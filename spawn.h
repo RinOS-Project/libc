@@ -14,7 +14,7 @@
 #include "stdlib.h"
 #include "string.h"
 #include "unistd.h"
-#include "../../src/shared/rin_posix_spawn_abi.h"
+#include "../../../src/shared/rin_posix_spawn_abi.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -15,7 +15,7 @@
 #include "sys/syscall.h"
 #include "linux/futex.h"
 #include "rin_thread_timeout_policy.h"
-#include "../../src/shared/rin_posix_semaphore_abi.h"
+#include "../../../src/shared/rin_posix_semaphore_abi.h"
 
 #ifndef _RIN_SEMAPHORE_FUTEX
 #define _RIN_SEMAPHORE_FUTEX(address, operation, value, timeout) \

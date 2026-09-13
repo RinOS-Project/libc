@@ -14,7 +14,7 @@
 #include "netinet/in.h"
 #include "stdlib.h"
 #include "string.h"
-#include "../../src/shared/netif_abi.h"
+#include "../../../src/shared/netif_abi.h"
 
 extern int rin_net_get_primary_info(RinNetPrimaryInfo* out);
 extern int rin_net_get_ipv6_info(RinNetIPv6Info* out);

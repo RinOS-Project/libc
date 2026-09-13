@@ -12,8 +12,8 @@
 #include "errno.h"
 #include "limits.h"
 #include "link.h"
-#include "../../src/shared/rin_dynlink_addr_abi.h"
-#include "../../src/shared/rin_dynlink_flags.h"
+#include "../../../src/shared/rin_dynlink_addr_abi.h"
+#include "../../../src/shared/rin_dynlink_flags.h"
 
 #ifdef __cplusplus
 extern "C" {

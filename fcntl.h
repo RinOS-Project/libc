@@ -15,8 +15,8 @@
 #include "sys/socket.h"
 #include "sys/syscall.h"
 #include "sys/types.h"
-#include "../../src/shared/rin_path_at_abi.h"
-#include "../../src/shared/rin_fcntl_lock_abi.h"
+#include "../../../src/shared/rin_path_at_abi.h"
+#include "../../../src/shared/rin_fcntl_lock_abi.h"
 
 #ifndef _RIN_FCNTL_SYSCALL3
 #define _RIN_FCNTL_SYSCALL3(number, arg1, arg2, arg3) \

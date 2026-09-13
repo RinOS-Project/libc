@@ -17,11 +17,11 @@
 #include "fcntl.h"
 #include "sys/stat.h"
 #include "rin_account_compat.h"
-#include "../../src/shared/rin_path_at_abi.h"
-#include "../../src/shared/rin_utsname_abi.h"
-#include "../../src/shared/rin_process_group_abi.h"
-#include "../../src/shared/rin_process_namespace_abi.h"
-#include "../../src/shared/rin_process_image_path_abi.h"
+#include "../../../src/shared/rin_path_at_abi.h"
+#include "../../../src/shared/rin_utsname_abi.h"
+#include "../../../src/shared/rin_process_group_abi.h"
+#include "../../../src/shared/rin_process_namespace_abi.h"
+#include "../../../src/shared/rin_process_image_path_abi.h"
 
 /* The allocator is linked by the target libc/rincrt image.  Keep this weak
  * so hosted syscall fixtures can include unistd.h without pulling allocator

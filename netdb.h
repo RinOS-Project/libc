@@ -17,10 +17,10 @@
 #include "stdio.h"
 #include "sched.h"
 #include "unistd.h"
-#include "../../src/shared/resolved_service_abi.h"
-#include "../../src/shared/ipv6_text.h"
-#include "../../src/shared/netif_abi.h"
-#include "../../src/shared/netif_addrconfig_policy.h"
+#include "../../../src/shared/resolved_service_abi.h"
+#include "../../../src/shared/ipv6_text.h"
+#include "../../../src/shared/netif_abi.h"
+#include "../../../src/shared/netif_addrconfig_policy.h"
 
 #ifndef RIN_NETDB_ALLOCATE
 #define RIN_NETDB_ALLOCATE(size) malloc(size)

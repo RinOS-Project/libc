@@ -2,7 +2,7 @@
 #include <errno.h>
 #include <net/if.h>
 
-#include "../../src/shared/netif_abi.h"
+#include "../../../src/shared/netif_abi.h"
 
 extern int rin_net_get_primary_info(RinNetPrimaryInfo* out);
 

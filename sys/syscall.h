@@ -13,7 +13,7 @@
 #include "../errno.h"
 #endif
 #include "../stdint.h"
-#include "../../../src/shared/rin_syscall_legacy.h"
+#include "../../../../src/shared/rin_syscall_legacy.h"
 #ifdef __cplusplus
 extern "C" {
 #endif

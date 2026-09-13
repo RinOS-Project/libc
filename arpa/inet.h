@@ -9,7 +9,7 @@
 #include "../errno.h"
 #include "../sys/socket.h"
 #include "../netinet/in.h"
-#include "../../../src/shared/ipv6_text.h"
+#include "../../../../src/shared/ipv6_text.h"
 
 #ifndef INET_ADDRSTRLEN
 #define INET_ADDRSTRLEN 16

@@ -11,7 +11,7 @@
 #include "../stdint.h"
 #include "../errno.h"
 #include "../sys/syscall.h"
-#include "../../../src/shared/rin_thread_name_abi.h"
+#include "../../../../src/shared/rin_thread_name_abi.h"
 
 #ifndef _RIN_PRCTL_NAME_SYSCALL1
 #define _RIN_PRCTL_NAME_SYSCALL1(number, argument) \

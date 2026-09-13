@@ -9,7 +9,7 @@
 #include "syscall.h"
 #include "../errno.h"
 #include "../limits.h"
-#include "../../../src/shared/rin_utsname_abi.h"
+#include "../../../../src/shared/rin_utsname_abi.h"
 
 #ifdef __cplusplus
 extern "C" {

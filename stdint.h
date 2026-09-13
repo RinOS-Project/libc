@@ -24,24 +24,16 @@ typedef __int64            int64_t;
 typedef __UINT8_TYPE__  uint8_t;
 typedef __UINT16_TYPE__ uint16_t;
 typedef __UINT32_TYPE__ uint32_t;
-#if defined(RIN_FREESTANDING)
-/* Keep the public fixed-width type compatible with RinOS' kernel u64 ABI.
- * On x86_64 GCC's host ABI chooses unsigned long for __UINT64_TYPE__, while
- * the freestanding kernel and its imported interfaces use unsigned long long. */
-typedef unsigned long long uint64_t;
-#else
+/* Use the compiler's fixed-width type even for freestanding builds.  This
+ * keeps this public header compatible when a kernel translation unit has
+ * already included the toolchain's stdint.h. */
 typedef __UINT64_TYPE__ uint64_t;
-#endif
 
 /* 符号付き整数型 */
 typedef __INT8_TYPE__  int8_t;
 typedef __INT16_TYPE__ int16_t;
 typedef __INT32_TYPE__ int32_t;
-#if defined(RIN_FREESTANDING)
-typedef signed long long int64_t;
-#else
 typedef __INT64_TYPE__ int64_t;
-#endif
 #endif
 
 /* 最小幅整数型 */
