@@ -13,7 +13,7 @@
 #include "../limits.h"
 #if defined(RIN_FREESTANDING) || defined(RIN_USERSPACE) || \
     defined(RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL)
-#include "../../../../src/shared/rin_resource_limit_abi.h"
+#include <rin/resource/limit_abi.h>
 #endif
 
 #ifdef __cplusplus

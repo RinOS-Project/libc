@@ -11,8 +11,8 @@
 #include "stdint.h"
 #include "limits.h"
 #include "sys/syscall.h"
-#include "../../../src/shared/rin_cpu_time_abi.h"
-#include "../../../src/shared/rin_timer_abi.h"
+#include <rin/time/cpu_time_abi.h>
+#include <rin/time/timer_abi.h>
 
 #if defined(RIN_USERSPACE)
 #include "locale.h"

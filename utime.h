@@ -11,8 +11,8 @@
 #include "fcntl.h"
 #include "time.h"
 #include "sys/time.h"
-#include "../../../src/shared/rin_futimens_abi.h"
-#include "../../../src/shared/rin_path_at_abi.h"
+#include <rin/time/futimens_abi.h>
+#include <rin/fs/path_at_abi.h>
 
 /* A hosted dependency can claim the generic _TIME_H include guard without
  * exporting timeval.  Keep the POSIX timestamp API self-contained while

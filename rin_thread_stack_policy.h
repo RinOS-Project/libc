@@ -5,7 +5,7 @@
 #include "stddef.h"
 #include "stdint.h"
 
-#include "../../../src/shared/rin_address_space_abi.h"
+#include <rin/memory/address_space_abi.h>
 
 /* Validate without allowing base + size to wrap.  The returned top is aligned
  * down for the x86_64 calling convention and remains inside the mapping. */

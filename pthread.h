@@ -17,8 +17,8 @@
 #include "time.h"
 #include "sys/syscall.h"
 #include "linux/futex.h"
-#include "../../../src/shared/rin_thread_name_abi.h"
-#include "../../../src/shared/rin_thread_sched_abi.h"
+#include <rin/thread/name_abi.h>
+#include <rin/thread/sched_abi.h>
 
 #ifndef _RIN_PTHREAD_SYSCALL0
 #define _RIN_PTHREAD_SYSCALL0(number) _syscall0((uintptr_t)(number))

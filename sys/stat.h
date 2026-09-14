@@ -13,7 +13,7 @@
 #include "../fcntl.h"
 #include "types.h"
 #include "syscall.h"
-#include "../../../../src/shared/rin_path_at_abi.h"
+#include <rin/fs/path_at_abi.h>
 
 #ifndef _RIN_STAT_SYSCALL2
 #define _RIN_STAT_SYSCALL2(number, argument1, argument2) \

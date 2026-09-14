@@ -24,7 +24,7 @@
 #include "stdint.h"
 #include "sys/ioctl.h"
 #include "sys/types.h"
-#include "../../../src/shared/rin_tty_abi.h"
+#include <rin/tty/abi.h>
 
 #ifdef __cplusplus
 extern "C" {

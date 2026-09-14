@@ -12,7 +12,7 @@
 #include "../stdint.h"
 #include "../limits.h"
 #define RIN_SOCKET_ABI_TYPES_PROVIDED 1
-#include "../../../RinOS-SDK/include/rin/socket_abi.h"
+#include <rin/net/socket_abi.h>
 #undef RIN_SOCKET_ABI_TYPES_PROVIDED
 
 /* Shared ABI headers may pull the hosted CRT's stddef, which in turn exposes

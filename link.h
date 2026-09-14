@@ -10,7 +10,7 @@
 #include "stdint.h"
 #include "errno.h"
 #include "sys/syscall.h"
-#include "../../../src/shared/rin_dynlink_inventory_abi.h"
+#include <rin/dynlink/inventory_abi.h>
 
 #ifdef __cplusplus
 extern "C" {

@@ -17,10 +17,14 @@
 #include "stdio.h"
 #include "sched.h"
 #include "unistd.h"
-#include "../../../src/shared/resolved_service_abi.h"
-#include "../../../src/shared/ipv6_text.h"
-#include "../../../src/shared/netif_abi.h"
-#include "../../../src/shared/netif_addrconfig_policy.h"
+#include <rin/net/resolved_protocol.h>
+#include <rin/net/ipv6_text.h>
+#include <rin/net/netif_abi.h>
+#include <rin/net/netif_addrconfig_policy.h>
+
+/* libc transport endpoint; the wire ABI intentionally does not carry this
+ * deployment-specific socket path. */
+#define RIN_LIBC_RESOLVED_SOCKET_PATH "/run/rin/resolved.sock"
 
 #ifndef RIN_NETDB_ALLOCATE
 #define RIN_NETDB_ALLOCATE(size) malloc(size)
@@ -270,7 +274,8 @@ static inline int _netdb_resolved_connect(void) {
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, RIN_RESOLVED_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, RIN_LIBC_RESOLVED_SOCKET_PATH,
+            sizeof(addr.sun_path) - 1);
     if (connect(fd, (const struct sockaddr*)&addr, (socklen_t)sizeof(addr)) < 0) {
         close(fd);
         return -1;

@@ -12,7 +12,7 @@
 #include "time.h"  /* for struct timespec */
 #include "errno.h"
 #include "limits.h"
-#include "../../../src/shared/rin_thread_sched_abi.h"
+#include <rin/thread/sched_abi.h>
 
 /* Caller-provided syscall hooks are the explicit opt-in for the Rin POSIX
  * scheduler surface in hosted tests.  Otherwise a hosted pthread provider
