@@ -266,14 +266,19 @@ struct sigevent {
     void* sigev_notify_attributes;
 };
 
-#if defined(RIN_USERSPACE)
+#endif
+
+/* Keep the runtime hooks independent from _SIGEVENT_DEFINED.  signal.h may
+ * provide the sigevent record before this header is reached; the timer
+ * implementation still needs these declarations for SIGEV_THREAD. */
+#if defined(RIN_USERSPACE) && !defined(RIN_TIMER_THREAD_RUNTIME_DECLS)
+#define RIN_TIMER_THREAD_RUNTIME_DECLS 1
 extern int rin_timer_thread_register(timer_t timer_id,
                                      void (*function)(union sigval),
                                      union sigval value)
     __attribute__((weak));
 extern void rin_timer_thread_unregister(timer_t timer_id)
     __attribute__((weak));
-#endif
 #endif
 #ifndef SIGALRM
 #define SIGALRM 14
