@@ -22,6 +22,7 @@
 #include <rin/process/process_group_abi.h>
 #include <rin/process/namespace_abi.h>
 #include <rin/process/image_path_abi.h>
+#include <rin/process/memory_abi.h>
 
 /* The allocator is linked by the target libc/rincrt image.  Keep this weak
  * so hosted syscall fixtures can include unistd.h without pulling allocator
@@ -477,6 +478,34 @@ static inline int rin_process_image_path_get(
         SYS_PROCESS_IMAGE_PATH_GET, (uintptr_t)response,
         (uintptr_t)sizeof(*response)));
     return result < 0 ? -1 : 0;
+}
+
+/* Return a fixed-width, self-only process memory snapshot.  The product
+ * kernel derives resident bytes from its authenticated page-accounting owner;
+ * there is deliberately no PID/handle argument or host /proc fallback. */
+static inline int rin_process_memory_info_get(
+    RinProcessMemoryInfoV1* response) {
+    intptr_t result;
+    if (response == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    result = _rin_unistd_result(_RIN_UNISTD_SYSCALL1(
+        SYS_PROCESS_MEMORY_INFO_GET, (uintptr_t)response));
+    if (result < 0) return -1;
+    if (result != 0) {
+        errno = (uintptr_t)result > (uintptr_t)INT_MAX ? EOVERFLOW : EIO;
+        return -1;
+    }
+    if (response->struct_size != sizeof(*response) ||
+        response->version != RIN_PROCESS_MEMORY_INFO_ABI_VERSION ||
+        (response->flags & ~RIN_PROCESS_MEMORY_INFO_FLAG_MASK) != 0u ||
+        (response->flags & RIN_PROCESS_MEMORY_INFO_FLAG_RESIDENT_VALID) == 0u ||
+        response->reserved != 0u) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
 }
 
 static inline char* realpath(const char* path, char* resolved_path) {
