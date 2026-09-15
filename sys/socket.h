@@ -350,10 +350,13 @@ struct linger {
  * msghdr構造体 (sendmsg/recvmsg用)
  * ═══════════════════════════════════════════════════════════════*/
 
+#ifndef RIN_LIBC_IOVEC_DEFINED
+#define RIN_LIBC_IOVEC_DEFINED 1
 struct iovec {
     void*  iov_base;  /* バッファ開始 */
     size_t iov_len;   /* バッファ長 */
 };
+#endif
 
 struct msghdr {
     void*         msg_name;       /* オプションアドレス */
