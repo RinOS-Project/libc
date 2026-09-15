@@ -56,6 +56,7 @@ struct utimbuf {
 #define UTIME_OMIT RIN_FUTIMENS_NSEC_OMIT
 #endif
 
+#ifndef MIDL_PASS
 static inline int __rin_utime_result(intptr_t result) {
     uintptr_t error;
     if (result < 0) {
@@ -196,6 +197,7 @@ static inline int futimens(int fd, const struct timespec times[2]) {
 static inline int utimensat(int dirfd, const char* pathname, const struct timespec times[2], int flags) {
     return __rin_utimens_path(dirfd, pathname, times, flags);
 }
+#endif /* !MIDL_PASS */
 
 #ifdef __cplusplus
 }

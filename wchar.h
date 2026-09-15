@@ -598,6 +598,68 @@ static inline size_t wcsrtombs(char* dest, const wchar_t** src, size_t len, mbst
     return rin_unicode_wcsrtombs32(dest, (const uint32_t**)src, len, (rin_unicode_mbstate_t*)ps);
 }
 
+static inline size_t wcsnrtombs(char* dest, const wchar_t** src, size_t nwc,
+                                size_t len, mbstate_t* ps) {
+    const wchar_t* cursor;
+    size_t converted = 0u;
+    if (!src || !(cursor = *src)) return 0u;
+    while (nwc != 0u && *cursor != L'\0') {
+        char encoded[4];
+        size_t written = rin_unicode_wcrtomb32(
+            encoded, (uint32_t)*cursor, (rin_unicode_mbstate_t*)ps);
+        if (written == (size_t)-1) return (size_t)-1;
+        if (dest && (converted > len || written > len - converted)) break;
+        if (dest) {
+            for (size_t index = 0u; index < written; ++index)
+                dest[converted + index] = encoded[index];
+        }
+        converted += written;
+        ++cursor;
+        --nwc;
+    }
+    if (nwc != 0u && *cursor == L'\0') {
+        if (!dest || converted < len) {
+            if (dest) dest[converted] = '\0';
+            *src = (const wchar_t*)0;
+        } else {
+            *src = cursor;
+        }
+    } else {
+        *src = cursor;
+    }
+    return converted;
+}
+
+static inline size_t mbsnrtowcs(wchar_t* dest, const char** src, size_t nms,
+                                size_t len, mbstate_t* ps) {
+    const char* cursor;
+    size_t converted = 0u;
+    if (!src || !(cursor = *src)) return 0u;
+    while (nms != 0u && *cursor != '\0' &&
+           (!dest || converted < len)) {
+        uint32_t codepoint = 0u;
+        size_t remaining = nms;
+        size_t read = rin_unicode_mbrtowc32(
+            &codepoint, cursor, remaining, (rin_unicode_mbstate_t*)ps);
+        if (read == (size_t)-1 || read == (size_t)-2) return (size_t)-1;
+        if (dest) dest[converted] = (wchar_t)codepoint;
+        ++converted;
+        cursor += read;
+        nms -= read;
+    }
+    if (nms != 0u && *cursor == '\0') {
+        if (!dest || converted < len) {
+            if (dest) dest[converted] = L'\0';
+            *src = (const char*)0;
+        } else {
+            *src = cursor;
+        }
+    } else {
+        *src = cursor;
+    }
+    return converted;
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * 時刻関数
  * ═══════════════════════════════════════════════════════════════*/

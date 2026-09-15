@@ -85,6 +85,7 @@ typedef struct __rin_account_info_v1 {
     uint64_t reserved[4];
 } __rin_account_info_v1;
 
+#ifndef MIDL_PASS
 #if defined(__cplusplus)
 static_assert(sizeof(__rin_credentials_v1) == 112,
               "credential wire layout changed");
@@ -257,5 +258,6 @@ static inline void __rin_account_copy(char* destination,
         destination[index] = (char)source[index];
     }
 }
+#endif /* !MIDL_PASS */
 
 #endif /* RIN_LIBC_ACCOUNT_COMPAT_H */

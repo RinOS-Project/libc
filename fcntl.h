@@ -18,6 +18,7 @@
 #include <rin/fs/path_at_abi.h>
 #include <rin/fs/fcntl_lock_abi.h>
 
+#ifndef MIDL_PASS
 #ifndef _RIN_FCNTL_SYSCALL3
 #define _RIN_FCNTL_SYSCALL3(number, arg1, arg2, arg3) \
     _syscall3((uintptr_t)(number), (uintptr_t)(arg1), (uintptr_t)(arg2), \
@@ -877,5 +878,6 @@ static inline ssize_t readlinkat(int dirfd, const char* pathname, char* buf, siz
 #ifdef __cplusplus
 }
 #endif
+#endif /* !MIDL_PASS */
 
 #endif /* _FCNTL_H */

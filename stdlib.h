@@ -16,7 +16,11 @@
 #else
 #include "errno.h"
 #endif
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+#include "locale.h"
+#endif
 #include "fcntl_flags.h"
+#ifndef MIDL_PASS
 #include "rin_aligned_alloc_meta.h"
 #include "sys/syscall.h"
 #include "internal/rin_integer_parse.h"
@@ -28,6 +32,7 @@
 #include "internal/rin_float_parse.h"
 #undef RIN_FP_PARSE_BINARY80
 #include "../libunicode/rin_unicode.h"
+#endif /* !MIDL_PASS */
 
 #ifndef _RIN_STDLIB_SYSCALL1
 #define _RIN_STDLIB_SYSCALL1(number, arg1) \
@@ -89,12 +94,15 @@
 #define _RIN_STDLIB_SYSTEM_AVAILABLE() 0
 #endif
 
+#ifndef MIDL_PASS
 #include "internal/rin_system_owner.h"
+#endif /* !MIDL_PASS */
 
 #ifndef RIN_STDLIB_SYSTEM_COMMAND_MAX
 #define RIN_STDLIB_SYSTEM_COMMAND_MAX 4095u
 #endif
 
+#ifndef MIDL_PASS
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -817,6 +825,39 @@ static inline long double strtold(const char* s, char** endptr) {
 #endif /* C++ <cstdlib> freestanding bridge */
 #endif /* !_STDLIB_SKIP_INLINE_DEFS - 数値変換 */
 
+/* libc++'s locale adapters use the POSIX locale-aware conversion entrypoints.
+ * RinOS currently has one UTF-8 numeric grammar, so these wrappers preserve
+ * the conversion contract while accepting the selected locale object. */
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+static inline long long strtoll_l(const char* s, char** endptr, int base,
+                                  locale_t locale) {
+    (void)locale;
+    return strtoll(s, endptr, base);
+}
+
+static inline unsigned long long strtoull_l(const char* s, char** endptr,
+                                            int base, locale_t locale) {
+    (void)locale;
+    return strtoull(s, endptr, base);
+}
+
+static inline float strtof_l(const char* s, char** endptr, locale_t locale) {
+    (void)locale;
+    return strtof(s, endptr);
+}
+
+static inline double strtod_l(const char* s, char** endptr, locale_t locale) {
+    (void)locale;
+    return strtod(s, endptr);
+}
+
+static inline long double strtold_l(const char* s, char** endptr,
+                                    locale_t locale) {
+    (void)locale;
+    return strtold(s, endptr);
+}
+#endif /* RIN_USERSPACE && !_MSVCRT_COMPAT */
+
 #ifndef _RIN_STDLIB_HOSTED_CXX_OWNER
 
 static inline int _rin_is_power_of_two_size(size_t value) {
@@ -858,6 +899,13 @@ static inline void* _rin_aligned_alloc_internal(size_t alignment, size_t size,
 /* aligned_alloc - C11準拠アラインドメモリ確保 */
 static inline void* aligned_alloc(size_t alignment, size_t size) {
     return _rin_aligned_alloc_internal(alignment, size, 1);
+}
+
+/* GNU/POSIX compatibility used by bundled native libraries.  Unlike
+ * aligned_alloc, memalign does not require size to be a multiple of the
+ * alignment. */
+static inline void* memalign(size_t alignment, size_t size) {
+    return _rin_aligned_alloc_internal(alignment, size, 0);
 }
 
 /* posix_memalign - POSIX準拠アラインドメモリ確保 */
@@ -961,6 +1009,8 @@ static inline lldiv_t lldiv(long long numer, long long denom) {
 #if !defined(__cplusplus) || !defined(RINCXX_CSTDLIB_H)
 int rand(void);
 void srand(unsigned int seed);
+long random(void);
+void srandom(unsigned int seed);
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1196,9 +1246,13 @@ static inline char* mkdtemp(char* tmpl) {
  * ═══════════════════════════════════════════════════════════════*/
 
 #if !defined(_RIN_STDLIB_HOSTED_C_OWNER)
+#ifndef MIDL_PASS
 static inline int system(const char* command) {
     return _rin_system_owner(command);
 }
+#else
+int system(const char* command);
+#endif /* !MIDL_PASS */
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1253,5 +1307,6 @@ static inline size_t wcstombs(char* dest, const wchar_t* src, size_t n) {
 #ifdef __cplusplus
 }
 #endif
+#endif /* !MIDL_PASS */
 
 #endif /* _STDLIB_H */

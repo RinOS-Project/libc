@@ -15,6 +15,7 @@
 #include "syscall.h"
 #include <rin/fs/path_at_abi.h>
 
+#ifndef MIDL_PASS
 #ifndef _RIN_STAT_SYSCALL2
 #define _RIN_STAT_SYSCALL2(number, argument1, argument2) \
     _syscall2((uintptr_t)(number), (uintptr_t)(argument1), \
@@ -80,6 +81,7 @@ static inline int __rin_stat_int_result(intptr_t result) {
     }
     return 0;
 }
+#endif /* !MIDL_PASS */
 
 #ifdef __cplusplus
 extern "C" {
@@ -152,6 +154,7 @@ struct stat {
  * 関数
  * ═══════════════════════════════════════════════════════════════*/
 
+#ifndef MIDL_PASS
 static inline int stat(const char* pathname, struct stat* statbuf) {
     if (!pathname || !statbuf) {
         errno = EFAULT;
@@ -176,6 +179,24 @@ static inline int lstat(const char* pathname, struct stat* statbuf) {
         return -1;
     }
     return __rin_stat_int_result(_RIN_STAT_SYSCALL2(SYS_LSTAT, pathname, statbuf));
+}
+
+/* RinOS has not published a device/FIFO creation operation in the stable
+ * path-at ABI yet.  Keep the POSIX entry points explicit and fail closed so
+ * native consumers can compile without accidentally calling a host libc. */
+static inline int mknod(const char* pathname, mode_t mode, dev_t dev) {
+    (void)pathname;
+    (void)mode;
+    (void)dev;
+    errno = ENOSYS;
+    return -1;
+}
+
+static inline int mkfifo(const char* pathname, mode_t mode) {
+    (void)pathname;
+    (void)mode;
+    errno = ENOSYS;
+    return -1;
 }
 
 static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf, int flags) {
@@ -353,6 +374,7 @@ static inline mode_t umask(mode_t mask) {
     }
     return (mode_t)result;
 }
+#endif /* !MIDL_PASS */
 
 #ifdef __cplusplus
 }

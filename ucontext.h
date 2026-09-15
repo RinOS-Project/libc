@@ -167,6 +167,24 @@ struct __ucontext {
 typedef struct __ucontext ucontext_t;
 #endif
 
+/* libunwind's signal-frame walker consumes byte offsets rather than the
+ * host libc's private mcontext names.  Publish offsets from the actual RinOS
+ * context layout so the cross build cannot inherit a Linux/Windows guess. */
+#if defined(__x86_64__) || defined(_M_X64)
+#ifndef UC_MCONTEXT_GREGS_RBP
+#define UC_MCONTEXT_GREGS_RBP \
+    ((size_t)offsetof(ucontext_t, uc_mcontext.gregs[REG_RBP]))
+#endif
+#ifndef UC_MCONTEXT_GREGS_RSP
+#define UC_MCONTEXT_GREGS_RSP \
+    ((size_t)offsetof(ucontext_t, uc_mcontext.gregs[REG_RSP]))
+#endif
+#ifndef UC_MCONTEXT_GREGS_RIP
+#define UC_MCONTEXT_GREGS_RIP \
+    ((size_t)offsetof(ucontext_t, uc_mcontext.gregs[REG_RIP]))
+#endif
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * Context manipulation functions
  * ═══════════════════════════════════════════════════════════════

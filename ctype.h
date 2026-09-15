@@ -11,8 +11,11 @@
 #if !defined(RINCXX_CCTYPE_H) && !defined(_MSVCRT_COMPAT)
 #include "locale.h"
 #endif
+#ifndef MIDL_PASS
 #include "../libunicode/rin_unicode.h"
+#endif
 
+#ifndef MIDL_PASS
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -73,5 +76,6 @@ static inline int toupper_l(int c, locale_t l) { return rin_locale_ctype_map(l, 
 #ifdef __cplusplus
 }
 #endif
+#endif /* !MIDL_PASS */
 
 #endif

@@ -6,6 +6,7 @@
 #ifndef _MATH_H
 #define _MATH_H
 
+#include "stddef.h"
 #include "float.h"
 #include "limits.h"
 #include "fenv.h"
@@ -62,6 +63,7 @@ typedef long double double_t;
 #define FP_SUBNORMAL 3
 #define FP_NORMAL    4
 
+#ifndef MIDL_PASS
 /* IEEE 754特殊値 - ビット操作による完全実装 */
 
 /* GCC/Clang built-in を使用して定数式として定義 */
@@ -426,6 +428,17 @@ static inline double cos(double x) {
 
 static inline float cosf(float x) {
     return (float)cos((double)x);
+}
+
+/* sincos - calculate sine and cosine in one ABI-compatible call. */
+static inline void sincos(double x, double* sinp, double* cosp) {
+    if (sinp != NULL) *sinp = sin(x);
+    if (cosp != NULL) *cosp = cos(x);
+}
+
+static inline void sincosf(float x, float* sinp, float* cosp) {
+    if (sinp != NULL) *sinp = sinf(x);
+    if (cosp != NULL) *cosp = cosf(x);
 }
 
 /* tan - 正接 */
@@ -1236,6 +1249,27 @@ static inline float frexpf(float x, int* exp) {
     return (float)frexp((double)x, exp);
 }
 
+/* ilogbf - unbiased binary exponent for float values.  Keep this local to
+ * the freestanding libc so callers such as CoreCLR do not acquire a host
+ * libm dependency. */
+static inline int ilogbf(float x) {
+    union { float value; unsigned int bits; } u;
+    u.value = x;
+    unsigned int exponent = (u.bits >> 23) & 0xFFU;
+    unsigned int fraction = u.bits & 0x7FFFFFU;
+
+    if (exponent == 0) {
+        if (fraction == 0) return INT_MIN;
+
+        int highest_bit = 0;
+        while ((fraction >>= 1) != 0) highest_bit++;
+        return highest_bit - 149;
+    }
+
+    if (exponent == 0xFFU) return INT_MAX;
+    return (int)exponent - 127;
+}
+
 /* ldexp - 仮数と指数から合成 */
 static inline double ldexp(double x, int exp) {
     if (x == 0.0 || __builtin_isnan(x) || __builtin_isinf(x)) return x;
@@ -1561,6 +1595,11 @@ static inline double atof(const char* s) {
 
 #ifdef __cplusplus
 }
+#endif
+#endif /* !MIDL_PASS */
+
+#if defined(__cplusplus) && !defined(TARGET_RINOS) && \
+    !defined(RIN_TARGET_RINOS)
 
 static inline int isnan(float x) {
     union { float f; unsigned int i; } u;

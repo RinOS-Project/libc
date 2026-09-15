@@ -26,8 +26,10 @@
 /* The allocator is linked by the target libc/rincrt image.  Keep this weak
  * so hosted syscall fixtures can include unistd.h without pulling allocator
  * implementation into the fixture. */
+#if !defined(MIDL_PASS)
 extern void rin_user_allocator_after_fork_child(void)
     __attribute__((weak));
+#endif
 
 /* Preserve caller-provided syscall hooks before installing defaults.  A
  * hosted unit that supplies a hook is intentionally asking for the Rin
@@ -98,6 +100,7 @@ extern char** environ;
  * 型定義
  * ═══════════════════════════════════════════════════════════════*/
 
+#ifndef MIDL_PASS
 static inline intptr_t _rin_unistd_result(intptr_t result) {
     result = __rin_syscall_posixize(result);
     if (result < 0) {
@@ -1788,6 +1791,8 @@ __attribute__((unused, noinline)) static void* sbrk(long increment) {
     if (result < 0) return (void*)-1;
     return (void*)(uintptr_t)result;
 }
+
+#endif /* !MIDL_PASS */
 
 #ifdef __cplusplus
 }

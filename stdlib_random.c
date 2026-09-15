@@ -34,6 +34,19 @@ void srand(unsigned int seed)
     __atomic_store_n(&rin_libc_rand_state, seed, __ATOMIC_RELAXED);
 }
 
+/* POSIX random(3) uses the same non-cryptographic process-wide generator
+ * for this freestanding libc.  Keep the aliases in one state owner so code
+ * that mixes rand() and random() observes deterministic, coherent progress. */
+long random(void)
+{
+    return (long)rand();
+}
+
+void srandom(unsigned int seed)
+{
+    srand(seed);
+}
+
 #ifdef __cplusplus
 }
 #endif

@@ -116,6 +116,9 @@
 #ifndef HOST_NAME_MAX
 #define HOST_NAME_MAX 64
 #endif
+#ifndef _POSIX_HOST_NAME_MAX
+#define _POSIX_HOST_NAME_MAX HOST_NAME_MAX
+#endif
 #ifndef LOGIN_NAME_MAX
 #define LOGIN_NAME_MAX 32
 #endif

@@ -271,7 +271,8 @@ struct sigevent {
 /* Keep the runtime hooks independent from _SIGEVENT_DEFINED.  signal.h may
  * provide the sigevent record before this header is reached; the timer
  * implementation still needs these declarations for SIGEV_THREAD. */
-#if defined(RIN_USERSPACE) && !defined(RIN_TIMER_THREAD_RUNTIME_DECLS)
+#if defined(RIN_USERSPACE) && !defined(RIN_TIMER_THREAD_RUNTIME_DECLS) && \
+    !defined(MIDL_PASS)
 #define RIN_TIMER_THREAD_RUNTIME_DECLS 1
 extern int rin_timer_thread_register(timer_t timer_id,
                                      void (*function)(union sigval),
@@ -295,7 +296,7 @@ extern void rin_timer_thread_unregister(timer_t timer_id)
 
 /* A target syscall result is a signed machine word.  Keep it in intptr_t
  * until the public API has checked its narrower destination type. */
-#if defined(RIN_TIME_TARGET_FUNCTIONS)
+#if defined(RIN_TIME_TARGET_FUNCTIONS) && !defined(MIDL_PASS)
 static inline intptr_t _rin_time_result(intptr_t result) {
     result = __rin_syscall_posixize(result);
     if (result < 0) {

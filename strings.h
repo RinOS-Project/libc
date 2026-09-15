@@ -8,6 +8,7 @@
 
 #include "stddef.h"
 
+#ifndef MIDL_PASS
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -150,5 +151,6 @@ static inline char* rindex(const char* s, int c) {
 #ifdef __cplusplus
 }
 #endif
+#endif /* !MIDL_PASS */
 
 #endif /* _STRINGS_H */

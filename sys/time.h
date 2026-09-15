@@ -37,6 +37,7 @@ struct itimerval {
 #define RIN_TIME_GETITIMER_DEFAULT_HOOK 1
 #endif
 
+#ifndef MIDL_PASS
 static inline int _rin_itimer_timeval_to_us(const struct timeval* value,
                                             uint64_t* output) {
     uint64_t seconds;
@@ -181,6 +182,8 @@ static inline int getitimer(int which, struct itimerval* value) {
     value->it_interval = converted_interval;
     return 0;
 }
+
+#endif /* !MIDL_PASS */
 
 /* timezone構造体 (BSD互換) */
 #ifndef _TIMEZONE_DEFINED

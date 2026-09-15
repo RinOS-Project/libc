@@ -75,6 +75,7 @@ struct lconv {
  * カーネルlocale.c API宣言
  * ═══════════════════════════════════════════════════════════════*/
 
+#ifndef MIDL_PASS
 /* 基本ロケール関数 */
 char* rin_setlocale(int category, const char* locale);
 struct lconv* rin_localeconv(void);
@@ -110,12 +111,15 @@ int rin_isxdigit(int c);
 int rin_tolower(int c);
 int rin_toupper(int c);
 
+#endif /* !MIDL_PASS */
+
 /* 文字列照合 (ロケール対応) - 宣言は string.h */
 
 /* ═══════════════════════════════════════════════════════════════
  * 標準ロケール関数 (カーネルAPIラッパー)
  * ═══════════════════════════════════════════════════════════════*/
 
+#ifndef MIDL_PASS
 #ifndef _MSVCRT_COMPAT
 /* setlocale - ロケールを設定
  * 対応ロケール: "C", "POSIX", "ja_JP.UTF-8", "ja_JP", "en_US.UTF-8", "en_US"
@@ -209,6 +213,7 @@ static inline int locale_is_japanese(void) {
 static inline int locale_is_utf8(void) {
     return rin_locale_is_utf8();
 }
+#endif /* !MIDL_PASS */
 
 #ifdef __cplusplus
 }

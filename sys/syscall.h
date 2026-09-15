@@ -13,7 +13,14 @@
 #include "../errno.h"
 #endif
 #include "../stdint.h"
+#ifndef MIDL_PASS
 #include <rin/syscall_legacy.h>
+#endif
+
+/* midl.exe consumes a few target headers while generating COM declarations,
+ * but it is not a C compiler and cannot parse the inline syscall assembly
+ * below.  The generated IDL C stubs do not need the syscall frontend. */
+#ifndef MIDL_PASS
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -415,5 +422,7 @@ static inline intptr_t __rin_syscall_posixize(intptr_t ret) {
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* MIDL_PASS */
 
 #endif /* _SYS_SYSCALL_H */

@@ -1,6 +1,8 @@
 #ifndef RIN_ALIGNED_ALLOC_META_H
 #define RIN_ALIGNED_ALLOC_META_H
 
+#ifndef MIDL_PASS
+
 #include "stddef.h"
 #include "stdint.h"
 
@@ -90,5 +92,7 @@ static inline int rin_load_aligned_allocation_raw_pointer(void* aligned_ptr, voi
     *out_raw = meta->raw;
     return 1;
 }
+
+#endif /* !MIDL_PASS */
 
 #endif

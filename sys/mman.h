@@ -121,6 +121,16 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 #define MADV_DONTFORK    10  /* fork時にコピーしない */
 #define MADV_DOFORK      11  /* fork時にコピーする */
 
+/* POSIX spells the advisory values separately from the Linux madvise names.
+ * RinOS uses the same ABI values and exposes the POSIX return convention. */
+#ifndef POSIX_MADV_NORMAL
+#define POSIX_MADV_NORMAL     MADV_NORMAL
+#define POSIX_MADV_RANDOM     MADV_RANDOM
+#define POSIX_MADV_SEQUENTIAL MADV_SEQUENTIAL
+#define POSIX_MADV_WILLNEED   MADV_WILLNEED
+#define POSIX_MADV_DONTNEED   MADV_DONTNEED
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * mlock フラグ
  * ═══════════════════════════════════════════════════════════════*/
@@ -193,6 +203,12 @@ static inline int madvise(void* addr, size_t length, int advice) {
         SYS_MADVISE, (uintptr_t)addr, (uintptr_t)length,
         (uintptr_t)(intptr_t)advice);
     return __rin_mman_zero_result(ret);
+}
+
+static inline int posix_madvise(void* addr, size_t length, int advice) {
+    if (madvise(addr, length, advice) == 0)
+        return 0;
+    return errno;
 }
 
 static inline int mlock(const void* addr, size_t length) {

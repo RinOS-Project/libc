@@ -15,6 +15,7 @@
 #include <rin/net/socket_abi.h>
 #undef RIN_SOCKET_ABI_TYPES_PROVIDED
 
+#ifndef MIDL_PASS
 /* Shared ABI headers may pull the hosted CRT's stddef, which in turn exposes
  * a second `errno` macro on MinGW.  Socket result helpers are part of the Rin
  * libc contract and must publish errors through its overridable
@@ -569,5 +570,6 @@ fail:
 #ifdef __cplusplus
 }
 #endif
+#endif /* !MIDL_PASS */
 
 #endif /* _SYS_SOCKET_H */

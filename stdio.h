@@ -10,6 +10,7 @@
 #include "stddef.h"
 #include "stdint.h"
 #include "stdarg.h"
+#include "sys/types.h"
 #include "errno.h"
 #include "limits.h"
 #include "sys/syscall.h"
@@ -104,6 +105,7 @@ struct _FILE {
 /* ファイル位置型 */
 typedef long fpos_t;
 
+#ifndef MIDL_PASS
 /* 静的FILEプール */
 #define _STDIO_MAX_FILES 16
 static FILE _stdio_files[_STDIO_MAX_FILES];
@@ -997,6 +999,63 @@ static inline char* fgets(char* s, int size, FILE* stream) {
     return result;
 }
 
+/* POSIX getline() over the same bounded FILE/fgetc implementation.  The
+ * buffer is caller-owned and grows geometrically; no host stdio is involved.
+ */
+static inline ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
+    size_t capacity;
+    size_t length = 0u;
+    char* replacement;
+
+    if (!lineptr || !n || !stream) {
+        errno = EINVAL;
+        return (ssize_t)-1;
+    }
+
+    capacity = *n;
+    if (!*lineptr || capacity < 2u) {
+        capacity = capacity < 128u ? 128u : capacity;
+        replacement = *lineptr ? (char*)realloc(*lineptr, capacity)
+                               : (char*)malloc(capacity);
+        if (!replacement) {
+            errno = ENOMEM;
+            return (ssize_t)-1;
+        }
+        *lineptr = replacement;
+        *n = capacity;
+    }
+
+    for (;;) {
+        int c = fgetc(stream);
+        if (c == EOF) {
+            if (length == 0u)
+                return (ssize_t)-1;
+            break;
+        }
+        if (length + 1u >= capacity) {
+            size_t next_capacity = capacity <= ((size_t)-1 / 2u)
+                ? capacity * 2u
+                : (size_t)-1;
+            if (next_capacity <= capacity || next_capacity < length + 2u) {
+                errno = ENOMEM;
+                return (ssize_t)-1;
+            }
+            replacement = (char*)realloc(*lineptr, next_capacity);
+            if (!replacement) {
+                errno = ENOMEM;
+                return (ssize_t)-1;
+            }
+            *lineptr = replacement;
+            *n = capacity = next_capacity;
+        }
+        (*lineptr)[length++] = (char)c;
+        if (c == '\n')
+            break;
+    }
+    (*lineptr)[length] = '\0';
+    return (ssize_t)length;
+}
+
 /* ungetc - C17 guarantees one byte; this bounded owner accepts 4 KiB. */
 static inline int _rin_ungetc_unlocked(int c, FILE* stream) {
     int idx;
@@ -1612,6 +1671,24 @@ static inline long ftell(FILE* stream) {
     return result;
 }
 
+/* POSIX large-file spellings used by libc++'s fstream implementation.  RinOS
+ * exposes long/off_t with the same width on the x86_64 target, so preserve the
+ * existing checked buffering and syscall path instead of introducing a second
+ * seek implementation. */
+static inline int fseeko(FILE* stream, off_t offset, int whence) {
+    if (offset > (off_t)__LONG_MAX__ || offset < (off_t)(-__LONG_MAX__ - 1L)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return fseek(stream, (long)offset, whence);
+}
+
+static inline off_t ftello(FILE* stream) {
+    long result = ftell(stream);
+    if (result < 0) return (off_t)-1;
+    return (off_t)result;
+}
+
 static inline void _rin_rewind_unlocked(FILE* stream) {
     fseek(stream, 0, SEEK_SET);
     stream->eof = 0;
@@ -2186,6 +2263,51 @@ _STDIO_PRINTF_FN int fprintf(FILE* stream, const char* fmt, ...) {
 }
 #endif /* !sprintf || _STDIO_GLOBAL_IMPL */
 
+/* POSIX formatted-allocation helper used by libc++'s locale fallback.  Keep
+ * the allocation bounded and use va_copy so the caller's va_list remains
+ * usable after the sizing/growth passes. */
+#if !defined(vasprintf) || defined(_STDIO_GLOBAL_IMPL)
+_STDIO_PRINTF_FN int vasprintf(char** result, const char* fmt, va_list ap) {
+    size_t capacity = 128u;
+    if (!result || !fmt) {
+        errno = EINVAL;
+        return -1;
+    }
+    *result = (char*)0;
+    for (;;) {
+        char* buffer = (char*)malloc(capacity);
+        int required;
+        va_list copy;
+        if (!buffer) {
+            errno = ENOMEM;
+            return -1;
+        }
+        va_copy(copy, ap);
+        required = vsnprintf(buffer, capacity, fmt, copy);
+        va_end(copy);
+        if (required >= 0 && (size_t)required < capacity) {
+            *result = buffer;
+            return required;
+        }
+        free(buffer);
+        if (required >= 0) {
+            if ((size_t)required == (size_t)-1 ||
+                (size_t)required >= (size_t)-1 - 1u) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            capacity = (size_t)required + 1u;
+        } else {
+            if (capacity > (size_t)-1 / 2u) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            capacity *= 2u;
+        }
+    }
+}
+#endif /* !vasprintf || _STDIO_GLOBAL_IMPL */
+
 /* ═══════════════════════════════════════════════════════════════
  * フォーマット入力
  * ═══════════════════════════════════════════════════════════════*/
@@ -2303,6 +2425,8 @@ static inline char* tmpnam(char* s) {
         destination[index] = generated[index];
     return destination;
 }
+
+#endif /* !MIDL_PASS */
 
 #ifdef __cplusplus
 }

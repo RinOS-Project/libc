@@ -14,7 +14,11 @@
 #include "errno.h"
 #endif
 #include "limits.h"
+#ifndef MIDL_PASS
 #include "internal/rin_memory_fast.h"
+#endif
+
+#ifndef MIDL_PASS
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,6 +76,12 @@ RIN_STRING_INLINE void* memchr(const void* s, int c, size_t n) {
 RIN_STRING_INLINE size_t strlen(const char* s) {
     size_t len = 0;
     while (*s++) len++;
+    return len;
+}
+
+RIN_STRING_INLINE size_t strnlen(const char* s, size_t maxlen) {
+    size_t len = 0;
+    while (len < maxlen && s[len] != '\0') len++;
     return len;
 }
 
@@ -497,7 +507,11 @@ RIN_STRING_INLINE int strerror_r(int errnum, char* buf, size_t buflen) {
 }
 #endif
 
+#endif /* !MIDL_PASS */
+
+#ifndef MIDL_PASS
 #include "fortify.h"
+#endif
 
 #undef RIN_STRING_INLINE
 #undef RIN_STRING_THREAD_LOCAL

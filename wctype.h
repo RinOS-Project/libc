@@ -35,6 +35,7 @@ typedef unsigned long wctrans_t;
 #define WEOF ((wint_t)-1)
 #endif
 
+#ifndef MIDL_PASS
 static inline int iswalnum(wint_t wc) { return rin_unicode_isalnum((uint32_t)wc); }
 static inline int iswalpha(wint_t wc) { return rin_unicode_isalpha((uint32_t)wc); }
 static inline int iswblank(wint_t wc) { return rin_unicode_isblank((uint32_t)wc); }
@@ -54,6 +55,7 @@ static inline wctype_t wctype(const char* property) { return (wctype_t)rin_unico
 static inline int iswctype(wint_t wc, wctype_t desc) { return rin_unicode_iswctype((uint32_t)wc, (unsigned long)desc); }
 static inline wctrans_t wctrans(const char* property) { return (wctrans_t)rin_unicode_wctrans(property); }
 static inline wint_t towctrans(wint_t wc, wctrans_t desc) { return (wint_t)rin_unicode_towctrans((uint32_t)wc, (unsigned long)desc); }
+#endif /* !MIDL_PASS */
 
 #ifdef __cplusplus
 }

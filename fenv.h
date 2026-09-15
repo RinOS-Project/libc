@@ -48,6 +48,7 @@ typedef unsigned int fexcept_t;
 #define FE_UPWARD       0x0800  /* 正の無限大への丸め */
 #define FE_TOWARDZERO   0x0C00  /* ゼロへの丸め */
 
+#ifndef MIDL_PASS
 /* ═══════════════════════════════════════════════════════════════
  * デフォルト環境
  * ═══════════════════════════════════════════════════════════════*/
@@ -305,5 +306,6 @@ static inline int feupdateenv(const fenv_t* envp) {
 #ifdef __cplusplus
 }
 #endif
+#endif /* !MIDL_PASS */
 
 #endif /* _FENV_H */
