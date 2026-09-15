@@ -168,14 +168,13 @@ static inline void rin_memory_copy_u64(unsigned char** destination,
     *size = n;
 }
 
-static inline void* rin_memory_copy_fast(void* destination,
-                                         const void* source,
-                                         rin_memory_size_t size) {
+static inline void* rin_memory_copy_fast_with_features(
+    void* destination, const void* source, rin_memory_size_t size,
+    unsigned features) {
     unsigned char* d = (unsigned char*)destination;
     const unsigned char* s = (const unsigned char*)source;
 
 #if defined(__x86_64__)
-    unsigned features = rin_memory_x86_features();
     if ((size >= 256u && (features & RIN_MEMORY_X86_ERMS) != 0u) ||
         (size >= 64u && (features & RIN_MEMORY_X86_FSRM) != 0u)) {
         __asm__ volatile("cld; rep movsb"
@@ -227,6 +226,7 @@ static inline void* rin_memory_copy_fast(void* destination,
     }
 #endif
 #elif defined(__i386__)
+    (void)features;
     if (size >= 32u) {
         rin_memory_size_t words = size >> 2;
         rin_memory_size_t tail = size & 3u;
@@ -245,6 +245,49 @@ static inline void* rin_memory_copy_fast(void* destination,
 #endif
     while (size-- != 0u) *d++ = *s++;
     return destination;
+}
+
+/* The capability query above is intentionally kept separate from the copy
+ * implementation.  Select the owner once per translation unit so ordinary
+ * memcpy callers do not repeat even the cached-feature branch on every call.
+ * The selected implementation still reads the immutable feature snapshot;
+ * it never guesses that an instruction is available. */
+typedef void* (*rin_memory_copy_dispatch_fn)(
+    void* destination, const void* source, rin_memory_size_t size);
+
+static inline void* rin_memory_copy_dispatch_scalar(
+    void* destination, const void* source, rin_memory_size_t size) {
+    return rin_memory_copy_fast_with_features(destination, source, size, 0u);
+}
+
+static inline void* rin_memory_copy_dispatch_x86(
+    void* destination, const void* source, rin_memory_size_t size) {
+    return rin_memory_copy_fast_with_features(
+        destination, source, size, rin_memory_x86_features());
+}
+
+static inline void* rin_memory_copy_fast(void* destination,
+                                         const void* source,
+                                         rin_memory_size_t size) {
+    static rin_memory_copy_dispatch_fn dispatch;
+    rin_memory_copy_dispatch_fn selected =
+        __atomic_load_n(&dispatch, __ATOMIC_ACQUIRE);
+
+    if (selected == 0) {
+        unsigned features = rin_memory_x86_features();
+#if defined(__x86_64__)
+        selected = (features & (RIN_MEMORY_X86_ERMS |
+                                RIN_MEMORY_X86_FSRM |
+                                RIN_MEMORY_X86_AVX2)) != 0u
+                       ? rin_memory_copy_dispatch_x86
+                       : rin_memory_copy_dispatch_scalar;
+#else
+        (void)features;
+        selected = rin_memory_copy_dispatch_scalar;
+#endif
+        __atomic_store_n(&dispatch, selected, __ATOMIC_RELEASE);
+    }
+    return selected(destination, source, size);
 }
 
 static inline void* rin_memory_move_fast(void* destination,
