@@ -171,6 +171,11 @@ static inline void rin_memory_copy_u64(unsigned char** destination,
 static inline void* rin_memory_copy_fast_with_features(
     void* destination, const void* source, rin_memory_size_t size,
     unsigned features) {
+    if (size == 0u || destination == source)
+        return destination;
+    if (destination == 0 || source == 0)
+        return destination;
+
     unsigned char* d = (unsigned char*)destination;
     const unsigned char* s = (const unsigned char*)source;
 
