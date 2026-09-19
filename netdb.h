@@ -32,6 +32,9 @@
 #ifndef RIN_NETDB_RELEASE
 #define RIN_NETDB_RELEASE(pointer) free(pointer)
 #endif
+#ifndef RIN_NETDB_IO_RETRY_LIMIT
+#define RIN_NETDB_IO_RETRY_LIMIT 5000u
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -234,16 +237,19 @@ static inline int _netdb_is_localhost(const char* name) {
 static inline int _netdb_resolved_send_all(int fd, const void* buf, size_t len) {
     const uint8_t* ptr = (const uint8_t*)buf;
     size_t off = 0;
+    unsigned int retries = 0u;
     while (off < len) {
         ssize_t rc = send(fd, ptr + off, len - off, 0);
         if (rc < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                if (++retries > RIN_NETDB_IO_RETRY_LIMIT) return -1;
                 sched_yield();
                 continue;
             }
             return -1;
         }
         if (rc == 0) return -1;
+        retries = 0u;
         off += (size_t)rc;
     }
     return 0;
@@ -252,16 +258,19 @@ static inline int _netdb_resolved_send_all(int fd, const void* buf, size_t len) 
 static inline int _netdb_resolved_recv_all(int fd, void* buf, size_t len) {
     uint8_t* ptr = (uint8_t*)buf;
     size_t off = 0;
+    unsigned int retries = 0u;
     while (off < len) {
         ssize_t rc = recv(fd, ptr + off, len - off, 0);
         if (rc < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                if (++retries > RIN_NETDB_IO_RETRY_LIMIT) return -1;
                 sched_yield();
                 continue;
             }
             return -1;
         }
         if (rc == 0) return -1;
+        retries = 0u;
         off += (size_t)rc;
     }
     return 0;
