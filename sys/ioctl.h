@@ -91,6 +91,16 @@ extern "C" {
 #define TIOCMBIS    0x5416  /* モデムビット設定 */
 #define TIOCMBIC    0x5417  /* モデムビットクリア */
 #define TIOCMSET    0x5418  /* モデム状態設定 */
+/* TIOCMGET/TIOCMSET status bits (Linux-compatible values). */
+#define TIOCM_LE     0x0001
+#define TIOCM_DTR    0x0002
+#define TIOCM_RTS    0x0004
+#define TIOCM_ST     0x0008
+#define TIOCM_SR     0x0010
+#define TIOCM_CTS    0x0020
+#define TIOCM_CAR    0x0040
+#define TIOCM_RNG    0x0080
+#define TIOCM_DSR    0x0100
 #define TIOCGSOFTCAR 0x5419
 #define TIOCSSOFTCAR 0x541A
 #define FIONREAD    0x541B  /* 読み取り可能バイト数 */

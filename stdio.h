@@ -1056,6 +1056,63 @@ static inline ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
     return (ssize_t)length;
 }
 
+/* POSIX getdelim() using the same bounded FILE/fgetc implementation as
+ * getline().  Keep the delimiter as an int so callers can pass any unsigned
+ * char value as well as EOF-compatible values. */
+static inline ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* stream) {
+    size_t capacity;
+    size_t length = 0u;
+    char* replacement;
+
+    if (!lineptr || !n || !stream) {
+        errno = EINVAL;
+        return (ssize_t)-1;
+    }
+
+    capacity = *n;
+    if (!*lineptr || capacity < 2u) {
+        capacity = capacity < 128u ? 128u : capacity;
+        replacement = *lineptr ? (char*)realloc(*lineptr, capacity)
+                               : (char*)malloc(capacity);
+        if (!replacement) {
+            errno = ENOMEM;
+            return (ssize_t)-1;
+        }
+        *lineptr = replacement;
+        *n = capacity;
+    }
+
+    for (;;) {
+        int c = fgetc(stream);
+        if (c == EOF) {
+            if (length == 0u)
+                return (ssize_t)-1;
+            break;
+        }
+        if (length + 1u >= capacity) {
+            size_t next_capacity = capacity <= ((size_t)-1 / 2u)
+                ? capacity * 2u
+                : (size_t)-1;
+            if (next_capacity <= capacity || next_capacity < length + 2u) {
+                errno = ENOMEM;
+                return (ssize_t)-1;
+            }
+            replacement = (char*)realloc(*lineptr, next_capacity);
+            if (!replacement) {
+                errno = ENOMEM;
+                return (ssize_t)-1;
+            }
+            *lineptr = replacement;
+            *n = capacity = next_capacity;
+        }
+        (*lineptr)[length++] = (char)c;
+        if (c == delimiter)
+            break;
+    }
+    (*lineptr)[length] = '\0';
+    return (ssize_t)length;
+}
+
 /* ungetc - C17 guarantees one byte; this bounded owner accepts 4 KiB. */
 static inline int _rin_ungetc_unlocked(int c, FILE* stream) {
     int idx;
