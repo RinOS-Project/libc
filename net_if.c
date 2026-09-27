@@ -1,10 +1,27 @@
 // SPDX-License-Identifier: MIT
 #include <errno.h>
 #include <net/if.h>
+#include <sys/syscall.h>
 
 #include <rin/net/netif_abi.h>
 
 extern int rin_net_get_primary_info(RinNetPrimaryInfo* out);
+
+int rin_net_get_interface_statistics(RinNetInterfaceStatisticsV1* out)
+{
+    if (!out) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (syscall(SYS_NET_STATISTICS, out) != 0)
+        return -1;
+    if (out->version != RIN_NET_STATISTICS_VERSION ||
+        out->struct_size != sizeof(*out) || out->device_generation == 0u) {
+        errno = EPROTO;
+        return -1;
+    }
+    return 0;
+}
 
 static int netif_snapshot(RinNetPrimaryInfo* info)
 {
