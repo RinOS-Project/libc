@@ -141,6 +141,15 @@ struct ip_mreqn {
     int            imr_ifindex;
 };
 
+/* Linux-compatible packet metadata payloads used by recvmsg(2).  RinOS
+ * exposes the same fixed-width control payload even though the network stack
+ * currently publishes one interface per namespace. */
+struct in_pktinfo {
+    struct in_addr ipi_addr;
+    struct in_addr ipi_spec_dst;
+    int ipi_ifindex;
+};
+
 /* ═══════════════════════════════════════════════════════════════
  * IPv6オプション
  * ═══════════════════════════════════════════════════════════════*/
@@ -156,6 +165,11 @@ struct ip_mreqn {
 #define IPV6_PKTINFO        50
 #define IPV6_RECVHOPLIMIT   51
 #define IPV6_HOPLIMIT       52
+
+struct in6_pktinfo {
+    struct in6_addr ipi6_addr;
+    uint32_t ipi6_ifindex;
+};
 
 /* ═══════════════════════════════════════════════════════════════
  * ポート定数
