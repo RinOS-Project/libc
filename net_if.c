@@ -123,6 +123,31 @@ int rin_net_get_icmp_global_statistics(
     return 0;
 }
 
+int rin_net_get_icmp_global_statistics_v2(
+    uint32_t address_family, RinNetIcmpGlobalStatisticsV2* out)
+{
+    if (!out) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (address_family != RIN_NET_ICMP_GLOBAL_STATISTICS_AF_IPV4 &&
+        address_family != RIN_NET_ICMP_GLOBAL_STATISTICS_AF_IPV6) {
+        errno = EAFNOSUPPORT;
+        return -1;
+    }
+    if (syscall(SYS_NET_ICMP_GLOBAL_STATISTICS_V2, out, address_family) != 0)
+        return -1;
+    if (out->version != RIN_NET_ICMP_GLOBAL_STATISTICS_V2_VERSION ||
+        out->struct_size != sizeof(*out) ||
+        out->device_generation == 0u ||
+        out->address_family != address_family ||
+        (out->supported_flags & ~RIN_NET_ICMP_GLOBAL_STATISTICS_V2_KNOWN_FLAGS) != 0u) {
+        errno = EPROTO;
+        return -1;
+    }
+    return 0;
+}
+
 static int netif_snapshot(RinNetPrimaryInfo* info)
 {
     int status;
