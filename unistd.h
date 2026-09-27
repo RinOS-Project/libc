@@ -1010,6 +1010,18 @@ static inline int setuid(uid_t uid) {
     return __rin_set_credential(__RIN_CREDENTIAL_SET_UID, (uint32_t)uid);
 }
 
+static inline int seteuid(uid_t euid) {
+#if !defined(RIN_SYS_TYPES_UNSIGNED_ID)
+    if ((int64_t)euid < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+#else
+    (void)euid;
+#endif
+    return __rin_set_credential(__RIN_CREDENTIAL_SET_EUID, (uint32_t)euid);
+}
+
 static inline int setgid(gid_t gid) {
 #if !defined(RIN_SYS_TYPES_UNSIGNED_ID)
     if ((int64_t)gid < 0) {
