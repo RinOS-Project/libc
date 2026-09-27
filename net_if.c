@@ -23,6 +23,31 @@ int rin_net_get_interface_statistics(RinNetInterfaceStatisticsV1* out)
     return 0;
 }
 
+int rin_net_get_ip_global_statistics(
+    uint32_t address_family, RinNetIpGlobalStatisticsV1* out)
+{
+    if (!out) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (address_family != RIN_NET_IP_GLOBAL_STATISTICS_AF_IPV4 &&
+        address_family != RIN_NET_IP_GLOBAL_STATISTICS_AF_IPV6) {
+        errno = EAFNOSUPPORT;
+        return -1;
+    }
+    if (syscall(SYS_NET_IP_GLOBAL_STATISTICS, out, address_family) != 0)
+        return -1;
+    if (out->version != RIN_NET_IP_GLOBAL_STATISTICS_VERSION ||
+        out->struct_size != sizeof(*out) ||
+        out->device_generation == 0u ||
+        out->address_family != address_family ||
+        (out->supported_flags & ~RIN_NET_IP_GLOBAL_STATISTICS_KNOWN_FLAGS) != 0u) {
+        errno = EPROTO;
+        return -1;
+    }
+    return 0;
+}
+
 static int netif_snapshot(RinNetPrimaryInfo* info)
 {
     int status;
