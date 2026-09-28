@@ -72,6 +72,10 @@ static inline pid_t __rin_wait_pid_result(intptr_t result) {
     return (pid_t)result;
 }
 
+static inline void __rin_wait_clear_status(int* wstatus) {
+    if (wstatus) *wstatus = 0;
+}
+
 /* waitid's private syscall returns a positive visible PID for an event, but
  * POSIX waitid returns zero after the siginfo copy. */
 static inline int __rin_waitid_event_result(intptr_t result) {
@@ -136,9 +140,13 @@ typedef int idtype_t;
 #ifndef _RIN_WAIT_DEFINED
 #define _RIN_WAIT_DEFINED
 static inline pid_t wait(int* wstatus) {
-    return __rin_wait_pid_result(
+    pid_t result;
+    __rin_wait_clear_status(wstatus);
+    result = __rin_wait_pid_result(
         _RIN_WAIT_SYSCALL3(SYS_WAIT, (uintptr_t)(intptr_t)-1,
                            (uintptr_t)wstatus, 0u));
+    if (result < 0) __rin_wait_clear_status(wstatus);
+    return result;
 }
 #endif /* _RIN_WAIT_DEFINED */
 
@@ -153,10 +161,14 @@ static inline pid_t waitpid(pid_t pid, int* wstatus, int options) {
         errno = EINVAL;
         return (pid_t)-1;
     }
-    return __rin_wait_pid_result(
+    pid_t result;
+    __rin_wait_clear_status(wstatus);
+    result = __rin_wait_pid_result(
         _RIN_WAIT_SYSCALL3(SYS_WAIT, (uintptr_t)(intptr_t)pid,
                            (uintptr_t)wstatus,
                            (uintptr_t)(unsigned int)options));
+    if (result < 0) __rin_wait_clear_status(wstatus);
+    return result;
 }
 
 static inline void __rin_waitid_clear_info(siginfo_t* information) {
@@ -212,10 +224,14 @@ static inline int waitid(idtype_t idtype, id_t id, siginfo_t* infop,
     if ((options & WNOWAIT) != 0) wait_flags |= __RIN_WAIT_OPTION_NOWAIT;
     if ((options & WNOHANG) != 0) wait_flags |= WNOHANG;
 
+    __rin_waitid_clear_info(infop);
     result = _RIN_WAITID_SYSCALL4(
         SYS_WAITID, (uintptr_t)(int32_t)idtype, (uintptr_t)(uint32_t)id,
         (uintptr_t)infop, (uintptr_t)(unsigned int)wait_flags);
-    if (__rin_waitid_event_result(result) != 0) return -1;
+    if (__rin_waitid_event_result(result) != 0) {
+        __rin_waitid_clear_info(infop);
+        return -1;
+    }
     if (result == 0) {
         __rin_waitid_clear_info(infop);
         return 0;
@@ -280,11 +296,13 @@ static inline pid_t wait3(int* wstatus, int options, struct rusage* rusage) {
     }
     if (rusage) {
         __rin_wait_clear_rusage(rusage);
+        __rin_wait_clear_status(wstatus);
         result = __rin_wait_pid_result(
             _RIN_WAIT_SYSCALL4(SYS_WAIT4, (uintptr_t)(intptr_t)-1,
                                (uintptr_t)wstatus, (uintptr_t)(unsigned int)options,
                                (uintptr_t)rusage));
         if (result < 0) __rin_wait_clear_rusage(rusage);
+        if (result < 0) __rin_wait_clear_status(wstatus);
         return result;
     }
     return waitpid(-1, wstatus, options);
@@ -298,11 +316,13 @@ static inline pid_t wait4(pid_t pid, int* wstatus, int options, struct rusage* r
     }
     if (rusage) {
         __rin_wait_clear_rusage(rusage);
+        __rin_wait_clear_status(wstatus);
         result = __rin_wait_pid_result(
             _RIN_WAIT_SYSCALL4(SYS_WAIT4, (uintptr_t)(intptr_t)pid,
                                (uintptr_t)wstatus, (uintptr_t)(unsigned int)options,
                                (uintptr_t)rusage));
         if (result < 0) __rin_wait_clear_rusage(rusage);
+        if (result < 0) __rin_wait_clear_status(wstatus);
         return result;
     }
     return waitpid(pid, wstatus, options);
