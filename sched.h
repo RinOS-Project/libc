@@ -566,29 +566,31 @@ static inline int sched_setaffinity(pid_t pid, size_t cpusetsize, const cpu_set_
  * silently change another address space. */
 static inline int rin_sched_get_numa_policy(RinNumaMemoryPolicyV1* policy)
 {
-    intptr_t result;
     if (!policy) {
         errno = EINVAL;
         return -1;
     }
-    result = _rin_sched_result(_RIN_SCHED_SYSCALL2(
-        SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_GET,
-        (uintptr_t)policy));
-    return result < 0 ? -1 : 0;
+    /* Do not expose a partial policy copy-out after a backend failure. */
+    __builtin_memset(policy, 0, sizeof(*policy));
+    if (_rin_sched_status(_RIN_SCHED_SYSCALL2(
+            SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_GET,
+            (uintptr_t)policy)) < 0) {
+        __builtin_memset(policy, 0, sizeof(*policy));
+        return -1;
+    }
+    return 0;
 }
 
 static inline int rin_sched_set_numa_policy(
     const RinNumaMemoryPolicyV1* policy)
 {
-    intptr_t result;
     if (!policy) {
         errno = EINVAL;
         return -1;
     }
-    result = _rin_sched_result(_RIN_SCHED_SYSCALL2(
+    return _rin_sched_status(_RIN_SCHED_SYSCALL2(
         SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_SET,
         (uintptr_t)policy));
-    return result < 0 ? -1 : 0;
 }
 
 /* 現在実行中のCPU番号を取得 */
