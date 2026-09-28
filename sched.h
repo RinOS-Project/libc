@@ -13,6 +13,7 @@
 #include "errno.h"
 #include "limits.h"
 #include <rin/thread/sched_abi.h>
+#include <rin/memory/numa_policy_abi.h>
 
 /* Caller-provided syscall hooks are the explicit opt-in for the Rin POSIX
  * scheduler surface in hosted tests.  Otherwise a hosted pthread provider
@@ -554,6 +555,36 @@ static inline int sched_setaffinity(pid_t pid, size_t cpusetsize, const cpu_set_
     }
     result = _rin_sched_result(_RIN_SCHED_SYSCALL3(
         SYS_SCHED_SETAFFINITY, (uintptr_t)pid, cpusetsize, (uintptr_t)mask));
+    return result < 0 ? -1 : 0;
+}
+
+/* Process-local NUMA placement policy.  The kernel accepts only the current
+ * process and validates every field, so a stale or malformed policy cannot
+ * silently change another address space. */
+static inline int rin_sched_get_numa_policy(RinNumaMemoryPolicyV1* policy)
+{
+    intptr_t result;
+    if (!policy) {
+        errno = EINVAL;
+        return -1;
+    }
+    result = _rin_sched_result(_RIN_SCHED_SYSCALL2(
+        SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_GET,
+        (uintptr_t)policy));
+    return result < 0 ? -1 : 0;
+}
+
+static inline int rin_sched_set_numa_policy(
+    const RinNumaMemoryPolicyV1* policy)
+{
+    intptr_t result;
+    if (!policy) {
+        errno = EINVAL;
+        return -1;
+    }
+    result = _rin_sched_result(_RIN_SCHED_SYSCALL2(
+        SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_SET,
+        (uintptr_t)policy));
     return result < 0 ? -1 : 0;
 }
 
