@@ -375,6 +375,8 @@ static inline int sched_getparam(pid_t pid, struct sched_param* param) {
         errno = EINVAL;
         return -1;
     }
+    /* Keep a failed scheduler query from exposing a stale priority. */
+    param->sched_priority = 0;
 
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
     RinThreadSchedParametersV1 parameters = {
@@ -493,6 +495,9 @@ static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
         errno = EINVAL;
         return -1;
     }
+    /* The interval is caller-owned output and must be empty on failure. */
+    interval->tv_sec = 0;
+    interval->tv_nsec = 0;
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
     uint32_t milliseconds = 0u;
     intptr_t result;
