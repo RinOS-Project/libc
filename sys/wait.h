@@ -252,6 +252,17 @@ struct rusage {
 };
 #endif
 
+/* wait3/wait4 receive a caller-owned aggregate through an unversioned
+ * syscall ABI.  Keep the public wrapper failure-atomic even if the kernel
+ * copied only a prefix before reporting an error. */
+static inline void __rin_wait_clear_rusage(struct rusage* rusage) {
+    size_t index;
+    unsigned char* bytes;
+    if (!rusage) return;
+    bytes = (unsigned char*)rusage;
+    for (index = 0u; index < sizeof(*rusage); ++index) bytes[index] = 0u;
+}
+
 /* rusageの定数 */
 #define RUSAGE_SELF     0
 #define RUSAGE_CHILDREN (-1)
@@ -262,29 +273,37 @@ static inline int __rin_wait_bsd_options_valid(int options) {
 }
 
 static inline pid_t wait3(int* wstatus, int options, struct rusage* rusage) {
+    pid_t result;
     if (!__rin_wait_bsd_options_valid(options)) {
         errno = EINVAL;
         return (pid_t)-1;
     }
     if (rusage) {
-        return __rin_wait_pid_result(
+        __rin_wait_clear_rusage(rusage);
+        result = __rin_wait_pid_result(
             _RIN_WAIT_SYSCALL4(SYS_WAIT4, (uintptr_t)(intptr_t)-1,
                                (uintptr_t)wstatus, (uintptr_t)(unsigned int)options,
                                (uintptr_t)rusage));
+        if (result < 0) __rin_wait_clear_rusage(rusage);
+        return result;
     }
     return waitpid(-1, wstatus, options);
 }
 
 static inline pid_t wait4(pid_t pid, int* wstatus, int options, struct rusage* rusage) {
+    pid_t result;
     if (!__rin_wait_bsd_options_valid(options)) {
         errno = EINVAL;
         return (pid_t)-1;
     }
     if (rusage) {
-        return __rin_wait_pid_result(
+        __rin_wait_clear_rusage(rusage);
+        result = __rin_wait_pid_result(
             _RIN_WAIT_SYSCALL4(SYS_WAIT4, (uintptr_t)(intptr_t)pid,
                                (uintptr_t)wstatus, (uintptr_t)(unsigned int)options,
                                (uintptr_t)rusage));
+        if (result < 0) __rin_wait_clear_rusage(rusage);
+        return result;
     }
     return waitpid(pid, wstatus, options);
 }
