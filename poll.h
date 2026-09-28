@@ -95,12 +95,23 @@ static inline intptr_t __rin_poll_result(intptr_t result) {
     return result;
 }
 
+static inline void __rin_poll_clear_revents(struct pollfd* fds,
+                                             nfds_t nfds) {
+    if (!fds) return;
+    for (nfds_t index = 0u; index < nfds; ++index)
+        fds[index].revents = 0;
+}
+
 static inline int __rin_poll_syscall_once(struct pollfd* fds, nfds_t nfds, int timeout) {
     intptr_t result = __rin_poll_result(_RIN_POLL_SYSCALL3(
         SYS_POLL, fds, nfds, timeout));
-    if (result < 0) return -1;
+    if (result < 0) {
+        __rin_poll_clear_revents(fds, nfds);
+        return -1;
+    }
     if (result > (intptr_t)INT_MAX) {
         errno = EOVERFLOW;
+        __rin_poll_clear_revents(fds, nfds);
         return -1;
     }
     return (int)result;
@@ -111,9 +122,13 @@ static inline int __rin_ppoll_syscall_once(
     const sigset_t* sigmask) {
     intptr_t result = __rin_poll_result(_RIN_POLL_SYSCALL5(
         SYS_PPOLL, fds, nfds, timeout_ms, sigmask, sizeof(sigset_t)));
-    if (result < 0) return -1;
+    if (result < 0) {
+        __rin_poll_clear_revents(fds, nfds);
+        return -1;
+    }
     if (result > (intptr_t)INT_MAX) {
         errno = EOVERFLOW;
+        __rin_poll_clear_revents(fds, nfds);
         return -1;
     }
     return (int)result;
