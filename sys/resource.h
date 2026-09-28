@@ -413,7 +413,19 @@ static inline int __rin_getrusage_status_result(intptr_t result) {
     return 0;
 }
 
+/* getrusage receives a caller-owned aggregate through an unversioned syscall
+ * ABI.  Clear it before the call and again on every failure so a kernel-side
+ * partial copy-out can never be observed as a usable usage snapshot. */
+static inline void __rin_getrusage_clear(struct rusage* usage) {
+    size_t index;
+    unsigned char* bytes;
+    if (!usage) return;
+    bytes = (unsigned char*)usage;
+    for (index = 0u; index < sizeof(*usage); ++index) bytes[index] = 0u;
+}
+
 static inline int getrusage(int who, struct rusage* usage) {
+    int status;
     if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN &&
         who != RUSAGE_THREAD) {
         errno = EINVAL;
@@ -423,8 +435,11 @@ static inline int getrusage(int who, struct rusage* usage) {
         errno = EFAULT;
         return -1;
     }
-    return __rin_getrusage_status_result(_RIN_GETRUSAGE_SYSCALL2(
+    __rin_getrusage_clear(usage);
+    status = __rin_getrusage_status_result(_RIN_GETRUSAGE_SYSCALL2(
         SYS_GETRUSAGE, (uintptr_t)(intptr_t)who, (uintptr_t)usage));
+    if (status != 0) __rin_getrusage_clear(usage);
+    return status;
 }
 
 /* ═══════════════════════════════════════════════════════════════
