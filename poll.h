@@ -102,6 +102,14 @@ static inline void __rin_poll_clear_revents(struct pollfd* fds,
         fds[index].revents = 0;
 }
 
+static inline void __rin_select_clear_sets(fd_set* readfds,
+                                            fd_set* writefds,
+                                            fd_set* exceptfds) {
+    if (readfds) FD_ZERO(readfds);
+    if (writefds) FD_ZERO(writefds);
+    if (exceptfds) FD_ZERO(exceptfds);
+}
+
 static inline int __rin_poll_syscall_once(struct pollfd* fds, nfds_t nfds, int timeout) {
     intptr_t result = __rin_poll_result(_RIN_POLL_SYSCALL3(
         SYS_POLL, fds, nfds, timeout));
@@ -342,16 +350,20 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     }
 
     if (npfds == 0) {
-        return poll(NULL, 0, timeout_ms);
+        const int ret = poll(NULL, 0, timeout_ms);
+        if (ret < 0)
+            __rin_select_clear_sets(readfds, writefds, exceptfds);
+        return ret;
     }
 
     int ret = poll(pfds, (nfds_t)npfds, timeout_ms);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        __rin_select_clear_sets(readfds, writefds, exceptfds);
+        return ret;
+    }
 
     /* fd_setをクリアして結果を設定 */
-    if (readfds) FD_ZERO(readfds);
-    if (writefds) FD_ZERO(writefds);
-    if (exceptfds) FD_ZERO(exceptfds);
+    __rin_select_clear_sets(readfds, writefds, exceptfds);
 
     for (int i = 0; i < npfds; i++) {
         if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
@@ -401,10 +413,11 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
             }
         }
         int ret = ppoll(pfds, (nfds_t)npfds, timeout, sigmask);
-        if (ret < 0) return ret;
-        if (readfds) FD_ZERO(readfds);
-        if (writefds) FD_ZERO(writefds);
-        if (exceptfds) FD_ZERO(exceptfds);
+        if (ret < 0) {
+            __rin_select_clear_sets(readfds, writefds, exceptfds);
+            return ret;
+        }
+        __rin_select_clear_sets(readfds, writefds, exceptfds);
         for (int i = 0; i < npfds; ++i) {
             if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
                 if (readfds) FD_SET(pfds[i].fd, readfds);
