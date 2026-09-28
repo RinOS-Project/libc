@@ -536,26 +536,29 @@ static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
 
 /* CPU affinity を取得 */
 static inline int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t* mask) {
-    intptr_t result;
     if (!mask || cpusetsize != sizeof(cpu_set_t)) {
         errno = EINVAL;
         return -1;
     }
-    result = _rin_sched_result(_RIN_SCHED_SYSCALL3(
-        SYS_SCHED_GETAFFINITY, (uintptr_t)pid, cpusetsize, (uintptr_t)mask));
-    return result < 0 ? -1 : 0;
+    /* Do not expose a partial kernel write when the producer reports failure. */
+    __rin_sched_cpu_zero(mask);
+    if (_rin_sched_status(_RIN_SCHED_SYSCALL3(
+            SYS_SCHED_GETAFFINITY, (uintptr_t)pid, cpusetsize,
+            (uintptr_t)mask)) < 0) {
+        __rin_sched_cpu_zero(mask);
+        return -1;
+    }
+    return 0;
 }
 
 /* CPU affinity を設定 */
 static inline int sched_setaffinity(pid_t pid, size_t cpusetsize, const cpu_set_t* mask) {
-    intptr_t result;
     if (!mask || cpusetsize != sizeof(cpu_set_t)) {
         errno = EINVAL;
         return -1;
     }
-    result = _rin_sched_result(_RIN_SCHED_SYSCALL3(
+    return _rin_sched_status(_RIN_SCHED_SYSCALL3(
         SYS_SCHED_SETAFFINITY, (uintptr_t)pid, cpusetsize, (uintptr_t)mask));
-    return result < 0 ? -1 : 0;
 }
 
 /* Process-local NUMA placement policy.  The kernel accepts only the current
