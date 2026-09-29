@@ -181,22 +181,23 @@ static inline int lstat(const char* pathname, struct stat* statbuf) {
     return __rin_stat_int_result(_RIN_STAT_SYSCALL2(SYS_LSTAT, pathname, statbuf));
 }
 
-/* RinOS has not published a device/FIFO creation operation in the stable
- * path-at ABI yet.  Keep the POSIX entry points explicit and fail closed so
- * native consumers can compile without accidentally calling a host libc. */
+/* Device and FIFO inode creation shares the stable descriptor-relative path
+ * ABI so path resolution and mutation authorization remain kernel-owned. */
 static inline int mknod(const char* pathname, mode_t mode, dev_t dev) {
-    (void)pathname;
-    (void)mode;
-    (void)dev;
-    errno = ENOSYS;
-    return -1;
+    RinPathAtCallV1 call;
+    if (!pathname) {
+        errno = EFAULT;
+        return -1;
+    }
+    __rin_stat_path_at_init(&call, RIN_PATH_AT_MKNOD);
+    call.path1 = (uint64_t)(uintptr_t)pathname;
+    call.mode = (uint32_t)mode;
+    call.reserved0 = (uint32_t)dev;
+    return __rin_stat_int_result(_RIN_STAT_PATH_AT_CALL(&call));
 }
 
 static inline int mkfifo(const char* pathname, mode_t mode) {
-    (void)pathname;
-    (void)mode;
-    errno = ENOSYS;
-    return -1;
+    return mknod(pathname, (mode_t)(S_IFIFO | (mode & 07777)), 0);
 }
 
 static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf, int flags) {
