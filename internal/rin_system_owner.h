@@ -86,6 +86,8 @@ static inline int _rin_system_owner(const char* command) {
         intptr_t fork_result;
         intptr_t wait_result;
         int status = 0;
+        char** environment;
+        unsigned int environment_epoch = 0u;
         char* shell_arguments[4];
 
         while (command_length <= RIN_STDLIB_SYSTEM_COMMAND_MAX &&
@@ -96,8 +98,16 @@ static inline int _rin_system_owner(const char* command) {
             return -1;
         }
 
+#if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
+        environment = __rin_env_read_begin(&environment_epoch);
+#else
+        environment = environ;
+#endif
         fork_result = __rin_syscall_posixize(
             (intptr_t)_RIN_STDLIB_SYSTEM_FORK());
+#if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
+        if (fork_result != 0) __rin_env_read_end(environment_epoch);
+#endif
         if (fork_result < 0) {
             if (fork_result != -1) errno = EIO;
             return -1;
@@ -105,16 +115,10 @@ static inline int _rin_system_owner(const char* command) {
         if (fork_result == 0) {
             intptr_t exec_result;
             int exec_errno;
-            char** environment;
             shell_arguments[0] = (char*)"sh";
             shell_arguments[1] = (char*)"-c";
             shell_arguments[2] = (char*)command;
             shell_arguments[3] = NULL;
-#if defined(RIN_FREESTANDING) && RIN_FREESTANDING
-            environment = __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
-#else
-            environment = environ;
-#endif
             exec_result = __rin_syscall_posixize((intptr_t)
                 _RIN_STDLIB_SYSTEM_EXECVE("/bin/sh", shell_arguments,
                                           environment));
@@ -123,6 +127,9 @@ static inline int _rin_system_owner(const char* command) {
                 exec_result = -1;
             }
             exec_errno = errno;
+#if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
+            __rin_env_read_end(environment_epoch);
+#endif
             _RIN_STDLIB_SYSTEM_EXIT(127);
             /* A test owner may return from the exit seam.  Preserve the
              * shell's conventional 127 status instead of exposing success. */

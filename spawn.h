@@ -399,6 +399,41 @@ static inline int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t* a
 #define _RIN_POSIX_SPAWN_GETENV(name) secure_getenv(name)
 #endif
 
+static inline int _rin_posix_spawn_capture_search_path(
+    char* storage, size_t storage_size, const char** path_out,
+    char*** environment_out, unsigned int* epoch_out)
+{
+    char** snapshot;
+    const char* path;
+    size_t path_length;
+    int result;
+    if (!storage || storage_size < _RIN_POSIX_SPAWN_ENV_PATH_CAPACITY + 1u ||
+        !path_out || !environment_out || !epoch_out)
+        return EINVAL;
+    snapshot = __rin_unistd_environment_snapshot(epoch_out);
+    *environment_out = snapshot;
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    defined(RIN_USERSPACE) && RIN_USERSPACE
+    path = __rin_env_get_from_snapshot(snapshot, "PATH");
+#else
+    path = _RIN_POSIX_SPAWN_GETENV("PATH");
+#endif
+    if (!path) {
+        *path_out = NULL;
+        return 0;
+    }
+    result = _rin_posix_spawn_bounded_string_length(
+        path, _RIN_POSIX_SPAWN_ENV_PATH_CAPACITY, &path_length);
+    if (result == 0) {
+        for (size_t index = 0u; index <= path_length; ++index)
+            storage[index] = path[index];
+        *path_out = storage;
+    } else {
+        __rin_unistd_environment_release(*epoch_out);
+    }
+    return result;
+}
+
 static inline int _rin_posix_spawn_validate(
     const posix_spawn_file_actions_t* file_actions,
     const posix_spawnattr_t* attr)
@@ -559,6 +594,8 @@ static inline int _rin_posix_spawn_direct(
     int validation;
     size_t path_length;
     uintptr_t spawn_flags = 0u;
+    unsigned int environment_epoch = 0u;
+    char* const* environment = envp;
     _rin_posix_spawn_file_action_t wire_actions[_RIN_POSIX_SPAWN_MAX_ACTIONS];
     uintptr_t wire_action_count = 0u;
 
@@ -581,33 +618,21 @@ static inline int _rin_posix_spawn_direct(
     if (validation != 0)
         return validation;
 
-#if defined(__x86_64__) || defined(_M_X64)
+    if (!environment)
+        environment = __rin_unistd_environment_snapshot(&environment_epoch);
     result = _RIN_POSIX_SPAWN_ACTION_SYSCALL6(
-        path, argv, envp ? envp : __rin_unistd_environment_snapshot(),
+        path, argv, environment,
         wire_action_count != 0u ? wire_actions : NULL,
         wire_action_count,
         spawn_flags);
+    if (!envp)
+        __rin_unistd_environment_release(environment_epoch);
     if (result < 0 && result >= -4095)
         return (int)-result;
     if (result <= 0 || result > 0x7fffffffL)
         return EIO;
     *pid = (pid_t)result;
     return 0;
-#else
-    /* _syscall6 is available on every RinOS personality.  Keep the direct
-     * ABI path usable for IA-32 instead of manufacturing an ENOSYS result. */
-    result = _RIN_POSIX_SPAWN_ACTION_SYSCALL6(
-        path, argv, envp ? envp : __rin_unistd_environment_snapshot(),
-        wire_action_count != 0u ? wire_actions : NULL,
-        wire_action_count,
-        spawn_flags);
-    if (result < 0 && result >= -4095)
-        return (int)-result;
-    if (result <= 0 || result > 0x7fffffffL)
-        return EIO;
-    *pid = (pid_t)result;
-    return 0;
-#endif
 }
 
 static inline int posix_spawn(
@@ -630,7 +655,11 @@ static inline int posix_spawnp(
     size_t search_path_length;
     int saved_error = ENOENT;
     int validation;
+    unsigned int environment_epoch = 0u;
+    char** inherited_environment = NULL;
+    char* const* spawn_environment = envp;
     char candidate[512];
+    char path_storage[_RIN_POSIX_SPAWN_ENV_PATH_CAPACITY + 1u];
 
     if (!pid || !file)
         return EINVAL;
@@ -647,7 +676,13 @@ static inline int posix_spawnp(
         return _rin_posix_spawn_direct(
             pid, file, file_actions, attr, argv, envp);
 
-    search_path = _RIN_POSIX_SPAWN_GETENV("PATH");
+    validation = _rin_posix_spawn_capture_search_path(
+        path_storage, sizeof(path_storage), &search_path,
+        &inherited_environment, &environment_epoch);
+    if (validation != 0)
+        return validation;
+    if (!spawn_environment)
+        spawn_environment = inherited_environment;
     /* An unset PATH uses this implementation's default.  An explicitly
      * empty PATH is one empty component, which searches the child cwd. */
     if (!search_path)
@@ -655,7 +690,8 @@ static inline int posix_spawnp(
     validation = _rin_posix_spawn_bounded_string_length(
         search_path, _RIN_POSIX_SPAWN_ENV_PATH_CAPACITY, &search_path_length);
     if (validation != 0)
-        return validation;
+        return __rin_unistd_environment_finish(
+            validation, environment_epoch);
     segment_begin = search_path;
 
     for (;;) {
@@ -677,13 +713,15 @@ static inline int posix_spawnp(
             }
             memcpy(candidate + offset, file, file_len + 1u);
             result = _rin_posix_spawn_direct(
-                pid, candidate, file_actions, attr, argv, envp);
+                pid, candidate, file_actions, attr, argv, spawn_environment);
             if (result == 0)
-                return 0;
+                return __rin_unistd_environment_finish(
+                    0, environment_epoch);
             if (result == EACCES) {
                 saved_error = EACCES;
             } else if (result != ENOENT && result != ENOTDIR) {
-                return result;
+                return __rin_unistd_environment_finish(
+                    result, environment_epoch);
             }
         } else if (saved_error == ENOENT) {
             saved_error = ENAMETOOLONG;
@@ -692,7 +730,8 @@ static inline int posix_spawnp(
             break;
         segment_begin = segment_end + 1;
     }
-    return saved_error;
+    return __rin_unistd_environment_finish(
+        saved_error, environment_epoch);
 }
 
 #ifdef __cplusplus

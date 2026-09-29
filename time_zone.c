@@ -3,6 +3,10 @@
 #include "errno.h"
 #include "limits.h"
 #include "stdlib.h"
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    defined(RIN_USERSPACE) && RIN_USERSPACE
+#include "internal/rin_environment_runtime.h"
+#endif
 #include "string.h"
 #include "time.h"
 
@@ -211,12 +215,37 @@ static void rin_time_zone_copy(char* output, const char* input,
 }
 
 static int rin_time_zone_snapshot_environment(char output[RIN_TZ_TEXT_MAX + 1u]) {
-    const char* value = getenv("TZ");
+    const char* value;
     RinTimeZoneSystemProvider provider = NULL;
     void* provider_context = NULL;
     size_t length = 0u;
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    defined(RIN_USERSPACE) && RIN_USERSPACE
+    unsigned int environment_epoch;
+    char** environment = __rin_env_read_begin(&environment_epoch);
+    value = __rin_env_get_from_snapshot(environment, "TZ");
+#else
+    value = getenv("TZ");
+#endif
     for (size_t index = 0u; index <= RIN_TZ_TEXT_MAX; ++index)
         output[index] = '\0';
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    defined(RIN_USERSPACE) && RIN_USERSPACE
+    if (value) {
+        if (value[0] == '\0') value = "UTC0";
+        while (length <= RIN_TZ_TEXT_MAX && value[length] != '\0') ++length;
+        if (length <= RIN_TZ_TEXT_MAX)
+            for (size_t index = 0u; index < length; ++index)
+                output[index] = value[index];
+        __rin_env_read_end(environment_epoch);
+        if (length > RIN_TZ_TEXT_MAX) {
+            errno = EOVERFLOW;
+            return 0;
+        }
+        return 1;
+    }
+    __rin_env_read_end(environment_epoch);
+#endif
     if (!value) {
         rin_time_zone_acquire();
         if (rin_time_zone_system_provider_bound) {
@@ -251,12 +280,16 @@ static int rin_time_zone_snapshot_environment(char output[RIN_TZ_TEXT_MAX + 1u])
         } else {
             value = "UTC0";
         }
-    } else if (value[0] == '\0') {
+    }
+#if !defined(RIN_FREESTANDING) || !RIN_FREESTANDING || \
+    !defined(RIN_USERSPACE) || !RIN_USERSPACE
+    else if (value[0] == '\0') {
         /* POSIX defines an explicitly empty TZ as UTC.  It must not silently
          * turn into the machine-wide provider merely because the provider is
          * installed. */
         value = "UTC0";
     }
+#endif
     while (length <= RIN_TZ_TEXT_MAX && value[length] != '\0') ++length;
     if (length > RIN_TZ_TEXT_MAX) {
         errno = EOVERFLOW;

@@ -95,6 +95,9 @@
 #endif
 
 #ifndef MIDL_PASS
+#if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
+#include "internal/rin_environment_runtime.h"
+#endif
 #include "internal/rin_system_owner.h"
 #endif /* !MIDL_PASS */
 
@@ -295,349 +298,14 @@ static inline int putenv(char* string) {
 }
 
 #elif defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
-/* Userspace environment support backed by the process-local environ table. */
-static inline size_t __rin_env_strlen(char const* string)
-{
-    size_t length = 0;
-    if (!string)
-        return 0;
-    while (string[length] != '\0')
-        ++length;
-    return length;
-}
-
-static inline int __rin_env_name_is_valid(char const* name)
-{
-    if (!name || *name == '\0')
-        return 0;
-
-    for (char const* ch = name; *ch != '\0'; ++ch) {
-        if (*ch == '=')
-            return 0;
-    }
-
-    return 1;
-}
-
-static inline int __rin_env_name_matches(char const* entry, char const* name)
-{
-    size_t index = 0;
-
-    if (!entry || !name)
-        return 0;
-
-    while (name[index] != '\0') {
-        if (entry[index] != name[index])
-            return 0;
-        ++index;
-    }
-
-    return entry[index] == '=';
-}
-
-static inline char* __rin_env_make_entry(char const* name, char const* value)
-{
-    size_t name_length;
-    size_t value_length;
-    char* entry;
-    size_t offset = 0;
-
-    if (!name || !value) {
-        errno = EINVAL;
-        return NULL;
-    }
-
-    name_length = __rin_env_strlen(name);
-    value_length = __rin_env_strlen(value);
-    if (value_length > SIZE_MAX - 2u ||
-        name_length > SIZE_MAX - value_length - 2u) {
-        errno = EOVERFLOW;
-        return NULL;
-    }
-    entry = (char*)malloc(name_length + value_length + 2);
-    if (!entry) {
-        errno = ENOMEM;
-        return NULL;
-    }
-
-    for (size_t i = 0; i < name_length; ++i)
-        entry[offset++] = name[i];
-    entry[offset++] = '=';
-    for (size_t i = 0; i < value_length; ++i)
-        entry[offset++] = value[i];
-    entry[offset] = '\0';
-    return entry;
-}
-
-/* Environment mutators are header inlines, so serialize publication through
- * the process-global environ pointer rather than a translation-unit-local
- * lock. Old tables and copied entries are retained because readers or callers
- * may still hold pointers into a prior environment snapshot. */
-static inline char** __rin_env_snapshot(void)
-{
-    return __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
-}
-
-static inline int __rin_env_publish(char** expected, char** replacement)
-{
-    return __atomic_compare_exchange_n(
-        &environ, &expected, replacement, 0,
-        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
-}
-
-static inline size_t __rin_env_count(char** source)
-{
-    size_t count = 0u;
-
-    if (!source)
-        return 0u;
-    while (source[count] != NULL) {
-        if (count >= SIZE_MAX / sizeof(char*) - 1u) {
-            errno = EOVERFLOW;
-            return SIZE_MAX;
-        }
-        ++count;
-    }
-    return count;
-}
-
-static inline size_t __rin_env_matching_count(
-    char** source, size_t entry_count, char const* name)
-{
-    size_t matches = 0u;
-
-    for (size_t index = 0u; index < entry_count; ++index) {
-        if (__rin_env_name_matches(source[index], name))
-            ++matches;
-    }
-    return matches;
-}
-
-static inline int __rin_env_entry_matches_name_slice(
-    char const* entry, char const* name, size_t name_length)
-{
-    if (!entry || !name || name_length == 0u)
-        return 0;
-    for (size_t index = 0u; index < name_length; ++index) {
-        if (entry[index] == '\0' || entry[index] != name[index])
-            return 0;
-    }
-    return entry[name_length] == '=';
-}
-
-static inline char** __rin_env_allocate_table(size_t entry_count)
-{
-    char** table;
-
-    if (entry_count >= SIZE_MAX / sizeof(char*)) {
-        errno = EOVERFLOW;
-        return NULL;
-    }
-    table = (char**)malloc(sizeof(char*) * (entry_count + 1u));
-
-    if (!table) {
-        errno = ENOMEM;
-        return NULL;
-    }
-    return table;
-}
-
-static inline int __rin_env_install_empty_table(void)
-{
-    for (;;) {
-        char** empty_table = __rin_env_allocate_table(0u);
-        char** snapshot;
-
-        if (!empty_table)
-            return -1;
-        empty_table[0] = NULL;
-        snapshot = __rin_env_snapshot();
-        if (__rin_env_publish(snapshot, empty_table))
-            return 0;
-        free(empty_table);
-    }
-}
-
-static inline char* getenv(const char* name) {
-    size_t name_length;
-    char** snapshot;
-    size_t count;
-
-    if (!__rin_env_name_is_valid(name))
-        return NULL;
-
-    snapshot = __rin_env_snapshot();
-    count = __rin_env_count(snapshot);
-    if (count == SIZE_MAX)
-        return NULL;
-    for (size_t index = 0u; index < count; ++index) {
-        if (__rin_env_name_matches(snapshot[index], name)) {
-            name_length = __rin_env_strlen(name);
-            return snapshot[index] + name_length + 1u;
-        }
-    }
-
-    return NULL;
-}
-
-static inline int setenv(const char* name, const char* value, int overwrite) {
-    char* new_entry = NULL;
-
-    if (!__rin_env_name_is_valid(name) || !value) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    for (;;) {
-        char** snapshot = __rin_env_snapshot();
-        size_t count = __rin_env_count(snapshot);
-        size_t matches;
-        size_t new_count;
-        size_t write_index = 0u;
-        int inserted = 0;
-        char** new_table;
-
-        if (count == SIZE_MAX) {
-            free(new_entry);
-            return -1;
-        }
-        matches = __rin_env_matching_count(snapshot, count, name);
-        if (matches != 0u && !overwrite) {
-            free(new_entry);
-            return 0;
-        }
-        if (!new_entry) {
-            new_entry = __rin_env_make_entry(name, value);
-            if (!new_entry)
-                return -1;
-        }
-        if (matches == 0u && count == SIZE_MAX - 1u) {
-            free(new_entry);
-            errno = EOVERFLOW;
-            return -1;
-        }
-        new_count = matches == 0u ? count + 1u : count - matches + 1u;
-        new_table = __rin_env_allocate_table(new_count);
-        if (!new_table) {
-            free(new_entry);
-            return -1;
-        }
-        for (size_t index = 0u; index < count; ++index) {
-            if (__rin_env_name_matches(snapshot[index], name)) {
-                if (!inserted) {
-                    new_table[write_index++] = new_entry;
-                    inserted = 1;
-                }
-            } else {
-                new_table[write_index++] = snapshot[index];
-            }
-        }
-        if (!inserted)
-            new_table[write_index++] = new_entry;
-        new_table[write_index] = NULL;
-        if (__rin_env_publish(snapshot, new_table))
-            return 0;
-        free(new_table);
-    }
-}
-
-static inline int unsetenv(const char* name) {
-    if (!__rin_env_name_is_valid(name)) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    for (;;) {
-        char** snapshot = __rin_env_snapshot();
-        size_t count = __rin_env_count(snapshot);
-        size_t matches;
-        size_t write_index = 0u;
-        char** new_table;
-
-        if (count == SIZE_MAX)
-            return -1;
-        matches = __rin_env_matching_count(snapshot, count, name);
-        if (matches == 0u)
-            return 0;
-        new_table = __rin_env_allocate_table(count - matches);
-        if (!new_table)
-            return -1;
-        for (size_t index = 0u; index < count; ++index) {
-            if (!__rin_env_name_matches(snapshot[index], name))
-                new_table[write_index++] = snapshot[index];
-        }
-        new_table[write_index] = NULL;
-        if (__rin_env_publish(snapshot, new_table))
-            return 0;
-        free(new_table);
-    }
-}
-
-static inline int putenv(char* string) {
-    char* equals = NULL;
-    size_t name_length;
-
-    if (!string) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    for (char* ch = string; *ch != '\0'; ++ch) {
-        if (*ch == '=') {
-            equals = ch;
-            break;
-        }
-    }
-
-    if (!equals || equals == string) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    name_length = (size_t)(equals - string);
-    for (;;) {
-        char** snapshot = __rin_env_snapshot();
-        size_t count = __rin_env_count(snapshot);
-        size_t matches = 0u;
-        size_t new_count;
-        size_t write_index = 0u;
-        int inserted = 0;
-        char** new_table;
-
-        if (count == SIZE_MAX)
-            return -1;
-        for (size_t index = 0u; index < count; ++index) {
-            if (__rin_env_entry_matches_name_slice(
-                    snapshot[index], string, name_length))
-                ++matches;
-        }
-        if (matches == 0u && count == SIZE_MAX - 1u) {
-            errno = EOVERFLOW;
-            return -1;
-        }
-        new_count = matches == 0u ? count + 1u : count - matches + 1u;
-        new_table = __rin_env_allocate_table(new_count);
-        if (!new_table)
-            return -1;
-        for (size_t index = 0u; index < count; ++index) {
-            if (__rin_env_entry_matches_name_slice(
-                    snapshot[index], string, name_length)) {
-                if (!inserted) {
-                    new_table[write_index++] = string;
-                    inserted = 1;
-                }
-            } else {
-                new_table[write_index++] = snapshot[index];
-            }
-        }
-        if (!inserted)
-            new_table[write_index++] = string;
-        new_table[write_index] = NULL;
-        if (__rin_env_publish(snapshot, new_table))
-            return 0;
-        free(new_table);
-    }
-}
+/* The process-wide environment owner is implemented once in libc so it can
+ * serialize mutations and reclaim retired tables across translation units. */
+char* getenv(const char* name);
+char* secure_getenv(const char* name);
+int setenv(const char* name, const char* value, int overwrite);
+int unsetenv(const char* name);
+int putenv(char* string);
+int clearenv(void);
 
 #else
 /* ホスト環境用スタブ */
@@ -663,15 +331,13 @@ static inline int putenv(char* string) {
 #endif /* RIN_FREESTANDING */
 #endif /* !_MSVCRT_COMPAT */
 
-#if !defined(_MSVCRT_COMPAT) && !defined(_RIN_STDLIB_HOSTED_CXX_OWNER)
+#if !defined(_MSVCRT_COMPAT) && !defined(_RIN_STDLIB_HOSTED_CXX_OWNER) && \
+    !(defined(RIN_FREESTANDING) && defined(RIN_USERSPACE))
 static inline char* secure_getenv(const char* name) {
     return getenv(name);
 }
 
 static inline int clearenv(void) {
-#if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
-    return __rin_env_install_empty_table();
-#else
     if (environ) {
         environ[0] = NULL;
     } else {
@@ -679,7 +345,6 @@ static inline int clearenv(void) {
         return -1;
     }
     return 0;
-#endif
 }
 #endif /* !_MSVCRT_COMPAT */
 

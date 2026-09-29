@@ -97,13 +97,30 @@ extern "C" {
 extern char** environ;
 #endif
 
-static inline char** __rin_unistd_environment_snapshot(void) {
+static inline char** __rin_unistd_environment_snapshot(
+    unsigned int* epoch_out) {
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
     defined(RIN_USERSPACE) && RIN_USERSPACE
-    return __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
+    return __rin_env_read_begin(epoch_out);
 #else
+    if (epoch_out) *epoch_out = 0u;
     return environ;
 #endif
+}
+
+static inline void __rin_unistd_environment_release(unsigned int epoch) {
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    defined(RIN_USERSPACE) && RIN_USERSPACE
+    __rin_env_read_end(epoch);
+#else
+    (void)epoch;
+#endif
+}
+
+static inline int __rin_unistd_environment_finish(
+    int result, unsigned int epoch) {
+    __rin_unistd_environment_release(epoch);
+    return result;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1688,6 +1705,7 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
     size_t file_length;
     int path_error = 0;
     int saved_error = ENOENT;
+    unsigned int environment_epoch = 0u;
     char candidate[__RIN_EXEC_PATH_MAX];
     char** environment;
 
@@ -1703,26 +1721,27 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
         errno = ENAMETOOLONG;
         return -1;
     }
-    environment = __rin_unistd_environment_snapshot();
+    environment = __rin_unistd_environment_snapshot(&environment_epoch);
     for (size_t index = 0u; index < file_length; ++index) {
         if (file[index] == '/') {
             int result = _RIN_UNISTD_EXECVE(file, argv, environment);
             if (result < 0 && errno == ENOEXEC)
-                return __rin_exec_shell_fallback(file, argv, environment);
-            return result;
+                result = __rin_exec_shell_fallback(file, argv, environment);
+            return __rin_unistd_environment_finish(
+                result, environment_epoch);
         }
     }
 
     search_path = __rin_exec_search_path(environment, &path_error);
     if (path_error != 0) {
         errno = path_error;
-        return -1;
+        return __rin_unistd_environment_finish(-1, environment_epoch);
     }
     if (!search_path) search_path = default_path;
     if (!__rin_exec_text_length(
             search_path, __RIN_EXEC_ENVIRONMENT_STRING_MAX, &file_length)) {
         errno = E2BIG;
-        return -1;
+        return __rin_unistd_environment_finish(-1, environment_epoch);
     }
     segment = search_path;
     for (;;) {
@@ -1736,7 +1755,7 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
         directory_length = (size_t)(end - segment);
         if (!__rin_exec_text_length(file, __RIN_EXEC_PATH_MAX, &name_length)) {
             errno = ENAMETOOLONG;
-            return -1;
+            return __rin_unistd_environment_finish(-1, environment_epoch);
         }
         required = directory_length + (directory_length ? 1u : 0u) +
                    name_length + 1u;
@@ -1747,15 +1766,19 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
             for (size_t index = 0u; index <= name_length; ++index)
                 candidate[offset++] = file[index];
             result = _RIN_UNISTD_EXECVE(candidate, argv, environment);
-            if (result < 0 && errno == ENOEXEC)
-                return __rin_exec_shell_fallback(
+            if (result < 0 && errno == ENOEXEC) {
+                result = __rin_exec_shell_fallback(
                     candidate, argv, environment);
+                return __rin_unistd_environment_finish(
+                    result, environment_epoch);
+            }
             if (result < 0 && (errno == ENOENT || errno == ENOTDIR)) {
                 /* Continue searching. */
             } else if (result < 0 && errno == EACCES) {
                 saved_error = EACCES;
             } else {
-                return result;
+                return __rin_unistd_environment_finish(
+                    result, environment_epoch);
             }
         } else if (saved_error == ENOENT) {
             saved_error = ENAMETOOLONG;
@@ -1764,12 +1787,13 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
         segment = end + 1;
     }
     errno = saved_error;
-    return -1;
+    return __rin_unistd_environment_finish(-1, environment_epoch);
 }
 
 static inline int execl(const char* pathname, const char* arg, ...) {
     char* arguments[__RIN_EXEC_ARGUMENT_COUNT_MAX + 1u];
-    char** environment = __rin_unistd_environment_snapshot();
+    char** environment;
+    unsigned int environment_epoch = 0u;
     va_list list;
     int result;
     if (!pathname || !arg) {
@@ -1780,7 +1804,9 @@ static inline int execl(const char* pathname, const char* arg, ...) {
     result = __rin_exec_collect_arguments(arg, &list, arguments);
     va_end(list);
     if (result != 0) return -1;
-    return _RIN_UNISTD_EXECVE(pathname, arguments, environment);
+    environment = __rin_unistd_environment_snapshot(&environment_epoch);
+    result = _RIN_UNISTD_EXECVE(pathname, arguments, environment);
+    return __rin_unistd_environment_finish(result, environment_epoch);
 }
 
 static inline int execlp(const char* file, const char* arg, ...) {
@@ -1819,8 +1845,10 @@ static inline int execle(const char* pathname, const char* arg, ...) {
 }
 
 static inline int execv(const char* pathname, char* const argv[]) {
-    return _RIN_UNISTD_EXECVE(
-        pathname, argv, __rin_unistd_environment_snapshot());
+    unsigned int environment_epoch = 0u;
+    char** environment = __rin_unistd_environment_snapshot(&environment_epoch);
+    int result = _RIN_UNISTD_EXECVE(pathname, argv, environment);
+    return __rin_unistd_environment_finish(result, environment_epoch);
 }
 
 static inline int execvp(const char* file, char* const argv[]) {
