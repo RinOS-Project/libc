@@ -1140,6 +1140,7 @@ static inline int ungetc(int c, FILE* stream) {
 static inline int _rin_stdio_parse_mode(const char* mode, unsigned int* flags) {
     int update = 0;
     int binary = 0;
+    int exclusive = 0;
     size_t index;
     if (!mode || !mode[0] || !flags) {
         errno = EINVAL;
@@ -1158,6 +1159,12 @@ static inline int _rin_stdio_parse_mode(const char* mode, unsigned int* flags) {
                 return -1;
             }
             binary = 1;
+        } else if (mode[index] == 'x') {
+            if (exclusive) {
+                errno = EINVAL;
+                return -1;
+            }
+            exclusive = 1;
         } else {
             errno = EINVAL;
             return -1;
@@ -1172,6 +1179,13 @@ static inline int _rin_stdio_parse_mode(const char* mode, unsigned int* flags) {
     } else {
         errno = EINVAL;
         return -1;
+    }
+    if (exclusive) {
+        if (mode[0] != 'w') {
+            errno = EINVAL;
+            return -1;
+        }
+        *flags |= O_EXCL;
     }
     return 0;
 }
