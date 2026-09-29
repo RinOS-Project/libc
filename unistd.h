@@ -285,7 +285,7 @@ static inline ssize_t write(int fd, const void* buf, size_t count) {
 #define _RIN_UNISTD_POSITIONAL_IO_MAX 16777216u
 
 static inline ssize_t _rin_unistd_positional_io(int fd, void const* buffer,
-                                                 size_t count, off_t offset,
+                                                 size_t count, int64_t offset,
                                                  int is_write) {
     uint64_t base_offset;
     size_t total = 0;
@@ -303,7 +303,7 @@ static inline ssize_t _rin_unistd_positional_io(int fd, void const* buffer,
 
         if (chunk > _RIN_UNISTD_POSITIONAL_IO_MAX)
             chunk = _RIN_UNISTD_POSITIONAL_IO_MAX;
-        if (base_offset > (uint64_t)LONG_MAX - (uint64_t)total) {
+        if (base_offset > (uint64_t)LLONG_MAX - (uint64_t)total) {
             errno = EOVERFLOW;
             return total ? (ssize_t)total : -1;
         }
@@ -334,6 +334,19 @@ static inline ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
 static inline ssize_t pwrite(int fd, const void* buf, size_t count,
                              off_t offset) {
     return _rin_unistd_positional_io(fd, buf, count, offset, 1);
+}
+
+/* The Rin PREAD/PWRITE wire ABI already carries a 64-bit offset as two
+ * 32-bit words on both native and compat32 callers. Keep the large-file
+ * spellings independent of off_t so ILP32 callers do not narrow it. */
+static inline ssize_t pread64(int fd, void* buf, size_t count,
+                              off64_t offset) {
+    return _rin_unistd_positional_io(fd, buf, count, (int64_t)offset, 0);
+}
+
+static inline ssize_t pwrite64(int fd, const void* buf, size_t count,
+                               off64_t offset) {
+    return _rin_unistd_positional_io(fd, buf, count, (int64_t)offset, 1);
 }
 
 static inline int close(int fd) {
