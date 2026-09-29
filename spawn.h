@@ -583,7 +583,7 @@ static inline int _rin_posix_spawn_direct(
 
 #if defined(__x86_64__) || defined(_M_X64)
     result = _RIN_POSIX_SPAWN_ACTION_SYSCALL6(
-        path, argv, envp ? envp : environ,
+        path, argv, envp ? envp : __rin_unistd_environment_snapshot(),
         wire_action_count != 0u ? wire_actions : NULL,
         wire_action_count,
         spawn_flags);
@@ -597,7 +597,7 @@ static inline int _rin_posix_spawn_direct(
     /* _syscall6 is available on every RinOS personality.  Keep the direct
      * ABI path usable for IA-32 instead of manufacturing an ENOSYS result. */
     result = _RIN_POSIX_SPAWN_ACTION_SYSCALL6(
-        path, argv, envp ? envp : environ,
+        path, argv, envp ? envp : __rin_unistd_environment_snapshot(),
         wire_action_count != 0u ? wire_actions : NULL,
         wire_action_count,
         spawn_flags);

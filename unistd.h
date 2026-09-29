@@ -97,6 +97,15 @@ extern "C" {
 extern char** environ;
 #endif
 
+static inline char** __rin_unistd_environment_snapshot(void) {
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    defined(RIN_USERSPACE) && RIN_USERSPACE
+    return __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
+#else
+    return environ;
+#endif
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * 型定義
  * ═══════════════════════════════════════════════════════════════*/
@@ -1624,14 +1633,15 @@ static inline int __rin_exec_text_length(
     return 1;
 }
 
-static inline const char* __rin_exec_search_path(int* error) {
+static inline const char* __rin_exec_search_path(
+    char** environment, int* error) {
     size_t entry_index;
     if (error) *error = 0;
-    if (!environ) return NULL;
+    if (!environment) return NULL;
     for (entry_index = 0u;
          entry_index < __RIN_EXEC_ENVIRONMENT_COUNT_MAX;
          ++entry_index) {
-        const char* entry = environ[entry_index];
+        const char* entry = environment[entry_index];
         size_t length;
         if (!entry) return NULL;
         if (!__rin_exec_text_length(
@@ -1649,7 +1659,7 @@ static inline const char* __rin_exec_search_path(int* error) {
 }
 
 static inline int __rin_exec_shell_fallback(
-    const char* path, char* const argv[]) {
+    const char* path, char* const argv[], char** environment) {
     char* shell_arguments[__RIN_EXEC_ARGUMENT_COUNT_MAX + 1u];
     size_t input_count = 0u;
     size_t output_count = 2u;
@@ -1668,7 +1678,7 @@ static inline int __rin_exec_shell_fallback(
     for (size_t index = 1u; index < input_count; ++index)
         shell_arguments[output_count++] = argv[index];
     shell_arguments[output_count] = NULL;
-    return _RIN_UNISTD_EXECVE("/bin/sh", shell_arguments, environ);
+    return _RIN_UNISTD_EXECVE("/bin/sh", shell_arguments, environment);
 }
 
 static inline int __rin_execvp(const char* file, char* const argv[]) {
@@ -1679,6 +1689,7 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
     int path_error = 0;
     int saved_error = ENOENT;
     char candidate[__RIN_EXEC_PATH_MAX];
+    char** environment;
 
     if (!file || !argv) {
         errno = EINVAL;
@@ -1692,16 +1703,17 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
         errno = ENAMETOOLONG;
         return -1;
     }
+    environment = __rin_unistd_environment_snapshot();
     for (size_t index = 0u; index < file_length; ++index) {
         if (file[index] == '/') {
-            int result = _RIN_UNISTD_EXECVE(file, argv, environ);
+            int result = _RIN_UNISTD_EXECVE(file, argv, environment);
             if (result < 0 && errno == ENOEXEC)
-                return __rin_exec_shell_fallback(file, argv);
+                return __rin_exec_shell_fallback(file, argv, environment);
             return result;
         }
     }
 
-    search_path = __rin_exec_search_path(&path_error);
+    search_path = __rin_exec_search_path(environment, &path_error);
     if (path_error != 0) {
         errno = path_error;
         return -1;
@@ -1734,9 +1746,10 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
             if (directory_length) candidate[offset++] = '/';
             for (size_t index = 0u; index <= name_length; ++index)
                 candidate[offset++] = file[index];
-            result = _RIN_UNISTD_EXECVE(candidate, argv, environ);
+            result = _RIN_UNISTD_EXECVE(candidate, argv, environment);
             if (result < 0 && errno == ENOEXEC)
-                return __rin_exec_shell_fallback(candidate, argv);
+                return __rin_exec_shell_fallback(
+                    candidate, argv, environment);
             if (result < 0 && (errno == ENOENT || errno == ENOTDIR)) {
                 /* Continue searching. */
             } else if (result < 0 && errno == EACCES) {
@@ -1756,6 +1769,7 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
 
 static inline int execl(const char* pathname, const char* arg, ...) {
     char* arguments[__RIN_EXEC_ARGUMENT_COUNT_MAX + 1u];
+    char** environment = __rin_unistd_environment_snapshot();
     va_list list;
     int result;
     if (!pathname || !arg) {
@@ -1766,7 +1780,7 @@ static inline int execl(const char* pathname, const char* arg, ...) {
     result = __rin_exec_collect_arguments(arg, &list, arguments);
     va_end(list);
     if (result != 0) return -1;
-    return _RIN_UNISTD_EXECVE(pathname, arguments, environ);
+    return _RIN_UNISTD_EXECVE(pathname, arguments, environment);
 }
 
 static inline int execlp(const char* file, const char* arg, ...) {
@@ -1805,7 +1819,8 @@ static inline int execle(const char* pathname, const char* arg, ...) {
 }
 
 static inline int execv(const char* pathname, char* const argv[]) {
-    return _RIN_UNISTD_EXECVE(pathname, argv, environ);
+    return _RIN_UNISTD_EXECVE(
+        pathname, argv, __rin_unistd_environment_snapshot());
 }
 
 static inline int execvp(const char* file, char* const argv[]) {

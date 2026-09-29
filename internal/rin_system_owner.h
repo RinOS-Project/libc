@@ -105,13 +105,19 @@ static inline int _rin_system_owner(const char* command) {
         if (fork_result == 0) {
             intptr_t exec_result;
             int exec_errno;
+            char** environment;
             shell_arguments[0] = (char*)"sh";
             shell_arguments[1] = (char*)"-c";
             shell_arguments[2] = (char*)command;
             shell_arguments[3] = NULL;
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING
+            environment = __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
+#else
+            environment = environ;
+#endif
             exec_result = __rin_syscall_posixize((intptr_t)
                 _RIN_STDLIB_SYSTEM_EXECVE("/bin/sh", shell_arguments,
-                                          environ));
+                                          environment));
             if (exec_result >= 0) {
                 errno = EIO;
                 exec_result = -1;

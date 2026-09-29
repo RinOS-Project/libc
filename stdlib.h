@@ -335,19 +335,6 @@ static inline int __rin_env_name_matches(char const* entry, char const* name)
     return entry[index] == '=';
 }
 
-static inline size_t __rin_env_count(void)
-{
-    size_t count = 0;
-
-    if (!environ)
-        return 0;
-
-    while (environ[count] != NULL)
-        ++count;
-
-    return count;
-}
-
 static inline char* __rin_env_make_entry(char const* name, char const* value)
 {
     size_t name_length;
@@ -362,6 +349,11 @@ static inline char* __rin_env_make_entry(char const* name, char const* value)
 
     name_length = __rin_env_strlen(name);
     value_length = __rin_env_strlen(value);
+    if (value_length > SIZE_MAX - 2u ||
+        name_length > SIZE_MAX - value_length - 2u) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
     entry = (char*)malloc(name_length + value_length + 2);
     if (!entry) {
         errno = ENOMEM;
@@ -377,142 +369,222 @@ static inline char* __rin_env_make_entry(char const* name, char const* value)
     return entry;
 }
 
-static inline char** __rin_env_clone_table(size_t entry_count)
+/* Environment mutators are header inlines, so serialize publication through
+ * the process-global environ pointer rather than a translation-unit-local
+ * lock. Old tables and copied entries are retained because readers or callers
+ * may still hold pointers into a prior environment snapshot. */
+static inline char** __rin_env_snapshot(void)
 {
-    char** table = (char**)malloc(sizeof(char*) * (entry_count + 1));
+    return __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
+}
+
+static inline int __rin_env_publish(char** expected, char** replacement)
+{
+    return __atomic_compare_exchange_n(
+        &environ, &expected, replacement, 0,
+        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+}
+
+static inline size_t __rin_env_count(char** source)
+{
+    size_t count = 0u;
+
+    if (!source)
+        return 0u;
+    while (source[count] != NULL) {
+        if (count >= SIZE_MAX / sizeof(char*) - 1u) {
+            errno = EOVERFLOW;
+            return SIZE_MAX;
+        }
+        ++count;
+    }
+    return count;
+}
+
+static inline size_t __rin_env_matching_count(
+    char** source, size_t entry_count, char const* name)
+{
+    size_t matches = 0u;
+
+    for (size_t index = 0u; index < entry_count; ++index) {
+        if (__rin_env_name_matches(source[index], name))
+            ++matches;
+    }
+    return matches;
+}
+
+static inline int __rin_env_entry_matches_name_slice(
+    char const* entry, char const* name, size_t name_length)
+{
+    if (!entry || !name || name_length == 0u)
+        return 0;
+    for (size_t index = 0u; index < name_length; ++index) {
+        if (entry[index] == '\0' || entry[index] != name[index])
+            return 0;
+    }
+    return entry[name_length] == '=';
+}
+
+static inline char** __rin_env_allocate_table(size_t entry_count)
+{
+    char** table;
+
+    if (entry_count >= SIZE_MAX / sizeof(char*)) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    table = (char**)malloc(sizeof(char*) * (entry_count + 1u));
 
     if (!table) {
         errno = ENOMEM;
         return NULL;
     }
-
-    for (size_t i = 0; i < entry_count; ++i)
-        table[i] = (environ && environ[i]) ? environ[i] : NULL;
-    table[entry_count] = NULL;
     return table;
-}
-
-static inline int __rin_env_find_index(char const* name)
-{
-    size_t index = 0;
-
-    if (!environ || !__rin_env_name_is_valid(name))
-        return -1;
-
-    while (environ[index] != NULL) {
-        if (__rin_env_name_matches(environ[index], name))
-            return (int)index;
-        ++index;
-    }
-
-    return -1;
 }
 
 static inline int __rin_env_install_empty_table(void)
 {
-    char** empty_table = (char**)malloc(sizeof(char*));
+    for (size_t attempt = 0u; attempt < 64u; ++attempt) {
+        char** empty_table = __rin_env_allocate_table(0u);
+        char** snapshot;
 
-    if (!empty_table) {
-        errno = ENOMEM;
-        return -1;
+        if (!empty_table)
+            return -1;
+        empty_table[0] = NULL;
+        snapshot = __rin_env_snapshot();
+        if (__rin_env_publish(snapshot, empty_table))
+            return 0;
+        free(empty_table);
     }
-
-    empty_table[0] = NULL;
-    environ = empty_table;
-    return 0;
+    errno = EAGAIN;
+    return -1;
 }
 
 static inline char* getenv(const char* name) {
     size_t name_length;
-    int index;
+    char** snapshot;
+    size_t count;
 
     if (!__rin_env_name_is_valid(name))
         return NULL;
 
-    index = __rin_env_find_index(name);
-    if (index < 0)
+    snapshot = __rin_env_snapshot();
+    count = __rin_env_count(snapshot);
+    if (count == SIZE_MAX)
         return NULL;
+    for (size_t index = 0u; index < count; ++index) {
+        if (__rin_env_name_matches(snapshot[index], name)) {
+            name_length = __rin_env_strlen(name);
+            return snapshot[index] + name_length + 1u;
+        }
+    }
 
-    name_length = __rin_env_strlen(name);
-    return environ[index] + name_length + 1;
+    return NULL;
 }
 
 static inline int setenv(const char* name, const char* value, int overwrite) {
-    size_t count;
-    int index;
-    char* new_entry;
-    char** new_table;
+    char* new_entry = NULL;
 
     if (!__rin_env_name_is_valid(name) || !value) {
         errno = EINVAL;
         return -1;
     }
 
-    count = __rin_env_count();
-    index = __rin_env_find_index(name);
+    for (size_t attempt = 0u; attempt < 64u; ++attempt) {
+        char** snapshot = __rin_env_snapshot();
+        size_t count = __rin_env_count(snapshot);
+        size_t matches;
+        size_t new_count;
+        size_t write_index = 0u;
+        int inserted = 0;
+        char** new_table;
 
-    if (index >= 0 && !overwrite)
-        return 0;
-
-    new_entry = __rin_env_make_entry(name, value);
-    if (!new_entry)
-        return -1;
-
-    new_table = __rin_env_clone_table(index >= 0 ? count : count + 1);
-    if (!new_table)
-        return -1;
-
-    if (index >= 0) {
-        new_table[index] = new_entry;
-    } else {
-        new_table[count] = new_entry;
-        new_table[count + 1] = NULL;
+        if (count == SIZE_MAX) {
+            free(new_entry);
+            return -1;
+        }
+        matches = __rin_env_matching_count(snapshot, count, name);
+        if (matches != 0u && !overwrite) {
+            free(new_entry);
+            return 0;
+        }
+        if (!new_entry) {
+            new_entry = __rin_env_make_entry(name, value);
+            if (!new_entry)
+                return -1;
+        }
+        if (matches == 0u && count == SIZE_MAX - 1u) {
+            free(new_entry);
+            errno = EOVERFLOW;
+            return -1;
+        }
+        new_count = matches == 0u ? count + 1u : count - matches + 1u;
+        new_table = __rin_env_allocate_table(new_count);
+        if (!new_table) {
+            free(new_entry);
+            return -1;
+        }
+        for (size_t index = 0u; index < count; ++index) {
+            if (__rin_env_name_matches(snapshot[index], name)) {
+                if (!inserted) {
+                    new_table[write_index++] = new_entry;
+                    inserted = 1;
+                }
+            } else {
+                new_table[write_index++] = snapshot[index];
+            }
+        }
+        if (!inserted)
+            new_table[write_index++] = new_entry;
+        new_table[write_index] = NULL;
+        if (__rin_env_publish(snapshot, new_table))
+            return 0;
+        free(new_table);
     }
 
-    environ = new_table;
-    return 0;
+    free(new_entry);
+    errno = EAGAIN;
+    return -1;
 }
 
 static inline int unsetenv(const char* name) {
-    size_t count;
-    int index;
-    char** new_table;
-    size_t write_index = 0;
-
     if (!__rin_env_name_is_valid(name)) {
         errno = EINVAL;
         return -1;
     }
 
-    count = __rin_env_count();
-    index = __rin_env_find_index(name);
-    if (index < 0)
-        return 0;
+    for (size_t attempt = 0u; attempt < 64u; ++attempt) {
+        char** snapshot = __rin_env_snapshot();
+        size_t count = __rin_env_count(snapshot);
+        size_t matches;
+        size_t write_index = 0u;
+        char** new_table;
 
-    if (count == 1)
-        return __rin_env_install_empty_table();
-
-    new_table = (char**)malloc(sizeof(char*) * count);
-    if (!new_table) {
-        errno = ENOMEM;
-        return -1;
+        if (count == SIZE_MAX)
+            return -1;
+        matches = __rin_env_matching_count(snapshot, count, name);
+        if (matches == 0u)
+            return 0;
+        new_table = __rin_env_allocate_table(count - matches);
+        if (!new_table)
+            return -1;
+        for (size_t index = 0u; index < count; ++index) {
+            if (!__rin_env_name_matches(snapshot[index], name))
+                new_table[write_index++] = snapshot[index];
+        }
+        new_table[write_index] = NULL;
+        if (__rin_env_publish(snapshot, new_table))
+            return 0;
+        free(new_table);
     }
 
-    for (size_t read_index = 0; read_index < count; ++read_index) {
-        if ((int)read_index == index)
-            continue;
-        new_table[write_index++] = environ[read_index];
-    }
-    new_table[write_index] = NULL;
-
-    environ = new_table;
-    return 0;
+    errno = EAGAIN;
+    return -1;
 }
 
 static inline int putenv(char* string) {
     char* equals = NULL;
     size_t name_length;
-    char* name;
 
     if (!string) {
         errno = EINVAL;
@@ -532,17 +604,51 @@ static inline int putenv(char* string) {
     }
 
     name_length = (size_t)(equals - string);
-    name = (char*)malloc(name_length + 1);
-    if (!name) {
-        errno = ENOMEM;
-        return -1;
+    for (size_t attempt = 0u; attempt < 64u; ++attempt) {
+        char** snapshot = __rin_env_snapshot();
+        size_t count = __rin_env_count(snapshot);
+        size_t matches = 0u;
+        size_t new_count;
+        size_t write_index = 0u;
+        int inserted = 0;
+        char** new_table;
+
+        if (count == SIZE_MAX)
+            return -1;
+        for (size_t index = 0u; index < count; ++index) {
+            if (__rin_env_entry_matches_name_slice(
+                    snapshot[index], string, name_length))
+                ++matches;
+        }
+        if (matches == 0u && count == SIZE_MAX - 1u) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        new_count = matches == 0u ? count + 1u : count - matches + 1u;
+        new_table = __rin_env_allocate_table(new_count);
+        if (!new_table)
+            return -1;
+        for (size_t index = 0u; index < count; ++index) {
+            if (__rin_env_entry_matches_name_slice(
+                    snapshot[index], string, name_length)) {
+                if (!inserted) {
+                    new_table[write_index++] = string;
+                    inserted = 1;
+                }
+            } else {
+                new_table[write_index++] = snapshot[index];
+            }
+        }
+        if (!inserted)
+            new_table[write_index++] = string;
+        new_table[write_index] = NULL;
+        if (__rin_env_publish(snapshot, new_table))
+            return 0;
+        free(new_table);
     }
 
-    for (size_t i = 0; i < name_length; ++i)
-        name[i] = string[i];
-    name[name_length] = '\0';
-
-    return setenv(name, equals + 1, 1);
+    errno = EAGAIN;
+    return -1;
 }
 
 #else
