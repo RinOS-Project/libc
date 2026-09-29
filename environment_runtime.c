@@ -253,12 +253,10 @@ int __rin_env_is_secure(void) {
     int saved_errno = errno;
     int error = __rin_credentials_get(&credentials);
     errno = saved_errno;
-    /* Until the loader exposes AT_SECURE, conservatively recognize the
-     * privileged credential states that the current ABI can report. */
+    /* The kernel snapshot carries per-image secure-exec state. If it cannot
+     * be read, do not expose environment data to a caller we cannot classify. */
     if (error != 0) return 1;
-    return credentials.uid != credentials.effective_uid ||
-           credentials.gid != credentials.effective_gid ||
-           credentials.capabilities != 0u;
+    return (credentials.flags & __RIN_CREDENTIALS_FLAG_SECURE_EXEC) != 0u;
 }
 
 char* __rin_env_get_secure_from_snapshot(char** snapshot, const char* name) {

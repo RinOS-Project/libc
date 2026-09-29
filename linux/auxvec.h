@@ -234,9 +234,16 @@ static inline unsigned long getauxval(unsigned long type) {
             if (type == AT_GID) return credentials.gid;
             return credentials.effective_gid;
         }
-        case AT_SECURE:
-            errno = ENOSYS;
-            return 0;
+        case AT_SECURE: {
+            __rin_credentials_v1 credentials;
+            int error = __rin_credentials_get(&credentials);
+            if (error != 0) {
+                errno = error;
+                return 0;
+            }
+            return (credentials.flags &
+                    __RIN_CREDENTIALS_FLAG_SECURE_EXEC) != 0u ? 1u : 0u;
+        }
         default:
             errno = ENOENT;
             return 0;

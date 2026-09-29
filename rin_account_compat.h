@@ -6,9 +6,12 @@
 #include "errno.h"
 #include "stddef.h"
 #include "stdint.h"
+#include "rin/abi.h"
 #include "sys/syscall.h"
 
 #define __RIN_CREDENTIALS_VERSION_1 1u
+#define __RIN_CREDENTIALS_FLAG_SECURE_EXEC RIN_CREDENTIALS_FLAG_SECURE_EXEC
+#define __RIN_CREDENTIALS_FLAGS_ALL RIN_CREDENTIALS_FLAGS_ALL
 #define __RIN_CREDENTIALS_MAX_GROUPS 8u
 #define __RIN_CREDENTIAL_SET_VERSION 1u
 #define __RIN_CREDENTIAL_SET_UID 1u
@@ -164,7 +167,8 @@ static inline int __rin_credentials_get(__rin_credentials_v1* credentials)
     if (credentials->struct_size != sizeof(*credentials) ||
         credentials->version != __RIN_CREDENTIALS_VERSION_1 ||
         credentials->group_count > __RIN_CREDENTIALS_MAX_GROUPS ||
-        credentials->personality > 3u || credentials->flags != 0u) {
+        credentials->personality > 3u ||
+        (credentials->flags & ~__RIN_CREDENTIALS_FLAGS_ALL) != 0u) {
         return EIO;
     }
     for (left = 0u; left < credentials->group_count; ++left) {
