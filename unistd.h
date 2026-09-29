@@ -370,6 +370,20 @@ static inline off_t lseek(int fd, off_t offset, int whence) {
     return (off_t)result;
 }
 
+/* The legacy SEEK syscall and off_t intentionally retain their word-sized
+ * ranges.  LSEEK64 uses an explicit split offset and copies the 64-bit result
+ * through a caller-owned output slot on both x86_64 and compat32. */
+static inline off64_t lseek64(int fd, off64_t offset, int whence) {
+    int64_t result = 0;
+    int status = _rin_unistd_status(_RIN_UNISTD_SYSCALL5(
+        SYS_LSEEK64, (uintptr_t)(intptr_t)fd,
+        (uintptr_t)(uint32_t)(uint64_t)offset,
+        (uintptr_t)(uint32_t)((uint64_t)offset >> 32),
+        (uintptr_t)(intptr_t)whence, (uintptr_t)&result));
+    if (status < 0) return (off64_t)-1;
+    return (off64_t)result;
+}
+
 static inline int dup(int oldfd) {
     intptr_t raw = _rin_unistd_result(_RIN_UNISTD_SYSCALL1(
         SYS_DUP, (uintptr_t)(intptr_t)oldfd));
@@ -1564,6 +1578,30 @@ static inline int ftruncate(int fd, off_t length) {
     return _rin_unistd_status(_RIN_UNISTD_SYSCALL2(
         SYS_FTRUNCATE, (uintptr_t)(intptr_t)fd,
         (uintptr_t)(intptr_t)length));
+}
+
+static inline int truncate64(const char* path, off64_t length) {
+    uint64_t bits;
+    if (length < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    bits = (uint64_t)length;
+    return _rin_unistd_status(_RIN_UNISTD_SYSCALL3(
+        SYS_TRUNCATE64, (uintptr_t)path, (uintptr_t)(uint32_t)bits,
+        (uintptr_t)(uint32_t)(bits >> 32)));
+}
+
+static inline int ftruncate64(int fd, off64_t length) {
+    uint64_t bits;
+    if (length < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    bits = (uint64_t)length;
+    return _rin_unistd_status(_RIN_UNISTD_SYSCALL3(
+        SYS_FTRUNCATE64, (uintptr_t)(intptr_t)fd,
+        (uintptr_t)(uint32_t)bits, (uintptr_t)(uint32_t)(bits >> 32)));
 }
 
 /* chown/fchown/lchown - 所有者変更 */
