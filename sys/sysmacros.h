@@ -15,29 +15,8 @@
 extern "C" {
 #endif
 
-/* ═══════════════════════════════════════════════════════════════
- * Device Number Layout (Linux-compatible)
- *
- * Traditional Unix used 8 bits each for major and minor.
- * Linux extended this to support more devices:
- *   - Major: 12 bits (0-4095)
- *   - Minor: 20 bits (0-1048575)
- *
- * 32-bit dev_t layout:
- *   bits 0-7:   minor low 8 bits
- *   bits 8-19:  major 12 bits
- *   bits 20-31: minor high 12 bits
- * ═══════════════════════════════════════════════════════════════*/
-
-/* Extract major device number from dev_t */
-#define major(dev)  ((unsigned int)(((dev) >> 8) & 0xFFF))
-
-/* Extract minor device number from dev_t */
-#define minor(dev)  ((unsigned int)(((dev) & 0xFF) | (((dev) >> 12) & 0xFFF00)))
-
-/* Combine major and minor into dev_t */
-#define makedev(maj, min) \
-    ((dev_t)(((min) & 0xFF) | (((maj) & 0xFFF) << 8) | (((min) & 0xFFF00) << 12)))
+/* RinOS persists and dispatches 8:8 device numbers. sys/types.h owns the
+ * matching makedev(), major(), and minor() definitions. */
 
 /* ═══════════════════════════════════════════════════════════════
  * GNU-style function versions (for compatibility)
@@ -65,12 +44,12 @@ static inline dev_t gnu_dev_makedev(unsigned int maj, unsigned int min) {
  * ═══════════════════════════════════════════════════════════════*/
 
 /* Some systems define these as the number of bits */
-#define MAJOR_BITS      12
-#define MINOR_BITS      20
+#define MAJOR_BITS      8
+#define MINOR_BITS      8
 
 /* Maximum values */
-#define MAJOR_MAX       ((1U << MAJOR_BITS) - 1)    /* 4095 */
-#define MINOR_MAX       ((1U << MINOR_BITS) - 1)    /* 1048575 */
+#define MAJOR_MAX       ((1U << MAJOR_BITS) - 1)    /* 255 */
+#define MINOR_MAX       ((1U << MINOR_BITS) - 1)    /* 255 */
 
 /* ═══════════════════════════════════════════════════════════════
  * Common Device Numbers (for reference)

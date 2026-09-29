@@ -75,9 +75,9 @@ typedef int            key_t;      /* IPC キー */
  * デバイス番号マクロ
  * ═══════════════════════════════════════════════════════════════*/
 
-#define makedev(maj, min)  ((dev_t)(((maj) << 8) | (min)))
-#define major(dev)         ((unsigned int)(((dev) >> 8) & 0xFF))
-#define minor(dev)         ((unsigned int)((dev) & 0xFF))
+#define makedev(maj, min) ((dev_t)((((maj) & 0xFF) << 8) | ((min) & 0xFF)))
+#define major(dev)        ((unsigned int)(((dev) >> 8) & 0xFF))
+#define minor(dev)        ((unsigned int)((dev) & 0xFF))
 
 /* pthread関連型はpthread.hで定義 - 循環参照を避けるため基本型のみここで定義 */
 #ifndef _PTHREAD_H
