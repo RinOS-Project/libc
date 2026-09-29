@@ -680,9 +680,10 @@ static inline int posix_spawnp(
                 pid, candidate, file_actions, attr, argv, envp);
             if (result == 0)
                 return 0;
-            if (result != ENOENT && result != ENOTDIR) {
-                if (result == EACCES || saved_error == ENOENT)
-                    saved_error = result;
+            if (result == EACCES) {
+                saved_error = EACCES;
+            } else if (result != ENOENT && result != ENOTDIR) {
+                return result;
             }
         } else if (saved_error == ENOENT) {
             saved_error = ENAMETOOLONG;
