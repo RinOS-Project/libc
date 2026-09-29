@@ -648,7 +648,9 @@ static inline int posix_spawnp(
             pid, file, file_actions, attr, argv, envp);
 
     search_path = _RIN_POSIX_SPAWN_GETENV("PATH");
-    if (!search_path || !*search_path)
+    /* An unset PATH uses this implementation's default.  An explicitly
+     * empty PATH is one empty component, which searches the child cwd. */
+    if (!search_path)
         search_path = "/bin:/sys/bin:/sys/apps";
     validation = _rin_posix_spawn_bounded_string_length(
         search_path, _RIN_POSIX_SPAWN_ENV_PATH_CAPACITY, &search_path_length);
