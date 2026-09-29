@@ -40,7 +40,7 @@ static inline int rin_atomic_wait_u32(volatile uint32_t* address,
         return -1;
     }
 
-    long result = syscall(SYS_futex, address, FUTEX_WAIT,
+    long result = syscall(SYS_futex, address, FUTEX_WAIT_PRIVATE,
                           (int32_t)expected, relative_timeout, NULL, 0);
     if (result == 0 || errno == EAGAIN || errno == EINTR) return 0;
     return -1;
@@ -52,7 +52,7 @@ static inline int rin_atomic_notify_one_u32(volatile uint32_t* address) {
         errno = EINVAL;
         return -1;
     }
-    long result = syscall(SYS_futex, address, FUTEX_WAKE, 1, NULL, NULL, 0);
+    long result = syscall(SYS_futex, address, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
     return result < 0 ? -1 : (int)result;
 }
 
@@ -62,7 +62,7 @@ static inline int rin_atomic_notify_all_u32(volatile uint32_t* address) {
         errno = EINVAL;
         return -1;
     }
-    long result = syscall(SYS_futex, address, FUTEX_WAKE, 0x7fffffff,
+    long result = syscall(SYS_futex, address, FUTEX_WAKE_PRIVATE, 0x7fffffff,
                           NULL, NULL, 0);
     return result < 0 ? -1 : (int)result;
 }

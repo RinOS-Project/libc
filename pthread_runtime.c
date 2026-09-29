@@ -12,6 +12,7 @@
 #include "rin_thread_timeout_policy.h"
 #include "stdlib.h"
 #include "string.h"
+#include "unistd.h"
 
 #define CLONE_THREAD    0x00010000UL
 #define CLONE_VM        0x00000100UL
@@ -23,6 +24,42 @@
 #define THREAD_STACK_MIN     (2UL * 1024UL * 1024UL)
 #define THREAD_STACK_GUARD   0x1000UL
 #define THREAD_PAGE_SIZE     0x1000UL
+
+/* Keep pthread_mutex_t's public size stable.  The otherwise small `type`
+ * field carries the process-shared bit alongside the POSIX mutex kind. */
+#define RIN_PTHREAD_MUTEX_PSHARED_FLAG 0x100
+#define RIN_PTHREAD_MUTEX_TYPE_MASK    0xff
+
+static int rin_pthread_mutex_is_shared(const pthread_mutex_t* mutex) {
+    return mutex && (mutex->type & RIN_PTHREAD_MUTEX_PSHARED_FLAG) != 0;
+}
+
+static int rin_pthread_mutex_type(const pthread_mutex_t* mutex) {
+    return mutex ? (mutex->type & RIN_PTHREAD_MUTEX_TYPE_MASK) :
+                   PTHREAD_MUTEX_DEFAULT;
+}
+
+static pthread_t rin_pthread_mutex_owner_token(const pthread_mutex_t* mutex,
+                                               pthread_t self) {
+    uintptr_t pid;
+    if (!rin_pthread_mutex_is_shared(mutex)) return self;
+    pid = (uintptr_t)(uint32_t)getpid();
+    if (pid == 0u) return self;
+#if UINTPTR_MAX > UINT32_MAX
+    return (pthread_t)((pid << 32) | ((uintptr_t)self & UINT32_MAX));
+#else
+    /* The compat ABI has a 32-bit owner word.  Mix both identities so equal
+     * TIDs in different processes do not look recursively owned. */
+    return (pthread_t)((uint32_t)self ^
+                       ((uint32_t)pid * UINT32_C(0x9e3779b9)));
+#endif
+}
+
+static int rin_pthread_mutex_futex_operation(const pthread_mutex_t* mutex,
+                                              int operation) {
+    return operation | (rin_pthread_mutex_is_shared(mutex) ? 0 :
+                        FUTEX_PRIVATE_FLAG);
+}
 
 #ifndef _RIN_PTHREAD_RUNTIME_CLONE
 #define _RIN_PTHREAD_RUNTIME_CLONE(flags, start, argument, stack, size, guard) \
@@ -694,12 +731,14 @@ int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexattr_t* attr) 
         if (attr->type != PTHREAD_MUTEX_NORMAL &&
             attr->type != PTHREAD_MUTEX_RECURSIVE &&
             attr->type != PTHREAD_MUTEX_ERRORCHECK) return EINVAL;
-        if (attr->pshared == PTHREAD_PROCESS_SHARED) return ENOSYS;
-        if (attr->pshared != PTHREAD_PROCESS_PRIVATE) return EINVAL;
+        if (attr->pshared != PTHREAD_PROCESS_PRIVATE &&
+            attr->pshared != PTHREAD_PROCESS_SHARED) return EINVAL;
     }
     mutex->locked = 0;
     mutex->owner = 0;
-    mutex->type = attr ? attr->type : PTHREAD_MUTEX_DEFAULT;
+    mutex->type = (attr ? attr->type : PTHREAD_MUTEX_DEFAULT) |
+        ((attr && attr->pshared == PTHREAD_PROCESS_SHARED) ?
+             RIN_PTHREAD_MUTEX_PSHARED_FLAG : 0);
     mutex->recursion = 0;
     return 0;
 }
@@ -714,14 +753,16 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
     if (!mutex) return EINVAL;
 
     pthread_t self = _RIN_PTHREAD_RUNTIME_SELF();
+    pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
+    int type = rin_pthread_mutex_type(mutex);
 
-    if (mutex->type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == self) {
+    if (type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == owner) {
         if (mutex->recursion == __INT_MAX__) return EAGAIN;
         mutex->recursion++;
         return 0;
     }
 
-    if (mutex->type == PTHREAD_MUTEX_ERRORCHECK && mutex->owner == self) {
+    if (type == PTHREAD_MUTEX_ERRORCHECK && mutex->owner == owner) {
         return EDEADLK;
     }
 
@@ -734,7 +775,9 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
             }
             while (c != 0) {
                 long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-                    &mutex->locked, FUTEX_WAIT, 2, NULL);
+                    &mutex->locked,
+                    rin_pthread_mutex_futex_operation(mutex, FUTEX_WAIT),
+                    2, NULL);
                 int wait_error = rin_pthread_futex_wait_error(wait_result,
                                                                errno);
                 if (wait_error != 0) return wait_error;
@@ -743,7 +786,7 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
         }
     }
 
-    mutex->owner = self;
+    mutex->owner = owner;
     mutex->recursion = 1;
     return 0;
 }
@@ -752,8 +795,10 @@ int pthread_mutex_trylock(pthread_mutex_t* mutex) {
     if (!mutex) return EINVAL;
 
     pthread_t self = _RIN_PTHREAD_RUNTIME_SELF();
+    pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
+    int type = rin_pthread_mutex_type(mutex);
 
-    if (mutex->type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == self) {
+    if (type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == owner) {
         if (mutex->recursion == __INT_MAX__) return EAGAIN;
         mutex->recursion++;
         return 0;
@@ -767,7 +812,7 @@ int pthread_mutex_trylock(pthread_mutex_t* mutex) {
         }
     }
 
-    mutex->owner = self;
+    mutex->owner = owner;
     mutex->recursion = 1;
     return 0;
 }
@@ -776,13 +821,15 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
     if (!mutex) return EINVAL;
 
     pthread_t self = _RIN_PTHREAD_RUNTIME_SELF();
+    pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
+    int type = rin_pthread_mutex_type(mutex);
 
-    if ((mutex->type == PTHREAD_MUTEX_ERRORCHECK ||
-         mutex->type == PTHREAD_MUTEX_RECURSIVE) && mutex->owner != self) {
+    if ((type == PTHREAD_MUTEX_ERRORCHECK ||
+         type == PTHREAD_MUTEX_RECURSIVE) && mutex->owner != owner) {
         return EPERM;
     }
 
-    if (mutex->type == PTHREAD_MUTEX_RECURSIVE) {
+    if (type == PTHREAD_MUTEX_RECURSIVE) {
         if (mutex->recursion <= 0) return EPERM;
         if (mutex->recursion > 1) {
             mutex->recursion--;
@@ -795,7 +842,8 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
 
     if (__atomic_exchange_n(&mutex->locked, 0, __ATOMIC_RELEASE) == 2) {
         long wake_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-            &mutex->locked, FUTEX_WAKE, 1, NULL);
+            &mutex->locked,
+            rin_pthread_mutex_futex_operation(mutex, FUTEX_WAKE), 1, NULL);
         int wake_error = rin_pthread_futex_wake_error(wake_result, errno);
         if (wake_error != 0) return wake_error;
     }
@@ -833,7 +881,7 @@ int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
 
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
         long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-            &cond->generation, FUTEX_WAIT, (int)gen, NULL);
+            &cond->generation, FUTEX_WAIT_PRIVATE, (int)gen, NULL);
         int wait_error = rin_pthread_futex_wait_error(wait_result, errno);
         if (wait_error != 0) {
             result = wait_error;
@@ -889,7 +937,7 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
         ts.tv_nsec = relative.nanoseconds;
 
         long ret = _RIN_PTHREAD_RUNTIME_FUTEX(
-            &cond->generation, FUTEX_WAIT, (int)gen, &ts);
+            &cond->generation, FUTEX_WAIT_PRIVATE, (int)gen, &ts);
         if (ret == -1 && errno == ETIMEDOUT) {
             if (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) != gen)
                 result = 0;
@@ -916,7 +964,7 @@ int pthread_cond_signal(pthread_cond_t* cond) {
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0) {
         long wake_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-            &cond->generation, FUTEX_WAKE, 1, NULL);
+            &cond->generation, FUTEX_WAKE_PRIVATE, 1, NULL);
         int wake_error = rin_pthread_futex_wake_error(wake_result, errno);
         if (wake_error != 0) return wake_error;
     }
@@ -928,7 +976,7 @@ int pthread_cond_broadcast(pthread_cond_t* cond) {
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0) {
         long wake_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-            &cond->generation, FUTEX_WAKE, 0x7fffffff, NULL);
+            &cond->generation, FUTEX_WAKE_PRIVATE, 0x7fffffff, NULL);
         int wake_error = rin_pthread_futex_wake_error(wake_result, errno);
         if (wake_error != 0) return wake_error;
     }
@@ -943,14 +991,14 @@ int pthread_once(pthread_once_t* once_control, void (*init_routine)(void)) {
         __atomic_store_n(once_control, 2, __ATOMIC_RELEASE);
         {
             long wake_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-                once_control, FUTEX_WAKE, 0x7fffffff, NULL);
+                once_control, FUTEX_WAKE_PRIVATE, 0x7fffffff, NULL);
             int wake_error = rin_pthread_futex_wake_error(wake_result, errno);
             if (wake_error != 0) return wake_error;
         }
     } else {
         while (__atomic_load_n(once_control, __ATOMIC_ACQUIRE) == 1) {
             long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-                once_control, FUTEX_WAIT, 1, NULL);
+                once_control, FUTEX_WAIT_PRIVATE, 1, NULL);
             int wait_error = rin_pthread_futex_wait_error(wait_result, errno);
             if (wait_error != 0) return wait_error;
         }

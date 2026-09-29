@@ -40,6 +40,51 @@ typedef struct {
     int waiters;
 } sem_t;
 
+/* Preserve sem_t's two-word ABI while storing whether its futex key is
+ * process-shared in the high bit of the waiter count. */
+#define RIN_SEM_PSHARED_FLAG UINT32_C(0x80000000)
+#define RIN_SEM_WAITER_MASK  UINT32_C(0x7fffffff)
+
+static inline uint32_t rin_sem_state_load(const sem_t* sem) {
+    return __atomic_load_n((const uint32_t*)&sem->waiters, __ATOMIC_ACQUIRE);
+}
+
+static inline int rin_sem_is_shared(const sem_t* sem) {
+    return (rin_sem_state_load(sem) & RIN_SEM_PSHARED_FLAG) != 0u;
+}
+
+static inline int rin_sem_waiter_add(sem_t* sem) {
+    uint32_t state = rin_sem_state_load(sem);
+    for (;;) {
+        uint32_t count = state & RIN_SEM_WAITER_MASK;
+        uint32_t next;
+        if (count == RIN_SEM_WAITER_MASK) return -1;
+        next = (state & RIN_SEM_PSHARED_FLAG) | (count + 1u);
+        if (__atomic_compare_exchange_n((uint32_t*)&sem->waiters, &state,
+                                        next, 0, __ATOMIC_SEQ_CST,
+                                        __ATOMIC_ACQUIRE))
+            return 0;
+    }
+}
+
+static inline void rin_sem_waiter_remove(sem_t* sem) {
+    uint32_t state = rin_sem_state_load(sem);
+    for (;;) {
+        uint32_t count = state & RIN_SEM_WAITER_MASK;
+        uint32_t next;
+        if (count == 0u) return;
+        next = (state & RIN_SEM_PSHARED_FLAG) | (count - 1u);
+        if (__atomic_compare_exchange_n((uint32_t*)&sem->waiters, &state,
+                                        next, 0, __ATOMIC_SEQ_CST,
+                                        __ATOMIC_ACQUIRE))
+            return;
+    }
+}
+
+static inline int rin_sem_futex_operation(const sem_t* sem, int operation) {
+    return operation | (rin_sem_is_shared(sem) ? 0 : FUTEX_PRIVATE_FLAG);
+}
+
 #define SEM_FAILED ((sem_t*)0)
 
 #ifndef SEM_VALUE_MAX
@@ -56,15 +101,12 @@ static inline int sem_init(sem_t* sem, int pshared, unsigned int value) {
         errno = EINVAL;
         return -1;
     }
-    /* FUTEX_WAIT/FUTEX_WAKE without FUTEX_PRIVATE_FLAG remains process
-     * shared when the caller places sem_t in shared memory. */
-    (void)pshared;
     if (value > SEM_VALUE_MAX) {
         errno = EINVAL;
         return -1;
     }
     sem->value = (int)value;
-    sem->waiters = 0;
+    sem->waiters = (int)(pshared ? RIN_SEM_PSHARED_FLAG : 0u);
     return 0;
 }
 
@@ -74,7 +116,7 @@ static inline int sem_destroy(sem_t* sem) {
         errno = EINVAL;
         return -1;
     }
-    if (__atomic_load_n(&sem->waiters, __ATOMIC_ACQUIRE) != 0) {
+    if ((rin_sem_state_load(sem) & RIN_SEM_WAITER_MASK) != 0u) {
         errno = EBUSY;
         return -1;
     }
@@ -101,7 +143,10 @@ static inline int sem_wait(sem_t* sem) {
 
         /* Slow path: prepare to sleep */
         /* Increment waiters count BEFORE sleep to ensure signal is not missed */
-        __atomic_fetch_add(&sem->waiters, 1, __ATOMIC_SEQ_CST);
+        if (rin_sem_waiter_add(sem) != 0) {
+            errno = EAGAIN;
+            return -1;
+        }
         
         /* Double-check value after incrementing waiters (handles race with sem_post) */
         val = __atomic_load_n(&sem->value, __ATOMIC_RELAXED);
@@ -109,21 +154,21 @@ static inline int sem_wait(sem_t* sem) {
             /* Retry acquire */
             if (__atomic_compare_exchange_n(&sem->value, &val, val - 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
                 /* Acquired! Undo waiters increment and return */
-                __atomic_fetch_sub(&sem->waiters, 1, __ATOMIC_SEQ_CST);
+                rin_sem_waiter_remove(sem);
                 return 0;
             }
             /* CAS failed (someone else stole it), decrement waiters and retry loop */
-            __atomic_fetch_sub(&sem->waiters, 1, __ATOMIC_SEQ_CST);
+            rin_sem_waiter_remove(sem);
             continue;
         }
 
         /* Sleep: wait for value to be 0 */
         /* If sem->value becomes != 0 before blocking, futex returns EAGAIN immediately */
         long ret = _RIN_SEMAPHORE_FUTEX(
-            &sem->value, FUTEX_WAIT, 0, NULL);
+            &sem->value, rin_sem_futex_operation(sem, FUTEX_WAIT), 0, NULL);
         
         /* Woke up (or error) - decrement waiters */
-        __atomic_fetch_sub(&sem->waiters, 1, __ATOMIC_SEQ_CST);
+        rin_sem_waiter_remove(sem);
 
         if (ret < 0 && errno != EAGAIN) {
             if (errno == 0) errno = EIO;
@@ -200,21 +245,24 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
         rel.tv_sec = (time_t)relative.seconds;
         rel.tv_nsec = relative.nanoseconds;
 
-        __atomic_fetch_add(&sem->waiters, 1, __ATOMIC_SEQ_CST);
+        if (rin_sem_waiter_add(sem) != 0) {
+            errno = EAGAIN;
+            return -1;
+        }
 
         val = __atomic_load_n(&sem->value, __ATOMIC_RELAXED);
         if (val > 0) {
             if (__atomic_compare_exchange_n(&sem->value, &val, val - 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
-                __atomic_fetch_sub(&sem->waiters, 1, __ATOMIC_SEQ_CST);
+                rin_sem_waiter_remove(sem);
                 return 0;
             }
-            __atomic_fetch_sub(&sem->waiters, 1, __ATOMIC_SEQ_CST);
+            rin_sem_waiter_remove(sem);
             continue;
         }
 
         long ret = _RIN_SEMAPHORE_FUTEX(
-            &sem->value, FUTEX_WAIT, 0, &rel);
-        __atomic_fetch_sub(&sem->waiters, 1, __ATOMIC_SEQ_CST);
+            &sem->value, rin_sem_futex_operation(sem, FUTEX_WAIT), 0, &rel);
+        rin_sem_waiter_remove(sem);
 
         if (ret < 0) {
             int err = errno;
@@ -250,9 +298,11 @@ static inline int sem_post(sem_t* sem) {
     }
     
     /* Optimization: Only wake kernel if there are waiters */
-    int w = __atomic_load_n(&sem->waiters, __ATOMIC_SEQ_CST);
-    if (w > 0) {
-        syscall(SYS_futex, &sem->value, FUTEX_WAKE, 1, NULL, NULL, 0);
+    uint32_t state = rin_sem_state_load(sem);
+    if ((state & RIN_SEM_WAITER_MASK) > 0u) {
+        syscall(SYS_futex, &sem->value,
+                rin_sem_futex_operation(sem, FUTEX_WAKE),
+                1, NULL, NULL, 0);
     }
     return 0;
 }

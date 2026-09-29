@@ -702,7 +702,7 @@ static inline int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex
      * Returns 0 on wake, -EAGAIN if value changed, -EINTR if interrupted.
      * Loop handles spurious wakeups. */
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-        syscall(SYS_futex, &cond->generation, FUTEX_WAIT,
+        syscall(SYS_futex, &cond->generation, FUTEX_WAIT_PRIVATE,
                 (int)gen, NULL, NULL, 0);
     }
 
@@ -736,7 +736,7 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* 
         ts.tv_sec = (time_t)(timeout_ns / 1000000000LL);
         ts.tv_nsec = (long)(timeout_ns % 1000000000LL);
 
-        long ret = syscall(SYS_futex, &cond->generation, FUTEX_WAIT,
+        long ret = syscall(SYS_futex, &cond->generation, FUTEX_WAIT_PRIVATE,
                            (int)gen, &ts, NULL, 0);
         if (ret < 0) {
             int err = errno;
@@ -760,7 +760,7 @@ static inline int pthread_cond_signal(pthread_cond_t* cond) {
     if (!cond) return EINVAL;
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0)
-        syscall(SYS_futex, &cond->generation, FUTEX_WAKE, 1, NULL, NULL, 0);
+        syscall(SYS_futex, &cond->generation, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
     return 0;
 }
 
@@ -768,7 +768,7 @@ static inline int pthread_cond_broadcast(pthread_cond_t* cond) {
     if (!cond) return EINVAL;
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0)
-        syscall(SYS_futex, &cond->generation, FUTEX_WAKE,
+        syscall(SYS_futex, &cond->generation, FUTEX_WAKE_PRIVATE,
                 0x7fffffff, NULL, NULL, 0);
     return 0;
 }
@@ -924,11 +924,11 @@ static inline int pthread_once(pthread_once_t* once_control, void (*init_routine
         init_routine();
         __atomic_store_n(once_control, 2, __ATOMIC_RELEASE);
         /* Wake all waiters */
-        syscall(SYS_futex, once_control, FUTEX_WAKE, 0x7fffffff, NULL, NULL, 0);
+        syscall(SYS_futex, once_control, FUTEX_WAKE_PRIVATE, 0x7fffffff, NULL, NULL, 0);
     } else {
         /* Another thread is running init_routine, block until done */
         while (__atomic_load_n(once_control, __ATOMIC_ACQUIRE) == 1) {
-            syscall(SYS_futex, once_control, FUTEX_WAIT, 1, NULL, NULL, 0);
+            syscall(SYS_futex, once_control, FUTEX_WAIT_PRIVATE, 1, NULL, NULL, 0);
         }
     }
     return 0;
