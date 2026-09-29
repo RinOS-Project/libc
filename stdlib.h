@@ -444,7 +444,7 @@ static inline char** __rin_env_allocate_table(size_t entry_count)
 
 static inline int __rin_env_install_empty_table(void)
 {
-    for (size_t attempt = 0u; attempt < 64u; ++attempt) {
+    for (;;) {
         char** empty_table = __rin_env_allocate_table(0u);
         char** snapshot;
 
@@ -456,8 +456,6 @@ static inline int __rin_env_install_empty_table(void)
             return 0;
         free(empty_table);
     }
-    errno = EAGAIN;
-    return -1;
 }
 
 static inline char* getenv(const char* name) {
@@ -490,7 +488,7 @@ static inline int setenv(const char* name, const char* value, int overwrite) {
         return -1;
     }
 
-    for (size_t attempt = 0u; attempt < 64u; ++attempt) {
+    for (;;) {
         char** snapshot = __rin_env_snapshot();
         size_t count = __rin_env_count(snapshot);
         size_t matches;
@@ -541,10 +539,6 @@ static inline int setenv(const char* name, const char* value, int overwrite) {
             return 0;
         free(new_table);
     }
-
-    free(new_entry);
-    errno = EAGAIN;
-    return -1;
 }
 
 static inline int unsetenv(const char* name) {
@@ -553,7 +547,7 @@ static inline int unsetenv(const char* name) {
         return -1;
     }
 
-    for (size_t attempt = 0u; attempt < 64u; ++attempt) {
+    for (;;) {
         char** snapshot = __rin_env_snapshot();
         size_t count = __rin_env_count(snapshot);
         size_t matches;
@@ -577,9 +571,6 @@ static inline int unsetenv(const char* name) {
             return 0;
         free(new_table);
     }
-
-    errno = EAGAIN;
-    return -1;
 }
 
 static inline int putenv(char* string) {
@@ -604,7 +595,7 @@ static inline int putenv(char* string) {
     }
 
     name_length = (size_t)(equals - string);
-    for (size_t attempt = 0u; attempt < 64u; ++attempt) {
+    for (;;) {
         char** snapshot = __rin_env_snapshot();
         size_t count = __rin_env_count(snapshot);
         size_t matches = 0u;
@@ -646,9 +637,6 @@ static inline int putenv(char* string) {
             return 0;
         free(new_table);
     }
-
-    errno = EAGAIN;
-    return -1;
 }
 
 #else
