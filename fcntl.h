@@ -652,15 +652,19 @@ static inline int faccessat(int dirfd, const char* pathname, int mode, int flags
         errno = EFAULT;
         return -1;
     }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
-        return -1;
-    }
     if ((mode & ~7) != 0) {
         errno = EINVAL;
         return -1;
     }
-    if ((flags & ~(AT_EACCESS | AT_SYMLINK_NOFOLLOW)) != 0) {
+    if ((flags & ~(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (pathname[0] == '\0' && (flags & AT_EMPTY_PATH) == 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    if (pathname[0] != '\0' && (flags & AT_EMPTY_PATH) != 0) {
         errno = EINVAL;
         return -1;
     }
@@ -687,12 +691,13 @@ static inline int fchownat(int dirfd, const char* pathname, uid_t owner, gid_t g
             errno = ENOENT;
             return -1;
         }
-        /* AT_EMPTY_PATH names the already-open file description.  NOFOLLOW
-         * has no additional effect once pathname traversal is bypassed, so
-         * use the existing descriptor owner instead of returning a stub
-         * failure.  Keep the target-width fd and uid/gid values intact. */
-        return _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL3(
-            SYS_FCHOWN, dirfd, (uint32_t)owner, (uint32_t)group));
+        _fcntl_path_at_init(&call, RIN_PATH_AT_CHOWN);
+        call.dirfd = dirfd;
+        call.flags = (uint32_t)flags;
+        call.owner = (uint32_t)owner;
+        call.group = (uint32_t)group;
+        call.path1 = (uint64_t)(uintptr_t)pathname;
+        return _fcntl_path_at_zero(&call);
     }
     if ((flags & AT_EMPTY_PATH) != 0) {
         errno = EINVAL;
@@ -848,10 +853,6 @@ static inline ssize_t readlinkat(int dirfd, const char* pathname, char* buf, siz
     intptr_t result;
     if (!pathname || !buf) {
         errno = EFAULT;
-        return -1;
-    }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
         return -1;
     }
     if (bufsiz == 0u) {

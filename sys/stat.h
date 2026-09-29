@@ -322,26 +322,16 @@ static inline int fchmodat(int dirfd, const char* pathname, mode_t mode,
     }
     if (pathname[0] == '\0') {
         if ((flags & AT_EMPTY_PATH) != 0) {
-            intptr_t result;
             if (((unsigned long)mode & ~(unsigned long)0777u) != 0u) {
                 errno = EINVAL;
                 return -1;
             }
-            /* Keep the fchmodat descriptor contract: AT_FDCWD and other
-             * target-width descriptor values are passed to the kernel as-is.
-             * Calling fchmod() here would reject AT_FDCWD before the syscall
-             * and would make AT_EMPTY_PATH|AT_SYMLINK_NOFOLLOW inconsistent
-             * with fstatat's direct SYS_FSTAT path. */
-            result = _RIN_STAT_SYSCALL2(SYS_FCHMOD, dirfd, mode);
-            if (result < 0) {
-                errno = result >= -4095 ? (int)-result : EIO;
-                return -1;
-            }
-            if (result != 0) {
-                errno = EIO;
-                return -1;
-            }
-            return 0;
+            __rin_stat_path_at_init(&call, RIN_PATH_AT_CHMOD);
+            call.flags = (uint32_t)flags;
+            call.dirfd = dirfd;
+            call.mode = (uint32_t)mode;
+            call.path1 = (uint64_t)(uintptr_t)pathname;
+            return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
         }
         errno = ENOENT;
         return -1;
