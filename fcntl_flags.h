@@ -69,6 +69,9 @@
 #ifndef O_TMPFILE
 #define O_TMPFILE   0x4000
 #endif
+#ifndef O_DIRECT
+#define O_DIRECT    0x8000
+#endif
 
 #ifndef O_CREATE
 #define O_CREATE    O_CREAT
