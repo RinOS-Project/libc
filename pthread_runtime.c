@@ -92,7 +92,9 @@ static int rin_pthread_mutex_robust_owner_id(pthread_mutex_t* mutex,
     long result;
     if (!mutex || !owner_id_out) return EINVAL;
     result = syscall(SYS_futex, &mutex->locked,
-                     FUTEX_RIN_ROBUST_REGISTER,
+                     FUTEX_RIN_ROBUST_REGISTER |
+                         (rin_pthread_mutex_is_shared(mutex) ? 0 :
+                          FUTEX_PRIVATE_FLAG),
                      (uintptr_t)&mutex->owner, (void*)(uintptr_t)owner,
                      NULL, 0);
     if (result < 0) {
@@ -110,7 +112,9 @@ static void rin_pthread_mutex_robust_owner_release(pthread_mutex_t* mutex,
                                                     pthread_t owner) {
     if (!mutex) return;
     (void)syscall(SYS_futex, &mutex->locked,
-                  FUTEX_RIN_ROBUST_UNREGISTER,
+                  FUTEX_RIN_ROBUST_UNREGISTER |
+                      (rin_pthread_mutex_is_shared(mutex) ? 0 :
+                       FUTEX_PRIVATE_FLAG),
                   (uintptr_t)&mutex->owner, (void*)(uintptr_t)owner,
                   NULL, 0);
 }
@@ -850,9 +854,6 @@ int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexattr_t* attr) 
         int pshared = attr->pshared & RIN_PTHREAD_MUTEXATTR_PSHARED_MASK;
         if (pshared != PTHREAD_PROCESS_PRIVATE &&
             pshared != PTHREAD_PROCESS_SHARED) return EINVAL;
-        if (rin_pthread_mutexattr_is_robust(attr) &&
-            pshared != PTHREAD_PROCESS_SHARED)
-            return ENOTSUP;
     }
     mutex->locked = 0;
     mutex->owner = 0;
@@ -888,7 +889,6 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
     int type = rin_pthread_mutex_type(mutex);
 
     if (rin_pthread_mutex_is_robust(mutex)) {
-        if (!rin_pthread_mutex_is_shared(mutex)) return ENOTSUP;
         return rin_pthread_mutex_robust_lock(mutex, owner, type, 0);
     }
 
@@ -935,7 +935,6 @@ int pthread_mutex_trylock(pthread_mutex_t* mutex) {
     int type = rin_pthread_mutex_type(mutex);
 
     if (rin_pthread_mutex_is_robust(mutex)) {
-        if (!rin_pthread_mutex_is_shared(mutex)) return ENOTSUP;
         return rin_pthread_mutex_robust_lock(mutex, owner, type, 1);
     }
 
@@ -970,7 +969,6 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
         uint32_t previous;
         uint32_t owner_id;
         int wake_error = 0;
-        if (!rin_pthread_mutex_is_shared(mutex)) return ENOTSUP;
         if (__atomic_load_n(&mutex->owner, __ATOMIC_ACQUIRE) != owner)
             return EPERM;
         wake_error = rin_pthread_mutex_robust_owner_id(mutex, owner,
@@ -1049,8 +1047,7 @@ int pthread_mutex_consistent(pthread_mutex_t* mutex) {
     uint32_t owner_id;
     int result;
     if (!mutex) return EINVAL;
-    if (!rin_pthread_mutex_is_robust(mutex) ||
-        !rin_pthread_mutex_is_shared(mutex))
+    if (!rin_pthread_mutex_is_robust(mutex))
         return EINVAL;
     self = _RIN_PTHREAD_RUNTIME_SELF();
     owner = rin_pthread_mutex_owner_token(mutex, self);
