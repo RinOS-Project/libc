@@ -21,6 +21,11 @@
 #define FUTEX_WAIT_REQUEUE_PI   11
 #define FUTEX_CMP_REQUEUE_PI    12
 
+/* RinOS shared robust-mutex registration extensions.  These operations are
+ * sent through SYS_futex and return a per-lock owner token on registration. */
+#define FUTEX_RIN_ROBUST_REGISTER   0x40
+#define FUTEX_RIN_ROBUST_UNREGISTER 0x41
+
 /* Futex flags */
 #define FUTEX_PRIVATE_FLAG      128
 #define FUTEX_CLOCK_REALTIME    256

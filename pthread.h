@@ -155,6 +155,8 @@ typedef struct {
 #define PTHREAD_MUTEX_RECURSIVE  1
 #define PTHREAD_MUTEX_ERRORCHECK 2
 #define PTHREAD_MUTEX_DEFAULT    PTHREAD_MUTEX_NORMAL
+#define PTHREAD_MUTEX_STALLED    0
+#define PTHREAD_MUTEX_ROBUST     1
 
 #define PTHREAD_PROCESS_PRIVATE 0
 #define PTHREAD_PROCESS_SHARED  1
@@ -497,6 +499,9 @@ static inline int pthread_mutexattr_init(pthread_mutexattr_t* attr) {
     return 0;
 }
 
+#define RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG 0x100
+#define RIN_PTHREAD_MUTEXATTR_PSHARED_MASK 0xff
+
 static inline int pthread_mutexattr_destroy(pthread_mutexattr_t* attr) {
     if (!attr) return EINVAL;
     attr->type = PTHREAD_MUTEX_DEFAULT;
@@ -520,13 +525,33 @@ static inline int pthread_mutexattr_gettype(const pthread_mutexattr_t* attr, int
 static inline int pthread_mutexattr_setpshared(pthread_mutexattr_t* attr, int pshared) {
     if (!attr) return EINVAL;
     if (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED) return EINVAL;
-    attr->pshared = pshared;
+    attr->pshared = (attr->pshared & RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG) |
+                    pshared;
     return 0;
 }
 
 static inline int pthread_mutexattr_getpshared(const pthread_mutexattr_t* attr, int* pshared) {
     if (!attr || !pshared) return EINVAL;
-    *pshared = attr->pshared;
+    *pshared = attr->pshared & RIN_PTHREAD_MUTEXATTR_PSHARED_MASK;
+    return 0;
+}
+
+static inline int pthread_mutexattr_setrobust(pthread_mutexattr_t* attr,
+                                               int robust) {
+    if (!attr || (robust != PTHREAD_MUTEX_STALLED &&
+                  robust != PTHREAD_MUTEX_ROBUST))
+        return EINVAL;
+    attr->pshared = (attr->pshared & RIN_PTHREAD_MUTEXATTR_PSHARED_MASK) |
+        (robust == PTHREAD_MUTEX_ROBUST ?
+             RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG : 0);
+    return 0;
+}
+
+static inline int pthread_mutexattr_getrobust(const pthread_mutexattr_t* attr,
+                                               int* robust) {
+    if (!attr || !robust) return EINVAL;
+    *robust = (attr->pshared & RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG) != 0 ?
+        PTHREAD_MUTEX_ROBUST : PTHREAD_MUTEX_STALLED;
     return 0;
 }
 
@@ -638,6 +663,7 @@ extern int pthread_mutex_destroy(pthread_mutex_t* mutex);
 extern int pthread_mutex_lock(pthread_mutex_t* mutex);
 extern int pthread_mutex_trylock(pthread_mutex_t* mutex);
 extern int pthread_mutex_unlock(pthread_mutex_t* mutex);
+extern int pthread_mutex_consistent(pthread_mutex_t* mutex);
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
