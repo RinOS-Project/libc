@@ -3,6 +3,7 @@
 
 #include "stdlib.h"
 #include "internal/rin_environment_runtime.h"
+#include "rin_account_compat.h"
 
 typedef struct RinEnvironmentAllocation {
     void* pointer;
@@ -247,7 +248,26 @@ char* getenv(const char* name) {
     return result;
 }
 
+int __rin_env_is_secure(void) {
+    __rin_credentials_v1 credentials;
+    int saved_errno = errno;
+    int error = __rin_credentials_get(&credentials);
+    errno = saved_errno;
+    /* Until the loader exposes AT_SECURE, conservatively recognize the
+     * privileged credential states that the current ABI can report. */
+    if (error != 0) return 1;
+    return credentials.uid != credentials.effective_uid ||
+           credentials.gid != credentials.effective_gid ||
+           credentials.capabilities != 0u;
+}
+
+char* __rin_env_get_secure_from_snapshot(char** snapshot, const char* name) {
+    if (__rin_env_is_secure()) return NULL;
+    return __rin_env_get_from_snapshot(snapshot, name);
+}
+
 char* secure_getenv(const char* name) {
+    if (__rin_env_is_secure()) return NULL;
     return getenv(name);
 }
 

@@ -414,7 +414,7 @@ static inline int _rin_posix_spawn_capture_search_path(
     *environment_out = snapshot;
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
     defined(RIN_USERSPACE) && RIN_USERSPACE
-    path = __rin_env_get_from_snapshot(snapshot, "PATH");
+    path = __rin_env_get_secure_from_snapshot(snapshot, "PATH");
 #else
     path = _RIN_POSIX_SPAWN_GETENV("PATH");
 #endif
