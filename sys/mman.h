@@ -10,6 +10,7 @@
 #include "types.h"
 #include "syscall.h"
 #include "../errno.h"
+#include <rin/mman_abi.h>
 #include <stdarg.h>
 
 #ifndef _RIN_MMAN_SYSCALL0
@@ -178,19 +179,35 @@ static inline void* mmap(void* addr, size_t length, int prot, int flags,
 #if !defined(__RIN_SYS_TYPES_HOST_OWNER)
 static inline void* mmap64(void* addr, size_t length, int prot, int flags,
                            int fd, off64_t offset) {
+    RinMmapFdCallV1 call = {0};
+    intptr_t result;
+
     if (offset < 0) {
         errno = EINVAL;
         return MAP_FAILED;
     }
-#if UINTPTR_MAX < UINT64_MAX
-    /* SYS_MMAP_FD currently has a word-sized compat32 offset. Refuse offsets
-     * that cannot cross that ABI instead of silently dropping their high word. */
-    if ((uint64_t)offset > UINT32_MAX) {
-        errno = EOVERFLOW;
+    if ((flags & MAP_ANONYMOUS) != 0) {
+        if (offset != 0) {
+            errno = EINVAL;
+            return MAP_FAILED;
+        }
+        return mmap(addr, length, prot, flags, fd, (off_t)0);
+    }
+    if (fd < 0) {
+        errno = EBADF;
         return MAP_FAILED;
     }
-#endif
-    return mmap(addr, length, prot, flags, fd, (off_t)offset);
+
+    call.struct_size = (uint32_t)sizeof(call);
+    call.version = RIN_MMAP_FD_CALL_VERSION;
+    call.address = (uint64_t)(uintptr_t)addr;
+    call.size = (uint64_t)length;
+    call.protection = (uint32_t)prot;
+    call.flags = (uint32_t)flags;
+    call.descriptor = fd;
+    call.offset = (uint64_t)offset;
+    result = _RIN_MMAN_SYSCALL1(SYS_MMAP_FD64, (uintptr_t)&call);
+    return __rin_mman_pointer_result(result);
 }
 #endif /* !__RIN_SYS_TYPES_HOST_OWNER */
 
