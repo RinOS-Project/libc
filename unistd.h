@@ -1929,6 +1929,17 @@ __attribute__((unused, noinline)) static void* sbrk(long increment) {
 
 #endif /* !MIDL_PASS */
 
+#if defined(__RIN_FILE_OFFSET_BITS64) && !defined(MIDL_PASS)
+/* These are header-only libc entry points, so redirect their public spellings
+ * to the explicit 64-bit implementations at the call site.  Keeping the
+ * redirect after the definitions avoids rewriting their own declarations. */
+#define pread pread64
+#define pwrite pwrite64
+#define lseek lseek64
+#define truncate truncate64
+#define ftruncate ftruncate64
+#endif
+
 #ifdef __cplusplus
 }
 #endif

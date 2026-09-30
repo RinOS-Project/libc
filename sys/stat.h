@@ -150,6 +150,33 @@ struct stat {
     time_t    st_ctime;   /* 最終状態変更時刻 */
 };
 
+#if !defined(__RIN_SYS_TYPES_HOST_OWNER)
+/* Stable compat32 large-file record. The old 52-byte stat ABI intentionally
+ * stays unchanged; stat64 and _FILE_OFFSET_BITS=64 use this 88-byte layout. */
+struct stat64 {
+    uint32_t st_dev;
+    uint32_t __reserved_dev;
+    uint64_t st_ino;
+    uint32_t st_mode;
+    uint32_t st_nlink;
+    int32_t  st_uid;
+    int32_t  st_gid;
+    uint32_t st_rdev;
+    uint32_t __reserved_rdev;
+    int64_t  st_size;
+    int64_t  st_blksize;
+    int64_t  st_blocks;
+    int64_t  st_atime;
+    int64_t  st_mtime;
+    int64_t  st_ctime;
+};
+#if !defined(MIDL_PASS) && defined(__cplusplus)
+static_assert(sizeof(struct stat64) == 88u, "RinOS stat64 ABI size");
+#elif !defined(MIDL_PASS)
+_Static_assert(sizeof(struct stat64) == 88u, "RinOS stat64 ABI size");
+#endif
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * 関数
  * ═══════════════════════════════════════════════════════════════*/
@@ -235,6 +262,62 @@ static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf,
     call.buffer_size = sizeof(*statbuf);
     return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
 }
+
+#if !defined(__RIN_SYS_TYPES_HOST_OWNER)
+/* Explicit 64-bit metadata calls share the versioned path-at buffer contract.
+ * fstat64 has a dedicated syscall so old two-argument fstat callers never
+ * depend on unspecified values in unused syscall registers. */
+static inline int fstat64(int fd, struct stat64* statbuf) {
+    if (!statbuf) {
+        errno = EFAULT;
+        return -1;
+    }
+    return __rin_stat_int_result(_RIN_STAT_SYSCALL2(
+        SYS_FSTAT64, fd, statbuf));
+}
+
+static inline int fstatat64(int dirfd, const char* pathname,
+                            struct stat64* statbuf, int flags) {
+    RinPathAtCallV1 call;
+
+    if (!pathname || !statbuf) {
+        errno = EFAULT;
+        return -1;
+    }
+    if ((flags & ~(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW |
+                   AT_NO_AUTOMOUNT)) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (pathname[0] == '\0') {
+        if ((flags & AT_EMPTY_PATH) == 0) {
+            errno = ENOENT;
+            return -1;
+        }
+        return fstat64(dirfd, statbuf);
+    }
+    if ((flags & AT_EMPTY_PATH) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    __rin_stat_path_at_init(&call, RIN_PATH_AT_STAT);
+    call.flags = (uint32_t)flags;
+    call.dirfd = dirfd;
+    call.path1 = (uint64_t)(uintptr_t)pathname;
+    call.buffer = (uint64_t)(uintptr_t)statbuf;
+    call.buffer_size = sizeof(*statbuf);
+    return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
+}
+
+static inline int stat64(const char* pathname, struct stat64* statbuf) {
+    return fstatat64(AT_FDCWD, pathname, statbuf, 0);
+}
+
+static inline int lstat64(const char* pathname, struct stat64* statbuf) {
+    return fstatat64(AT_FDCWD, pathname, statbuf, AT_SYMLINK_NOFOLLOW);
+}
+#endif /* !__RIN_SYS_TYPES_HOST_OWNER */
 
 /* Capability-only fstatat for WASI preopens. Unlike fstatat(), this cannot
  * fall back to the process CWD or traverse outside the retained dirfd. */
@@ -373,5 +456,15 @@ static inline mode_t umask(mode_t mask) {
 
 /* POSIX declares futimens() through <sys/stat.h>. */
 #include "../utime.h"
+
+#if defined(__RIN_FILE_OFFSET_BITS64) && \
+    !defined(__RIN_SYS_TYPES_HOST_OWNER) && !defined(MIDL_PASS)
+/* POSIX source-level redirection also changes `struct stat` to the 64-bit ABI
+ * tag for translation units that define _FILE_OFFSET_BITS=64. */
+#define stat stat64
+#define fstat fstat64
+#define lstat lstat64
+#define fstatat fstatat64
+#endif
 
 #endif /* _SYS_STAT_H */

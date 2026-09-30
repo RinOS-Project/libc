@@ -37,6 +37,12 @@
     _syscall3((uintptr_t)(number), (uintptr_t)(arg1), \
               (uintptr_t)(arg2), (uintptr_t)(arg3))
 #endif
+#ifndef _RIN_STDIO_SYSCALL5
+#define _RIN_STDIO_SYSCALL5(number, arg1, arg2, arg3, arg4, arg5) \
+    _syscall5((uintptr_t)(number), (uintptr_t)(arg1), \
+              (uintptr_t)(arg2), (uintptr_t)(arg3), \
+              (uintptr_t)(arg4), (uintptr_t)(arg5))
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -103,7 +109,11 @@ struct _FILE {
 #endif
 
 /* ファイル位置型 */
+#if defined(__RIN_FILE_OFFSET_BITS64)
+typedef off64_t fpos_t;
+#else
 typedef long fpos_t;
+#endif
 
 #ifndef MIDL_PASS
 /* 静的FILEプール */
@@ -1760,6 +1770,134 @@ static inline off_t ftello(FILE* stream) {
     return (off_t)result;
 }
 
+static inline int _rin_fseeko64_unlocked(FILE* stream, off64_t offset,
+                                         int whence) {
+    int64_t adjusted = (int64_t)offset;
+    int64_t position = 0;
+    intptr_t status;
+    size_t unread;
+    int stream_index;
+
+    if (!stream) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (_rin_stdio_flush_output_buffer(stream) != 0) return -1;
+    unread = _rin_stdio_input_buffer_unread(stream);
+    if (unread == (size_t)-1) return -1;
+    stream_index = _rin_stdio_stream_index(stream);
+    if (whence == SEEK_CUR) {
+        if (unread > (size_t)INT64_MAX ||
+            adjusted < INT64_MIN + (int64_t)unread) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        adjusted -= (int64_t)unread;
+        if (stream_index >= 0) {
+            size_t pushback = _rin_stdio_ungetc_count(stream_index);
+            if (pushback > (size_t)INT64_MAX ||
+                adjusted < INT64_MIN + (int64_t)pushback) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            adjusted -= (int64_t)pushback;
+        }
+    }
+    status = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
+        SYS_LSEEK64, (uintptr_t)stream->fd,
+        (uintptr_t)(uint32_t)(uint64_t)adjusted,
+        (uintptr_t)(uint32_t)((uint64_t)adjusted >> 32),
+        (uintptr_t)whence, (uintptr_t)&position));
+    if (status < 0) {
+        stream->error = 1;
+        return -1;
+    }
+    if (status != 0) {
+        errno = EIO;
+        stream->error = 1;
+        return -1;
+    }
+    if (stream_index >= 0) _rin_stdio_ungetc_clear(stream_index);
+    _rin_stdio_wide_pushback_clear(stream);
+    stream->buf_pos = 0u;
+    stream->buf_end = 0u;
+    stream->eof = 0;
+    return 0;
+}
+
+static inline int fseeko64(FILE* stream, off64_t offset, int whence) {
+    int result;
+    if (!stream) {
+        errno = EINVAL;
+        return -1;
+    }
+    flockfile(stream);
+    result = _rin_fseeko64_unlocked(stream, offset, whence);
+    funlockfile(stream);
+    return result;
+}
+
+static inline off64_t _rin_ftello64_unlocked(FILE* stream) {
+    int64_t position = 0;
+    intptr_t status;
+    size_t unread;
+    int stream_index;
+
+    if (!stream) {
+        errno = EINVAL;
+        return (off64_t)-1;
+    }
+    status = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
+        SYS_LSEEK64, (uintptr_t)stream->fd, 0u, 0u,
+        (uintptr_t)SEEK_CUR, (uintptr_t)&position));
+    if (status < 0) return (off64_t)-1;
+    if (status != 0 || position < 0) {
+        errno = EIO;
+        return (off64_t)-1;
+    }
+    if (_rin_stdio_output_buffer_enabled(stream)) {
+        if (stream->buf_pos > (size_t)INT64_MAX ||
+            position > INT64_MAX - (int64_t)stream->buf_pos) {
+            errno = EOVERFLOW;
+            return (off64_t)-1;
+        }
+        position += (int64_t)stream->buf_pos;
+    }
+    unread = _rin_stdio_input_buffer_unread(stream);
+    if (unread == (size_t)-1) return (off64_t)-1;
+    if (unread != 0u) {
+        if (unread > (size_t)INT64_MAX || position < (int64_t)unread) {
+            errno = EIO;
+            stream->error = 1;
+            return (off64_t)-1;
+        }
+        position -= (int64_t)unread;
+    }
+    stream_index = _rin_stdio_stream_index(stream);
+    if (stream_index >= 0) {
+        size_t pushback = _rin_stdio_ungetc_count(stream_index);
+        if (pushback > (size_t)INT64_MAX) {
+            errno = EIO;
+            stream->error = 1;
+            return (off64_t)-1;
+        }
+        if ((int64_t)pushback <= position) position -= (int64_t)pushback;
+    }
+    return (off64_t)position;
+}
+
+static inline off64_t ftello64(FILE* stream) {
+    off64_t result;
+    if (!stream) {
+        errno = EINVAL;
+        return (off64_t)-1;
+    }
+    flockfile(stream);
+    result = _rin_ftello64_unlocked(stream);
+    funlockfile(stream);
+    return result;
+}
+
 static inline void _rin_rewind_unlocked(FILE* stream) {
     fseek(stream, 0, SEEK_SET);
     stream->eof = 0;
@@ -1774,7 +1912,11 @@ static inline void rewind(FILE* stream) {
 }
 
 static inline int _rin_fgetpos_unlocked(FILE* stream, fpos_t* pos) {
+#if defined(__RIN_FILE_OFFSET_BITS64)
+    off64_t p = ftello64(stream);
+#else
     long p = ftell(stream);
+#endif
     if (p < 0) return -1;
     *pos = (fpos_t)p;
     return 0;
@@ -1793,7 +1935,11 @@ static inline int fgetpos(FILE* stream, fpos_t* pos) {
 }
 
 static inline int _rin_fsetpos_unlocked(FILE* stream, const fpos_t* pos) {
+#if defined(__RIN_FILE_OFFSET_BITS64)
+    return _rin_fseeko64_unlocked(stream, (off64_t)*pos, SEEK_SET);
+#else
     return fseek(stream, (long)*pos, SEEK_SET);
+#endif
 }
 
 static inline int fsetpos(FILE* stream, const fpos_t* pos) {
@@ -2501,6 +2647,11 @@ static inline char* tmpnam(char* s) {
 
 #ifdef __cplusplus
 }
+#endif
+
+#if defined(__RIN_FILE_OFFSET_BITS64) && !defined(MIDL_PASS)
+#define fseeko fseeko64
+#define ftello ftello64
 #endif
 
 #endif /* _STDIO_H */

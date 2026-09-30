@@ -19,6 +19,7 @@ extern "C" {
  * and pthread_once_t) would make a harmless transitive include fail. */
 #if defined(_INC_TYPES) && defined(__STDC_HOSTED__) && __STDC_HOSTED__
 #define RIN_SYS_TYPES_HOST_OWNER 1
+#define __RIN_SYS_TYPES_HOST_OWNER 1
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -34,8 +35,13 @@ typedef int            gid_t;      /* グループID */
 typedef unsigned int   id_t;       /* 汎用ID */
 
 /* ファイル関連 */
-typedef long           off_t;      /* ファイルオフセット */
 typedef long long      off64_t;    /* 64ビットオフセット */
+#if defined(_FILE_OFFSET_BITS) && _FILE_OFFSET_BITS == 64
+#define __RIN_FILE_OFFSET_BITS64 1
+typedef off64_t         off_t;      /* large-file redirect */
+#else
+typedef long           off_t;      /* ファイルオフセット */
+#endif
 typedef unsigned long  ino_t;      /* iノード番号 */
 typedef unsigned long  ino64_t;    /* 64ビットiノード */
 typedef unsigned int   dev_t;      /* デバイス番号 */

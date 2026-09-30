@@ -9,6 +9,7 @@
 
 #include "types.h"
 #include "syscall.h"
+#include "../errno.h"
 #include <stdarg.h>
 
 #ifndef _RIN_MMAN_SYSCALL0
@@ -174,6 +175,25 @@ static inline void* mmap(void* addr, size_t length, int prot, int flags,
     return __rin_mman_pointer_result(ret);
 }
 
+#if !defined(__RIN_SYS_TYPES_HOST_OWNER)
+static inline void* mmap64(void* addr, size_t length, int prot, int flags,
+                           int fd, off64_t offset) {
+    if (offset < 0) {
+        errno = EINVAL;
+        return MAP_FAILED;
+    }
+#if UINTPTR_MAX < UINT64_MAX
+    /* SYS_MMAP_FD currently has a word-sized compat32 offset. Refuse offsets
+     * that cannot cross that ABI instead of silently dropping their high word. */
+    if ((uint64_t)offset > UINT32_MAX) {
+        errno = EOVERFLOW;
+        return MAP_FAILED;
+    }
+#endif
+    return mmap(addr, length, prot, flags, fd, (off_t)offset);
+}
+#endif /* !__RIN_SYS_TYPES_HOST_OWNER */
+
 static inline int munmap(void* addr, size_t length) {
     intptr_t ret = _RIN_MMAN_SYSCALL2(
         SYS_MUNMAP, (uintptr_t)addr, (uintptr_t)length);
@@ -260,6 +280,11 @@ static inline void* mremap(void* old_addr, size_t old_size, size_t new_size,
 
 #ifdef __cplusplus
 }
+#endif
+
+#if defined(__RIN_FILE_OFFSET_BITS64) && \
+    !defined(__RIN_SYS_TYPES_HOST_OWNER)
+#define mmap mmap64
 #endif
 
 #endif /* _SYS_MMAN_H */
