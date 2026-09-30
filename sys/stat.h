@@ -210,21 +210,32 @@ static inline int lstat(const char* pathname, struct stat* statbuf) {
 
 /* Device and FIFO inode creation shares the stable descriptor-relative path
  * ABI so path resolution and mutation authorization remain kernel-owned. */
-static inline int mknod(const char* pathname, mode_t mode, dev_t dev) {
+static inline int mknodat(int dirfd, const char* pathname, mode_t mode,
+                          dev_t dev) {
     RinPathAtCallV1 call;
     if (!pathname) {
         errno = EFAULT;
         return -1;
     }
     __rin_stat_path_at_init(&call, RIN_PATH_AT_MKNOD);
+    call.dirfd = dirfd;
     call.path1 = (uint64_t)(uintptr_t)pathname;
     call.mode = (uint32_t)mode;
     call.reserved0 = (uint32_t)dev;
     return __rin_stat_int_result(_RIN_STAT_PATH_AT_CALL(&call));
 }
 
+static inline int mknod(const char* pathname, mode_t mode, dev_t dev) {
+    return mknodat(AT_FDCWD, pathname, mode, dev);
+}
+
+static inline int mkfifoat(int dirfd, const char* pathname, mode_t mode) {
+    return mknodat(dirfd, pathname,
+                   (mode_t)(S_IFIFO | (mode & 07777)), 0);
+}
+
 static inline int mkfifo(const char* pathname, mode_t mode) {
-    return mknod(pathname, (mode_t)(S_IFIFO | (mode & 07777)), 0);
+    return mkfifoat(AT_FDCWD, pathname, mode);
 }
 
 static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf, int flags) {
