@@ -439,7 +439,9 @@ static inline uint8_t _rtc_read(uint8_t reg) {
  * 時刻計算ヘルパー
  * ═══════════════════════════════════════════════════════════════*/
 
-static const int _days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+static const int _days_in_month[] __attribute__((unused)) = {
+     31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+};
 
 static inline int _is_leap_year(int year) {
     return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
@@ -580,139 +582,159 @@ static char _tzname_utc[] = "UTC";
  * freestanding -Werror unused-variable failure in every translation unit. */
 static char* tzname[2] __attribute__((unused)) = { _tzname_utc, _tzname_utc };
 
-static inline struct tm* gmtime(const time_t* timer) {
-    if (!timer) return NULL;
-
-    time_t t = *timer;
-    int days = (int)(t / 86400);
-    int rem = (int)(t % 86400);
-
-    if (rem < 0) { rem += 86400; days--; }
-
-    _tm_buf.tm_sec = rem % 60; rem /= 60;
-    _tm_buf.tm_min = rem % 60;
-    _tm_buf.tm_hour = rem / 60;
-
-    _tm_buf.tm_wday = (4 + days) % 7;
-    if (_tm_buf.tm_wday < 0) _tm_buf.tm_wday += 7;
-
-    int year = 1970;
-    while (days >= (_is_leap_year(year) ? 366 : 365)) {
-        days -= _is_leap_year(year) ? 366 : 365;
-        year++;
-    }
-    while (days < 0) {
-        year--;
-        days += _is_leap_year(year) ? 366 : 365;
-    }
-
-    _tm_buf.tm_year = year - 1900;
-    _tm_buf.tm_yday = days;
-
-    int month = 0;
-    while (month < 11) {
-        int mdays = _days_in_month[month];
-        if (month == 1 && _is_leap_year(year)) mdays++;
-        if (days < mdays) break;
-        days -= mdays;
-        month++;
-    }
-
-    _tm_buf.tm_mon = month;
-    _tm_buf.tm_mday = days + 1;
-    _tm_buf.tm_isdst = 0;
-    _tm_buf.tm_gmtoff = 0;
-    _tm_buf.tm_zone = "UTC";
-
-    return &_tm_buf;
+static inline int64_t _rin_time_floor_divide(int64_t value,
+                                              int64_t divisor) {
+    int64_t quotient = value / divisor;
+    if (value % divisor < 0) --quotient;
+    return quotient;
 }
 
-static inline struct tm* localtime(const time_t* timer) {
-    return gmtime(timer);  /* タイムゾーン未対応 */
+/* Howard Hinnant's civil-date conversion, with 64-bit intermediates.  A
+ * time_t can cover far more days than fit in int, so gmtime must not narrow
+ * the day count before converting the calendar year. */
+static inline int64_t _rin_time_days_from_civil(int64_t year,
+                                                 unsigned int month,
+                                                 unsigned int day) {
+    int64_t era;
+    unsigned int year_of_era;
+    unsigned int day_of_year;
+    unsigned int day_of_era;
+    year -= month <= 2u;
+    era = _rin_time_floor_divide(year, 400);
+    year_of_era = (unsigned int)(year - era * 400);
+    day_of_year = (153u * (month > 2u ? month - 3u : month + 9u) + 2u) /
+                      5u +
+                  day - 1u;
+    day_of_era = year_of_era * 365u + year_of_era / 4u -
+                 year_of_era / 100u + day_of_year;
+    return era * 146097 + (int64_t)day_of_era - 719468;
 }
 
-/* リエントラント版 */
+static inline void _rin_time_civil_from_days(int64_t days, int64_t* year,
+                                              unsigned int* month,
+                                              unsigned int* day) {
+    int64_t era;
+    int64_t candidate_year;
+    unsigned int day_of_era;
+    unsigned int year_of_era;
+    unsigned int day_of_year;
+    unsigned int month_prime;
+    days += 719468;
+    era = _rin_time_floor_divide(days, 146097);
+    day_of_era = (unsigned int)(days - era * 146097);
+    year_of_era = (day_of_era - day_of_era / 1460u +
+                   day_of_era / 36524u - day_of_era / 146096u) / 365u;
+    candidate_year = (int64_t)year_of_era + era * 400;
+    day_of_year = day_of_era -
+        (365u * year_of_era + year_of_era / 4u - year_of_era / 100u);
+    month_prime = (5u * day_of_year + 2u) / 153u;
+    *day = day_of_year - (153u * month_prime + 2u) / 5u + 1u;
+    *month = month_prime < 10u ? month_prime + 3u : month_prime - 9u;
+    *year = candidate_year + (*month <= 2u);
+}
+
 static inline struct tm* gmtime_r(const time_t* timer, struct tm* result) {
-    if (!timer || !result) return NULL;
-
-    time_t t = *timer;
-    int days = (int)(t / 86400);
-    int rem = (int)(t % 86400);
-
-    if (rem < 0) { rem += 86400; days--; }
-
-    result->tm_sec = rem % 60; rem /= 60;
-    result->tm_min = rem % 60;
-    result->tm_hour = rem / 60;
-
-    result->tm_wday = (4 + days) % 7;
-    if (result->tm_wday < 0) result->tm_wday += 7;
-
-    int year = 1970;
-    while (days >= (_is_leap_year(year) ? 366 : 365)) {
-        days -= _is_leap_year(year) ? 366 : 365;
-        year++;
+    struct tm candidate;
+    int64_t value;
+    int64_t days;
+    int64_t seconds_of_day;
+    int64_t year;
+    int64_t year_start;
+    unsigned int month;
+    unsigned int day;
+    if (!timer || !result) {
+        errno = EINVAL;
+        return NULL;
     }
-    while (days < 0) {
-        year--;
-        days += _is_leap_year(year) ? 366 : 365;
+    value = (int64_t)*timer;
+    days = value / 86400;
+    seconds_of_day = value % 86400;
+    if (seconds_of_day < 0) {
+        seconds_of_day += 86400;
+        --days;
     }
-
-    result->tm_year = year - 1900;
-    result->tm_yday = days;
-
-    int month = 0;
-    while (month < 11) {
-        int mdays = _days_in_month[month];
-        if (month == 1 && _is_leap_year(year)) mdays++;
-        if (days < mdays) break;
-        days -= mdays;
-        month++;
+    _rin_time_civil_from_days(days, &year, &month, &day);
+    if (year < (int64_t)INT_MIN + 1900 ||
+        year > (int64_t)INT_MAX + 1900) {
+        errno = EOVERFLOW;
+        return NULL;
     }
-
-    result->tm_mon = month;
-    result->tm_mday = days + 1;
-    result->tm_isdst = 0;
-    result->tm_gmtoff = 0;
-    result->tm_zone = "UTC";
-
+    year_start = _rin_time_days_from_civil(year, 1u, 1u);
+    candidate.tm_sec = (int)(seconds_of_day % 60);
+    candidate.tm_min = (int)((seconds_of_day / 60) % 60);
+    candidate.tm_hour = (int)(seconds_of_day / 3600);
+    candidate.tm_mday = (int)day;
+    candidate.tm_mon = (int)month - 1;
+    candidate.tm_year = (int)(year - 1900);
+    candidate.tm_wday = (int)((days % 7 + 4) % 7);
+    if (candidate.tm_wday < 0) candidate.tm_wday += 7;
+    candidate.tm_yday = (int)(days - year_start);
+    candidate.tm_isdst = 0;
+    candidate.tm_gmtoff = 0;
+    candidate.tm_zone = "UTC";
+    *result = candidate;
     return result;
 }
 
+static inline struct tm* gmtime(const time_t* timer) {
+    return gmtime_r(timer, &_tm_buf);
+}
+
+static inline struct tm* localtime(const time_t* timer) {
+    return gmtime(timer);  /* UTC-only fallback has no timezone owner. */
+}
+
 static inline struct tm* localtime_r(const time_t* timer, struct tm* result) {
-    return gmtime_r(timer, result);  /* タイムゾーン未対応 */
+    return gmtime_r(timer, result);  /* UTC-only fallback has no timezone owner. */
 }
 
-static inline time_t mktime(struct tm* tm) {
-    if (!tm) return -1;
-
-    int year = tm->tm_year + 1900;
-    int month = tm->tm_mon;
-    int day = tm->tm_mday;
-
-    time_t days = 0;
-    for (int y = 1970; y < year; y++) {
-        days += _is_leap_year(y) ? 366 : 365;
+static inline time_t timegm(struct tm* value) {
+    struct tm normalized;
+    int64_t year;
+    int64_t month;
+    int64_t month_year;
+    int64_t days;
+    int64_t seconds;
+    time_t result;
+    int saved_errno = errno;
+    if (!value) {
+        errno = EINVAL;
+        return (time_t)-1;
     }
-
-    for (int m = 0; m < month; m++) {
-        days += _days_in_month[m];
-        if (m == 1 && _is_leap_year(year)) days++;
+    year = (int64_t)value->tm_year + 1900;
+    month = value->tm_mon;
+    month_year = _rin_time_floor_divide(month, 12);
+    year += month_year;
+    month -= month_year * 12;
+    days = _rin_time_days_from_civil(year, (unsigned int)month + 1u, 1u) +
+        (int64_t)value->tm_mday - 1;
+    /* tm fields are int-sized, so the normalized civil range fits int64_t. */
+    seconds = days * 86400 + (int64_t)value->tm_hour * 3600 +
+        (int64_t)value->tm_min * 60 + value->tm_sec;
+    result = (time_t)seconds;
+    if ((int64_t)result != seconds) {
+        errno = EOVERFLOW;
+        return (time_t)-1;
     }
-
-    days += day - 1;
-
-    return days * 86400 + tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec;
+    if (!gmtime_r(&result, &normalized)) {
+        return (time_t)-1;
+    }
+    *value = normalized;
+    errno = saved_errno;
+    return result;
 }
 
-static inline time_t timegm(struct tm* tm) {
-    return mktime(tm);
+static inline time_t mktime(struct tm* value) {
+    /* This fallback is used only where the libc timezone owner is absent. */
+    return timegm(value);
 }
 
 #endif /* RIN_USERSPACE */
 
 static inline double difftime(time_t time1, time_t time0) {
-    return (double)(time1 - time0);
+    if (time1 >= time0)
+        return (double)((uint64_t)time1 - (uint64_t)time0);
+    return -(double)((uint64_t)time0 - (uint64_t)time1);
 }
 
 /* ═══════════════════════════════════════════════════════════════
