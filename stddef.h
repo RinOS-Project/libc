@@ -67,17 +67,21 @@ typedef int              wchar_t;
 #endif
 
 /* max_align_t - type with maximum alignment requirement
- * RinOS独自定義 */
+ * RinOS独自定義.  Clang's hosted headers define max_align_t before this
+ * public freestanding header can be reached, including under MSVC's ABI.
+ * Reuse that definition instead of redeclaring it with a different type. */
+#if !defined(__CLANG_MAX_ALIGN_T_DEFINED) && !defined(_GCC_MAX_ALIGN_T)
 #if defined(_MSC_VER)
 typedef struct {
     long long __ll;
     long double __ld;
 } max_align_t;
-#elif !defined(__CLANG_MAX_ALIGN_T_DEFINED) && !defined(_GCC_MAX_ALIGN_T)
+#else
 typedef struct {
     long long __ll __attribute__((__aligned__(__alignof__(long long))));
     long double __ld __attribute__((__aligned__(__alignof__(long double))));
 } max_align_t;
+#endif
 #define __CLANG_MAX_ALIGN_T_DEFINED
 #define _GCC_MAX_ALIGN_T
 #endif

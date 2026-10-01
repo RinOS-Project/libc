@@ -7,7 +7,7 @@
 #ifndef _STDINT_H
 #define _STDINT_H
 
-#if !defined(__CLANG_STDINT_H)
+#if !defined(__CLANG_STDINT_H) && !defined(_STDINT)
 
 /* MSVC has no GNU/Clang fixed-width type macros. */
 #if defined(_MSC_VER)
