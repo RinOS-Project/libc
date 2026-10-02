@@ -88,7 +88,9 @@ static inline int _rin_system_owner(const char* command) {
         intptr_t wait_result;
         int status = 0;
         char** environment;
+#if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
         unsigned int environment_epoch = 0u;
+#endif
         char* shell_arguments[4];
 
         while (command_length <= RIN_STDLIB_SYSTEM_COMMAND_MAX &&
