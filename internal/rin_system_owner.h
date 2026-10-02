@@ -5,6 +5,7 @@
 #define RIN_SYSTEM_OWNER_H
 
 #include "../limits.h"
+#include "rin_environment_runtime.h"
 
 #ifndef RIN_STDLIB_SYSTEM_COMMAND_MAX
 #define RIN_STDLIB_SYSTEM_COMMAND_MAX 4095u
