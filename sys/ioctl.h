@@ -205,12 +205,13 @@ static inline int _rin_ioctl_result_status_zero(intptr_t raw_result) {
  *                regular VFS_FILE/DIR/STDIO → 成功 (意味的に no-op)。
  *                admitted legacy CHAR1 VFS_FILE は driver ioctl callbackへ渡す。
  *   TCGETS / TCSETS / TCSETSW / TCSETSF / TCSBRK / TCSBRKP / TCXONC /
- *   TCFLSH / TIOCGSID / TIOCSCTTY / TIOCNOTTY
+ *   TCFLSH / TIOCGSID / TIOCGPGRP / TIOCSCTTY / TIOCNOTTY
  *              : COM1 serial TTY owner、または admitted legacy CHAR1 callbackへ委譲。
  *                legacy CHAR1は旧TTY requestのwire sizeをkernelが補う。
  *                line-discipline、出力suspend、flow-control、breakなど
  *                physical backend未接続のrequestは EOPNOTSUPP を返すが、
- *                session attach/detachとTIOCGSIDはTTY ownerへ実装済み。
+ *                session attach/detach、TIOCGSID、同一session限定の
+ *                TIOCGPGRPはTTY ownerへ実装済み。
  *   TIOCGWINSZ / TIOCSWINSZ : x86_64 の admitted stdio descriptor は
  *              TTY owner の 8-byte winsize を取得・更新する。32-bit ABI、
  *              virtual-terminal descriptor、未admit fd は ENOTTY。

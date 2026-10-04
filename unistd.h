@@ -16,6 +16,7 @@
 #include "sys/syscall.h"
 #include "fcntl.h"
 #include "sys/stat.h"
+#include "sys/ioctl.h"
 #include "rin_account_compat.h"
 #include <rin/fs/path_at_abi.h>
 #include <rin/utsname_abi.h>
@@ -889,6 +890,23 @@ static inline pid_t getsid(pid_t pid)
         return (pid_t)-1;
     }
     return (pid_t)response.session_id;
+}
+
+/* Return the foreground process group attached to this process's controlling
+ * terminal.  The kernel verifies the terminal/session relationship and
+ * copies the fixed-width process-group ID through the ioctl boundary. */
+static inline pid_t tcgetpgrp(int fd)
+{
+    pid_t process_group_id = 0;
+    intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL3(
+        SYS_IOCTL, (uintptr_t)fd, (uintptr_t)TIOCGPGRP,
+        (uintptr_t)&process_group_id));
+    if (result < 0) return (pid_t)-1;
+    if (process_group_id <= 0) {
+        errno = EIO;
+        return (pid_t)-1;
+    }
+    return process_group_id;
 }
 
 static inline pid_t setsid(void)
