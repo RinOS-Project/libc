@@ -909,6 +909,22 @@ static inline pid_t tcgetpgrp(int fd)
     return process_group_id;
 }
 
+/* Set the foreground process group on this process's controlling terminal.
+ * The kernel validates the session/group relationship and applies POSIX
+ * background SIGTTOU behavior before changing terminal-owned state. */
+static inline int tcsetpgrp(int fd, pid_t process_group_id)
+{
+    intptr_t result;
+    if (process_group_id <= 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    result = _rin_unistd_result(_RIN_UNISTD_SYSCALL3(
+        SYS_IOCTL, (uintptr_t)fd, (uintptr_t)TIOCSPGRP,
+        (uintptr_t)&process_group_id));
+    return result < 0 ? -1 : 0;
+}
+
 static inline pid_t setsid(void)
 {
     RinProcessGroupSyscallResponseV1 response;
