@@ -795,6 +795,29 @@ static inline int renameat(int olddirfd, const char* oldpath, int newdirfd, cons
     return _fcntl_path_at_zero(&call);
 }
 
+/* Descriptor-relative atomic publication. The kernel refuses an existing
+ * destination instead of replacing it between a caller-side preflight and
+ * the rename. */
+static inline int rin_renameat_noreplace(int olddirfd, const char* oldpath,
+                                         int newdirfd, const char* newpath) {
+    RinPathAtCallV1 call;
+    if (!oldpath || !newpath) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (oldpath[0] == '\0' || newpath[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    _fcntl_path_at_init(&call, RIN_PATH_AT_RENAME);
+    call.flags = RIN_PATH_AT_RENAME_NOREPLACE;
+    call.dirfd = olddirfd;
+    call.secondary_dirfd = newdirfd;
+    call.path1 = (uint64_t)(uintptr_t)oldpath;
+    call.path2 = (uint64_t)(uintptr_t)newpath;
+    return _fcntl_path_at_zero(&call);
+}
+
 /* RinOS extension: atomically fail with EEXIST when the destination exists. */
 static inline int rin_rename_noreplace(const char* oldpath,
                                        const char* newpath) {
@@ -806,8 +829,7 @@ static inline int rin_rename_noreplace(const char* oldpath,
         errno = ENOENT;
         return -1;
     }
-    return _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL2(
-        SYS_RENAME_NOREPLACE, (uintptr_t)oldpath, (uintptr_t)newpath));
+    return rin_renameat_noreplace(AT_FDCWD, oldpath, AT_FDCWD, newpath);
 }
 
 static inline int symlinkat(const char* target, int newdirfd, const char* linkpath) {
