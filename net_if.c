@@ -211,7 +211,10 @@ unsigned int if_nametoindex(const char* ifname)
         errno = ENXIO;
         return 0u;
     }
-    return (unsigned int)info.device_generation;
+    /* libc currently publishes only the primary interface.  Its POSIX
+     * interface index is therefore a stable local ordinal, not the volatile
+     * device generation used to invalidate snapshots. */
+    return 1u;
 }
 
 char* if_indextoname(unsigned int ifindex, char* ifname)
@@ -227,7 +230,7 @@ char* if_indextoname(unsigned int ifindex, char* ifname)
     length = netif_snapshot(&info);
     if (length < 0)
         return (char*)0;
-    if (ifindex != (unsigned int)info.device_generation) {
+    if (ifindex != 1u) {
         errno = ENXIO;
         return (char*)0;
     }
