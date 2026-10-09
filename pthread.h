@@ -157,6 +157,9 @@ typedef struct {
 #define PTHREAD_MUTEX_DEFAULT    PTHREAD_MUTEX_NORMAL
 #define PTHREAD_MUTEX_STALLED    0
 #define PTHREAD_MUTEX_ROBUST     1
+#define PTHREAD_PRIO_NONE        0
+#define PTHREAD_PRIO_INHERIT     1
+#define PTHREAD_PRIO_PROTECT     2
 
 #define PTHREAD_PROCESS_PRIVATE 0
 #define PTHREAD_PROCESS_SHARED  1
@@ -501,6 +504,8 @@ static inline int pthread_mutexattr_init(pthread_mutexattr_t* attr) {
 
 #define RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG 0x100
 #define RIN_PTHREAD_MUTEXATTR_PSHARED_MASK 0xff
+#define RIN_PTHREAD_MUTEXATTR_TYPE_MASK 0xff
+#define RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG 0x100
 
 static inline int pthread_mutexattr_destroy(pthread_mutexattr_t* attr) {
     if (!attr) return EINVAL;
@@ -512,13 +517,42 @@ static inline int pthread_mutexattr_destroy(pthread_mutexattr_t* attr) {
 static inline int pthread_mutexattr_settype(pthread_mutexattr_t* attr, int type) {
     if (!attr) return EINVAL;
     if (type < 0 || type > PTHREAD_MUTEX_ERRORCHECK) return EINVAL;
-    attr->type = type;
+    attr->type = (attr->type & ~RIN_PTHREAD_MUTEXATTR_TYPE_MASK) | type;
     return 0;
 }
 
 static inline int pthread_mutexattr_gettype(const pthread_mutexattr_t* attr, int* type) {
     if (!attr || !type) return EINVAL;
-    *type = attr->type;
+    *type = attr->type & RIN_PTHREAD_MUTEXATTR_TYPE_MASK;
+    return 0;
+}
+
+static inline int pthread_mutexattr_setprotocol(pthread_mutexattr_t* attr,
+                                                int protocol) {
+    if (!attr) return EINVAL;
+    if (protocol == PTHREAD_PRIO_NONE) {
+        attr->type &= ~RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG;
+        return 0;
+    }
+    if (protocol == PTHREAD_PRIO_INHERIT) {
+#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+        /* This header-only kernel path uses platform_mutex, whose owner/wait
+         * queue is not connected to the POSIX scheduler's PI graph. */
+        return ENOTSUP;
+#else
+        attr->type |= RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG;
+        return 0;
+#endif
+    }
+    if (protocol == PTHREAD_PRIO_PROTECT) return ENOTSUP;
+    return EINVAL;
+}
+
+static inline int pthread_mutexattr_getprotocol(
+    const pthread_mutexattr_t* attr, int* protocol) {
+    if (!attr || !protocol) return EINVAL;
+    *protocol = (attr->type & RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG) != 0
+        ? PTHREAD_PRIO_INHERIT : PTHREAD_PRIO_NONE;
     return 0;
 }
 

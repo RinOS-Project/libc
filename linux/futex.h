@@ -29,6 +29,8 @@
 /* Futex flags */
 #define FUTEX_PRIVATE_FLAG      128
 #define FUTEX_CLOCK_REALTIME    256
+#define FUTEX_RIN_PI_FLAG       512
+#define FUTEX_RIN_PI_ROBUST_FLAG 1024
 
 /* Combined operations with flags */
 #define FUTEX_WAIT_PRIVATE      (FUTEX_WAIT | FUTEX_PRIVATE_FLAG)

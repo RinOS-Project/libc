@@ -30,6 +30,7 @@
 #define RIN_PTHREAD_MUTEX_PSHARED_FLAG 0x100
 #define RIN_PTHREAD_MUTEX_ROBUST_FLAG  0x200
 #define RIN_PTHREAD_MUTEX_NOT_RECOVERABLE_FLAG 0x400
+#define RIN_PTHREAD_MUTEX_PRIO_INHERIT_FLAG 0x800
 #define RIN_PTHREAD_MUTEX_TYPE_MASK    0xff
 #define RIN_PTHREAD_ROBUST_OWNER_MASK UINT32_C(0x3fffffff)
 #define RIN_PTHREAD_ROBUST_OWNER_DIED UINT32_C(0x40000000)
@@ -64,6 +65,10 @@ static int rin_pthread_mutex_is_robust(const pthread_mutex_t* mutex) {
     return mutex && (mutex->type & RIN_PTHREAD_MUTEX_ROBUST_FLAG) != 0;
 }
 
+static int rin_pthread_mutex_is_prio_inherit(const pthread_mutex_t* mutex) {
+    return mutex && (mutex->type & RIN_PTHREAD_MUTEX_PRIO_INHERIT_FLAG) != 0;
+}
+
 static pthread_t rin_pthread_mutex_owner_token(const pthread_mutex_t* mutex,
                                                pthread_t self) {
     uintptr_t pid;
@@ -93,6 +98,11 @@ static int rin_pthread_mutex_robust_owner_id(pthread_mutex_t* mutex,
     if (!mutex || !owner_id_out) return EINVAL;
     result = syscall(SYS_futex, &mutex->locked,
                      FUTEX_RIN_ROBUST_REGISTER |
+                         (rin_pthread_mutex_is_prio_inherit(mutex)
+                              ? FUTEX_RIN_PI_FLAG : 0) |
+                         (rin_pthread_mutex_is_prio_inherit(mutex) &&
+                          rin_pthread_mutex_is_robust(mutex)
+                              ? FUTEX_RIN_PI_ROBUST_FLAG : 0) |
                          (rin_pthread_mutex_is_shared(mutex) ? 0 :
                           FUTEX_PRIVATE_FLAG),
                      (uintptr_t)&mutex->owner, (void*)(uintptr_t)owner,
@@ -113,6 +123,11 @@ static void rin_pthread_mutex_robust_owner_release(pthread_mutex_t* mutex,
     if (!mutex) return;
     (void)syscall(SYS_futex, &mutex->locked,
                   FUTEX_RIN_ROBUST_UNREGISTER |
+                      (rin_pthread_mutex_is_prio_inherit(mutex)
+                           ? FUTEX_RIN_PI_FLAG : 0) |
+                      (rin_pthread_mutex_is_prio_inherit(mutex) &&
+                       rin_pthread_mutex_is_robust(mutex)
+                           ? FUTEX_RIN_PI_ROBUST_FLAG : 0) |
                       (rin_pthread_mutex_is_shared(mutex) ? 0 :
                        FUTEX_PRIVATE_FLAG),
                   (uintptr_t)&mutex->owner, (void*)(uintptr_t)owner,
@@ -154,6 +169,11 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                                             __ATOMIC_RELAXED)) {
                 __atomic_store_n(&mutex->owner, owner, __ATOMIC_RELEASE);
                 mutex->recursion = 1;
+                if (rin_pthread_mutex_is_prio_inherit(mutex)) {
+                    uint32_t refreshed_owner_id = 0u;
+                    (void)rin_pthread_mutex_robust_owner_id(
+                        mutex, owner, &refreshed_owner_id);
+                }
                 return (desired & RIN_PTHREAD_ROBUST_OWNER_DIED) != 0u
                     ? EOWNERDEAD : 0;
             }
@@ -848,27 +868,37 @@ int pthread_detach(pthread_t thread) {
 int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexattr_t* attr) {
     if (!mutex) return EINVAL;
     if (attr) {
-        if (attr->type != PTHREAD_MUTEX_NORMAL &&
-            attr->type != PTHREAD_MUTEX_RECURSIVE &&
-            attr->type != PTHREAD_MUTEX_ERRORCHECK) return EINVAL;
+        int type = attr->type & RIN_PTHREAD_MUTEX_TYPE_MASK;
+        if (type != PTHREAD_MUTEX_NORMAL &&
+            type != PTHREAD_MUTEX_RECURSIVE &&
+            type != PTHREAD_MUTEX_ERRORCHECK) return EINVAL;
+        if ((attr->type & ~(RIN_PTHREAD_MUTEX_TYPE_MASK |
+                            RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG)) != 0)
+            return EINVAL;
         int pshared = attr->pshared & RIN_PTHREAD_MUTEXATTR_PSHARED_MASK;
         if (pshared != PTHREAD_PROCESS_PRIVATE &&
             pshared != PTHREAD_PROCESS_SHARED) return EINVAL;
     }
     mutex->locked = 0;
     mutex->owner = 0;
-    mutex->type = (attr ? attr->type : PTHREAD_MUTEX_DEFAULT) |
+    mutex->type = (attr
+                       ? (attr->type & RIN_PTHREAD_MUTEX_TYPE_MASK)
+                       : PTHREAD_MUTEX_DEFAULT) |
         (rin_pthread_mutexattr_is_shared(attr) ?
              RIN_PTHREAD_MUTEX_PSHARED_FLAG : 0);
     if (rin_pthread_mutexattr_is_robust(attr))
         mutex->type |= RIN_PTHREAD_MUTEX_ROBUST_FLAG;
+    if (attr &&
+        (attr->type & RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG) != 0)
+        mutex->type |= RIN_PTHREAD_MUTEX_PRIO_INHERIT_FLAG;
     mutex->recursion = 0;
     return 0;
 }
 
 int pthread_mutex_destroy(pthread_mutex_t* mutex) {
     if (!mutex) return EINVAL;
-    if (rin_pthread_mutex_is_robust(mutex)) {
+    if (rin_pthread_mutex_is_robust(mutex) ||
+        rin_pthread_mutex_is_prio_inherit(mutex)) {
         uint32_t state = __atomic_load_n((uint32_t*)&mutex->locked,
                                          __ATOMIC_ACQUIRE);
         if ((state & (RIN_PTHREAD_ROBUST_OWNER_MASK |
@@ -888,7 +918,8 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
     pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
     int type = rin_pthread_mutex_type(mutex);
 
-    if (rin_pthread_mutex_is_robust(mutex)) {
+    if (rin_pthread_mutex_is_robust(mutex) ||
+        rin_pthread_mutex_is_prio_inherit(mutex)) {
         return rin_pthread_mutex_robust_lock(mutex, owner, type, 0);
     }
 
@@ -934,7 +965,8 @@ int pthread_mutex_trylock(pthread_mutex_t* mutex) {
     pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
     int type = rin_pthread_mutex_type(mutex);
 
-    if (rin_pthread_mutex_is_robust(mutex)) {
+    if (rin_pthread_mutex_is_robust(mutex) ||
+        rin_pthread_mutex_is_prio_inherit(mutex)) {
         return rin_pthread_mutex_robust_lock(mutex, owner, type, 1);
     }
 
@@ -964,7 +996,8 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
     pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
     int type = rin_pthread_mutex_type(mutex);
 
-    if (rin_pthread_mutex_is_robust(mutex)) {
+    if (rin_pthread_mutex_is_robust(mutex) ||
+        rin_pthread_mutex_is_prio_inherit(mutex)) {
         uint32_t state;
         uint32_t previous;
         uint32_t owner_id;
@@ -986,7 +1019,8 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
                 return 0;
             }
         }
-        if ((state & RIN_PTHREAD_ROBUST_OWNER_DIED) != 0u)
+        if (rin_pthread_mutex_is_robust(mutex) &&
+            (state & RIN_PTHREAD_ROBUST_OWNER_DIED) != 0u)
             __atomic_fetch_or(&mutex->type,
                               RIN_PTHREAD_MUTEX_NOT_RECOVERABLE_FLAG,
                               __ATOMIC_RELEASE);
