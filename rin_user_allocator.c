@@ -91,6 +91,9 @@ struct RinUserAllocationHeader {
     uint64_t owner_token;
     uint32_t owner_generation;
     uint32_t reserved4;
+    RinUserAllocationHeader* volatile remote_next;
+    volatile uint32_t remote_state;
+    uint32_t reserved5;
     uintptr_t backtrace[RIN_USER_ALLOCATOR_BACKTRACE_DEPTH];
 };
 
@@ -110,6 +113,14 @@ struct RinUserAllocatorMap {
     uint32_t reserved2;
     RinUserAllocationHeader* first;
     RinUserFreeLinks* free_lists[RIN_USER_ARENA_CLASS_COUNT];
+    RinUserAllocationHeader* volatile remote_free_head;
+    volatile unsigned remote_free_lock;
+    volatile uint64_t remote_free_depth;
+    volatile uint64_t remote_free_peak_depth;
+    volatile uint64_t remote_free_enqueues;
+    volatile uint64_t remote_free_drains;
+    uint32_t remote_corrupt;
+    uint32_t reserved3;
 };
 
 static RinUserAllocatorMap* rin_user_allocator_maps;
@@ -178,12 +189,16 @@ static void rin_user_cache_unlock(RinUserAllocatorTlsCache* cache)
     rin_user_allocator_unlock(&cache->lock);
 }
 
+static void rin_user_allocator_drain_remote_frees_locked(
+    RinUserAllocatorMap* map);
+
 static void rin_user_map_lock(RinUserAllocatorMap* map)
 {
     rin_user_allocator_lock(&map->lock);
     __atomic_add_fetch(
         &rin_user_allocator_tls_cache.arena_lock_acquisitions, 1u,
         __ATOMIC_RELAXED);
+    rin_user_allocator_drain_remote_frees_locked(map);
 }
 
 static void rin_user_allocator_thread_cache_destructor(void* value);
@@ -192,6 +207,7 @@ static int rin_user_allocator_thread_cache_ensure(
 static int rin_user_allocator_cache_flush_locked(
     RinUserAllocatorTlsCache* cache);
 static void rin_user_allocator_cache_reap_idle(uint64_t epoch);
+static int rin_user_allocator_drain_all_remote_queues(void);
 
 /* Compatibility declarations let older host fixtures keep using the old
  * bump backend while product runtimes migrate to map/unmap.  New product
@@ -428,6 +444,45 @@ static RinUserAllocationHeader* rin_user_previous_block(
                                                   block->previous_size);
 }
 
+static int rin_user_block_is_live(const RinUserAllocationHeader* block)
+{
+    uint32_t state;
+    if (!block) return 0;
+    state = __atomic_load_n(&block->remote_state, __ATOMIC_ACQUIRE);
+    return (block->magic == RIN_USER_ARENA_MAGIC_ALLOCATED &&
+            (block->flags == RIN_USER_BLOCK_FLAG_ALLOCATED ||
+             block->flags == RIN_USER_BLOCK_FLAG_LARGE) &&
+            state == 0u) ||
+           (block->magic == RIN_USER_ARENA_MAGIC_CACHED &&
+            block->flags == RIN_USER_BLOCK_FLAG_CACHED && state == 3u);
+}
+
+static int rin_user_map_remote_queue_valid_locked(
+    const RinUserAllocatorMap* map)
+{
+    const RinUserAllocationHeader* block;
+    size_t maximum_nodes;
+    size_t nodes = 0u;
+    uint64_t depth;
+    if (!map || map->kind != RIN_USER_ARENA_KIND) return 1;
+    maximum_nodes = (map->data_end - map->data_offset) /
+                        rin_user_min_block_size() +
+                    1u;
+    depth = __atomic_load_n(&map->remote_free_depth, __ATOMIC_RELAXED);
+    block = __atomic_load_n(&map->remote_free_head, __ATOMIC_RELAXED);
+    while (block) {
+        uintptr_t address = (uintptr_t)block;
+        if (++nodes > maximum_nodes ||
+            !rin_user_map_range_valid(map, address, sizeof(*block)) ||
+            address < (uintptr_t)map + map->data_offset ||
+            block->map != (uintptr_t)map ||
+            __atomic_load_n(&block->remote_state, __ATOMIC_ACQUIRE) != 1u)
+            return 0;
+        block = __atomic_load_n(&block->remote_next, __ATOMIC_RELAXED);
+    }
+    return nodes == depth;
+}
+
 static int rin_user_map_block_graph_valid(const RinUserAllocatorMap* map)
 {
     uintptr_t begin;
@@ -448,6 +503,9 @@ static int rin_user_map_block_graph_valid(const RinUserAllocatorMap* map)
         RinUserAllocationHeader* block =
             (RinUserAllocationHeader*)(uintptr_t)cursor;
         size_t capacity;
+        size_t requested_size;
+        uint32_t remote_state;
+        uint32_t backtrace_count;
         if (++block_count > maximum_blocks ||
             block->map != (uintptr_t)map ||
             block->previous_size != previous_size ||
@@ -458,42 +516,93 @@ static int rin_user_map_block_graph_valid(const RinUserAllocatorMap* map)
              block->magic != RIN_USER_ARENA_MAGIC_FREE &&
              block->magic != RIN_USER_ARENA_MAGIC_CACHED))
             return 0;
+        for (;;) {
+            uint32_t state_after_fields;
+            remote_state = __atomic_load_n(&block->remote_state,
+                                           __ATOMIC_ACQUIRE);
+            requested_size = __atomic_load_n(&block->requested_size,
+                                             __ATOMIC_RELAXED);
+            backtrace_count = __atomic_load_n(&block->backtrace_count,
+                                              __ATOMIC_RELAXED);
+            state_after_fields = __atomic_load_n(&block->remote_state,
+                                                 __ATOMIC_ACQUIRE);
+            if (remote_state == state_after_fields) break;
+        }
         capacity = block->total_size - sizeof(*block) -
                    RIN_USER_ARENA_TAIL_GUARD_SIZE;
         if (block->magic == RIN_USER_ARENA_MAGIC_FREE) {
             if (block->flags != RIN_USER_BLOCK_FLAG_FREE ||
-                block->requested_size != 0u ||
+                requested_size != 0u ||
                 block->bin_index != rin_user_bin_for_size(capacity) ||
-                block->backtrace_count != 0u || block->owner_token != 0u ||
-                block->owner_generation != 0u)
+                backtrace_count != 0u || block->owner_token != 0u ||
+                block->owner_generation != 0u ||
+                __atomic_load_n(&block->remote_next, __ATOMIC_RELAXED) != NULL ||
+                (remote_state != 0u && remote_state != 2u))
                 return 0;
         } else if (block->magic == RIN_USER_ARENA_MAGIC_CACHED) {
             if (block->flags != RIN_USER_BLOCK_FLAG_CACHED ||
-                block->requested_size != 0u ||
                 block->bin_index >= RIN_USER_ARENA_CLASS_COUNT ||
                 capacity < (size_t)rin_user_size_classes[block->bin_index] ||
-                block->backtrace_count != 0u || block->owner_token == 0u ||
+                block->owner_token == 0u ||
                 block->owner_generation == 0u ||
                 map->kind != RIN_USER_ARENA_KIND)
                 return 0;
+            if (remote_state == 2u) {
+                if (requested_size != 0u || backtrace_count != 0u ||
+                    __atomic_load_n(&block->remote_next,
+                                    __ATOMIC_RELAXED) != NULL)
+                    return 0;
+            } else if (remote_state == 3u) {
+                if (requested_size == 0u || requested_size > capacity ||
+                    block->bin_index != rin_user_bin_for_size(requested_size) ||
+                    backtrace_count > RIN_USER_ALLOCATOR_BACKTRACE_DEPTH ||
+                    __atomic_load_n(&block->remote_next,
+                                    __ATOMIC_RELAXED) != NULL)
+                    return 0;
+            } else if (remote_state == 1u) {
+                if (requested_size == 0u || requested_size > capacity ||
+                    block->bin_index != rin_user_bin_for_size(requested_size) ||
+                    backtrace_count > RIN_USER_ALLOCATOR_BACKTRACE_DEPTH)
+                    return 0;
+            } else if (remote_state == 5u) {
+                /* A remote free has claimed the block and is publishing it. */
+                if (requested_size == 0u || requested_size > capacity ||
+                    block->bin_index != rin_user_bin_for_size(requested_size) ||
+                    backtrace_count > RIN_USER_ALLOCATOR_BACKTRACE_DEPTH ||
+                    __atomic_load_n(&block->remote_next,
+                                    __ATOMIC_RELAXED) != NULL)
+                    return 0;
+            } else if (remote_state == 4u) {
+                /* Magazine allocation is initializing while state 4 is set. */
+                if (__atomic_load_n(&block->remote_next,
+                                    __ATOMIC_RELAXED) != NULL)
+                    return 0;
+            } else {
+                return 0;
+            }
         } else if (block->flags != RIN_USER_BLOCK_FLAG_ALLOCATED &&
                    block->flags != RIN_USER_BLOCK_FLAG_LARGE) {
             return 0;
-        } else if (block->requested_size == 0u ||
-                   block->requested_size > capacity ||
-                   block->backtrace_count > RIN_USER_ALLOCATOR_BACKTRACE_DEPTH) {
+        } else if (requested_size == 0u || requested_size > capacity ||
+                   backtrace_count > RIN_USER_ALLOCATOR_BACKTRACE_DEPTH ||
+                   (remote_state != 0u && remote_state != 1u &&
+                    remote_state != 5u) ||
+                   (map->kind == RIN_USER_LARGE_KIND &&
+                    remote_state != 0u)) {
             return 0;
         } else if ((block->flags == RIN_USER_BLOCK_FLAG_ALLOCATED &&
                     (map->kind != RIN_USER_ARENA_KIND ||
                      block->bin_index >= RIN_USER_ARENA_CLASS_COUNT ||
                      block->bin_index !=
-                         rin_user_bin_for_size(block->requested_size))) ||
+                         rin_user_bin_for_size(requested_size))) ||
                    (block->flags == RIN_USER_BLOCK_FLAG_LARGE &&
                     (map->kind != RIN_USER_LARGE_KIND ||
                      block->bin_index != RIN_USER_ARENA_LARGE_CLASS))) {
             return 0;
         }
-        if (!rin_user_block_tail_valid(block)) return 0;
+        if (remote_state != 2u && remote_state != 4u &&
+            !rin_user_block_tail_valid(block))
+            return 0;
         saw_block = 1;
         previous_size = block->total_size;
         cursor += block->total_size;
@@ -546,7 +655,15 @@ static int rin_user_map_free_lists_valid(const RinUserAllocatorMap* map)
 {
     unsigned index;
     size_t maximum_entries;
-    if (!rin_user_map_block_graph_valid(map)) return 0;
+    int graph_valid;
+    rin_user_allocator_lock((volatile unsigned*)&map->remote_free_lock);
+    graph_valid =
+        __atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) == 0u &&
+        rin_user_map_block_graph_valid(map) &&
+        rin_user_map_remote_queue_valid_locked(map);
+    rin_user_allocator_unlock((volatile unsigned*)&map->remote_free_lock);
+    if (!graph_valid)
+        return 0;
     maximum_entries = (map->data_end - map->data_offset) /
                       rin_user_min_block_size() + 1u;
     for (index = 0u; index < RIN_USER_ARENA_CLASS_COUNT; ++index) {
@@ -635,6 +752,8 @@ static void rin_user_insert_free_block(RinUserAllocatorMap* map,
     block->owner_token = 0u;
     block->owner_generation = 0u;
     block->reserved4 = 0u;
+    __atomic_store_n(&block->remote_next, NULL, __ATOMIC_RELAXED);
+    block->reserved5 = 0u;
     for (trace_index = 0u;
          trace_index < RIN_USER_ALLOCATOR_BACKTRACE_DEPTH; ++trace_index)
         block->backtrace[trace_index] = 0u;
@@ -665,6 +784,9 @@ static void rin_user_invalidate_block(RinUserAllocationHeader* block)
     block->owner_token = 0u;
     block->owner_generation = 0u;
     block->reserved4 = 0u;
+    __atomic_store_n(&block->remote_next, NULL, __ATOMIC_RELAXED);
+    __atomic_store_n(&block->remote_state, 0u, __ATOMIC_RELAXED);
+    block->reserved5 = 0u;
     for (index = 0u; index < RIN_USER_ALLOCATOR_BACKTRACE_DEPTH; ++index)
         block->backtrace[index] = 0u;
 }
@@ -691,6 +813,9 @@ static void rin_user_mark_allocated(RinUserAllocationHeader* block,
     block->owner_token = owner_token;
     block->owner_generation = owner_generation;
     block->reserved4 = 0u;
+    __atomic_store_n(&block->remote_next, NULL, __ATOMIC_RELAXED);
+    __atomic_store_n(&block->remote_state, 0u, __ATOMIC_RELAXED);
+    block->reserved5 = 0u;
     for (index = 0u; index < RIN_USER_ALLOCATOR_BACKTRACE_DEPTH; ++index) {
         block->backtrace[index] = backtrace ? backtrace[index] : 0u;
         if (block->backtrace[index] != 0u)
@@ -716,6 +841,9 @@ static void rin_user_mark_cached(RinUserAllocationHeader* block,
     block->reserved2 = 0u;
     block->reserved3 = 0u;
     block->reserved4 = 0u;
+    __atomic_store_n(&block->remote_next, NULL, __ATOMIC_RELAXED);
+    __atomic_store_n(&block->remote_state, 2u, __ATOMIC_RELAXED);
+    block->reserved5 = 0u;
     for (index = 0u; index < RIN_USER_ALLOCATOR_BACKTRACE_DEPTH; ++index)
         block->backtrace[index] = 0u;
     rin_user_block_store_tail(block);
@@ -750,6 +878,9 @@ static int rin_user_split_allocated_tail(RinUserAllocatorMap* map,
     remainder->owner_token = 0u;
     remainder->owner_generation = 0u;
     remainder->reserved4 = 0u;
+    __atomic_store_n(&remainder->remote_next, NULL, __ATOMIC_RELAXED);
+    __atomic_store_n(&remainder->remote_state, 0u, __ATOMIC_RELAXED);
+    remainder->reserved5 = 0u;
     for (unsigned trace_index = 0u;
          trace_index < RIN_USER_ALLOCATOR_BACKTRACE_DEPTH; ++trace_index)
         remainder->backtrace[trace_index] = 0u;
@@ -823,6 +954,14 @@ static void rin_user_map_metadata_clear(RinUserAllocatorMap* map,
                                             map->data_offset);
     for (index = 0u; index < RIN_USER_ARENA_CLASS_COUNT; ++index)
         map->free_lists[index] = NULL;
+    map->remote_free_head = NULL;
+    map->remote_free_lock = 0u;
+    map->remote_free_depth = 0u;
+    map->remote_free_peak_depth = 0u;
+    map->remote_free_enqueues = 0u;
+    map->remote_free_drains = 0u;
+    map->remote_corrupt = 0u;
+    map->reserved3 = 0u;
 }
 
 static RinUserAllocatorMap* rin_user_create_arena(void)
@@ -857,6 +996,9 @@ static RinUserAllocatorMap* rin_user_create_arena(void)
     map->first->owner_token = 0u;
     map->first->owner_generation = 0u;
     map->first->reserved4 = 0u;
+    __atomic_store_n(&map->first->remote_next, NULL, __ATOMIC_RELAXED);
+    __atomic_store_n(&map->first->remote_state, 0u, __ATOMIC_RELAXED);
+    map->first->reserved5 = 0u;
     for (unsigned trace_index = 0u;
          trace_index < RIN_USER_ALLOCATOR_BACKTRACE_DEPTH; ++trace_index)
         map->first->backtrace[trace_index] = 0u;
@@ -948,18 +1090,33 @@ static int rin_user_release_block(RinUserAllocatorMap* map,
 {
     RinUserAllocationHeader* next;
     RinUserAllocationHeader* previous;
+    uint32_t remote_state;
     if (!map || !block ||
         !((block->flags == RIN_USER_BLOCK_FLAG_ALLOCATED &&
            block->magic == RIN_USER_ARENA_MAGIC_ALLOCATED) ||
           (block->flags == RIN_USER_BLOCK_FLAG_CACHED &&
            block->magic == RIN_USER_ARENA_MAGIC_CACHED)))
         return 0;
+    remote_state = __atomic_load_n(&block->remote_state, __ATOMIC_ACQUIRE);
+    while (remote_state != 2u) {
+        if ((remote_state != 0u && remote_state != 1u && remote_state != 3u) ||
+            !__atomic_compare_exchange_n(&block->remote_state, &remote_state,
+                                         2u, 0, __ATOMIC_ACQ_REL,
+                                         __ATOMIC_ACQUIRE)) {
+            if (remote_state != 0u && remote_state != 1u &&
+                remote_state != 3u)
+                return 0;
+            continue;
+        }
+        break;
+    }
     block->magic = RIN_USER_ARENA_MAGIC_FREE;
     block->flags = RIN_USER_BLOCK_FLAG_FREE;
     block->requested_size = 0u;
     block->bin_index = 0u;
     block->owner_token = 0u;
     block->owner_generation = 0u;
+    __atomic_store_n(&block->remote_next, NULL, __ATOMIC_RELAXED);
     next = rin_user_next_block(map, block);
     if (next && next->magic == RIN_USER_ARENA_MAGIC_FREE) {
         if (!rin_user_remove_free_block(map, next) ||
@@ -983,6 +1140,137 @@ static int rin_user_release_block(RinUserAllocatorMap* map,
     }
     rin_user_insert_free_block(map, block);
     return 1;
+}
+
+static void rin_user_allocator_remote_queue_record_peak(
+    RinUserAllocatorMap* map, uint64_t depth)
+{
+    uint64_t peak = __atomic_load_n(&map->remote_free_peak_depth,
+                                    __ATOMIC_RELAXED);
+    while (peak < depth &&
+           !__atomic_compare_exchange_n(&map->remote_free_peak_depth, &peak,
+                                        depth, 1, __ATOMIC_RELAXED,
+                                        __ATOMIC_RELAXED)) {
+    }
+}
+
+static int rin_user_allocator_remote_enqueue(
+    RinUserAllocatorMap* map, RinUserAllocationHeader* block)
+{
+    uint64_t depth;
+    if (!map || !block || map->kind != RIN_USER_ARENA_KIND) return 0;
+    rin_user_allocator_lock(&map->remote_free_lock);
+    if (__atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) != 0u) {
+        rin_user_allocator_unlock(&map->remote_free_lock);
+        return 0;
+    }
+    if (__atomic_load_n(&block->remote_state, __ATOMIC_ACQUIRE) != 5u) {
+        rin_user_allocator_unlock(&map->remote_free_lock);
+        return 0;
+    }
+    __atomic_store_n(&block->remote_next,
+                     __atomic_load_n(&map->remote_free_head,
+                                     __ATOMIC_RELAXED),
+                     __ATOMIC_RELAXED);
+    __atomic_store_n(&map->remote_free_head, block, __ATOMIC_RELAXED);
+    __atomic_store_n(&block->remote_state, 1u, __ATOMIC_RELEASE);
+    depth = __atomic_add_fetch(&map->remote_free_depth, 1u,
+                               __ATOMIC_RELAXED);
+    __atomic_add_fetch(&map->remote_free_enqueues, 1u, __ATOMIC_RELAXED);
+    rin_user_allocator_remote_queue_record_peak(map, depth);
+    rin_user_allocator_unlock(&map->remote_free_lock);
+    return 1;
+}
+
+static void rin_user_allocator_drain_remote_frees_locked(
+    RinUserAllocatorMap* map)
+{
+    RinUserAllocationHeader* block;
+    uint64_t detached_depth;
+    size_t maximum_nodes;
+    size_t nodes = 0u;
+    int corrupt = 0;
+    if (!map || map->kind != RIN_USER_ARENA_KIND ||
+        __atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) != 0u)
+        return;
+
+    rin_user_allocator_lock(&map->remote_free_lock);
+    block = __atomic_load_n(&map->remote_free_head, __ATOMIC_RELAXED);
+    __atomic_store_n(&map->remote_free_head, NULL, __ATOMIC_RELAXED);
+    detached_depth = __atomic_exchange_n(&map->remote_free_depth, 0u,
+                                         __ATOMIC_RELAXED);
+    rin_user_allocator_unlock(&map->remote_free_lock);
+    if (!block) {
+        if (detached_depth != 0u) corrupt = 1;
+        if (corrupt)
+            __atomic_store_n(&map->remote_corrupt, 1u, __ATOMIC_RELEASE);
+        return;
+    }
+
+    maximum_nodes = (map->data_end - map->data_offset) /
+                        rin_user_min_block_size() +
+                    1u;
+    while (block) {
+        RinUserAllocationHeader* next;
+        uintptr_t address = (uintptr_t)block;
+        size_t offset;
+        size_t capacity;
+        if (++nodes > maximum_nodes ||
+            !rin_user_map_range_valid(map, address, sizeof(*block)) ||
+            address < (uintptr_t)map + map->data_offset) {
+            corrupt = 1;
+            break;
+        }
+        next = __atomic_load_n(&block->remote_next, __ATOMIC_RELAXED);
+        __atomic_store_n(&block->remote_next, NULL, __ATOMIC_RELAXED);
+        offset = (size_t)(address - ((uintptr_t)map + map->data_offset));
+        if (block->total_size < rin_user_min_block_size() ||
+            (block->total_size & (RIN_USER_BLOCK_ALIGNMENT - 1u)) != 0u ||
+            offset > map->data_end - map->data_offset ||
+            block->total_size > map->data_end - map->data_offset - offset) {
+            corrupt = 1;
+            break;
+        }
+        capacity = block->total_size - sizeof(*block) -
+                   RIN_USER_ARENA_TAIL_GUARD_SIZE;
+        if (block->map != (uintptr_t)map ||
+            !((block->magic == RIN_USER_ARENA_MAGIC_ALLOCATED &&
+               block->flags == RIN_USER_BLOCK_FLAG_ALLOCATED) ||
+              (block->magic == RIN_USER_ARENA_MAGIC_CACHED &&
+               block->flags == RIN_USER_BLOCK_FLAG_CACHED)) ||
+            __atomic_load_n(&block->remote_state, __ATOMIC_ACQUIRE) != 1u ||
+            block->requested_size == 0u ||
+            block->requested_size > capacity ||
+            block->bin_index >= RIN_USER_ARENA_CLASS_COUNT ||
+            block->bin_index != rin_user_bin_for_size(block->requested_size) ||
+            block->owner_token == 0u || block->owner_generation == 0u ||
+            !rin_user_block_tail_valid(block) ||
+            !rin_user_release_block(map, block)) {
+            corrupt = 1;
+        } else {
+            __atomic_add_fetch(&map->remote_free_drains, 1u,
+                               __ATOMIC_RELAXED);
+        }
+        block = next;
+    }
+    if (nodes != detached_depth || block != NULL) corrupt = 1;
+    if (corrupt)
+        __atomic_store_n(&map->remote_corrupt, 1u, __ATOMIC_RELEASE);
+}
+
+static int rin_user_allocator_drain_all_remote_queues(void)
+{
+    RinUserAllocatorMap* map;
+    int corrupt = 0;
+    rin_user_allocator_lock(&rin_user_allocator_directory_lock);
+    for (map = rin_user_allocator_maps; map; map = map->next) {
+        rin_user_map_lock(map);
+        if (__atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) != 0u)
+            corrupt = 1;
+        rin_user_allocator_unlock(&map->lock);
+    }
+    rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
+    return !corrupt;
 }
 
 static uint32_t rin_user_allocator_current_generation(void)
@@ -1124,6 +1412,10 @@ static int rin_user_allocator_cache_flush_locked(
                     block->magic != RIN_USER_ARENA_MAGIC_CACHED ||
                     block->flags != RIN_USER_BLOCK_FLAG_CACHED ||
                     block->bin_index != class_index ||
+                    __atomic_load_n(&block->remote_next,
+                                    __ATOMIC_RELAXED) != NULL ||
+                    __atomic_load_n(&block->remote_state,
+                                    __ATOMIC_RELAXED) != 2u ||
                     block->owner_token != cache->owner_token ||
                     block->owner_generation != cache->owner_generation ||
                     !rin_user_block_tail_valid(block) ||
@@ -1160,6 +1452,7 @@ static void rin_user_allocator_cache_reap_idle(uint64_t epoch)
         rin_user_cache_unlock(cache);
     }
     rin_user_allocator_unlock(&rin_user_allocator_cache_registry_lock);
+    if (!rin_user_allocator_drain_all_remote_queues()) corrupt = 1;
     if (corrupt) rin_user_allocator_corruption();
 }
 
@@ -1298,6 +1591,7 @@ void rin_user_allocator_trim(void)
         rin_user_cache_unlock(cache);
     }
     rin_user_allocator_unlock(&rin_user_allocator_cache_registry_lock);
+    if (!rin_user_allocator_drain_all_remote_queues()) corrupt = 1;
     if (corrupt) rin_user_allocator_corruption();
 }
 
@@ -1329,6 +1623,26 @@ int rin_user_allocator_metrics_read(RinUserAllocatorMetricsV1* metrics)
         snapshot.cached_bytes += cache->cached_bytes;
         rin_user_cache_unlock(cache);
     }
+    rin_user_allocator_lock(&rin_user_allocator_directory_lock);
+    {
+        RinUserAllocatorMap* map;
+        for (map = rin_user_allocator_maps; map; map = map->next) {
+            uint64_t peak;
+            rin_user_allocator_lock(&map->remote_free_lock);
+            snapshot.remote_free_enqueues += __atomic_load_n(
+                &map->remote_free_enqueues, __ATOMIC_RELAXED);
+            snapshot.remote_free_queue_depth += __atomic_load_n(
+                &map->remote_free_depth, __ATOMIC_RELAXED);
+            peak = __atomic_load_n(&map->remote_free_peak_depth,
+                                   __ATOMIC_RELAXED);
+            if (peak > snapshot.remote_free_queue_peak_depth)
+                snapshot.remote_free_queue_peak_depth = peak;
+            rin_user_allocator_unlock(&map->remote_free_lock);
+            snapshot.remote_free_drains += __atomic_load_n(
+                &map->remote_free_drains, __ATOMIC_RELAXED);
+        }
+    }
+    rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
     rin_user_allocator_unlock(&rin_user_allocator_cache_registry_lock);
     *metrics = snapshot;
     return 0;
@@ -1358,6 +1672,8 @@ static void* rin_user_allocator_magazine_pop_locked(
         block->magic != RIN_USER_ARENA_MAGIC_CACHED ||
         block->flags != RIN_USER_BLOCK_FLAG_CACHED ||
         block->bin_index != class_index || block->requested_size != 0u ||
+        __atomic_load_n(&block->remote_next, __ATOMIC_RELAXED) != NULL ||
+        __atomic_load_n(&block->remote_state, __ATOMIC_RELAXED) != 2u ||
         block->owner_token != cache->owner_token ||
         block->owner_generation != cache->owner_generation ||
         !rin_user_block_tail_valid(block)) {
@@ -1370,9 +1686,30 @@ static void* rin_user_allocator_magazine_pop_locked(
         return NULL;
     }
     cache->cached_bytes -= block_size;
-    rin_user_mark_allocated(block, size, RIN_USER_BLOCK_FLAG_ALLOCATED,
-                            backtrace, cache->owner_token,
-                            cache->owner_generation);
+    {
+        uint32_t expected_state = 2u;
+        unsigned trace_index;
+        if (!__atomic_compare_exchange_n(&block->remote_state, &expected_state,
+                                         4u, 0, __ATOMIC_ACQ_REL,
+                                         __ATOMIC_ACQUIRE)) {
+            *corrupt = 1;
+            return NULL;
+        }
+        __atomic_store_n(&block->requested_size, size, __ATOMIC_RELAXED);
+        __atomic_store_n(&block->backtrace_count, 0u, __ATOMIC_RELAXED);
+        for (trace_index = 0u;
+             trace_index < RIN_USER_ALLOCATOR_BACKTRACE_DEPTH;
+             ++trace_index) {
+            uintptr_t frame = backtrace ? backtrace[trace_index] : 0u;
+            __atomic_store_n(&block->backtrace[trace_index], frame,
+                             __ATOMIC_RELAXED);
+            if (frame != 0u)
+                __atomic_store_n(&block->backtrace_count, trace_index + 1u,
+                                 __ATOMIC_RELAXED);
+        }
+        rin_user_block_store_tail(block);
+        __atomic_store_n(&block->remote_state, 3u, __ATOMIC_RELEASE);
+    }
     cache->magazine_hits++;
     return rin_user_block_payload(block);
 }
@@ -1615,15 +1952,20 @@ static int rin_user_allocator_cache_flush_maps_locked(
                 corrupt = 1;
                 continue;
             }
-            block_size = block->total_size;
-            map = (RinUserAllocatorMap*)block->map;
-            if (!map || !rin_user_map_shape_valid(map) ||
-                map->kind != RIN_USER_ARENA_KIND ||
-                !rin_user_map_range_valid(map, (uintptr_t)block,
-                                           sizeof(*block)) ||
+            block_size = 0u;
+            map = rin_user_find_map(rin_user_block_payload(block));
+            if (map && rin_user_map_range_valid(map, (uintptr_t)block,
+                                                 sizeof(*block)))
+                block_size = block->total_size;
+            if (!map || map->kind != RIN_USER_ARENA_KIND ||
+                block_size == 0u ||
                 block->magic != RIN_USER_ARENA_MAGIC_CACHED ||
                 block->flags != RIN_USER_BLOCK_FLAG_CACHED ||
                 block->bin_index != class_index ||
+                __atomic_load_n(&block->remote_next,
+                                __ATOMIC_RELAXED) != NULL ||
+                __atomic_load_n(&block->remote_state,
+                                __ATOMIC_RELAXED) != 2u ||
                 block->owner_token != cache->owner_token ||
                 block->owner_generation != cache->owner_generation ||
                 !rin_user_block_tail_valid(block) ||
@@ -1709,8 +2051,10 @@ void rin_user_allocator_after_fork_child(void)
             generation = __atomic_add_fetch(
                 &rin_user_allocator_fork_generation, 1u, __ATOMIC_ACQ_REL);
         }
-        for (map = rin_user_allocator_maps; map; map = map->next)
+        for (map = rin_user_allocator_maps; map; map = map->next) {
             map->lock = 0u;
+            map->remote_free_lock = 0u;
+        }
         rin_user_allocator_directory_lock = 0u;
         rin_user_allocator_cache_registry_lock = 0u;
         rin_user_allocator_cache_registry = NULL;
@@ -1741,14 +2085,32 @@ void rin_user_allocator_after_fork_child(void)
         /* Compatibility for a caller that bypasses the libc fork wrapper.
          * Product fork() takes the fully synchronized path above. */
         rin_user_allocator_directory_lock = 0u;
-        for (map = rin_user_allocator_maps; map; map = map->next)
+        rin_user_allocator_cache_registry_lock = 0u;
+        for (map = rin_user_allocator_maps; map; map = map->next) {
             map->lock = 0u;
+            map->remote_free_lock = 0u;
+        }
+        current = rin_user_allocator_cache_registry;
+        while (current) {
+            RinUserAllocatorTlsCache* next = current->registry_next;
+            current->lock = 0u;
+            rin_user_cache_lock(current);
+            if (rin_user_allocator_cache_flush_locked(current))
+                corrupt = 1;
+            if (current != cache)
+                rin_user_allocator_cache_retire_metrics_locked(current);
+            if (current->cached_bytes != 0u) corrupt = 1;
+            current->cached_bytes = 0u;
+            current->owner_token = 0u;
+            current->owner_generation = 0u;
+            current->registered = 0u;
+            current->registry_next = NULL;
+            rin_user_cache_unlock(current);
+            current = next;
+        }
+        rin_user_allocator_cache_registry = NULL;
         cache->lock = 0u;
         rin_user_cache_lock(cache);
-        corrupt = rin_user_allocator_cache_flush_locked(cache);
-        for (class_index = 0u;
-             class_index < RIN_USER_ARENA_CLASS_COUNT; ++class_index)
-            cache->arena_by_class[class_index] = NULL;
         cache->owner_token = rin_user_allocator_next_owner();
         cache->owner_generation = rin_user_allocator_current_generation();
         cache->operations_since_epoch = 0u;
@@ -1757,11 +2119,22 @@ void rin_user_allocator_after_fork_child(void)
             __atomic_load_n(&rin_user_allocator_activity_epoch,
                             __ATOMIC_RELAXED),
             __ATOMIC_RELAXED);
+        for (class_index = 0u;
+             class_index < RIN_USER_ARENA_CLASS_COUNT; ++class_index)
+            cache->arena_by_class[class_index] = NULL;
+        if (cache->cached_bytes != 0u) corrupt = 1;
+        cache->cached_bytes = 0u;
         rin_user_cache_unlock(cache);
         if (rin_user_allocator_pthread_key_state == 2u &&
-            pthread_setspecific)
-            (void)pthread_setspecific(rin_user_allocator_pthread_key, cache);
+            pthread_setspecific &&
+            pthread_setspecific(rin_user_allocator_pthread_key, cache) == 0) {
+            cache->registered = 1u;
+            cache->registry_next = NULL;
+            rin_user_allocator_cache_registry = cache;
+        }
     }
+    if (!prepared && !rin_user_allocator_drain_all_remote_queues())
+        corrupt = 1;
     if (corrupt) rin_user_allocator_corruption();
 }
 
@@ -1786,10 +2159,84 @@ void rin_user_allocator_free(void* pointer)
         rin_user_allocator_corruption();
         return;
     }
+    if (cache_enabled && map->kind == RIN_USER_ARENA_KIND &&
+        (uintptr_t)pointer >= sizeof(RinUserAllocationHeader)) {
+        uintptr_t block_address =
+            (uintptr_t)pointer - sizeof(RinUserAllocationHeader);
+        RinUserAllocationHeader* remote =
+            (RinUserAllocationHeader*)(uintptr_t)block_address;
+        uintptr_t data_begin = (uintptr_t)map + map->data_offset;
+        uintptr_t data_end = (uintptr_t)map + map->data_end;
+        int remote_candidate =
+            rin_user_map_range_valid(map, block_address, sizeof(*remote)) &&
+            block_address >= data_begin && block_address < data_end;
+        uint32_t remote_state = 0u;
+        if (remote_candidate) {
+            remote_state = __atomic_load_n(&remote->remote_state,
+                                           __ATOMIC_ACQUIRE);
+            remote_candidate =
+                rin_user_block_payload(remote) == (unsigned char*)pointer &&
+                remote->map == (uintptr_t)map &&
+                ((remote->magic == RIN_USER_ARENA_MAGIC_ALLOCATED &&
+                  remote->flags == RIN_USER_BLOCK_FLAG_ALLOCATED &&
+                  remote_state == 0u) ||
+                 (remote->magic == RIN_USER_ARENA_MAGIC_CACHED &&
+                  remote->flags == RIN_USER_BLOCK_FLAG_CACHED &&
+                  remote_state == 3u)) &&
+                remote->owner_token != 0u &&
+                (remote->owner_token != cache->owner_token ||
+                 remote->owner_generation != cache->owner_generation);
+        }
+        if (remote_candidate) {
+            size_t capacity = 0u;
+            size_t offset = (size_t)(block_address - data_begin);
+            uint32_t expected_state = remote_state;
+            size_t requested_size = __atomic_load_n(
+                &remote->requested_size, __ATOMIC_ACQUIRE);
+            int valid = remote->total_size >= rin_user_min_block_size() &&
+                        (remote->total_size &
+                         (RIN_USER_BLOCK_ALIGNMENT - 1u)) == 0u &&
+                        offset <= map->data_end - map->data_offset &&
+                        remote->total_size <=
+                            map->data_end - map->data_offset - offset;
+            if (valid) {
+                capacity = remote->total_size - sizeof(*remote) -
+                           RIN_USER_ARENA_TAIL_GUARD_SIZE;
+                valid = requested_size != 0u &&
+                        requested_size <= capacity &&
+                        remote->bin_index < RIN_USER_ARENA_CLASS_COUNT &&
+                        remote->bin_index ==
+                            rin_user_bin_for_size(requested_size) &&
+                        remote->owner_generation != 0u &&
+                        rin_user_block_tail_valid(remote) &&
+                        __atomic_load_n(&map->remote_corrupt,
+                                        __ATOMIC_RELAXED) == 0u;
+            }
+            if (!valid || !__atomic_compare_exchange_n(
+                              &remote->remote_state, &expected_state, 5u, 0,
+                              __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                rin_user_allocator_unlock(
+                    &rin_user_allocator_directory_lock);
+                rin_user_cache_unlock(cache);
+                rin_user_allocator_corruption();
+                return;
+            }
+            rin_user_asan_poison(rin_user_block_payload(remote), capacity);
+            rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
+            if (!rin_user_allocator_remote_enqueue(map, remote)) {
+                __atomic_store_n(&map->remote_corrupt, 1u, __ATOMIC_RELEASE);
+                rin_user_cache_unlock(cache);
+                rin_user_allocator_corruption();
+                return;
+            }
+            rin_user_cache_unlock(cache);
+            return;
+        }
+    }
     rin_user_map_lock(map);
     if (!rin_user_map_free_lists_valid(map) ||
         (block = rin_user_find_block_locked(map, pointer)) == NULL ||
-        block->magic != RIN_USER_ARENA_MAGIC_ALLOCATED ||
+        !rin_user_block_is_live(block) ||
         !rin_user_block_tail_valid(block)) {
         rin_user_allocator_unlock(&map->lock);
         rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
@@ -1820,7 +2267,12 @@ void rin_user_allocator_free(void* pointer)
                                         cache->cached_bytes) {
         unsigned class_index = block->bin_index;
         size_t block_size = block->total_size;
-        if (class_index != rin_user_bin_for_size(block->requested_size)) {
+        uint32_t expected_state =
+            block->magic == RIN_USER_ARENA_MAGIC_CACHED ? 3u : 0u;
+        if (class_index != rin_user_bin_for_size(block->requested_size) ||
+            !__atomic_compare_exchange_n(&block->remote_state, &expected_state,
+                                         2u, 0, __ATOMIC_ACQ_REL,
+                                         __ATOMIC_ACQUIRE)) {
             corrupt = 1;
         } else {
             rin_user_mark_cached(block, class_index);
@@ -1864,7 +2316,7 @@ size_t rin_user_allocator_usable_size(const void* pointer)
     rin_user_map_lock(map);
     block = rin_user_find_block_locked(map, pointer);
     if (!rin_user_map_free_lists_valid(map) || !block ||
-        block->magic != RIN_USER_ARENA_MAGIC_ALLOCATED ||
+        !rin_user_block_is_live(block) ||
         !rin_user_block_tail_valid(block)) {
         rin_user_allocator_unlock(&map->lock);
         rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
@@ -1904,18 +2356,20 @@ size_t rin_user_allocator_get_backtrace(const void* pointer,
     rin_user_map_lock(map);
     block = rin_user_find_block_locked(map, pointer);
     if (!rin_user_map_free_lists_valid(map) || !block ||
-        block->magic != RIN_USER_ARENA_MAGIC_ALLOCATED ||
+        !rin_user_block_is_live(block) ||
         !rin_user_block_tail_valid(block) ||
-        block->backtrace_count > RIN_USER_ALLOCATOR_BACKTRACE_DEPTH) {
+        __atomic_load_n(&block->backtrace_count, __ATOMIC_ACQUIRE) >
+            RIN_USER_ALLOCATOR_BACKTRACE_DEPTH) {
         rin_user_allocator_unlock(&map->lock);
         rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
         rin_user_allocator_corruption();
         return 0u;
     }
-    total = block->backtrace_count;
+    total = __atomic_load_n(&block->backtrace_count, __ATOMIC_ACQUIRE);
     copy_count = total < capacity ? total : capacity;
     for (index = 0u; index < copy_count; ++index)
-        frames[index] = block->backtrace[index];
+        frames[index] = __atomic_load_n(&block->backtrace[index],
+                                        __ATOMIC_RELAXED);
     rin_user_allocator_unlock(&map->lock);
     rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
     return total;
@@ -1951,7 +2405,7 @@ void* rin_user_allocator_realloc(void* pointer, size_t size)
     rin_user_map_lock(map);
     block = rin_user_find_block_locked(map, pointer);
     if (!rin_user_map_free_lists_valid(map) || !block ||
-        block->magic != RIN_USER_ARENA_MAGIC_ALLOCATED ||
+        !rin_user_block_is_live(block) ||
         !rin_user_block_tail_valid(block)) {
         rin_user_allocator_unlock(&map->lock);
         rin_user_allocator_unlock(&rin_user_allocator_directory_lock);

@@ -46,11 +46,16 @@ typedef struct RinUserAllocatorMetricsV1 {
     uint64_t magazine_refills;
     uint64_t magazine_flushes;
     uint64_t cached_bytes;
+    uint64_t remote_free_enqueues;
+    uint64_t remote_free_drains;
+    /* Current total depth and highest lifetime depth of any one arena. */
+    uint64_t remote_free_queue_depth;
+    uint64_t remote_free_queue_peak_depth;
 } RinUserAllocatorMetricsV1;
 
-/* Release cached blocks from all live thread magazines under memory pressure. */
+/* Flush live thread magazines and drain arena remote-free queues. */
 void rin_user_allocator_trim(void);
-/* Snapshot debug/performance counters without changing allocator state. */
+/* Snapshot lock, magazine, and remote-free counters without changing state. */
 int rin_user_allocator_metrics_read(RinUserAllocatorMetricsV1* metrics);
 
 void* rin_user_allocator_malloc(size_t size);
