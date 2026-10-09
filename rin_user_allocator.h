@@ -35,6 +35,23 @@ size_t rin_user_allocator_capture_backtrace(uintptr_t* frames,
  * that may have owned these spin locks.  The target fork frontend calls this
  * immediately in the child before user code can allocate again. */
 void rin_user_allocator_after_fork_child(void);
+void rin_user_allocator_before_fork(void);
+void rin_user_allocator_after_fork_parent(void);
+
+typedef struct RinUserAllocatorMetricsV1 {
+    uint32_t struct_size;
+    uint32_t version;
+    uint64_t arena_lock_acquisitions;
+    uint64_t magazine_hits;
+    uint64_t magazine_refills;
+    uint64_t magazine_flushes;
+    uint64_t cached_bytes;
+} RinUserAllocatorMetricsV1;
+
+/* Release cached blocks from all live thread magazines under memory pressure. */
+void rin_user_allocator_trim(void);
+/* Snapshot debug/performance counters without changing allocator state. */
+int rin_user_allocator_metrics_read(RinUserAllocatorMetricsV1* metrics);
 
 void* rin_user_allocator_malloc(size_t size);
 void rin_user_allocator_free(void* pointer);

@@ -31,6 +31,9 @@
 #if !defined(MIDL_PASS)
 extern void rin_user_allocator_after_fork_child(void)
     __attribute__((weak));
+extern void rin_user_allocator_before_fork(void) __attribute__((weak));
+extern void rin_user_allocator_after_fork_parent(void)
+    __attribute__((weak));
 #endif
 
 /* Preserve caller-provided syscall hooks before installing defaults.  A
@@ -939,14 +942,41 @@ static inline pid_t setsid(void)
 }
 
 static inline pid_t fork(void) {
-    intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_FORK));
-    if (result < 0) return -1;
-    if ((uintptr_t)result > (uintptr_t)INT_MAX) {
-        errno = EOVERFLOW;
+#if !defined(MIDL_PASS)
+    int allocator_fork_prepared = 0;
+#endif
+    intptr_t result;
+#if !defined(MIDL_PASS)
+    if (rin_user_allocator_before_fork != NULL) {
+        rin_user_allocator_before_fork();
+        allocator_fork_prepared = 1;
+    }
+#endif
+    result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_FORK));
+    if (result < 0) {
+#if !defined(MIDL_PASS)
+        if (allocator_fork_prepared &&
+            rin_user_allocator_after_fork_parent != NULL)
+            rin_user_allocator_after_fork_parent();
+#endif
         return -1;
     }
+    if ((uintptr_t)result > (uintptr_t)INT_MAX) {
+        errno = EOVERFLOW;
+#if !defined(MIDL_PASS)
+        if (allocator_fork_prepared &&
+            rin_user_allocator_after_fork_parent != NULL)
+            rin_user_allocator_after_fork_parent();
+#endif
+        return -1;
+    }
+#if !defined(MIDL_PASS)
     if (result == 0 && rin_user_allocator_after_fork_child != NULL)
         rin_user_allocator_after_fork_child();
+    else if (allocator_fork_prepared &&
+             rin_user_allocator_after_fork_parent != NULL)
+        rin_user_allocator_after_fork_parent();
+#endif
     return (pid_t)result;
 }
 
