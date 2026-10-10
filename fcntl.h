@@ -758,6 +758,56 @@ static inline int mkdirat(int dirfd, const char* pathname, mode_t mode) {
     return _fcntl_path_at_zero(&call);
 }
 
+/* Create one directory below a VFS directory descriptor and return a
+ * descriptor pinned to the inode created by this call. This closes the
+ * mkdirat()+openat() name-replacement window for storage owners. */
+static inline int rin_mkdirat_open_dir(int dirfd, const char* pathname,
+                                       mode_t mode) {
+    RinPathAtCallV1 call;
+    intptr_t result;
+    if (!pathname) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (pathname[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    _fcntl_path_at_init(&call, RIN_PATH_AT_MKDIR_OPEN);
+    call.dirfd = dirfd;
+    call.open_flags = RIN_PATH_AT_O_CLOEXEC;
+    call.mode = (uint32_t)mode;
+    call.path1 = (uint64_t)(uintptr_t)pathname;
+    result = _fcntl_path_at_value(&call);
+    if (result < 0 || (uintptr_t)result > (uintptr_t)INT32_MAX) {
+        if (result >= 0) errno = EOVERFLOW;
+        return -1;
+    }
+    _fcntl_track_new_fd((int)result, O_CLOEXEC, FD_CLOEXEC);
+    return (int)result;
+}
+
+/* Remove a directory name only when it still names the inode held by
+ * expected_dirfd. The target descriptor stays open through the atomic check
+ * and removal. */
+static inline int rin_rmdirat_if_same(int dirfd, const char* pathname,
+                                      int expected_dirfd) {
+    RinPathAtCallV1 call;
+    if (!pathname) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (pathname[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    _fcntl_path_at_init(&call, RIN_PATH_AT_RMDIR_MATCH);
+    call.dirfd = dirfd;
+    call.secondary_dirfd = expected_dirfd;
+    call.path1 = (uint64_t)(uintptr_t)pathname;
+    return _fcntl_path_at_zero(&call);
+}
+
 static inline int rin_mkdirat_beneath(int dirfd, const char* pathname,
                                       mode_t mode) {
     intptr_t result;
