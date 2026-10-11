@@ -14,7 +14,7 @@
 #include "stdint.h"
 
 #define RIN_USER_PAGE_SIZE ((size_t)4096u)
-#define RIN_USER_BLOCK_ALIGNMENT ((size_t)16u)
+#define RIN_USER_BLOCK_ALIGNMENT 16u
 #define RIN_USER_ARENA_CHUNK_SIZE ((size_t)64u * 1024u)
 #define RIN_USER_ARENA_MIN_BLOCKS 8u
 #define RIN_USER_ARENA_MAX_ALLOCATION ((size_t)32768u)
@@ -95,9 +95,11 @@ struct RinUserAllocationHeader {
     volatile uint32_t remote_state;
     uint32_t reserved5;
     uintptr_t backtrace[RIN_USER_ALLOCATOR_BACKTRACE_DEPTH];
-};
+} __attribute__((aligned(RIN_USER_BLOCK_ALIGNMENT)));
 
 /* This keeps every user payload naturally 16-byte aligned on both targets. */
+_Static_assert(_Alignof(RinUserAllocationHeader) >= RIN_USER_BLOCK_ALIGNMENT,
+               "allocator block headers must be 16-byte aligned");
 _Static_assert(sizeof(RinUserAllocationHeader) % RIN_USER_BLOCK_ALIGNMENT == 0u,
                "allocator block headers must be 16-byte aligned");
 
