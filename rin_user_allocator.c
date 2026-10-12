@@ -1674,6 +1674,7 @@ static void* rin_user_allocator_magazine_pop_locked(
         block->magic != RIN_USER_ARENA_MAGIC_CACHED ||
         block->flags != RIN_USER_BLOCK_FLAG_CACHED ||
         block->bin_index != class_index || block->requested_size != 0u ||
+        block_size < rin_user_block_total_for_request(size) ||
         __atomic_load_n(&block->remote_next, __ATOMIC_RELAXED) != NULL ||
         __atomic_load_n(&block->remote_state, __ATOMIC_RELAXED) != 2u ||
         block->owner_token != cache->owner_token ||
@@ -2265,6 +2266,8 @@ void rin_user_allocator_free(void* pointer)
                block->bin_index < RIN_USER_ARENA_CLASS_COUNT &&
                cache->magazine_count[block->bin_index] <
                    RIN_USER_MAGAZINE_CAPACITY &&
+               block->total_size >= rin_user_block_total_for_request(
+                   rin_user_size_classes[block->bin_index]) &&
                block->total_size <= RIN_USER_MAGAZINE_MAX_BYTES -
                                         cache->cached_bytes) {
         unsigned class_index = block->bin_index;
@@ -2415,8 +2418,20 @@ void* rin_user_allocator_realloc(void* pointer, size_t size)
         return NULL;
     }
     old_size = block->requested_size;
+    /* A magazine block becomes an ordinary allocation as soon as realloc
+     * mutates its extent.  Keeping the cached tag after an in-place grow can
+     * violate the class-capacity invariant when the exact requested size is
+     * smaller than the magazine class maximum. */
+    if (map->kind == RIN_USER_ARENA_KIND &&
+        block->magic == RIN_USER_ARENA_MAGIC_CACHED &&
+        __atomic_load_n(&block->remote_state, __ATOMIC_ACQUIRE) == 3u) {
+        block->magic = RIN_USER_ARENA_MAGIC_ALLOCATED;
+        block->flags = RIN_USER_BLOCK_FLAG_ALLOCATED;
+        __atomic_store_n(&block->remote_state, 0u, __ATOMIC_RELEASE);
+    }
     if (requested_total <= block->total_size) {
         if (map->kind == RIN_USER_ARENA_KIND &&
+            block->magic == RIN_USER_ARENA_MAGIC_ALLOCATED &&
             !rin_user_split_allocated_tail(map, block, requested_total)) {
             rin_user_allocator_unlock(&map->lock);
             rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
