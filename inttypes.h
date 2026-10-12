@@ -34,35 +34,43 @@ static inline imaxdiv_t imaxdiv(intmax_t numer, intmax_t denom) {
  * ═══════════════════════════════════════════════════════════════*/
 
 // Format macros for printf/scanf
+#if !defined(_MSC_VER) && defined(__SIZEOF_LONG__) && __SIZEOF_LONG__ == 8
+/* On LP64 targets, uint64_t/int64_t are unsigned long/long. */
+#define RIN_INT64_FMT_PREFIX "l"
+#else
+/* ILP32 and LLP64 targets use long long for 64-bit integers. */
+#define RIN_INT64_FMT_PREFIX "ll"
+#endif
+
 #define PRId8   "d"
 #define PRId16  "d"
 #define PRId32  "d"
-#define PRId64  "lld"
+#define PRId64  RIN_INT64_FMT_PREFIX "d"
 
 #define PRIi8   "i"
 #define PRIi16  "i"
 #define PRIi32  "i"
-#define PRIi64  "lli"
+#define PRIi64  RIN_INT64_FMT_PREFIX "i"
 
 #define PRIu8   "u"
 #define PRIu16  "u"
 #define PRIu32  "u"
-#define PRIu64  "llu"
+#define PRIu64  RIN_INT64_FMT_PREFIX "u"
 
 #define PRIx8   "x"
 #define PRIx16  "x"
 #define PRIx32  "x"
-#define PRIx64  "llx"
+#define PRIx64  RIN_INT64_FMT_PREFIX "x"
 
 #define PRIX8   "X"
 #define PRIX16  "X"
 #define PRIX32  "X"
-#define PRIX64  "llX"
+#define PRIX64  RIN_INT64_FMT_PREFIX "X"
 
 #define PRIo8   "o"
 #define PRIo16  "o"
 #define PRIo32  "o"
-#define PRIo64  "llo"
+#define PRIo64  RIN_INT64_FMT_PREFIX "o"
 
 // Pointer formats
 #define PRIdPTR "ld"
@@ -75,22 +83,22 @@ static inline imaxdiv_t imaxdiv(intmax_t numer, intmax_t denom) {
 #define SCNd8   "hhd"
 #define SCNd16  "hd"
 #define SCNd32  "d"
-#define SCNd64  "lld"
+#define SCNd64  RIN_INT64_FMT_PREFIX "d"
 
 #define SCNi8   "hhi"
 #define SCNi16  "hi"
 #define SCNi32  "i"
-#define SCNi64  "lli"
+#define SCNi64  RIN_INT64_FMT_PREFIX "i"
 
 #define SCNu8   "hhu"
 #define SCNu16  "hu"
 #define SCNu32  "u"
-#define SCNu64  "llu"
+#define SCNu64  RIN_INT64_FMT_PREFIX "u"
 
 #define SCNx8   "hhx"
 #define SCNx16  "hx"
 #define SCNx32  "x"
-#define SCNx64  "llx"
+#define SCNx64  RIN_INT64_FMT_PREFIX "x"
 
 // Integer conversion functions
 static inline intmax_t strtoimax(const char* nptr, char** endptr, int base) {
