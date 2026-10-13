@@ -641,7 +641,7 @@ static inline int pthread_mutex_lock(pthread_mutex_t* mutex) {
 
     pthread_t self = pthread_self();
     if (self == 0) return ESRCH;
-    int type = mutex->type & RIN_PTHREAD_MUTEX_TYPE_MASK;
+    int type = mutex->type & RIN_PTHREAD_MUTEXATTR_TYPE_MASK;
 
     /* 再帰ロックチェック */
     if (type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == self) {
@@ -671,7 +671,7 @@ static inline int pthread_mutex_trylock(pthread_mutex_t* mutex) {
 
     pthread_t self = pthread_self();
     if (self == 0) return ESRCH;
-    int type = mutex->type & RIN_PTHREAD_MUTEX_TYPE_MASK;
+    int type = mutex->type & RIN_PTHREAD_MUTEXATTR_TYPE_MASK;
 
     if (type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == self) {
         if (mutex->recursion == INT_MAX) return EAGAIN;
@@ -694,7 +694,7 @@ static inline int pthread_mutex_unlock(pthread_mutex_t* mutex) {
 
     pthread_t self = pthread_self();
     if (self == 0) return ESRCH;
-    int type = mutex->type & RIN_PTHREAD_MUTEX_TYPE_MASK;
+    int type = mutex->type & RIN_PTHREAD_MUTEXATTR_TYPE_MASK;
 
     if (mutex->owner != self) {
         return EPERM;
