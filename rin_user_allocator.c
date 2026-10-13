@@ -125,8 +125,8 @@ struct RinUserAllocatorMap {
     uint32_t reserved3;
 };
 
-static RinUserAllocatorMap* rin_user_allocator_maps;
-static volatile unsigned rin_user_allocator_directory_lock;
+static RinUserAllocatorMap* rin_user_allocator_maps = 0;
+static volatile unsigned rin_user_allocator_directory_lock = 0u;
 
 typedef struct RinUserAllocatorTlsCache {
     RinUserAllocatorMap* arena_by_class[RIN_USER_ARENA_CLASS_COUNT];
@@ -149,18 +149,18 @@ typedef struct RinUserAllocatorTlsCache {
 
 static RIN_USER_THREAD_LOCAL RinUserAllocatorTlsCache
     rin_user_allocator_tls_cache;
-static RinUserAllocatorTlsCache* rin_user_allocator_cache_registry;
-static volatile unsigned rin_user_allocator_cache_registry_lock;
-static volatile unsigned rin_user_allocator_pthread_key_state;
+static RinUserAllocatorTlsCache* rin_user_allocator_cache_registry = 0;
+static volatile unsigned rin_user_allocator_cache_registry_lock = 0u;
+static volatile unsigned rin_user_allocator_pthread_key_state = 0u;
 static volatile uint64_t rin_user_allocator_next_owner_token = 1u;
 static volatile uint32_t rin_user_allocator_fork_generation = 1u;
 static volatile uint64_t rin_user_allocator_activity_epoch = 1u;
-static RinUserAllocatorPthreadKey rin_user_allocator_pthread_key;
-static volatile unsigned rin_user_allocator_fork_prepared;
-static volatile uint64_t rin_user_allocator_retired_arena_lock_acquisitions;
-static volatile uint64_t rin_user_allocator_retired_magazine_hits;
-static volatile uint64_t rin_user_allocator_retired_magazine_refills;
-static volatile uint64_t rin_user_allocator_retired_magazine_flushes;
+static RinUserAllocatorPthreadKey rin_user_allocator_pthread_key = 0u;
+static volatile unsigned rin_user_allocator_fork_prepared = 0u;
+static volatile uint64_t rin_user_allocator_retired_arena_lock_acquisitions = 0u;
+static volatile uint64_t rin_user_allocator_retired_magazine_hits = 0u;
+static volatile uint64_t rin_user_allocator_retired_magazine_refills = 0u;
+static volatile uint64_t rin_user_allocator_retired_magazine_flushes = 0u;
 
 static const uint32_t rin_user_size_classes[RIN_USER_ARENA_CLASS_COUNT] = {
     16u, 32u, 64u, 128u, 256u, 512u,
