@@ -866,6 +866,10 @@ static int rin_user_split_allocated_tail(RinUserAllocatorMap* map,
     block->total_size = requested_total;
     remainder = (RinUserAllocationHeader*)((unsigned char*)block +
                                            requested_total);
+    /* A free block's payload is poisoned except for its link prefix.  Once
+     * split, this address becomes allocator metadata again, so make the new
+     * header accessible before initializing it. */
+    rin_user_asan_unpoison(remainder, sizeof(*remainder));
     remainder->total_size = remainder_size;
     remainder->previous_size = requested_total;
     remainder->requested_size = 0u;
@@ -899,6 +903,11 @@ static int rin_user_split_allocated_tail(RinUserAllocatorMap* map,
                                    remainder_size));
     }
     rin_user_insert_free_block(map, remainder);
+    /* The new guard can land inside the old free block's poisoned payload.
+     * Keep it addressable for allocator validation; the allocator's explicit
+     * tail pattern remains the overrun check for this boundary. */
+    rin_user_asan_unpoison(rin_user_block_tail(block),
+                           RIN_USER_ARENA_TAIL_GUARD_SIZE);
     rin_user_block_store_tail(block);
     return 1;
 }
@@ -1713,6 +1722,9 @@ static void* rin_user_allocator_magazine_pop_locked(
         rin_user_block_store_tail(block);
         __atomic_store_n(&block->remote_state, 3u, __ATOMIC_RELEASE);
     }
+    rin_user_asan_unpoison(
+        rin_user_block_payload(block),
+        block_size - sizeof(*block) - RIN_USER_ARENA_TAIL_GUARD_SIZE);
     cache->magazine_hits++;
     return rin_user_block_payload(block);
 }
@@ -2442,6 +2454,10 @@ void* rin_user_allocator_realloc(void* pointer, size_t size)
         if (map->kind == RIN_USER_ARENA_KIND)
             block->bin_index = (uint16_t)rin_user_bin_for_size(size);
         rin_user_block_store_tail(block);
+        rin_user_asan_unpoison(
+            rin_user_block_payload(block),
+            block->total_size - sizeof(*block) -
+                RIN_USER_ARENA_TAIL_GUARD_SIZE);
         rin_user_allocator_unlock(&map->lock);
         rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
         return pointer;
@@ -2470,6 +2486,10 @@ void* rin_user_allocator_realloc(void* pointer, size_t size)
         block->requested_size = size;
         block->bin_index = (uint16_t)rin_user_bin_for_size(size);
         rin_user_block_store_tail(block);
+        rin_user_asan_unpoison(
+            rin_user_block_payload(block),
+            block->total_size - sizeof(*block) -
+                RIN_USER_ARENA_TAIL_GUARD_SIZE);
         rin_user_allocator_unlock(&map->lock);
         rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
         return pointer;
