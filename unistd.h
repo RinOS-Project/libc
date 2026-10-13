@@ -25,17 +25,6 @@
 #include <rin/process/image_path_abi.h>
 #include <rin/process/memory_abi.h>
 
-/* The allocator is linked by the target libc/rincrt image.  Keep this weak
- * so hosted syscall fixtures can include unistd.h without pulling allocator
- * implementation into the fixture. */
-#if !defined(MIDL_PASS)
-extern void rin_user_allocator_after_fork_child(void)
-    __attribute__((weak));
-extern void rin_user_allocator_before_fork(void) __attribute__((weak));
-extern void rin_user_allocator_after_fork_parent(void)
-    __attribute__((weak));
-#endif
-
 /* Preserve caller-provided syscall hooks before installing defaults.  A
  * hosted unit that supplies a hook is intentionally asking for the Rin
  * frontend even when the compiler reports a hosted environment. */
@@ -83,6 +72,18 @@ extern void rin_user_allocator_after_fork_parent(void)
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+/* The allocator is linked by the target libc/rincrt image.  Keep these hooks
+ * weak so hosted syscall fixtures can include unistd.h without pulling the
+ * allocator implementation into the fixture.  They must be declared inside
+ * the C-linkage block so C++ callers refer to the libc symbols. */
+#if !defined(MIDL_PASS)
+extern void rin_user_allocator_after_fork_child(void)
+    __attribute__((weak));
+extern void rin_user_allocator_before_fork(void) __attribute__((weak));
+extern void rin_user_allocator_after_fork_parent(void)
+    __attribute__((weak));
 #endif
 
 /* The process/exec frontend is a target-side syscall surface.  Hosted
