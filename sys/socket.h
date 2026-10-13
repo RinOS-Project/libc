@@ -531,40 +531,8 @@ static inline ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags) {
 
 static inline int accept4(int sockfd, struct sockaddr* addr,
                           socklen_t* addrlen, int flags) {
-    int accepted;
-    int saved_errno;
-    if ((flags & ~(SOCK_NONBLOCK | SOCK_CLOEXEC)) != 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    accepted = accept(sockfd, addr, addrlen);
-    if (accepted < 0 || flags == 0) return accepted;
-    if ((flags & SOCK_NONBLOCK) != 0) {
-        int enabled = 1;
-        if (setsockopt(accepted, SOL_SOCKET, SO_NONBLOCK, &enabled,
-                       (socklen_t)sizeof(enabled)) != 0)
-            goto fail;
-    }
-    if ((flags & SOCK_CLOEXEC) != 0) {
-        intptr_t descriptor_flags = _RIN_SOCKET_SYSCALL3(
-            SYS_FCNTL, accepted, 1 /* F_GETFD */, 0u);
-        if (__rin_socket_raw_error(descriptor_flags) != 0)
-            goto fail;
-        if ((uintptr_t)descriptor_flags > (uintptr_t)INT_MAX)
-            goto overflow;
-        descriptor_flags |= 1 /* FD_CLOEXEC */;
-        if (__rin_socket_status_result(_RIN_SOCKET_SYSCALL3(
-                SYS_FCNTL, accepted, 2 /* F_SETFD */, descriptor_flags)) != 0)
-            goto fail;
-    }
-    return accepted;
-overflow:
-    errno = EOVERFLOW;
-fail:
-    saved_errno = errno;
-    (void)_RIN_SOCKET_SYSCALL1(SYS_CLOSE, accepted);
-    errno = saved_errno;
-    return -1;
+    return __rin_socket_fd_result(
+        _RIN_SOCKET_SYSCALL5(SYS_ACCEPT4, sockfd, addr, addrlen, flags, 0u));
 }
 
 #ifdef __cplusplus
