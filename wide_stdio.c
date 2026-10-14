@@ -2,6 +2,9 @@
 
 #include "wchar.h"
 #include "stdio.h"
+#if defined(RIN_USERSPACE)
+#include "stdio_internal.h"
+#endif
 #include "limits.h"
 
 #define RIN_WPRINTF_FORMAT_LIMIT 4096u
