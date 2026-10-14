@@ -4,7 +4,9 @@
 #include "stdio.h"
 #if defined(RIN_USERSPACE)
 #include "stdio_internal.h"
+#include "stdlib.h"
 #endif
+#include "stdio_scanf_float_impl.h"
 #include "limits.h"
 
 #define RIN_WPRINTF_FORMAT_LIMIT 4096u
