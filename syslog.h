@@ -12,6 +12,7 @@
 #include "stdint.h"
 #include "stdarg.h"
 #include "stdio.h"
+#include "sys/syscall.h"
 
 #ifdef __cplusplus
 extern "C" {
