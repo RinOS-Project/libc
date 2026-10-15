@@ -17,7 +17,9 @@
 #include "fcntl.h"
 #include "sys/stat.h"
 #include "sys/ioctl.h"
+#if !defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
 #include "rin_account_compat.h"
+#endif
 #include <rin/fs/path_at_abi.h>
 #include <rin/utsname_abi.h>
 #include <rin/process/process_group_abi.h>
@@ -1072,6 +1074,7 @@ static inline pid_t wait(int* wstatus) {
  * ユーザー/グループ ID
  * ═══════════════════════════════════════════════════════════════*/
 
+#if !defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
 static inline int __rin_get_credentials(__rin_credentials_v1* credentials) {
     int error = __rin_credentials_get(credentials);
     if (error != 0) {
@@ -1151,6 +1154,7 @@ static inline int setgid(gid_t gid) {
 #endif
     return __rin_set_credential(__RIN_CREDENTIAL_SET_GID, (uint32_t)gid);
 }
+#endif /* !RIN_LIBC_NO_ACCOUNT_COMPAT */
 
 /* ═══════════════════════════════════════════════════════════════
  * スリープ関連
