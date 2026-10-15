@@ -242,9 +242,30 @@ static FILE _stdout_file = { 1, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0,
 static FILE _stderr_file = { 2, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
 #endif
 
+#ifdef stdin
+#undef stdin
+#endif
+#ifdef stdout
+#undef stdout
+#endif
+#ifdef stderr
+#undef stderr
+#endif
 #define stdin  (&_stdin_file)
 #define stdout (&_stdout_file)
 #define stderr (&_stderr_file)
+
+_RIN_STDIO_API FILE* rin_stdio_get_stdin(void) {
+    return &_stdin_file;
+}
+
+_RIN_STDIO_API FILE* rin_stdio_get_stdout(void) {
+    return &_stdout_file;
+}
+
+_RIN_STDIO_API FILE* rin_stdio_get_stderr(void) {
+    return &_stderr_file;
+}
 
 /* C guarantees at least one byte of pushback per open stream.  Keep the first
  * five bytes inline for normal cursor work, then allocate a bounded spill only

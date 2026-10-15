@@ -74,12 +74,12 @@ typedef long fpos_t;
 #undef RIN_STDIO_LOCAL_FALLBACK
 #else
 
-extern FILE _stdin_file;
-extern FILE _stdout_file;
-extern FILE _stderr_file;
-#define stdin  (&_stdin_file)
-#define stdout (&_stdout_file)
-#define stderr (&_stderr_file)
+FILE* rin_stdio_get_stdin(void);
+FILE* rin_stdio_get_stdout(void);
+FILE* rin_stdio_get_stderr(void);
+#define stdin  (rin_stdio_get_stdin())
+#define stdout (rin_stdio_get_stdout())
+#define stderr (rin_stdio_get_stderr())
 
 void flockfile(FILE* stream);
 int ftrylockfile(FILE* stream);
