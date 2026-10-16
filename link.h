@@ -257,8 +257,8 @@ typedef int32_t  Elf32_Sword;
 typedef uint16_t Elf32_Section;
 typedef uint16_t Elf32_Versym;
 
-#ifndef RIN_ELF_AUXV_TYPES_DEFINED
-#define RIN_ELF_AUXV_TYPES_DEFINED
+#ifndef RIN_ELF32_AUXV_TYPE_DEFINED
+#define RIN_ELF32_AUXV_TYPE_DEFINED
 /* Auxiliary vector entry */
 typedef struct {
     uint32_t a_type;
@@ -266,6 +266,7 @@ typedef struct {
         uint32_t a_val;
     } a_un;
 } Elf32_auxv_t;
+#endif /* RIN_ELF32_AUXV_TYPE_DEFINED */
 
 /* ═══════════════════════════════════════════════════════════════
  * ELF types for 64-bit (for completeness)
@@ -281,13 +282,15 @@ typedef uint16_t Elf64_Section;
 typedef uint16_t Elf64_Versym;
 
 /* Auxiliary vector entry */
+#ifndef RIN_ELF64_AUXV_TYPE_DEFINED
+#define RIN_ELF64_AUXV_TYPE_DEFINED
 typedef struct {
     uint64_t a_type;
     union {
         uint64_t a_val;
     } a_un;
 } Elf64_auxv_t;
-#endif /* RIN_ELF_AUXV_TYPES_DEFINED */
+#endif /* RIN_ELF64_AUXV_TYPE_DEFINED */
 
 /* ELF Header */
 typedef struct {

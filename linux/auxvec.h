@@ -179,24 +179,27 @@ extern "C" {
 
 /* Note: The actual structures are defined in elf.h */
 #ifndef __ASSEMBLY__
-#ifndef RIN_ELF_AUXV_TYPES_DEFINED
-#define RIN_ELF_AUXV_TYPES_DEFINED
+#ifndef RIN_ELF32_AUXV_TYPE_DEFINED
+#define RIN_ELF32_AUXV_TYPE_DEFINED
 typedef struct {
     unsigned long a_type;
     union {
         unsigned long a_val;
     } a_un;
 } Elf32_auxv_t;
+#endif /* RIN_ELF32_AUXV_TYPE_DEFINED */
 
 #ifdef __x86_64__
+#ifndef RIN_ELF64_AUXV_TYPE_DEFINED
+#define RIN_ELF64_AUXV_TYPE_DEFINED
 typedef struct {
     unsigned long a_type;
     union {
         unsigned long a_val;
     } a_un;
 } Elf64_auxv_t;
+#endif /* RIN_ELF64_AUXV_TYPE_DEFINED */
 #endif
-#endif /* RIN_ELF_AUXV_TYPES_DEFINED */
 #endif /* !__ASSEMBLY__ */
 
 /* ═══════════════════════════════════════════════════════════════
