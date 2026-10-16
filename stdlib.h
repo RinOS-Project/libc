@@ -212,6 +212,8 @@ __attribute__((noreturn)) static inline void _Exit(int status) {
 #endif /* !_MSVCRT_COMPAT */
 
 #ifndef _MSVCRT_COMPAT
+#ifndef _RIN_CSTDLIB_GLOBAL_ABORT_DEFINED
+#define _RIN_CSTDLIB_GLOBAL_ABORT_DEFINED
 __attribute__((noreturn)) static inline void abort(void) {
     /* Debug: output abort message with stack trace via serial */
     const char* msg = "[ABORT] libc abort() called\n";
@@ -257,6 +259,7 @@ __attribute__((noreturn)) static inline void abort(void) {
     _RIN_STDLIB_SYSCALL1(SYS_EXIT, (uintptr_t)1u);
     for(;;) {}
 }
+#endif /* _RIN_CSTDLIB_GLOBAL_ABORT_DEFINED */
 
 /* atexit - 宣言のみ、実装はmalloc.cにある */
 int atexit(void (*func)(void));
