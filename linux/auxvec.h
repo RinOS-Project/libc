@@ -179,6 +179,8 @@ extern "C" {
 
 /* Note: The actual structures are defined in elf.h */
 #ifndef __ASSEMBLY__
+#ifndef RIN_ELF_AUXV_TYPES_DEFINED
+#define RIN_ELF_AUXV_TYPES_DEFINED
 typedef struct {
     unsigned long a_type;
     union {
@@ -194,6 +196,7 @@ typedef struct {
     } a_un;
 } Elf64_auxv_t;
 #endif
+#endif /* RIN_ELF_AUXV_TYPES_DEFINED */
 #endif /* !__ASSEMBLY__ */
 
 /* ═══════════════════════════════════════════════════════════════

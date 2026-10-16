@@ -257,6 +257,8 @@ typedef int32_t  Elf32_Sword;
 typedef uint16_t Elf32_Section;
 typedef uint16_t Elf32_Versym;
 
+#ifndef RIN_ELF_AUXV_TYPES_DEFINED
+#define RIN_ELF_AUXV_TYPES_DEFINED
 /* Auxiliary vector entry */
 typedef struct {
     uint32_t a_type;
@@ -285,6 +287,7 @@ typedef struct {
         uint64_t a_val;
     } a_un;
 } Elf64_auxv_t;
+#endif /* RIN_ELF_AUXV_TYPES_DEFINED */
 
 /* ELF Header */
 typedef struct {
