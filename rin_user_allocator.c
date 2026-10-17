@@ -11,7 +11,7 @@
 
 #include "rin_user_allocator.h"
 
-#include "stdint.h"
+#include <stdint.h>
 
 #define RIN_USER_PAGE_SIZE ((size_t)4096u)
 #define RIN_USER_BLOCK_ALIGNMENT 16u

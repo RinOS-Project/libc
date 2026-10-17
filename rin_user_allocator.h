@@ -2,8 +2,8 @@
 #ifndef RIN_LIBC_USER_ALLOCATOR_H
 #define RIN_LIBC_USER_ALLOCATOR_H
 
-#include "stddef.h"
-#include "stdint.h"
+#include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
