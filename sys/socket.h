@@ -329,6 +329,7 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define MSG_WAITALL     0x100   /* 全データを待つ */
 #define MSG_NOSIGNAL    0x4000  /* SIGPIPEを送らない */
 #define MSG_CTRUNC      0x08    /* 補助データが制御バッファで切り詰められた */
+#define MSG_CMSG_CLOEXEC 0x40000000 /* SCM_RIGHTS descriptors use FD_CLOEXEC */
 
 /* ═══════════════════════════════════════════════════════════════
  * shutdownフラグ
