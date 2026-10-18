@@ -27,6 +27,11 @@ static inline intmax_t imaxabs(intmax_t j) {
 
 static inline imaxdiv_t imaxdiv(intmax_t numer, intmax_t denom) {
     imaxdiv_t result;
+    if (numer == INTMAX_MIN && denom == -1) {
+        result.quot = INTMAX_MIN;
+        result.rem = 0;
+        return result;
+    }
     result.quot = numer / denom;
     result.rem = numer % denom;
     return result;

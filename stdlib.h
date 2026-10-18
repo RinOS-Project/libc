@@ -748,16 +748,31 @@ typedef struct { long quot; long rem; } ldiv_t;
 typedef struct { long long quot; long long rem; } lldiv_t;
 
 static inline div_t div(int numer, int denom) {
+    /* Division whose mathematical quotient is INT_MAX+1 is undefined in C.
+     * RinOS keeps the result deterministic without evaluating either
+     * overflowing operator. */
+    if (numer == INT_MIN && denom == -1) {
+        div_t minimum = { INT_MIN, 0 };
+        return minimum;
+    }
     div_t r = { numer / denom, numer % denom };
     return r;
 }
 
 static inline ldiv_t ldiv(long numer, long denom) {
+    if (numer == LONG_MIN && denom == -1L) {
+        ldiv_t minimum = { LONG_MIN, 0 };
+        return minimum;
+    }
     ldiv_t r = { numer / denom, numer % denom };
     return r;
 }
 
 static inline lldiv_t lldiv(long long numer, long long denom) {
+    if (numer == LLONG_MIN && denom == -1LL) {
+        lldiv_t minimum = { LLONG_MIN, 0 };
+        return minimum;
+    }
     lldiv_t r = { numer / denom, numer % denom };
     return r;
 }
