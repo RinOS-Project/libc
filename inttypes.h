@@ -19,6 +19,9 @@ typedef struct {
 } imaxdiv_t;
 
 static inline intmax_t imaxabs(intmax_t j) {
+    /* Match abs/labs: keep the unrepresentable minimum magnitude deterministic
+     * without signed overflow. */
+    if (j == INTMAX_MIN) return INTMAX_MIN;
     return j < 0 ? -j : j;
 }
 

@@ -726,21 +726,21 @@ static inline char* strndup(const char* s, size_t n) {
  * ═══════════════════════════════════════════════════════════════*/
 
 static inline int abs(int n) {
-    if (n >= 0) return n;
-    /* Form the magnitude in the unsigned domain so INT_MIN does not invoke
-     * signed overflow.  Converting the modulo result back preserves the
-     * implementation's two's-complement minimum representation. */
-    return (int)(0u - (unsigned int)n);
+    /* C leaves abs(INT_MIN) undefined because its positive magnitude is not
+     * representable. RinOS defines a deterministic extension: preserve the
+     * minimum value instead of overflowing or converting out of range. */
+    if (n == INT_MIN) return INT_MIN;
+    return n < 0 ? -n : n;
 }
 
 static inline long labs(long n) {
-    if (n >= 0) return n;
-    return (long)(0UL - (unsigned long)n);
+    if (n == LONG_MIN) return LONG_MIN;
+    return n < 0 ? -n : n;
 }
 
 static inline long long llabs(long long n) {
-    if (n >= 0) return n;
-    return (long long)(0ULL - (unsigned long long)n);
+    if (n == LLONG_MIN) return LLONG_MIN;
+    return n < 0 ? -n : n;
 }
 
 typedef struct { int quot; int rem; } div_t;
