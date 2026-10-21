@@ -626,9 +626,10 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
             0, total_map, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK);
         if (map_result >= 0 && map_result != 0) {
             void* map_base = (void*)(uintptr_t)map_result;
-            if (_RIN_PTHREAD_RUNTIME_MPROTECT(
-                    (uintptr_t)((unsigned char*)map_base + THREAD_STACK_GUARD),
-                    requested_stack, PROT_READ | PROT_WRITE) >= 0) {
+            intptr_t protection_result = _RIN_PTHREAD_RUNTIME_MPROTECT(
+                (uintptr_t)((unsigned char*)map_base + THREAD_STACK_GUARD),
+                requested_stack, PROT_READ | PROT_WRITE);
+            if (protection_result >= 0) {
                 alloc_base = map_base;
                 alloc_size = total_map;
                 alloc_kind = RIN_THREAD_ALLOC_MMAP;
@@ -654,7 +655,16 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
                 }
 #endif
             } else {
-                rin_log("[PTHREAD] stack mprotect failed\n");
+                static const char digits[] = "0123456789ABCDEF";
+                char message[] =
+                    "[PTHREAD] stack mprotect failed result=0x0000000000000000\n";
+                uint64_t raw_result = (uint64_t)protection_result;
+                for (uint32_t index = 0u; index < 16u; ++index) {
+                    uint32_t shift = 60u - index * 4u;
+                    message[41u + index] = digits[
+                        (raw_result >> shift) & UINT64_C(0x0f)];
+                }
+                rin_log(message);
                 (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)map_base, total_map);
             }
         } else {
