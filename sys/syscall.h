@@ -13,8 +13,23 @@
 #include "../errno.h"
 #endif
 #include "../stdint.h"
+
+/* The SDK deliberately keeps legacy SYS_* aliases opt-in for C++ consumers.
+ * RinOS libc is itself a legacy C/C++ implementation and its public wrapper
+ * headers still use those aliases internally, so opt in only for this header
+ * while importing the generated ABI names.  Do not make this a toolchain-wide
+ * define: unrelated SDK C++ consumers must continue to use RIN_SYS_* unless
+ * they explicitly request the compatibility surface. */
+#if defined(__cplusplus) && !defined(RIN_SDK_ENABLE_LEGACY_SYSCALL_ALIASES)
+#define RIN_LIBC_ENABLE_LEGACY_SYSCALL_ALIASES 1
+#define RIN_SDK_ENABLE_LEGACY_SYSCALL_ALIASES 1
+#endif
 #ifndef MIDL_PASS
 #include <rin/syscall_legacy.h>
+#endif
+#if defined(RIN_LIBC_ENABLE_LEGACY_SYSCALL_ALIASES)
+#undef RIN_SDK_ENABLE_LEGACY_SYSCALL_ALIASES
+#undef RIN_LIBC_ENABLE_LEGACY_SYSCALL_ALIASES
 #endif
 
 /* midl.exe consumes a few target headers while generating COM declarations,
