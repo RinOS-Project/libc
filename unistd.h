@@ -87,10 +87,10 @@ extern void rin_user_allocator_before_fork(void) __attribute__((weak));
 extern void rin_user_allocator_after_fork_parent(void)
     __attribute__((weak));
 extern int rinfs_fork_hooks_prepare(void) __attribute__((weak));
-extern void rinfs_fork_hooks_complete(int fork_succeeded)
+extern int rinfs_fork_hooks_complete(int fork_succeeded)
     __attribute__((weak));
 extern int rinfs_fork_prepare(void) __attribute__((weak));
-extern void rinfs_fork_complete(int fork_succeeded) __attribute__((weak));
+extern int rinfs_fork_complete(int fork_succeeded) __attribute__((weak));
 #endif
 
 /* The process/exec frontend is a target-side syscall surface.  Hosted
@@ -949,6 +949,24 @@ static inline pid_t setsid(void)
     return (pid_t)response.session_id;
 }
 
+#if !defined(MIDL_PASS)
+__attribute__((noreturn)) static inline void _exit(int status);
+static inline int __rin_fork_complete_local(int fork_succeeded,
+                                            int rinfs_prepared,
+                                            int hooks_prepared) {
+    int result = 0;
+    if (rinfs_prepared && rinfs_fork_complete != NULL) {
+        int complete_result = rinfs_fork_complete(fork_succeeded);
+        if (complete_result != 0) result = complete_result;
+    }
+    if (hooks_prepared && rinfs_fork_hooks_complete != NULL) {
+        int complete_result = rinfs_fork_hooks_complete(fork_succeeded);
+        if (complete_result != 0 && result == 0) result = complete_result;
+    }
+    return result;
+}
+#endif
+
 static inline pid_t fork(void) {
 #if !defined(MIDL_PASS)
     int allocator_fork_prepared = 0;
@@ -967,8 +985,9 @@ static inline pid_t fork(void) {
     }
     if (rinfs_fork_prepare != NULL && rinfs_fork_complete != NULL) {
         if (rinfs_fork_prepare() != 0) {
-            if (fork_hooks_prepared) rinfs_fork_hooks_complete(0);
-            errno = EBUSY;
+            int complete_result = __rin_fork_complete_local(
+                0, rinfs_fork_prepared, fork_hooks_prepared);
+            errno = complete_result != 0 ? EIO : EBUSY;
             return -1;
         }
         rinfs_fork_prepared = 1;
@@ -981,35 +1000,48 @@ static inline pid_t fork(void) {
     result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_FORK));
     if (result < 0) {
 #if !defined(MIDL_PASS)
-        if (rinfs_fork_prepared) rinfs_fork_complete(0);
-        if (fork_hooks_prepared) rinfs_fork_hooks_complete(0);
+        int complete_result = __rin_fork_complete_local(
+            0, rinfs_fork_prepared, fork_hooks_prepared);
         if (allocator_fork_prepared &&
             rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
+        if (complete_result != 0) errno = EIO;
 #endif
         return -1;
     }
     if ((uintptr_t)result > (uintptr_t)INT_MAX) {
-        errno = EOVERFLOW;
 #if !defined(MIDL_PASS)
         /* The kernel created a child; retain its cloned RinFS owner counts
          * even though this parent cannot represent the returned PID. */
-        if (rinfs_fork_prepared) rinfs_fork_complete(1);
-        if (fork_hooks_prepared) rinfs_fork_hooks_complete(1);
+        int complete_result = __rin_fork_complete_local(
+            1, rinfs_fork_prepared, fork_hooks_prepared);
         if (allocator_fork_prepared &&
             rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
+        errno = complete_result != 0 ? EIO : EOVERFLOW;
+#else
+        errno = EOVERFLOW;
 #endif
         return -1;
     }
 #if !defined(MIDL_PASS)
-    if (rinfs_fork_prepared) rinfs_fork_complete(1);
-    if (fork_hooks_prepared) rinfs_fork_hooks_complete(1);
-    if (result == 0 && rin_user_allocator_after_fork_child != NULL)
-        rin_user_allocator_after_fork_child();
-    else if (allocator_fork_prepared &&
-             rin_user_allocator_after_fork_parent != NULL)
-        rin_user_allocator_after_fork_parent();
+    {
+        int complete_result = __rin_fork_complete_local(
+            1, rinfs_fork_prepared, fork_hooks_prepared);
+        if (result == 0 && complete_result != 0) {
+            errno = EIO;
+            _exit(127);
+        }
+        if (result == 0 && rin_user_allocator_after_fork_child != NULL)
+            rin_user_allocator_after_fork_child();
+        else if (allocator_fork_prepared &&
+                 rin_user_allocator_after_fork_parent != NULL)
+            rin_user_allocator_after_fork_parent();
+        /* fork cannot be rolled back after the kernel publishes the child.
+         * Preserve the parent's PID result and surface local completion
+         * failure in errno; the child exits before reaching user code. */
+        if (result != 0 && complete_result != 0) errno = EIO;
+    }
 #endif
     return (pid_t)result;
 }
