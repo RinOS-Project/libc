@@ -86,6 +86,8 @@ extern void rin_user_allocator_after_fork_child(void)
 extern void rin_user_allocator_before_fork(void) __attribute__((weak));
 extern void rin_user_allocator_after_fork_parent(void)
     __attribute__((weak));
+extern int rinfs_fork_prepare(void) __attribute__((weak));
+extern void rinfs_fork_complete(void) __attribute__((weak));
 #endif
 
 /* The process/exec frontend is a target-side syscall surface.  Hosted
@@ -947,9 +949,17 @@ static inline pid_t setsid(void)
 static inline pid_t fork(void) {
 #if !defined(MIDL_PASS)
     int allocator_fork_prepared = 0;
+    int rinfs_fork_prepared = 0;
 #endif
     intptr_t result;
 #if !defined(MIDL_PASS)
+    if (rinfs_fork_prepare != NULL && rinfs_fork_complete != NULL) {
+        if (rinfs_fork_prepare() != 0) {
+            errno = EBUSY;
+            return -1;
+        }
+        rinfs_fork_prepared = 1;
+    }
     if (rin_user_allocator_before_fork != NULL) {
         rin_user_allocator_before_fork();
         allocator_fork_prepared = 1;
@@ -958,6 +968,7 @@ static inline pid_t fork(void) {
     result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_FORK));
     if (result < 0) {
 #if !defined(MIDL_PASS)
+        if (rinfs_fork_prepared) rinfs_fork_complete();
         if (allocator_fork_prepared &&
             rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
@@ -967,6 +978,7 @@ static inline pid_t fork(void) {
     if ((uintptr_t)result > (uintptr_t)INT_MAX) {
         errno = EOVERFLOW;
 #if !defined(MIDL_PASS)
+        if (rinfs_fork_prepared) rinfs_fork_complete();
         if (allocator_fork_prepared &&
             rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
@@ -974,6 +986,7 @@ static inline pid_t fork(void) {
         return -1;
     }
 #if !defined(MIDL_PASS)
+    if (rinfs_fork_prepared) rinfs_fork_complete();
     if (result == 0 && rin_user_allocator_after_fork_child != NULL)
         rin_user_allocator_after_fork_child();
     else if (allocator_fork_prepared &&
