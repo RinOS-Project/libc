@@ -681,7 +681,11 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
         return EAGAIN;
     }
 
-    if (!(attr && attr->stackaddr != NULL)) {
+    /* Private anonymous mmap stacks are zero-filled by the VMM on demand:
+     * untouched pages map the pinned zero page and writes use zeroed COW
+     * pages.  Do not fault in the full stack before the new thread runs. */
+    if (alloc_kind != RIN_THREAD_ALLOC_MMAP &&
+        !(attr && attr->stackaddr != NULL)) {
         memset(stack_usable_base, 0, (size_t)stack_usable_size);
     }
 
