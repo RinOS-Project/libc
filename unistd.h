@@ -86,6 +86,9 @@ extern void rin_user_allocator_after_fork_child(void)
 extern void rin_user_allocator_before_fork(void) __attribute__((weak));
 extern void rin_user_allocator_after_fork_parent(void)
     __attribute__((weak));
+extern int rinfs_fork_hooks_prepare(void) __attribute__((weak));
+extern void rinfs_fork_hooks_complete(int fork_succeeded)
+    __attribute__((weak));
 extern int rinfs_fork_prepare(void) __attribute__((weak));
 extern void rinfs_fork_complete(int fork_succeeded) __attribute__((weak));
 #endif
@@ -949,12 +952,22 @@ static inline pid_t setsid(void)
 static inline pid_t fork(void) {
 #if !defined(MIDL_PASS)
     int allocator_fork_prepared = 0;
+    int fork_hooks_prepared = 0;
     int rinfs_fork_prepared = 0;
 #endif
     intptr_t result;
 #if !defined(MIDL_PASS)
+    if (rinfs_fork_hooks_prepare != NULL &&
+        rinfs_fork_hooks_complete != NULL) {
+        if (rinfs_fork_hooks_prepare() != 0) {
+            errno = EBUSY;
+            return -1;
+        }
+        fork_hooks_prepared = 1;
+    }
     if (rinfs_fork_prepare != NULL && rinfs_fork_complete != NULL) {
         if (rinfs_fork_prepare() != 0) {
+            if (fork_hooks_prepared) rinfs_fork_hooks_complete(0);
             errno = EBUSY;
             return -1;
         }
@@ -969,6 +982,7 @@ static inline pid_t fork(void) {
     if (result < 0) {
 #if !defined(MIDL_PASS)
         if (rinfs_fork_prepared) rinfs_fork_complete(0);
+        if (fork_hooks_prepared) rinfs_fork_hooks_complete(0);
         if (allocator_fork_prepared &&
             rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
@@ -981,6 +995,7 @@ static inline pid_t fork(void) {
         /* The kernel created a child; retain its cloned RinFS owner counts
          * even though this parent cannot represent the returned PID. */
         if (rinfs_fork_prepared) rinfs_fork_complete(1);
+        if (fork_hooks_prepared) rinfs_fork_hooks_complete(1);
         if (allocator_fork_prepared &&
             rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
@@ -989,6 +1004,7 @@ static inline pid_t fork(void) {
     }
 #if !defined(MIDL_PASS)
     if (rinfs_fork_prepared) rinfs_fork_complete(1);
+    if (fork_hooks_prepared) rinfs_fork_hooks_complete(1);
     if (result == 0 && rin_user_allocator_after_fork_child != NULL)
         rin_user_allocator_after_fork_child();
     else if (allocator_fork_prepared &&
