@@ -20,6 +20,9 @@
 
 #ifndef MIDL_PASS
 
+/* A translation unit that exports the libc string symbols defines
+ * RIN_STRING_IMPLEMENTATION to use declarations for those functions instead
+ * of creating same-named header-local definitions. */
 #ifdef __cplusplus
 extern "C" {
 #define RIN_STRING_INLINE inline
@@ -35,6 +38,12 @@ extern "C" {
  * ═══════════════════════════════════════════════════════════════*/
 
 #ifndef memcpy
+#ifdef RIN_STRING_IMPLEMENTATION
+void* memcpy(void* dest, const void* src, size_t n);
+void* memmove(void* dest, const void* src, size_t n);
+void* memset(void* s, int c, size_t n);
+int memcmp(const void* s1, const void* s2, size_t n);
+#else
 RIN_STRING_INLINE void* memcpy(void* dest, const void* src, size_t n) {
     return rin_memory_copy_fast(dest, src, n);
 }
@@ -56,6 +65,7 @@ RIN_STRING_INLINE int memcmp(const void* s1, const void* s2, size_t n) {
     }
     return 0;
 }
+#endif
 
 RIN_STRING_INLINE void* memchr(const void* s, int c, size_t n) {
     const unsigned char* p = (const unsigned char*)s;
@@ -73,15 +83,20 @@ RIN_STRING_INLINE void* memchr(const void* s, int c, size_t n) {
  * ═══════════════════════════════════════════════════════════════*/
 
 #ifndef strlen
+#ifdef RIN_STRING_IMPLEMENTATION
+size_t strlen(const char* s);
+char* strcpy(char* dest, const char* src);
+char* strncpy(char* dest, const char* src, size_t n);
+char* strcat(char* dest, const char* src);
+int strcmp(const char* s1, const char* s2);
+int strncmp(const char* s1, const char* s2, size_t n);
+char* strchr(const char* s, int c);
+char* strrchr(const char* s, int c);
+char* strstr(const char* haystack, const char* needle);
+#else
 RIN_STRING_INLINE size_t strlen(const char* s) {
     size_t len = 0;
     while (*s++) len++;
-    return len;
-}
-
-RIN_STRING_INLINE size_t strnlen(const char* s, size_t maxlen) {
-    size_t len = 0;
-    while (len < maxlen && s[len] != '\0') len++;
     return len;
 }
 
@@ -102,14 +117,6 @@ RIN_STRING_INLINE char* strcat(char* dest, const char* src) {
     char* d = dest;
     while (*d) d++;
     while ((*d++ = *src++));
-    return dest;
-}
-
-RIN_STRING_INLINE char* strncat(char* dest, const char* src, size_t n) {
-    char* d = dest;
-    while (*d) d++;
-    while (n-- && (*d++ = *src++));
-    *d = '\0';
     return dest;
 }
 
@@ -149,6 +156,21 @@ RIN_STRING_INLINE char* strstr(const char* haystack, const char* needle) {
         if (!*n) return (char*)(__UINTPTR_TYPE__)haystack;
     }
     return NULL;
+}
+#endif
+
+RIN_STRING_INLINE size_t strnlen(const char* s, size_t maxlen) {
+    size_t len = 0;
+    while (len < maxlen && s[len] != '\0') len++;
+    return len;
+}
+
+RIN_STRING_INLINE char* strncat(char* dest, const char* src, size_t n) {
+    char* d = dest;
+    while (*d) d++;
+    while (n-- && (*d++ = *src++));
+    *d = '\0';
+    return dest;
 }
 
 RIN_STRING_INLINE size_t strspn(const char* s, const char* accept) {
