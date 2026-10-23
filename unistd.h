@@ -91,6 +91,8 @@ extern int rinfs_fork_hooks_complete(int fork_succeeded)
     __attribute__((weak));
 extern int rinfs_fork_prepare(void) __attribute__((weak));
 extern int rinfs_fork_complete(int fork_succeeded) __attribute__((weak));
+extern int rinfs_exec_prepare_all(void) __attribute__((weak));
+extern int rinfs_exec_abort_all(void) __attribute__((weak));
 #endif
 
 /* The process/exec frontend is a target-side syscall surface.  Hosted
@@ -1088,6 +1090,9 @@ static inline int rin_process_instance_cookie(uint32_t local_pid,
 
 static inline int execve(const char* pathname, char* const argv[], char* const envp[]) {
     intptr_t result;
+    intptr_t normalized_result;
+    int exec_hooks_prepared = 0;
+    int syscall_errno;
     if (!pathname || !argv) {
         errno = EINVAL;
         return -1;
@@ -1096,9 +1101,35 @@ static inline int execve(const char* pathname, char* const argv[], char* const e
         errno = ENOENT;
         return -1;
     }
+#if !defined(MIDL_PASS)
+    /* RinFS uses process-owned block leases. Drop them only after every tracked
+     * mount has closed admission and flushed, then restore them if exec fails. */
+    if (rinfs_exec_prepare_all || rinfs_exec_abort_all) {
+        if (!rinfs_exec_prepare_all || !rinfs_exec_abort_all ||
+            rinfs_exec_prepare_all() != 0) {
+            errno = EBUSY;
+            return -1;
+        }
+        exec_hooks_prepared = 1;
+    }
+#endif
     result = _RIN_UNISTD_EXEC_SYSCALL3(
         SYS_EXEC, (uintptr_t)pathname, (uintptr_t)argv, (uintptr_t)envp);
-    return _rin_unistd_result(result) < 0 ? -1 : 0;
+    normalized_result = _rin_unistd_result(result);
+    syscall_errno = errno;
+#if !defined(MIDL_PASS)
+    if (exec_hooks_prepared) {
+        if (rinfs_exec_abort_all() != 0) {
+            errno = EIO;
+            return -1;
+        }
+        errno = syscall_errno;
+    }
+#else
+    (void)exec_hooks_prepared;
+    (void)syscall_errno;
+#endif
+    return normalized_result < 0 ? -1 : 0;
 }
 
 #ifndef _RIN_UNISTD_EXECVE
