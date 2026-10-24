@@ -10,6 +10,7 @@
 #include "types.h"
 #include "syscall.h"
 #include "../stdint.h"
+#include "../time.h"
 #include "../limits.h"
 #define RIN_SOCKET_ABI_TYPES_PROVIDED 1
 #include <rin/net/socket_abi.h>
@@ -447,9 +448,44 @@ static inline int accept(int sockfd, struct sockaddr* addr, socklen_t* addrlen) 
         _RIN_SOCKET_SYSCALL3(SYS_ACCEPT, sockfd, addr, addrlen));
 }
 
+static inline int getsockopt(int sockfd, int level, int optname,
+                             void* optval, socklen_t* optlen);
+
 static inline int connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
-    return __rin_socket_status_result(
-        _RIN_SOCKET_SYSCALL3(SYS_CONNECT, sockfd, addr, addrlen));
+    (void)addr;
+    (void)addrlen;
+    uint32_t retry_count = 0u;
+    uint32_t delay_ms = 1u;
+
+    for (;;) {
+        const intptr_t result =
+            _RIN_SOCKET_SYSCALL3(SYS_CONNECT, sockfd, addr, addrlen);
+        if (result == 0) return 0;
+        if (result > 0) {
+            errno = EIO;
+            return -1;
+        }
+        (void)__rin_socket_raw_error(result);
+        if (errno != EAGAIN || retry_count >= 9u)
+            return -1;
+
+        int nonblocking = 0;
+        socklen_t nonblocking_size = (socklen_t)sizeof(nonblocking);
+        if (getsockopt(sockfd, SOL_SOCKET, SO_NONBLOCK, &nonblocking,
+                       &nonblocking_size) != 0 ||
+            nonblocking_size != (socklen_t)sizeof(nonblocking) ||
+            nonblocking != 0)
+            return -1;
+
+        /* Connect EAGAIN can reflect transient admission pressure. Sleep with
+         * exponential backoff for at most 511 ms; the kernel syscall never
+         * spins or parks a worker while waiting for capacity. Nonblocking
+         * sockets and other errors return immediately. */
+        struct timespec delay = {0, (long)delay_ms * 1000000L};
+        if (nanosleep(&delay, 0) != 0) return -1;
+        ++retry_count;
+        delay_ms <<= 1;
+    }
 }
 
 static inline ssize_t send(int sockfd, const void* buf, size_t len, int flags) {
