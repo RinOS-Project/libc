@@ -71,7 +71,15 @@ typedef int              wchar_t;
  * public freestanding header can be reached, including under MSVC's ABI.
  * Reuse that definition instead of redeclaring it with a different type. */
 #if !defined(__CLANG_MAX_ALIGN_T_DEFINED) && !defined(_GCC_MAX_ALIGN_T)
-#if defined(_MSC_VER)
+#if defined(__RINOS__)
+/* The RinOS floating-point ABI has no long double, and the frontend does not
+ * need a GNU field-alignment attribute here: the union's natural alignment is
+ * the maximum alignment of the supported fundamental scalar types. */
+typedef union {
+    long long __ll;
+    double __double;
+} max_align_t;
+#elif defined(_MSC_VER)
 typedef struct {
     long long __ll;
     long double __ld;
