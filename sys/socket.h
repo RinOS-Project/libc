@@ -519,10 +519,13 @@ static inline int connect(int sockfd, const struct sockaddr* addr, socklen_t add
         int nonblocking = 0;
         socklen_t nonblocking_size = (socklen_t)sizeof(nonblocking);
         if (getsockopt(sockfd, SOL_SOCKET, SO_NONBLOCK, &nonblocking,
-                       &nonblocking_size) != 0 ||
-            nonblocking_size != (socklen_t)sizeof(nonblocking) ||
-            nonblocking != 0)
+                       &nonblocking_size) != 0)
             return -1;
+        if (nonblocking_size != (socklen_t)sizeof(nonblocking)) {
+            errno = EIO;
+            return -1;
+        }
+        if (nonblocking != 0) return -1;
 
         /* Connect EAGAIN can reflect transient admission pressure. Sleep with
          * exponential backoff for at most 511 ms; the kernel syscall never
