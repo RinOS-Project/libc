@@ -443,13 +443,60 @@ static inline int listen(int sockfd, int backlog) {
         _RIN_SOCKET_SYSCALL2(SYS_LISTEN, sockfd, backlog));
 }
 
-static inline int accept(int sockfd, struct sockaddr* addr, socklen_t* addrlen) {
-    return __rin_socket_fd_result(
-        _RIN_SOCKET_SYSCALL3(SYS_ACCEPT, sockfd, addr, addrlen));
-}
-
 static inline int getsockopt(int sockfd, int level, int optname,
                              void* optval, socklen_t* optlen);
+
+/* The kernel32 socket dispatcher has no restartable blocking wait boundary.
+ * Keep its Unix accept retry contract sleep-based at the libc boundary, while
+ * preserving immediate EAGAIN for nonblocking or non-listening sockets. */
+static inline int __rin_socket_accept_backoff(int sockfd,
+                                               uint32_t* delay_ms) {
+    int nonblocking = 0;
+    socklen_t option_size = (socklen_t)sizeof(nonblocking);
+    if (getsockopt(sockfd, SOL_SOCKET, SO_NONBLOCK, &nonblocking,
+                   &option_size) != 0)
+        return 0;
+    if (option_size != (socklen_t)sizeof(nonblocking)) {
+        errno = EIO;
+        return 0;
+    }
+    if (nonblocking != 0) return 0;
+
+    int accepting = 0;
+    option_size = (socklen_t)sizeof(accepting);
+    if (getsockopt(sockfd, SOL_SOCKET, SO_ACCEPTCONN, &accepting,
+                   &option_size) != 0)
+        return 0;
+    if (option_size != (socklen_t)sizeof(accepting)) {
+        errno = EIO;
+        return 0;
+    }
+    if (accepting != 1) {
+        errno = EINVAL;
+        return 0;
+    }
+
+    struct timespec delay = {0, (long)*delay_ms * 1000000L};
+    if (nanosleep(&delay, 0) != 0) return 0;
+    if (*delay_ms < 256u) {
+        *delay_ms = *delay_ms > 128u ? 256u : *delay_ms * 2u;
+    }
+    return 1;
+}
+
+static inline int accept(int sockfd, struct sockaddr* addr,
+                         socklen_t* addrlen) {
+    uint32_t delay_ms = 1u;
+    for (;;) {
+        const intptr_t result =
+            _RIN_SOCKET_SYSCALL3(SYS_ACCEPT, sockfd, addr, addrlen);
+        if (result >= 0) return __rin_socket_fd_result(result);
+        (void)__rin_socket_raw_error(result);
+        if (errno != EAGAIN ||
+            !__rin_socket_accept_backoff(sockfd, &delay_ms))
+            return -1;
+    }
+}
 
 static inline int connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     (void)addr;
@@ -568,8 +615,16 @@ static inline ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags) {
 
 static inline int accept4(int sockfd, struct sockaddr* addr,
                           socklen_t* addrlen, int flags) {
-    return __rin_socket_fd_result(
-        _RIN_SOCKET_SYSCALL5(SYS_ACCEPT4, sockfd, addr, addrlen, flags, 0u));
+    uint32_t delay_ms = 1u;
+    for (;;) {
+        const intptr_t result = _RIN_SOCKET_SYSCALL5(
+            SYS_ACCEPT4, sockfd, addr, addrlen, flags, 0u);
+        if (result >= 0) return __rin_socket_fd_result(result);
+        (void)__rin_socket_raw_error(result);
+        if (errno != EAGAIN ||
+            !__rin_socket_accept_backoff(sockfd, &delay_ms))
+            return -1;
+    }
 }
 
 #ifdef __cplusplus
