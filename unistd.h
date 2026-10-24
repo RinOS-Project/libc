@@ -91,8 +91,10 @@ extern int rinfs_fork_hooks_complete(int fork_succeeded)
     __attribute__((weak));
 extern int rinfs_fork_prepare(void) __attribute__((weak));
 extern int rinfs_fork_complete(int fork_succeeded) __attribute__((weak));
+/* The error mapper is optional for compatibility with older RinRuntime. */
 extern int rinfs_exec_prepare_all(void) __attribute__((weak));
 extern int rinfs_exec_abort_all(void) __attribute__((weak));
+extern int rinfs_exec_status_to_errno(int status) __attribute__((weak));
 #endif
 
 /* The process/exec frontend is a target-side syscall surface.  Hosted
@@ -1093,6 +1095,9 @@ static inline int execve(const char* pathname, char* const argv[], char* const e
     intptr_t normalized_result;
     int exec_hooks_prepared = 0;
     int syscall_errno;
+#if !defined(MIDL_PASS)
+    int exec_hook_errno;
+#endif
     if (!pathname || !argv) {
         errno = EINVAL;
         return -1;
@@ -1105,9 +1110,15 @@ static inline int execve(const char* pathname, char* const argv[], char* const e
     /* RinFS uses process-owned block leases. Drop them only after every tracked
      * mount has closed admission and flushed, then restore them if exec fails. */
     if (rinfs_exec_prepare_all || rinfs_exec_abort_all) {
-        if (!rinfs_exec_prepare_all || !rinfs_exec_abort_all ||
-            rinfs_exec_prepare_all() != 0) {
+        if (!rinfs_exec_prepare_all || !rinfs_exec_abort_all) {
             errno = EBUSY;
+            return -1;
+        }
+        exec_hook_errno = rinfs_exec_prepare_all();
+        if (exec_hook_errno != 0) {
+            int mapped_errno = rinfs_exec_status_to_errno
+                ? rinfs_exec_status_to_errno(exec_hook_errno) : EBUSY;
+            errno = mapped_errno > 0 ? mapped_errno : EIO;
             return -1;
         }
         exec_hooks_prepared = 1;
@@ -1119,8 +1130,11 @@ static inline int execve(const char* pathname, char* const argv[], char* const e
     syscall_errno = errno;
 #if !defined(MIDL_PASS)
     if (exec_hooks_prepared) {
-        if (rinfs_exec_abort_all() != 0) {
-            errno = EIO;
+        exec_hook_errno = rinfs_exec_abort_all();
+        if (exec_hook_errno != 0) {
+            int mapped_errno = rinfs_exec_status_to_errno
+                ? rinfs_exec_status_to_errno(exec_hook_errno) : EIO;
+            errno = mapped_errno > 0 ? mapped_errno : EIO;
             return -1;
         }
         errno = syscall_errno;
