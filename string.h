@@ -204,45 +204,7 @@ RIN_STRING_INLINE char* strpbrk(const char* s, const char* accept) {
     return NULL;
 }
 
-extern RIN_STRING_THREAD_LOCAL char* _rin_strtok_last;
-
-RIN_STRING_INLINE char* strtok(char* str, const char* delim) {
-    if (str) _rin_strtok_last = str;
-    if (!_rin_strtok_last) return NULL;
-
-    /* 先頭のデリミタをスキップ */
-    while (*_rin_strtok_last) {
-        const char* d = delim;
-        int is_delim = 0;
-        while (*d) {
-            if (*_rin_strtok_last == *d++) { is_delim = 1; break; }
-        }
-        if (!is_delim) break;
-        _rin_strtok_last++;
-    }
-
-    if (!*_rin_strtok_last) {
-        _rin_strtok_last = NULL;
-        return NULL;
-    }
-
-    char* start = _rin_strtok_last;
-
-    /* トークンの終端を探す */
-    while (*_rin_strtok_last) {
-        const char* d = delim;
-        while (*d) {
-            if (*_rin_strtok_last == *d++) {
-                *_rin_strtok_last++ = '\0';
-                return start;
-            }
-        }
-        _rin_strtok_last++;
-    }
-
-    _rin_strtok_last = NULL;
-    return start;
-}
+char* strtok(char* str, const char* delim);
 
 /* Caller-owned reentrant tokenizer.  The save pointer is the only mutable
  * state, so two parsers can be interleaved without touching the process-wide
@@ -299,19 +261,9 @@ RIN_STRING_INLINE char* strtok_r(char* str, const char* delim,
  * ロケール依存文字列比較 (カーネルlocale.c連携)
  * ═══════════════════════════════════════════════════════════════*/
 
-/* カーネルAPI宣言 */
-int rin_strcoll(const char* s1, const char* s2);
-size_t rin_strxfrm(char* dest, const char* src, size_t n);
-
-/* strcoll - ロケール依存文字列比較 */
-RIN_STRING_INLINE int strcoll(const char* s1, const char* s2) {
-    return rin_strcoll(s1, s2);
-}
-
-/* strxfrm - 照合用文字列変換 */
-RIN_STRING_INLINE size_t strxfrm(char* dest, const char* src, size_t n) {
-    return rin_strxfrm(dest, src, n);
-}
+/* RinUnicode-backed collation functions are owned by libc's shared runtime. */
+int strcoll(const char* s1, const char* s2);
+size_t strxfrm(char* dest, const char* src, size_t n);
 
 /* ═══════════════════════════════════════════════════════════════
  * エラーメッセージ
