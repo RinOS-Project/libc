@@ -1039,8 +1039,24 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
                               RIN_PTHREAD_MUTEX_NOT_RECOVERABLE_FLAG,
                               __ATOMIC_RELEASE);
         mutex->recursion = 0;
-        previous = __atomic_exchange_n((uint32_t*)&mutex->locked, 0u,
-                                       __ATOMIC_RELEASE);
+        for (;;) {
+            uint32_t unlocked_state;
+            if ((state & RIN_PTHREAD_ROBUST_OWNER_MASK) != owner_id) {
+                rin_pthread_mutex_robust_owner_release(mutex, owner);
+                return EPERM;
+            }
+            /* Keep the waiter bit in the unlocked word when waking one
+             * waiter.  The next owner then carries the bit forward and
+             * wakes another waiter on its unlock.  Clearing it here can
+             * strand every waiter except the one just woken. */
+            unlocked_state = state & RIN_PTHREAD_ROBUST_WAITERS;
+            previous = state;
+            if (__atomic_compare_exchange_n((uint32_t*)&mutex->locked,
+                                            &state, unlocked_state, 0,
+                                            __ATOMIC_ACQ_REL,
+                                            __ATOMIC_ACQUIRE))
+                break;
+        }
         {
             pthread_t expected_owner = owner;
             (void)__atomic_compare_exchange_n(&mutex->owner, &expected_owner,
