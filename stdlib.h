@@ -117,6 +117,7 @@ extern "C" {
 #ifndef alloca
 #define alloca(size) __builtin_alloca(size)
 #endif
+#endif
 
 /* Status-only stdlib syscalls must not interpret a positive backend word as
  * an errno (or silently report success).  Keep target-width ownership until
@@ -137,7 +138,6 @@ static inline int _rin_stdlib_status_result(intptr_t result) {
     }
     return 0;
 }
-#endif
 
 /* Skip C inline definitions if C++ cstdlib has already provided them */
 #if defined(__cplusplus) && defined(RINCXX_CSTDLIB_H)
@@ -516,6 +516,7 @@ static inline float strtof(const char* s, char** endptr) {
     return rin_float_parse_binary32_value(parsed.bits);
 }
 
+#if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
 static inline long double strtold(const char* s, char** endptr) {
 #if defined(RIN_FP_HAS_BINARY80)
     rin_long_double_parse_result parsed = rin_float_parse_binary80(s);
@@ -527,6 +528,7 @@ static inline long double strtold(const char* s, char** endptr) {
     return (long double)strtod(s, endptr);
 #endif
 }
+#endif
 
 #else
 /* When <cstdlib> comes first in a freestanding C++ translation unit, it
@@ -581,9 +583,11 @@ static inline float strtof(const char* s, char** endptr) {
     return std::strtof(s, endptr);
 }
 
+#if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
 static inline long double strtold(const char* s, char** endptr) {
     return std::strtold(s, endptr);
 }
+#endif
 #endif /* C++ <cstdlib> freestanding bridge */
 #endif /* !_STDLIB_SKIP_INLINE_DEFS - 数値変換 */
 
@@ -613,11 +617,13 @@ static inline double strtod_l(const char* s, char** endptr, locale_t locale) {
     return strtod(s, endptr);
 }
 
+#if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
 static inline long double strtold_l(const char* s, char** endptr,
                                     locale_t locale) {
     (void)locale;
     return strtold(s, endptr);
 }
+#endif
 #endif /* RIN_USERSPACE && !_MSVCRT_COMPAT */
 
 #ifndef _RIN_STDLIB_HOSTED_CXX_OWNER
