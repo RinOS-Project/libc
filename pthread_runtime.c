@@ -195,7 +195,9 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
         }
         {
             long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-                &mutex->locked, FUTEX_WAIT, (int)state, NULL);
+                &mutex->locked,
+                rin_pthread_mutex_futex_operation(mutex, FUTEX_WAIT),
+                (int)state, NULL);
             int wait_error = rin_pthread_futex_wait_error(wait_result,
                                                            errno);
             if (wait_error != 0) {
