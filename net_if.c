@@ -214,7 +214,7 @@ unsigned int if_nametoindex(const char* ifname)
     /* libc currently publishes only the primary interface.  Its POSIX
      * interface index is therefore a stable local ordinal, not the volatile
      * device generation used to invalidate snapshots. */
-    return 1u;
+    return RIN_NET_PRIMARY_INTERFACE_INDEX;
 }
 
 char* if_indextoname(unsigned int ifindex, char* ifname)
