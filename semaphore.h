@@ -280,6 +280,7 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
 /* セマフォのインクリメント (V操作/post) */
 static inline int sem_post(sem_t* sem) {
     int value;
+    int posted_value;
     if (!sem) {
         errno = EINVAL;
         return -1;
@@ -293,6 +294,7 @@ static inline int sem_post(sem_t* sem) {
         }
         if (__atomic_compare_exchange_n(&sem->value, &value, value + 1, 0,
                                         __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+            posted_value = value + 1;
             break;
         }
     }
@@ -300,9 +302,22 @@ static inline int sem_post(sem_t* sem) {
     /* Optimization: Only wake kernel if there are waiters */
     uint32_t state = rin_sem_state_load(sem);
     if ((state & RIN_SEM_WAITER_MASK) > 0u) {
-        syscall(SYS_futex, &sem->value,
-                rin_sem_futex_operation(sem, FUTEX_WAKE),
-                1, NULL, NULL, 0);
+        long wake_result = _RIN_SEMAPHORE_FUTEX(
+            &sem->value, rin_sem_futex_operation(sem, FUTEX_WAKE), 1, NULL);
+        if (wake_result < 0) {
+            int error_number = errno;
+            int expected = posted_value;
+            /* Restore the token when no waiter or concurrent poster observed
+             * it. If another thread already consumed/advanced the value, keep
+             * that ownership change intact while still surfacing wake failure. */
+            (void)__atomic_compare_exchange_n(&sem->value, &expected,
+                                              posted_value - 1, 0,
+                                              __ATOMIC_RELEASE,
+                                              __ATOMIC_RELAXED);
+            errno = error_number > 0 && error_number <= 4095
+                        ? error_number : EIO;
+            return -1;
+        }
     }
     return 0;
 }

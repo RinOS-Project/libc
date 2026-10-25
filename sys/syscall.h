@@ -373,16 +373,14 @@ static inline intptr_t _syscall6(uintptr_t num, uintptr_t a1,
                              uintptr_t a2, uintptr_t a3,
                              uintptr_t a4, uintptr_t a5,
                              uintptr_t a6) {
-    intptr_t ret;
+    intptr_t ret = (intptr_t)num;
     __asm__ volatile (
-        "movl %7, %%eax\n\t"
         "pushl %%ebp\n\t"
-        "movl %%eax, %%ebp\n\t"
-        "movl %1, %%eax\n\t"
+        "movl %6, %%ebp\n\t"
         "int $0x80\n\t"
         "popl %%ebp"
-        : "=&a"(ret)
-        : "g"(num), "b"(a1), "c"(a2), "d"(a3), "S"(a4), "D"(a5), "m"(a6)
+        : "+a"(ret)
+        : "b"(a1), "c"(a2), "d"(a3), "S"(a4), "D"(a5), "m"(a6)
         : "memory"
     );
     return ret;
