@@ -84,6 +84,74 @@ rin_atomic_u64 rin_atomic_fetch_add_8_runtime(volatile void* address,
     return previous;
 }
 
+rin_atomic_u64 rin_atomic_fetch_sub_8_runtime(volatile void* address,
+                                              rin_atomic_u64 value,
+                                              int memory_order)
+    __asm__("__atomic_fetch_sub_8");
+rin_atomic_u64 rin_atomic_fetch_sub_8_runtime(volatile void* address,
+                                              rin_atomic_u64 value,
+                                              int memory_order)
+{
+    rin_atomic_u64 previous;
+    (void)memory_order;
+    rin_atomic_u64_lock_acquire();
+    previous = *(volatile rin_atomic_u64*)address;
+    *(volatile rin_atomic_u64*)address = previous - value;
+    rin_atomic_u64_lock_release();
+    return previous;
+}
+
+rin_atomic_u64 rin_atomic_fetch_and_8_runtime(volatile void* address,
+                                              rin_atomic_u64 value,
+                                              int memory_order)
+    __asm__("__atomic_fetch_and_8");
+rin_atomic_u64 rin_atomic_fetch_and_8_runtime(volatile void* address,
+                                              rin_atomic_u64 value,
+                                              int memory_order)
+{
+    rin_atomic_u64 previous;
+    (void)memory_order;
+    rin_atomic_u64_lock_acquire();
+    previous = *(volatile rin_atomic_u64*)address;
+    *(volatile rin_atomic_u64*)address = previous & value;
+    rin_atomic_u64_lock_release();
+    return previous;
+}
+
+rin_atomic_u64 rin_atomic_fetch_or_8_runtime(volatile void* address,
+                                             rin_atomic_u64 value,
+                                             int memory_order)
+    __asm__("__atomic_fetch_or_8");
+rin_atomic_u64 rin_atomic_fetch_or_8_runtime(volatile void* address,
+                                             rin_atomic_u64 value,
+                                             int memory_order)
+{
+    rin_atomic_u64 previous;
+    (void)memory_order;
+    rin_atomic_u64_lock_acquire();
+    previous = *(volatile rin_atomic_u64*)address;
+    *(volatile rin_atomic_u64*)address = previous | value;
+    rin_atomic_u64_lock_release();
+    return previous;
+}
+
+rin_atomic_u64 rin_atomic_fetch_xor_8_runtime(volatile void* address,
+                                              rin_atomic_u64 value,
+                                              int memory_order)
+    __asm__("__atomic_fetch_xor_8");
+rin_atomic_u64 rin_atomic_fetch_xor_8_runtime(volatile void* address,
+                                              rin_atomic_u64 value,
+                                              int memory_order)
+{
+    rin_atomic_u64 previous;
+    (void)memory_order;
+    rin_atomic_u64_lock_acquire();
+    previous = *(volatile rin_atomic_u64*)address;
+    *(volatile rin_atomic_u64*)address = previous ^ value;
+    rin_atomic_u64_lock_release();
+    return previous;
+}
+
 /* Clang's i686 outlined builtin ABI omits the weak flag when the lowering is
  * statically strong.  The C identifier avoids GCC's differently-shaped
  * builtin declaration while retaining Clang's required object symbol. */
