@@ -40,7 +40,7 @@ static inline void rin_memory_store_u64(void* pointer,
 #if defined(__x86_64__)
     __asm__ volatile("movq %1, (%0)"
                      :
-                     : "r"(pointer), "r"(value)
+                     : "D"(pointer), "S"(value)
                      : "memory");
 #else
     unsigned char* bytes = (unsigned char*)pointer;
@@ -53,7 +53,7 @@ static inline void rin_memory_store_u64(void* pointer,
 #if defined(__i386__)
 static inline unsigned rin_memory_load_u32(const void* pointer) {
     unsigned value;
-    __asm__ volatile("movl (%1), %0"
+    __asm__ volatile("mov (%1), %0"
                      : "=r"(value)
                      : "r"(pointer)
                      : "memory");
@@ -61,9 +61,9 @@ static inline unsigned rin_memory_load_u32(const void* pointer) {
 }
 
 static inline void rin_memory_store_u32(void* pointer, unsigned value) {
-    __asm__ volatile("movl %1, (%0)"
+    __asm__ volatile("mov %1, (%0)"
                      :
-                     : "r"(pointer), "r"(value)
+                     : "c"(pointer), "a"(value)
                      : "memory");
 }
 
