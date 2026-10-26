@@ -176,10 +176,9 @@ static inline const char* _dynlink_error_copy_v1(void) {
 }
 
 static inline const char* dynlink_error(void) {
-    /* The legacy no-argument ABI cannot return text without leaking a kernel
-     * pointer.  Keep its unsupported status visible to direct callers. */
-    (void)_dynlink_status_result(_RIN_DYNLINK_SYSCALL0(SYS_DLERROR));
-    return NULL;
+    /* Keep the source-level helper safe while the raw no-argument syscall
+     * remains unsupported: the versioned ABI copies into thread-local storage. */
+    return _dynlink_error_copy_v1();
 }
 
 static inline void _dl_set_error(const char* msg) {
