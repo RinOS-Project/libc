@@ -151,11 +151,6 @@ static inline int dynlink_add_search_path(const char* path) {
         SYS_DL_ADD_PATH, (uintptr_t)path));
 }
 
-static inline const char* dynlink_error(void) {
-    return (const char*)_dynlink_pointer_result(
-        _RIN_DYNLINK_SYSCALL0(SYS_DLERROR));
-}
-
 /* ═══════════════════════════════════════════════════════════════
  * エラーメッセージバッファ (ローカル用)
  * ═══════════════════════════════════════════════════════════════*/
@@ -170,6 +165,22 @@ static inline const char* dynlink_error(void) {
 static RIN_DLERROR_THREAD_LOCAL char _dlerror_buf[256] = {0};
 static RIN_DLERROR_THREAD_LOCAL int _dlerror_flag = 0;
 #undef RIN_DLERROR_THREAD_LOCAL
+
+static inline const char* _dynlink_error_copy_v1(void) {
+    if (_dynlink_status_result(_RIN_DYNLINK_SYSCALL2(
+            SYS_DLERROR_COPY_V1, (uintptr_t)_dlerror_buf,
+            (uintptr_t)sizeof(_dlerror_buf))) != 0) {
+        return NULL;
+    }
+    return _dlerror_buf[0] ? _dlerror_buf : NULL;
+}
+
+static inline const char* dynlink_error(void) {
+    /* The legacy no-argument ABI cannot return text without leaking a kernel
+     * pointer.  Keep its unsupported status visible to direct callers. */
+    (void)_dynlink_status_result(_RIN_DYNLINK_SYSCALL0(SYS_DLERROR));
+    return NULL;
+}
 
 static inline void _dl_set_error(const char* msg) {
     int i = 0;
@@ -609,7 +620,7 @@ static inline void* dlsym(void* handle, const char* symbol) {
  */
 static inline char* dlerror(void) {
     /* まずカーネルエラーをチェック */
-    const char* kernel_err = dynlink_error();
+    const char* kernel_err = _dynlink_error_copy_v1();
     if (kernel_err && kernel_err[0]) {
         /* カーネルエラーをローカルバッファにコピー */
         int i = 0;
