@@ -346,6 +346,41 @@ static inline int _rin_unistd_status(intptr_t result) {
 
 /* confstr constants */
 #define _CS_PATH                0
+#define _CS_V6_WIDTH_RESTRICTED_ENVS 1
+#define _CS_XBS5_ILP32_OFF32_CFLAGS 1100
+#define _CS_XBS5_ILP32_OFF32_LDFLAGS 1101
+#define _CS_XBS5_ILP32_OFF32_LIBS 1102
+#define _CS_XBS5_ILP32_OFF32_LINTFLAGS 1103
+#define _CS_XBS5_ILP32_OFFBIG_CFLAGS 1104
+#define _CS_XBS5_ILP32_OFFBIG_LDFLAGS 1105
+#define _CS_XBS5_ILP32_OFFBIG_LIBS 1106
+#define _CS_XBS5_ILP32_OFFBIG_LINTFLAGS 1107
+#define _CS_XBS5_LP64_OFF64_CFLAGS 1108
+#define _CS_XBS5_LP64_OFF64_LDFLAGS 1109
+#define _CS_XBS5_LP64_OFF64_LIBS 1110
+#define _CS_XBS5_LP64_OFF64_LINTFLAGS 1111
+#define _CS_XBS5_LPBIG_OFFBIG_CFLAGS 1112
+#define _CS_XBS5_LPBIG_OFFBIG_LDFLAGS 1113
+#define _CS_XBS5_LPBIG_OFFBIG_LIBS 1114
+#define _CS_XBS5_LPBIG_OFFBIG_LINTFLAGS 1115
+#define _CS_POSIX_V6_ILP32_OFF32_CFLAGS 1116
+#define _CS_POSIX_V6_ILP32_OFF32_LDFLAGS 1117
+#define _CS_POSIX_V6_ILP32_OFF32_LIBS 1118
+#define _CS_POSIX_V6_ILP32_OFF32_LINTFLAGS 1119
+#define _CS_POSIX_V6_ILP32_OFFBIG_CFLAGS 1120
+#define _CS_POSIX_V6_ILP32_OFFBIG_LDFLAGS 1121
+#define _CS_POSIX_V6_ILP32_OFFBIG_LIBS 1122
+#define _CS_POSIX_V6_ILP32_OFFBIG_LINTFLAGS 1123
+#define _CS_POSIX_V6_LP64_OFF64_CFLAGS 1124
+#define _CS_POSIX_V6_LP64_OFF64_LDFLAGS 1125
+#define _CS_POSIX_V6_LP64_OFF64_LIBS 1126
+#define _CS_POSIX_V6_LP64_OFF64_LINTFLAGS 1127
+#define _CS_POSIX_V6_LPBIG_OFFBIG_CFLAGS 1128
+#define _CS_POSIX_V6_LPBIG_OFFBIG_LDFLAGS 1129
+#define _CS_POSIX_V6_LPBIG_OFFBIG_LIBS 1130
+#define _CS_POSIX_V6_LPBIG_OFFBIG_LINTFLAGS 1131
+#define _CS_POSIX_V6_WIDTH_RESTRICTED_ENVS \
+    _CS_V6_WIDTH_RESTRICTED_ENVS
 
 /* ═══════════════════════════════════════════════════════════════
  * ファイル操作
@@ -1855,16 +1890,92 @@ static inline long fpathconf(int fd, int name) {
     }
 }
 
+static inline const char* __rin_confstr_model_value(
+        int name, int* configured) {
+    static const char width_restricted_v6[] =
+        "POSIX_V6_ILP32_OFF32\nPOSIX_V6_ILP32_OFFBIG\n"
+        "POSIX_V6_LP64_OFF64\nPOSIX_V6_LPBIG_OFFBIG";
+    static const char i686[] = "--target=i686-unknown-rinos";
+    static const char i686_offbig[] =
+        "--target=i686-unknown-rinos -D_FILE_OFFSET_BITS=64";
+    static const char x86_64[] = "--target=x86_64-unknown-rinos";
+    static const char libraries[] = "--dep rincrt.rll";
+    if (!configured) return NULL;
+    *configured = 1;
+    switch (name) {
+    case _CS_XBS5_ILP32_OFF32_CFLAGS:
+    case _CS_POSIX_V6_ILP32_OFF32_CFLAGS:
+        return i686;
+    case _CS_XBS5_ILP32_OFF32_LDFLAGS:
+    case _CS_POSIX_V6_ILP32_OFF32_LDFLAGS:
+        return i686;
+    case _CS_XBS5_ILP32_OFF32_LIBS:
+    case _CS_POSIX_V6_ILP32_OFF32_LIBS:
+        return libraries;
+    case _CS_XBS5_ILP32_OFFBIG_CFLAGS:
+    case _CS_POSIX_V6_ILP32_OFFBIG_CFLAGS:
+        return i686_offbig;
+    case _CS_XBS5_ILP32_OFFBIG_LDFLAGS:
+    case _CS_POSIX_V6_ILP32_OFFBIG_LDFLAGS:
+        return i686;
+    case _CS_XBS5_ILP32_OFFBIG_LIBS:
+    case _CS_POSIX_V6_ILP32_OFFBIG_LIBS:
+        return libraries;
+    case _CS_XBS5_LP64_OFF64_CFLAGS:
+    case _CS_POSIX_V6_LP64_OFF64_CFLAGS:
+    case _CS_XBS5_LPBIG_OFFBIG_CFLAGS:
+    case _CS_POSIX_V6_LPBIG_OFFBIG_CFLAGS:
+        return x86_64;
+    case _CS_XBS5_LP64_OFF64_LDFLAGS:
+    case _CS_POSIX_V6_LP64_OFF64_LDFLAGS:
+    case _CS_XBS5_LPBIG_OFFBIG_LDFLAGS:
+    case _CS_POSIX_V6_LPBIG_OFFBIG_LDFLAGS:
+        return x86_64;
+    case _CS_XBS5_LP64_OFF64_LIBS:
+    case _CS_POSIX_V6_LP64_OFF64_LIBS:
+    case _CS_XBS5_LPBIG_OFFBIG_LIBS:
+    case _CS_POSIX_V6_LPBIG_OFFBIG_LIBS:
+        return libraries;
+    case _CS_XBS5_ILP32_OFF32_LINTFLAGS:
+    case _CS_XBS5_ILP32_OFFBIG_LINTFLAGS:
+    case _CS_XBS5_LP64_OFF64_LINTFLAGS:
+    case _CS_XBS5_LPBIG_OFFBIG_LINTFLAGS:
+    case _CS_POSIX_V6_ILP32_OFF32_LINTFLAGS:
+    case _CS_POSIX_V6_ILP32_OFFBIG_LINTFLAGS:
+    case _CS_POSIX_V6_LP64_OFF64_LINTFLAGS:
+    case _CS_POSIX_V6_LPBIG_OFFBIG_LINTFLAGS:
+        *configured = 0;
+        return NULL;
+    case _CS_V6_WIDTH_RESTRICTED_ENVS:
+        return width_restricted_v6;
+    default:
+        *configured = -1;
+        return NULL;
+    }
+}
+
 static inline size_t confstr(int name, char* buf, size_t len) {
     static const char path[] = "/bin:/sys/bin:/sys/apps";
-    const char* value;
-    size_t required;
-    if (name != _CS_PATH) {
-        errno = EINVAL;
-        return 0u;
+    const char* value = NULL;
+    size_t required = 0u;
+    int configured = 1;
+    if (name == _CS_PATH) {
+        value = path;
+        required = sizeof(path);
+    } else {
+        value = __rin_confstr_model_value(name, &configured);
+        if (configured < 0) {
+            errno = EINVAL;
+            return 0u;
+        }
+        if (!configured) return 0u;
+        if (!value) {
+            errno = EINVAL;
+            return 0u;
+        }
+        while (value[required] != '\0') ++required;
+        ++required;
     }
-    value = path;
-    required = sizeof(path);
     if (len != 0u) {
         size_t copy_count;
         if (!buf) {
