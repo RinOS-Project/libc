@@ -174,7 +174,23 @@ static inline struct lconv* localeconv(void) {
 int rin_locale_ctype_test(locale_t locobj, int character,
                           uint32_t operation);
 int rin_locale_current_ctype_test(int character, uint32_t operation);
-/* Wide-character classification used by XSI terminal-width APIs. */
+int rin_locale_wide_ctype_test(locale_t locobj, uint32_t character,
+                               uint32_t operation);
+int rin_locale_current_wide_ctype_test(uint32_t character,
+                                       uint32_t operation);
+int rin_locale_wide_ctype_iswctype(locale_t locobj, uint32_t character,
+                                   unsigned long descriptor);
+int rin_locale_current_wide_ctype_iswctype(uint32_t character,
+                                           unsigned long descriptor);
+uint32_t rin_locale_wide_ctype_map(locale_t locobj, uint32_t character,
+                                   uint32_t operation);
+uint32_t rin_locale_current_wide_ctype_map(uint32_t character,
+                                           uint32_t operation);
+uint32_t rin_locale_wide_ctype_towctrans(locale_t locobj, uint32_t character,
+                                         unsigned long descriptor);
+uint32_t rin_locale_current_wide_ctype_towctrans(uint32_t character,
+                                                 unsigned long descriptor);
+/* XSI wcwidth uses this predicate to reject non-printing characters. */
 int rin_locale_current_wide_print_test(uint32_t character);
 int rin_locale_ctype_map(locale_t locobj, int character,
                          uint32_t operation);

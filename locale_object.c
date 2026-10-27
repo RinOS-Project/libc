@@ -296,43 +296,71 @@ static int locale_global_test(int character, uint32_t operation) {
     }
 }
 
-int rin_locale_ctype_test(locale_t locale, int character,
-                          uint32_t operation) {
-    if (locale == LC_GLOBAL_LOCALE)
-        return locale_global_test(character, operation);
-    if (!locale_object_valid(locale)) return 0;
-    return locale_ascii_test(character, operation);
+static int locale_kind_is_utf8(uint8_t kind) {
+    return kind == RIN_LOCALE_KIND_EN_US_UTF8 ||
+           kind == RIN_LOCALE_KIND_JA_JP_UTF8 ||
+           kind == RIN_LOCALE_KIND_DE_DE_UTF8 ||
+           kind == RIN_LOCALE_KIND_FR_FR_UTF8 ||
+           kind == RIN_LOCALE_KIND_ES_ES_UTF8 ||
+           kind == RIN_LOCALE_KIND_IT_IT_UTF8 ||
+           kind == RIN_LOCALE_KIND_PT_BR_UTF8 ||
+           kind == RIN_LOCALE_KIND_ES_MX_UTF8 ||
+           kind == RIN_LOCALE_KIND_PT_PT_UTF8;
 }
 
-int rin_locale_current_ctype_test(int character, uint32_t operation) {
-    return rin_locale_ctype_test(locale_thread_current, character, operation);
+static int locale_global_narrow_ascii_only(void) {
+    const char* codeset = rin_locale_codeset();
+    return !codeset || locale_equal(codeset, "ASCII") ||
+           locale_equal(codeset, "US-ASCII") ||
+           locale_equal(codeset, "UTF-8") || locale_equal(codeset, "UTF8");
 }
 
-int rin_locale_current_wide_print_test(uint32_t character) {
-    locale_t locale = locale_thread_current;
+static int locale_narrow_ascii_only(locale_t locale) {
+    if (locale == LC_GLOBAL_LOCALE) return locale_global_narrow_ascii_only();
+    if (!locale_object_valid(locale)) return 1;
+    return locale->categories[LC_CTYPE] == RIN_LOCALE_KIND_C ||
+           locale_kind_is_utf8(locale->categories[LC_CTYPE]);
+}
+
+static int locale_ctype_is_c(locale_t locale) {
     const char* name;
-
-    if (!rin_unicode_is_valid_scalar(character)) return 0;
     if (locale == LC_GLOBAL_LOCALE) {
         name = rin_locale_name(LC_CTYPE);
-        if (!name || locale_equal(name, "C") || locale_equal(name, "POSIX"))
-            return character >= 0x20u && character <= 0x7eu;
-    } else {
-        if (!locale_object_valid(locale)) return 0;
-        if (locale->categories[LC_CTYPE] == RIN_LOCALE_KIND_C)
-            return character >= 0x20u && character <= 0x7eu;
+        return !name || locale_equal(name, "C") || locale_equal(name, "POSIX");
     }
-    return rin_unicode_isprint(character);
+    return !locale_object_valid(locale) ||
+           locale->categories[LC_CTYPE] == RIN_LOCALE_KIND_C;
 }
 
-int rin_locale_ctype_map(locale_t locale, int character,
-                         uint32_t operation) {
-    if (locale == LC_GLOBAL_LOCALE) {
-        if (operation == RIN_LOCALE_CTYPE_TOLOWER) return rin_tolower(character);
-        if (operation == RIN_LOCALE_CTYPE_TOUPPER) return rin_toupper(character);
-        return character;
+static int locale_unicode_wide_test(uint32_t character,
+                                    uint32_t operation) {
+    switch (operation) {
+        case RIN_LOCALE_CTYPE_ALNUM: return rin_unicode_isalnum(character);
+        case RIN_LOCALE_CTYPE_ALPHA: return rin_unicode_isalpha(character);
+        case RIN_LOCALE_CTYPE_DIGIT: return rin_unicode_isdigit(character);
+        case RIN_LOCALE_CTYPE_XDIGIT: return rin_unicode_isxdigit(character);
+        case RIN_LOCALE_CTYPE_LOWER: return rin_unicode_islower(character);
+        case RIN_LOCALE_CTYPE_UPPER: return rin_unicode_isupper(character);
+        case RIN_LOCALE_CTYPE_SPACE: return rin_unicode_isspace(character);
+        case RIN_LOCALE_CTYPE_BLANK: return rin_unicode_isblank(character);
+        case RIN_LOCALE_CTYPE_CNTRL: return rin_unicode_iscntrl(character);
+        case RIN_LOCALE_CTYPE_PRINT: return rin_unicode_isprint(character);
+        case RIN_LOCALE_CTYPE_GRAPH: return rin_unicode_isgraph(character);
+        case RIN_LOCALE_CTYPE_PUNCT: return rin_unicode_ispunct(character);
+        default: return 0;
     }
-    if (!locale_object_valid(locale)) return character;
+}
+
+static uint32_t locale_unicode_wide_map(uint32_t character,
+                                       uint32_t operation) {
+    if (operation == RIN_LOCALE_CTYPE_TOLOWER)
+        return rin_unicode_tolower(character);
+    if (operation == RIN_LOCALE_CTYPE_TOUPPER)
+        return rin_unicode_toupper(character);
+    return character;
+}
+
+static int locale_ascii_map(int character, uint32_t operation) {
     if (operation == RIN_LOCALE_CTYPE_TOLOWER &&
         character >= 'A' && character <= 'Z')
         return character + ('a' - 'A');
@@ -340,6 +368,107 @@ int rin_locale_ctype_map(locale_t locale, int character,
         character >= 'a' && character <= 'z')
         return character - ('a' - 'A');
     return character;
+}
+
+int rin_locale_ctype_test(locale_t locale, int character,
+                          uint32_t operation) {
+    if (character < 0 || character > 255) return 0;
+    if (locale == LC_GLOBAL_LOCALE) {
+        if (locale_global_narrow_ascii_only())
+            return locale_ascii_test(character, operation);
+        return locale_global_test(character, operation);
+    }
+    if (!locale_object_valid(locale)) return 0;
+    if (locale_narrow_ascii_only(locale))
+        return locale_ascii_test(character, operation);
+    return locale_global_test(character, operation);
+}
+
+int rin_locale_current_ctype_test(int character, uint32_t operation) {
+    return rin_locale_ctype_test(locale_thread_current, character, operation);
+}
+
+int rin_locale_wide_ctype_test(locale_t locale, uint32_t character,
+                               uint32_t operation) {
+    if (locale != LC_GLOBAL_LOCALE && !locale_object_valid(locale)) return 0;
+    if (!rin_unicode_is_valid_scalar(character)) return 0;
+    if (locale_ctype_is_c(locale))
+        return character <= 0x7fu
+            ? locale_ascii_test((int)character, operation) : 0;
+    return locale_unicode_wide_test(character, operation);
+}
+
+int rin_locale_current_wide_ctype_test(uint32_t character,
+                                       uint32_t operation) {
+    return rin_locale_wide_ctype_test(locale_thread_current, character,
+                                      operation);
+}
+
+int rin_locale_wide_ctype_iswctype(locale_t locale, uint32_t character,
+                                   unsigned long descriptor) {
+    if (locale != LC_GLOBAL_LOCALE && !locale_object_valid(locale)) return 0;
+    if (!rin_unicode_is_valid_scalar(character)) return 0;
+    if (locale_ctype_is_c(locale) && character > 0x7fu) return 0;
+    return rin_unicode_iswctype(character, descriptor);
+}
+
+int rin_locale_current_wide_ctype_iswctype(uint32_t character,
+                                           unsigned long descriptor) {
+    return rin_locale_wide_ctype_iswctype(locale_thread_current, character,
+                                          descriptor);
+}
+
+uint32_t rin_locale_wide_ctype_map(locale_t locale, uint32_t character,
+                                   uint32_t operation) {
+    if (locale != LC_GLOBAL_LOCALE && !locale_object_valid(locale))
+        return character;
+    if (!rin_unicode_is_valid_scalar(character)) return character;
+    if (locale_ctype_is_c(locale)) {
+        if (character > 0x7fu) return character;
+        return (uint32_t)locale_ascii_map((int)character, operation);
+    }
+    return locale_unicode_wide_map(character, operation);
+}
+
+uint32_t rin_locale_current_wide_ctype_map(uint32_t character,
+                                           uint32_t operation) {
+    return rin_locale_wide_ctype_map(locale_thread_current, character,
+                                     operation);
+}
+
+uint32_t rin_locale_wide_ctype_towctrans(locale_t locale, uint32_t character,
+                                         unsigned long descriptor) {
+    if (locale != LC_GLOBAL_LOCALE && !locale_object_valid(locale))
+        return character;
+    if (!rin_unicode_is_valid_scalar(character)) return character;
+    if (locale_ctype_is_c(locale) && character > 0x7fu) return character;
+    return rin_unicode_towctrans(character, descriptor);
+}
+
+uint32_t rin_locale_current_wide_ctype_towctrans(
+    uint32_t character, unsigned long descriptor) {
+    return rin_locale_wide_ctype_towctrans(locale_thread_current, character,
+                                          descriptor);
+}
+
+int rin_locale_current_wide_print_test(uint32_t character) {
+    return rin_locale_current_wide_ctype_test(
+        character, RIN_LOCALE_CTYPE_PRINT);
+}
+
+int rin_locale_ctype_map(locale_t locale, int character,
+                         uint32_t operation) {
+    int mapped;
+    if (character < 0 || character > 255) return character;
+    if (locale != LC_GLOBAL_LOCALE && !locale_object_valid(locale))
+        return character;
+    if (locale_narrow_ascii_only(locale))
+        return locale_ascii_map(character, operation);
+    mapped = operation == RIN_LOCALE_CTYPE_TOLOWER
+        ? rin_tolower(character)
+        : operation == RIN_LOCALE_CTYPE_TOUPPER
+            ? rin_toupper(character) : character;
+    return mapped >= 0 && mapped <= 255 ? mapped : character;
 }
 
 int rin_locale_current_ctype_map(int character, uint32_t operation) {
