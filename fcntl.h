@@ -425,7 +425,7 @@ static inline int fcntl(int fd, int cmd, ...) {
                 result = -1;
                 break;
             }
-            result = _fcntl_result_to_int(_syscall3(
+            result = _fcntl_result_to_int(_RIN_FCNTL_SYSCALL3(
                 (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
                 (uintptr_t)F_GETFL, 0u));
             if (result >= 0) _fcntl_fl_flags[fd] = result;
@@ -443,7 +443,7 @@ static inline int fcntl(int fd, int cmd, ...) {
             /* The process may have inherited this descriptor through exec.
              * Read its access mode from the kernel instead of trusting the
              * per-process cache before passing status flags to F_SETFL. */
-            current_flags = _fcntl_result_to_int(_syscall3(
+            current_flags = _fcntl_result_to_int(_RIN_FCNTL_SYSCALL3(
                 (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
                 (uintptr_t)F_GETFL, 0u));
             if (current_flags < 0) {
@@ -453,7 +453,7 @@ static inline int fcntl(int fd, int cmd, ...) {
             new_flags = (current_flags & O_ACCMODE) |
                 (flags & ~O_ACCMODE);
             {
-                intptr_t kernel_result = _syscall3(
+                intptr_t kernel_result = _RIN_FCNTL_SYSCALL3(
                     (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
                     (uintptr_t)F_SETFL, (uintptr_t)new_flags);
                 result = _fcntl_result_status_zero(kernel_result);
