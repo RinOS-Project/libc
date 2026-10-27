@@ -1290,8 +1290,11 @@ int pthread_once(pthread_once_t* once_control, void (*init_routine)(void)) {
 
 int pthread_rwlock_init(pthread_rwlock_t* rwlock, const pthread_rwlockattr_t* attr) {
     int result;
-    (void)attr;
     if (!rwlock) return EINVAL;
+    if (attr && attr->pshared != PTHREAD_PROCESS_PRIVATE &&
+        attr->pshared != PTHREAD_PROCESS_SHARED)
+        return EINVAL;
+    if (attr && attr->pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
     rwlock->readers = 0;
     rwlock->writer = 0;
     rwlock->waiting_readers = 0;

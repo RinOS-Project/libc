@@ -142,7 +142,7 @@ typedef struct {
 } pthread_rwlock_t;
 
 typedef struct {
-    int dummy;
+    int pshared;
 } pthread_rwlockattr_t;
 
 /* ═══════════════════════════════════════════════════════════════
@@ -876,17 +876,63 @@ extern int pthread_cond_broadcast(pthread_cond_t* cond);
  * 読み書きロック
  * ═══════════════════════════════════════════════════════════════*/
 
+static inline int pthread_rwlockattr_init(pthread_rwlockattr_t* attr) {
+    if (!attr) return EINVAL;
+    attr->pshared = PTHREAD_PROCESS_PRIVATE;
+    return 0;
+}
+
+static inline int pthread_rwlockattr_destroy(pthread_rwlockattr_t* attr) {
+    if (!attr) return EINVAL;
+    attr->pshared = PTHREAD_PROCESS_PRIVATE;
+    return 0;
+}
+
+static inline int pthread_rwlockattr_setpshared(pthread_rwlockattr_t* attr,
+                                                 int pshared) {
+    if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
+                  pshared != PTHREAD_PROCESS_SHARED))
+        return EINVAL;
+    if (pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
+    attr->pshared = pshared;
+    return 0;
+}
+
+static inline int pthread_rwlockattr_getpshared(
+    const pthread_rwlockattr_t* attr, int* pshared) {
+    if (!attr || !pshared) return EINVAL;
+    if (attr->pshared != PTHREAD_PROCESS_PRIVATE &&
+        attr->pshared != PTHREAD_PROCESS_SHARED)
+        return EINVAL;
+    *pshared = attr->pshared;
+    return 0;
+}
+
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
 static inline int pthread_rwlock_init(pthread_rwlock_t* rwlock, const pthread_rwlockattr_t* attr) {
-    (void)attr;
+    int result;
     if (!rwlock) return EINVAL;
+    if (attr && attr->pshared != PTHREAD_PROCESS_PRIVATE &&
+        attr->pshared != PTHREAD_PROCESS_SHARED)
+        return EINVAL;
+    if (attr && attr->pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
     rwlock->readers = 0;
     rwlock->writer = 0;
     rwlock->waiting_readers = 0;
     rwlock->waiting_writers = 0;
-    pthread_mutex_init(&rwlock->mutex, NULL);
-    pthread_cond_init(&rwlock->can_read, NULL);
-    pthread_cond_init(&rwlock->can_write, NULL);
+    result = pthread_mutex_init(&rwlock->mutex, NULL);
+    if (result != 0) return result;
+    result = pthread_cond_init(&rwlock->can_read, NULL);
+    if (result != 0) {
+        (void)pthread_mutex_destroy(&rwlock->mutex);
+        return result;
+    }
+    result = pthread_cond_init(&rwlock->can_write, NULL);
+    if (result != 0) {
+        (void)pthread_cond_destroy(&rwlock->can_read);
+        (void)pthread_mutex_destroy(&rwlock->mutex);
+        return result;
+    }
     return 0;
 }
 
