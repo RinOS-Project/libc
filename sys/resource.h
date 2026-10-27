@@ -155,18 +155,14 @@ static inline int __rin_resource_limit_set_hook(
 }
 
 #if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
-/* Return 0 for the three resources owned by the kernel ABI and 1 for a class
- * that must remain on the established libc fallback boundary. */
+/* All public RLIMIT identifiers use the same fixed-width kernel ABI. */
 static inline int __rin_resource_limit_wire_resource(
     int resource, uint32_t* wire_resource)
 {
     if (!wire_resource) return -1;
-    if (resource == RLIMIT_NOFILE || resource == RLIMIT_MEMLOCK ||
-        resource == RLIMIT_AS) {
-        *wire_resource = (uint32_t)resource;
-        return 0;
-    }
-    return 1;
+    if (resource < 0 || resource >= RLIMIT_NLIMITS) return 1;
+    *wire_resource = (uint32_t)resource;
+    return 0;
 }
 
 static inline int __rin_resource_limit_wire_call(
@@ -196,11 +192,9 @@ static inline int __rin_resource_limit_wire_call(
     request.target_process_id = target_process_id;
     request.target_instance_cookie = target_instance_cookie;
     if (new_limit) {
-        request.new_current = resource == RLIMIT_AS &&
-                new_limit->rlim_cur == (rlim_t)RLIM_INFINITY
+        request.new_current = new_limit->rlim_cur == (rlim_t)RLIM_INFINITY
             ? UINT64_MAX : (uint64_t)new_limit->rlim_cur;
-        request.new_maximum = resource == RLIMIT_AS &&
-                new_limit->rlim_max == (rlim_t)RLIM_INFINITY
+        request.new_maximum = new_limit->rlim_max == (rlim_t)RLIM_INFINITY
             ? UINT64_MAX : (uint64_t)new_limit->rlim_max;
     }
     raw_result = _RIN_RESOURCE_LIMIT_SYSCALL2(
@@ -216,9 +210,9 @@ static inline int __rin_resource_limit_wire_call(
         response.reserved0 != 0u || response.reserved[0] != 0u ||
         response.reserved[1] != 0u || response.current > response.maximum ||
         (response.current > (uint64_t)(rlim_t)~(rlim_t)0 &&
-         !(resource == RLIMIT_AS && response.current == UINT64_MAX)) ||
+         response.current != UINT64_MAX) ||
         (response.maximum > (uint64_t)(rlim_t)~(rlim_t)0 &&
-         !(resource == RLIMIT_AS && response.maximum == UINT64_MAX)) ||
+         response.maximum != UINT64_MAX) ||
         (operation == RIN_RESOURCE_LIMIT_CALL_SET &&
          (response.current != request.new_current ||
           response.maximum != request.new_maximum))) {
@@ -354,7 +348,8 @@ static inline int setrlimit(int resource, const struct rlimit* rlim) {
 static inline int prlimit(pid_t pid, int resource,
                           const struct rlimit* new_limit,
                           struct rlimit* old_limit) {
-    if (pid < 0) {
+    if (pid < 0 || resource < 0 || resource >= RLIMIT_NLIMITS ||
+        (new_limit == NULL && old_limit == NULL)) {
         errno = EINVAL;
         return -1;
     }
@@ -363,7 +358,7 @@ static inline int prlimit(pid_t pid, int resource,
         return rin_resource_limit_prlimit(pid, resource, new_limit, old_limit);
 #endif
 #if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
-    if (pid == 0 && (new_limit != NULL || old_limit != NULL)) {
+    if (new_limit != NULL || old_limit != NULL) {
         if (new_limit && new_limit->rlim_cur > new_limit->rlim_max) {
             errno = EINVAL;
             return -1;
@@ -371,7 +366,8 @@ static inline int prlimit(pid_t pid, int resource,
         return __rin_resource_limit_wire_call(
             RIN_RESOURCE_LIMIT_CALL_PRLIMIT,
             new_limit ? RIN_RESOURCE_LIMIT_CALL_FLAG_SET : 0u,
-            0u, 0u, resource, new_limit, old_limit);
+            pid == 0 ? 0u : (uint32_t)pid, 0u, resource,
+            new_limit, old_limit);
     }
 #endif
     if (pid != 0 || new_limit) {
