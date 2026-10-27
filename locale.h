@@ -239,6 +239,8 @@ const char* rin_locale_l_weekday(locale_t locobj, int weekday, int abbreviated);
 const char* rin_locale_l_month(locale_t locobj, int month, int abbreviated);
 const char* rin_locale_l_am_pm(locale_t locobj, int hour);
 const char* rin_locale_l_time_format(locale_t locobj, char conversion);
+const char* rin_locale_l_codeset(locale_t locobj);
+const char* rin_locale_l_currency_string(locale_t locobj);
 
 /* ═══════════════════════════════════════════════════════════════
  * RinOS拡張関数
