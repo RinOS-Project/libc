@@ -336,6 +336,9 @@ static inline int _rin_time_ns_to_timespec(uint64_t nanoseconds,
 
 /* クロックID */
 #define CLOCK_REALTIME           0
+#ifndef TIME_UTC
+#define TIME_UTC                  1
+#endif
 #define CLOCK_MONOTONIC          1
 #define CLOCK_PROCESS_CPUTIME_ID 2
 #define CLOCK_THREAD_CPUTIME_ID  3
@@ -936,6 +939,12 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
             errno = EINVAL;
             return -1;
     }
+}
+
+static inline int timespec_get(struct timespec* ts, int base) {
+    if (base != TIME_UTC) return 0;
+    if (clock_gettime(CLOCK_REALTIME, ts) != 0) return 0;
+    return TIME_UTC;
 }
 
 static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
