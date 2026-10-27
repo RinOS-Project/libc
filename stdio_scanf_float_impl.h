@@ -46,6 +46,14 @@ struct RinSscanfFloat {
     long double long_value;
 };
 
+static inline char rin_sscanf_decimal_point(void) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    return rin_locale_current_decimal_point();
+#else
+    return '.';
+#endif
+}
+
 static inline int rin_sscanf_parse_float(
         const char* input, size_t input_size, size_t* offset,
         const struct RinSscanfSpec* spec, struct RinSscanfFloat* value_out,
@@ -55,6 +63,7 @@ static inline int rin_sscanf_parse_float(
     size_t current = *offset;
     size_t end = input_size;
     size_t count;
+    char decimal_point = rin_sscanf_decimal_point();
 
     *input_failure_out = 0;
     value_out->bits = 0u;
@@ -73,7 +82,8 @@ static inline int rin_sscanf_parse_float(
         candidate[index] = input[current + index];
     candidate[count] = '\0';
     if (spec->length == RIN_SSCANF_LENGTH_NONE) {
-        rin_float_parse_result parsed = rin_float_parse_binary32(candidate);
+        rin_float_parse_result parsed = rin_float_parse_binary32_radix(
+            candidate, decimal_point);
         if (!parsed.converted) return 0;
         if (parsed.range_direction != 0 || parsed.subnormal) {
             errno = ERANGE;
@@ -82,7 +92,8 @@ static inline int rin_sscanf_parse_float(
         value_out->bits = parsed.bits;
         parsed_end = parsed.end;
     } else if (spec->length == RIN_SSCANF_LENGTH_LONG) {
-        rin_float_parse_result parsed = rin_float_parse_binary64(candidate);
+        rin_float_parse_result parsed = rin_float_parse_binary64_radix(
+            candidate, decimal_point);
         if (!parsed.converted) return 0;
         if (parsed.range_direction != 0 || parsed.subnormal) {
             errno = ERANGE;
@@ -92,7 +103,8 @@ static inline int rin_sscanf_parse_float(
         parsed_end = parsed.end;
     } else {
 #if defined(RIN_FP_HAS_BINARY80)
-        rin_long_double_parse_result parsed = rin_float_parse_binary80(candidate);
+        rin_long_double_parse_result parsed = rin_float_parse_binary80_radix(
+            candidate, decimal_point);
         if (!parsed.converted) return 0;
         if (parsed.range_direction != 0 || parsed.subnormal) {
             errno = ERANGE;
@@ -101,7 +113,8 @@ static inline int rin_sscanf_parse_float(
         value_out->long_value = parsed.value;
         parsed_end = parsed.end;
 #else
-        rin_float_parse_result parsed = rin_float_parse_binary64(candidate);
+        rin_float_parse_result parsed = rin_float_parse_binary64_radix(
+            candidate, decimal_point);
         if (!parsed.converted) return 0;
         if (parsed.range_direction != 0 || parsed.subnormal) {
             errno = ERANGE;

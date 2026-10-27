@@ -707,7 +707,8 @@ static inline rin_float_parse_result rin_fp_empty_result(const char* string)
 }
 
 static inline rin_float_parse_result rin_fp_parse_decimal_magnitude(
-    const char* first, int negative, const rin_fp_traits* traits)
+    const char* first, int negative, const rin_fp_traits* traits,
+    char decimal_point)
 {
     rin_float_parse_result result = rin_fp_empty_result(first);
     rin_fp_big_uint decimal;
@@ -727,7 +728,7 @@ static inline rin_float_parse_result rin_fp_parse_decimal_magnitude(
     rin_fp_big_zero(&decimal);
     for (;;) {
         unsigned digit;
-        if (*cursor == '.' && !point) {
+        if (*cursor == decimal_point && !point) {
             point = 1;
             ++cursor;
             continue;
@@ -806,7 +807,8 @@ static inline rin_float_parse_result rin_fp_parse_decimal_magnitude(
 }
 
 static inline rin_float_parse_result rin_fp_parse_hex_magnitude(
-    const char* first, int negative, const rin_fp_traits* traits)
+    const char* first, int negative, const rin_fp_traits* traits,
+    char decimal_point)
 {
     rin_float_parse_result result = rin_fp_empty_result(first);
     const char* cursor = first;
@@ -826,7 +828,7 @@ static inline rin_float_parse_result rin_fp_parse_hex_magnitude(
         int digit;
         unsigned digit_bits;
         unsigned available;
-        if (*cursor == '.' && !seen_point) {
+        if (*cursor == decimal_point && !seen_point) {
             seen_point = 1;
             ++cursor;
             continue;
@@ -933,7 +935,8 @@ static inline rin_long_double_parse_result rin_fp_empty_binary80_result(
 }
 
 static inline rin_long_double_parse_result
-rin_fp_parse_binary80_decimal_magnitude(const char* first, int negative)
+rin_fp_parse_binary80_decimal_magnitude(const char* first, int negative,
+                                       char decimal_point)
 {
     rin_long_double_parse_result result =
         rin_fp_empty_binary80_result(first);
@@ -954,7 +957,7 @@ rin_fp_parse_binary80_decimal_magnitude(const char* first, int negative)
     rin_fp_big_zero(&decimal);
     for (;;) {
         unsigned digit;
-        if (*cursor == '.' && !point) {
+        if (*cursor == decimal_point && !point) {
             point = 1;
             ++cursor;
             continue;
@@ -1043,7 +1046,8 @@ rin_fp_parse_binary80_decimal_magnitude(const char* first, int negative)
 }
 
 static inline rin_long_double_parse_result
-rin_fp_parse_binary80_hex_magnitude(const char* first, int negative)
+rin_fp_parse_binary80_hex_magnitude(const char* first, int negative,
+                                    char decimal_point)
 {
     rin_long_double_parse_result result =
         rin_fp_empty_binary80_result(first);
@@ -1064,7 +1068,7 @@ rin_fp_parse_binary80_hex_magnitude(const char* first, int negative)
         int digit;
         unsigned digit_bits;
         unsigned available;
-        if (*cursor == '.' && !seen_point) {
+        if (*cursor == decimal_point && !seen_point) {
             seen_point = 1;
             ++cursor;
             continue;
@@ -1167,8 +1171,17 @@ rin_fp_parse_binary80_hex_magnitude(const char* first, int negative)
     return result;
 }
 
+static inline rin_long_double_parse_result rin_float_parse_binary80_radix(
+    const char* string, char decimal_point);
+
 static inline rin_long_double_parse_result rin_float_parse_binary80(
     const char* string)
+{
+    return rin_float_parse_binary80_radix(string, '.');
+}
+
+static inline rin_long_double_parse_result rin_float_parse_binary80_radix(
+    const char* string, char decimal_point)
 {
     rin_long_double_parse_result result =
         rin_fp_empty_binary80_result(string);
@@ -1212,13 +1225,15 @@ static inline rin_long_double_parse_result rin_float_parse_binary80(
     }
     if (cursor[0] == '0' && (cursor[1] == 'x' || cursor[1] == 'X')) {
         int first_digit = rin_fp_hex_digit(cursor[2]);
-        int point_digit = cursor[2] == '.'
+        int point_digit = cursor[2] == decimal_point
                               ? rin_fp_hex_digit(cursor[3]) : -1;
         hexadecimal = first_digit >= 0 || point_digit >= 0;
     }
     result = hexadecimal
-                 ? rin_fp_parse_binary80_hex_magnitude(cursor + 2, negative)
-                 : rin_fp_parse_binary80_decimal_magnitude(cursor, negative);
+                 ? rin_fp_parse_binary80_hex_magnitude(
+                       cursor + 2, negative, decimal_point)
+                 : rin_fp_parse_binary80_decimal_magnitude(
+                       cursor, negative, decimal_point);
     if (!result.converted) {
         result.end = original;
         result.value = rin_fp_binary80_value(0u, 0u, 0);
@@ -1228,7 +1243,7 @@ static inline rin_long_double_parse_result rin_float_parse_binary80(
 #endif
 
 static inline rin_float_parse_result rin_fp_parse_binary(
-    const char* string, const rin_fp_traits* traits)
+    const char* string, const rin_fp_traits* traits, char decimal_point)
 {
     rin_float_parse_result result = rin_fp_empty_result(string);
     const char* original = string;
@@ -1271,13 +1286,15 @@ static inline rin_float_parse_result rin_fp_parse_binary(
 
     if (cursor[0] == '0' && (cursor[1] == 'x' || cursor[1] == 'X')) {
         int first_digit = rin_fp_hex_digit(cursor[2]);
-        int point_digit = cursor[2] == '.'
+        int point_digit = cursor[2] == decimal_point
                               ? rin_fp_hex_digit(cursor[3]) : -1;
         hexadecimal = first_digit >= 0 || point_digit >= 0;
     }
     result = hexadecimal
-                 ? rin_fp_parse_hex_magnitude(cursor + 2, negative, traits)
-                 : rin_fp_parse_decimal_magnitude(cursor, negative, traits);
+                 ? rin_fp_parse_hex_magnitude(
+                       cursor + 2, negative, traits, decimal_point)
+                 : rin_fp_parse_decimal_magnitude(
+                       cursor, negative, traits, decimal_point);
     if (!result.converted) {
         result.end = original;
         result.bits = 0u;
@@ -1285,18 +1302,35 @@ static inline rin_float_parse_result rin_fp_parse_binary(
     return result;
 }
 
+static inline rin_float_parse_result rin_float_parse_binary32_radix(
+    const char* string, char decimal_point);
+static inline rin_float_parse_result rin_float_parse_binary64_radix(
+    const char* string, char decimal_point);
+
 static inline rin_float_parse_result rin_float_parse_binary32(
     const char* string)
 {
+    return rin_float_parse_binary32_radix(string, '.');
+}
+
+static inline rin_float_parse_result rin_float_parse_binary32_radix(
+    const char* string, char decimal_point)
+{
     rin_fp_traits traits = rin_fp_binary32_traits();
-    return rin_fp_parse_binary(string, &traits);
+    return rin_fp_parse_binary(string, &traits, decimal_point);
 }
 
 static inline rin_float_parse_result rin_float_parse_binary64(
     const char* string)
 {
+    return rin_float_parse_binary64_radix(string, '.');
+}
+
+static inline rin_float_parse_result rin_float_parse_binary64_radix(
+    const char* string, char decimal_point)
+{
     rin_fp_traits traits = rin_fp_binary64_traits();
-    return rin_fp_parse_binary(string, &traits);
+    return rin_fp_parse_binary(string, &traits, decimal_point);
 }
 
 static inline float rin_float_parse_binary32_value(rin_fp_u64 bits)

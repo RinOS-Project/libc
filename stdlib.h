@@ -360,7 +360,12 @@ static inline int clearenv(void) {
 #ifndef _ATOF_DEFINED
 #define _ATOF_DEFINED
 static inline double atof(const char* s) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    rin_float_parse_result parsed = rin_float_parse_binary64_radix(
+        s, rin_locale_current_decimal_point());
+#else
     rin_float_parse_result parsed = rin_float_parse_binary64(s);
+#endif
     if (parsed.invalid_input) errno = EINVAL;
     else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
     return rin_float_parse_binary64_value(parsed.bits);
@@ -501,7 +506,12 @@ static inline long long atoll(const char* s) {
 
 /* 浮動小数点数変換 */
 static inline double strtod(const char* s, char** endptr) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    rin_float_parse_result parsed = rin_float_parse_binary64_radix(
+        s, rin_locale_current_decimal_point());
+#else
     rin_float_parse_result parsed = rin_float_parse_binary64(s);
+#endif
     if (endptr) *endptr = (char*)(__UINTPTR_TYPE__)parsed.end;
     if (parsed.invalid_input) errno = EINVAL;
     else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
@@ -509,7 +519,12 @@ static inline double strtod(const char* s, char** endptr) {
 }
 
 static inline float strtof(const char* s, char** endptr) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    rin_float_parse_result parsed = rin_float_parse_binary32_radix(
+        s, rin_locale_current_decimal_point());
+#else
     rin_float_parse_result parsed = rin_float_parse_binary32(s);
+#endif
     if (endptr) *endptr = (char*)(__UINTPTR_TYPE__)parsed.end;
     if (parsed.invalid_input) errno = EINVAL;
     else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
@@ -519,7 +534,12 @@ static inline float strtof(const char* s, char** endptr) {
 #if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
 static inline long double strtold(const char* s, char** endptr) {
 #if defined(RIN_FP_HAS_BINARY80)
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    rin_long_double_parse_result parsed = rin_float_parse_binary80_radix(
+        s, rin_locale_current_decimal_point());
+#else
     rin_long_double_parse_result parsed = rin_float_parse_binary80(s);
+#endif
     if (endptr) *endptr = (char*)(__UINTPTR_TYPE__)parsed.end;
     if (parsed.invalid_input) errno = EINVAL;
     else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
@@ -608,20 +628,41 @@ static inline unsigned long long strtoull_l(const char* s, char** endptr,
 }
 
 static inline float strtof_l(const char* s, char** endptr, locale_t locale) {
-    (void)locale;
-    return strtof(s, endptr);
+    rin_float_parse_result parsed = rin_float_parse_binary32_radix(
+        s, rin_locale_decimal_point_l(locale));
+    if (endptr) *endptr = (char*)(__UINTPTR_TYPE__)parsed.end;
+    if (parsed.invalid_input) errno = EINVAL;
+    else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
+    return rin_float_parse_binary32_value(parsed.bits);
 }
 
 static inline double strtod_l(const char* s, char** endptr, locale_t locale) {
-    (void)locale;
-    return strtod(s, endptr);
+    rin_float_parse_result parsed = rin_float_parse_binary64_radix(
+        s, rin_locale_decimal_point_l(locale));
+    if (endptr) *endptr = (char*)(__UINTPTR_TYPE__)parsed.end;
+    if (parsed.invalid_input) errno = EINVAL;
+    else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
+    return rin_float_parse_binary64_value(parsed.bits);
 }
 
 #if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
 static inline long double strtold_l(const char* s, char** endptr,
                                     locale_t locale) {
-    (void)locale;
-    return strtold(s, endptr);
+#if defined(RIN_FP_HAS_BINARY80)
+    rin_long_double_parse_result parsed = rin_float_parse_binary80_radix(
+        s, rin_locale_decimal_point_l(locale));
+    if (endptr) *endptr = (char*)(__UINTPTR_TYPE__)parsed.end;
+    if (parsed.invalid_input) errno = EINVAL;
+    else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
+    return parsed.value;
+#else
+    rin_float_parse_result parsed = rin_float_parse_binary64_radix(
+        s, rin_locale_decimal_point_l(locale));
+    if (endptr) *endptr = (char*)(__UINTPTR_TYPE__)parsed.end;
+    if (parsed.invalid_input) errno = EINVAL;
+    else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
+    return (long double)rin_float_parse_binary64_value(parsed.bits);
+#endif
 }
 #endif
 #endif /* RIN_USERSPACE && !_MSVCRT_COMPAT */

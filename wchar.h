@@ -385,7 +385,12 @@ static inline double wcstod(const wchar_t* nptr, wchar_t** endptr) {
         errno = ERANGE;
         return 0.0;
     }
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    parsed = rin_float_parse_binary64_radix(
+        input.text, rin_locale_current_decimal_point());
+#else
     parsed = rin_float_parse_binary64(input.text);
+#endif
     if (endptr) {
         *endptr = parsed.converted
                       ? (wchar_t*)(input.start + (parsed.end - input.text))
@@ -410,7 +415,12 @@ static inline float wcstof(const wchar_t* nptr, wchar_t** endptr) {
         errno = ERANGE;
         return 0.0f;
     }
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    parsed = rin_float_parse_binary32_radix(
+        input.text, rin_locale_current_decimal_point());
+#else
     parsed = rin_float_parse_binary32(input.text);
+#endif
     if (endptr) {
         *endptr = parsed.converted
                       ? (wchar_t*)(input.start + (parsed.end - input.text))
@@ -436,7 +446,13 @@ static inline long double wcstold(const wchar_t* nptr, wchar_t** endptr) {
     }
 #if defined(RIN_FP_HAS_BINARY80)
     {
-        rin_long_double_parse_result parsed = rin_float_parse_binary80(input.text);
+        rin_long_double_parse_result parsed =
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+            rin_float_parse_binary80_radix(
+                input.text, rin_locale_current_decimal_point());
+#else
+            rin_float_parse_binary80(input.text);
+#endif
         if (endptr) {
             *endptr = parsed.converted
                           ? (wchar_t*)(input.start + (parsed.end - input.text))
@@ -449,7 +465,13 @@ static inline long double wcstold(const wchar_t* nptr, wchar_t** endptr) {
     }
 #else
     {
-        rin_float_parse_result parsed = rin_float_parse_binary64(input.text);
+        rin_float_parse_result parsed =
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+            rin_float_parse_binary64_radix(
+                input.text, rin_locale_current_decimal_point());
+#else
+            rin_float_parse_binary64(input.text);
+#endif
         if (endptr) {
             *endptr = parsed.converted
                           ? (wchar_t*)(input.start + (parsed.end - input.text))

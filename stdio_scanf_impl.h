@@ -1478,6 +1478,8 @@ static int rin_fscanf_stream_parse_hex_float(
         int* input_failure_out) {
     unsigned char value = '\0';
     unsigned char tail[3];
+    unsigned char decimal_point =
+        (unsigned char)rin_sscanf_decimal_point();
     size_t tail_count = 1u;
     size_t limit = spec->has_width ? spec->width : RIN_SSCANF_MAX_INPUT;
     int status;
@@ -1496,7 +1498,7 @@ static int rin_fscanf_stream_parse_hex_float(
         if (digit >= 0) {
             any_digit = 1;
             candidate[count++] = (char)value;
-        } else if (value == '.' && !seen_point) {
+        } else if (value == decimal_point && !seen_point) {
             seen_point = 1;
             candidate[count++] = (char)value;
             tail[tail_count++] = value;
@@ -1606,6 +1608,8 @@ static int rin_fscanf_stream_parse_decimal_float(
     char candidate[RIN_SSCANF_MAX_INPUT + 1u];
     unsigned char value = '\0';
     unsigned char tail[3];
+    unsigned char decimal_point =
+        (unsigned char)rin_sscanf_decimal_point();
     size_t count = 0u;
     size_t limit = spec->has_width ? spec->width : RIN_SSCANF_MAX_INPUT;
     int status;
@@ -1651,7 +1655,7 @@ static int rin_fscanf_stream_parse_decimal_float(
         if (value >= '0' && value <= '9') {
             any_digit = 1;
             candidate[count++] = (char)value;
-        } else if (value == '.' && !seen_point) {
+        } else if (value == decimal_point && !seen_point) {
             seen_point = 1;
             candidate[count++] = (char)value;
         } else {

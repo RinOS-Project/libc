@@ -156,6 +156,19 @@ static inline struct lconv* localeconv(void) {
 }
 #endif
 
+static inline char rin_locale_decimal_point_l(locale_t locobj) {
+    struct lconv* current = rin_localeconv_for_locale(locobj);
+    if (!current || !current->decimal_point ||
+        current->decimal_point[0] == '\0' ||
+        current->decimal_point[1] != '\0')
+        return '.';
+    return current->decimal_point[0];
+}
+
+static inline char rin_locale_current_decimal_point(void) {
+    return rin_locale_decimal_point_l(uselocale(NULL));
+}
+
 #define RIN_LOCALE_CTYPE_ALNUM 1u
 #define RIN_LOCALE_CTYPE_ALPHA 2u
 #define RIN_LOCALE_CTYPE_DIGIT 3u
