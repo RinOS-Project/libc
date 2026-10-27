@@ -123,10 +123,12 @@ typedef struct {
     volatile unsigned int generation;   /* 世代カウンタ（wakeup lost防止） */
     volatile int waiting;
     int clock_id;
+    int pshared;
 } pthread_cond_t;
 
 typedef struct {
     int clock_id;
+    int pshared;
 } pthread_condattr_t;
 
 typedef int pthread_once_t;
@@ -193,7 +195,7 @@ typedef struct {
 #define PTHREAD_CANCELED             ((void*)(intptr_t)-1)
 
 #define PTHREAD_MUTEX_INITIALIZER { 0, 0, 0, 0 }
-#define PTHREAD_COND_INITIALIZER  { 0, 0, CLOCK_REALTIME }
+#define PTHREAD_COND_INITIALIZER  { 0, 0, CLOCK_REALTIME, PTHREAD_PROCESS_PRIVATE }
 #define PTHREAD_RWLOCK_INITIALIZER { 0, 0, 0, 0, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -774,6 +776,7 @@ extern int pthread_mutex_consistent(pthread_mutex_t* mutex);
 static inline int pthread_condattr_init(pthread_condattr_t* attr) {
     if (!attr) return EINVAL;
     attr->clock_id = CLOCK_REALTIME;
+    attr->pshared = PTHREAD_PROCESS_PRIVATE;
     return 0;
 }
 
@@ -797,12 +800,32 @@ static inline int pthread_condattr_getclock(const pthread_condattr_t* attr, int*
     return 0;
 }
 
+static inline int pthread_condattr_setpshared(pthread_condattr_t* attr,
+                                               int pshared) {
+    if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
+                  pshared != PTHREAD_PROCESS_SHARED))
+        return EINVAL;
+    attr->pshared = pshared;
+    return 0;
+}
+
+static inline int pthread_condattr_getpshared(const pthread_condattr_t* attr,
+                                               int* pshared) {
+    if (!attr || !pshared) return EINVAL;
+    *pshared = attr->pshared;
+    return 0;
+}
+
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
 static inline int pthread_cond_init(pthread_cond_t* cond, const pthread_condattr_t* attr) {
     if (!cond) return EINVAL;
+    if (attr && attr->pshared != PTHREAD_PROCESS_PRIVATE &&
+        attr->pshared != PTHREAD_PROCESS_SHARED)
+        return EINVAL;
     cond->generation = 0;
     cond->waiting = 0;
     cond->clock_id = (attr ? attr->clock_id : CLOCK_REALTIME);
+    cond->pshared = (attr ? attr->pshared : PTHREAD_PROCESS_PRIVATE);
     return 0;
 }
 
@@ -828,7 +851,9 @@ static inline int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex
      * Returns 0 on wake, -EAGAIN if value changed, -EINTR if interrupted.
      * Loop handles spurious wakeups. */
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-        syscall(SYS_futex, &cond->generation, FUTEX_WAIT_PRIVATE,
+        syscall(SYS_futex, &cond->generation,
+                FUTEX_WAIT | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
+                              FUTEX_PRIVATE_FLAG),
                 (int)gen, NULL, NULL, 0);
     }
 
@@ -862,8 +887,11 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* 
         ts.tv_sec = (time_t)(timeout_ns / 1000000000LL);
         ts.tv_nsec = (long)(timeout_ns % 1000000000LL);
 
-        long ret = syscall(SYS_futex, &cond->generation, FUTEX_WAIT_PRIVATE,
-                           (int)gen, &ts, NULL, 0);
+        long ret = syscall(
+            SYS_futex, &cond->generation,
+            FUTEX_WAIT | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
+                          FUTEX_PRIVATE_FLAG),
+            (int)gen, &ts, NULL, 0);
         if (ret < 0) {
             int err = errno;
             if (err == ETIMEDOUT) {
@@ -886,7 +914,10 @@ static inline int pthread_cond_signal(pthread_cond_t* cond) {
     if (!cond) return EINVAL;
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0)
-        syscall(SYS_futex, &cond->generation, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+        syscall(SYS_futex, &cond->generation,
+                FUTEX_WAKE | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
+                              FUTEX_PRIVATE_FLAG),
+                1, NULL, NULL, 0);
     return 0;
 }
 
@@ -894,7 +925,9 @@ static inline int pthread_cond_broadcast(pthread_cond_t* cond) {
     if (!cond) return EINVAL;
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0)
-        syscall(SYS_futex, &cond->generation, FUTEX_WAKE_PRIVATE,
+        syscall(SYS_futex, &cond->generation,
+                FUTEX_WAKE | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
+                              FUTEX_PRIVATE_FLAG),
                 0x7fffffff, NULL, NULL, 0);
     return 0;
 }

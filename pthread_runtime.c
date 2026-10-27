@@ -91,6 +91,13 @@ static int rin_pthread_mutex_futex_operation(const pthread_mutex_t* mutex,
                         FUTEX_PRIVATE_FLAG);
 }
 
+static int rin_pthread_cond_futex_operation(const pthread_cond_t* cond,
+                                             int operation) {
+    return operation |
+        (cond && cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
+         FUTEX_PRIVATE_FLAG);
+}
+
 static int rin_pthread_mutex_robust_owner_id(pthread_mutex_t* mutex,
                                              pthread_t owner,
                                              uint32_t* owner_id_out) {
@@ -1140,9 +1147,13 @@ int pthread_mutex_consistent(pthread_mutex_t* mutex) {
 
 int pthread_cond_init(pthread_cond_t* cond, const pthread_condattr_t* attr) {
     if (!cond) return EINVAL;
+    if (attr && attr->pshared != PTHREAD_PROCESS_PRIVATE &&
+        attr->pshared != PTHREAD_PROCESS_SHARED)
+        return EINVAL;
     cond->generation = 0;
     cond->waiting = 0;
     cond->clock_id = attr ? attr->clock_id : CLOCK_REALTIME;
+    cond->pshared = attr ? attr->pshared : PTHREAD_PROCESS_PRIVATE;
     return 0;
 }
 
@@ -1168,7 +1179,9 @@ int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
 
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
         long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-            &cond->generation, FUTEX_WAIT_PRIVATE, (int)gen, NULL);
+            &cond->generation,
+            rin_pthread_cond_futex_operation(cond, FUTEX_WAIT),
+            (int)gen, NULL);
         int wait_error = rin_pthread_futex_wait_error(wait_result, errno);
         if (wait_error != 0) {
             result = wait_error;
@@ -1224,7 +1237,9 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
         ts.tv_nsec = relative.nanoseconds;
 
         long ret = _RIN_PTHREAD_RUNTIME_FUTEX(
-            &cond->generation, FUTEX_WAIT_PRIVATE, (int)gen, &ts);
+            &cond->generation,
+            rin_pthread_cond_futex_operation(cond, FUTEX_WAIT),
+            (int)gen, &ts);
         if (ret == -1 && errno == ETIMEDOUT) {
             if (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) != gen)
                 result = 0;
@@ -1251,7 +1266,8 @@ int pthread_cond_signal(pthread_cond_t* cond) {
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0) {
         long wake_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-            &cond->generation, FUTEX_WAKE_PRIVATE, 1, NULL);
+            &cond->generation,
+            rin_pthread_cond_futex_operation(cond, FUTEX_WAKE), 1, NULL);
         int wake_error = rin_pthread_futex_wake_error(wake_result, errno);
         if (wake_error != 0) return wake_error;
     }
@@ -1263,7 +1279,9 @@ int pthread_cond_broadcast(pthread_cond_t* cond) {
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0) {
         long wake_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-            &cond->generation, FUTEX_WAKE_PRIVATE, 0x7fffffff, NULL);
+            &cond->generation,
+            rin_pthread_cond_futex_operation(cond, FUTEX_WAKE),
+            0x7fffffff, NULL);
         int wake_error = rin_pthread_futex_wake_error(wake_result, errno);
         if (wake_error != 0) return wake_error;
     }
