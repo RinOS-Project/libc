@@ -55,6 +55,8 @@ typedef void (*sighandler_t)(int);
 typedef unsigned long sigset_t;
 #endif
 
+struct timespec;
+
 /* ═══════════════════════════════════════════════════════════════
  * シグナル番号
  * ═══════════════════════════════════════════════════════════════*/
@@ -540,6 +542,65 @@ static inline int sigsuspend(const sigset_t* mask) {
         return -1;
     }
     return __rin_signal_status_result(result);
+}
+
+static inline int sigwait(const sigset_t* set, int* signal_number_out) {
+    intptr_t result;
+    if (!set || !signal_number_out) return EINVAL;
+    do {
+        result = _RIN_SIGNAL_SYSCALL4(
+            SYS_rt_sigtimedwait, set, 0, 0, sizeof(sigset_t));
+    } while (result == -(intptr_t)EINTR);
+    if (result < 0) {
+        uintptr_t magnitude = (uintptr_t)0 - (uintptr_t)result;
+        return magnitude != 0u && magnitude <= 4095u
+                   ? (int)magnitude : EIO;
+    }
+    if (result <= 0 || result >= NSIG) return EIO;
+    *signal_number_out = (int)result;
+    return 0;
+}
+
+static inline int sigwaitinfo(const sigset_t* set,
+                              siginfo_t* information_out) {
+    intptr_t result;
+    if (!set) {
+        errno = EFAULT;
+        return -1;
+    }
+    result = _RIN_SIGNAL_SYSCALL4(
+        SYS_rt_sigtimedwait, set, information_out, 0, sizeof(sigset_t));
+    if (result < 0) {
+        (void)__rin_signal_status_result(result);
+        return -1;
+    }
+    if (result <= 0 || result >= NSIG) {
+        errno = EIO;
+        return -1;
+    }
+    return (int)result;
+}
+
+static inline int sigtimedwait(const sigset_t* set,
+                               siginfo_t* information_out,
+                               const struct timespec* timeout) {
+    intptr_t result;
+    if (!set || !timeout) {
+        errno = EFAULT;
+        return -1;
+    }
+    result = _RIN_SIGNAL_SYSCALL4(
+        SYS_rt_sigtimedwait, set, information_out, timeout,
+        sizeof(sigset_t));
+    if (result < 0) {
+        (void)__rin_signal_status_result(result);
+        return -1;
+    }
+    if (result <= 0 || result >= NSIG) {
+        errno = EIO;
+        return -1;
+    }
+    return (int)result;
 }
 
 /* pthread_kill: スレッドにシグナル送信 */
