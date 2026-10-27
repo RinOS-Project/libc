@@ -145,6 +145,21 @@ typedef struct {
     int pshared;
 } pthread_rwlockattr_t;
 
+typedef struct {
+    uint32_t magic;
+    uint32_t count;
+    volatile uint32_t waiting;
+    volatile uint32_t generation;
+    volatile uint32_t lock;
+    volatile uint32_t lock_waiters;
+    volatile uint32_t active_waiters;
+    uint32_t pshared;
+} pthread_barrier_t;
+
+typedef struct {
+    int pshared;
+} pthread_barrierattr_t;
+
 /* ═══════════════════════════════════════════════════════════════
  * 定数
  * ═══════════════════════════════════════════════════════════════*/
@@ -164,6 +179,7 @@ typedef struct {
 
 #define PTHREAD_PROCESS_PRIVATE 0
 #define PTHREAD_PROCESS_SHARED  1
+#define PTHREAD_BARRIER_SERIAL_THREAD (-1)
 
 #define PTHREAD_ONCE_INIT 0
 
@@ -1050,6 +1066,47 @@ extern int pthread_rwlock_tryrdlock(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_trywrlock(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_unlock(pthread_rwlock_t* rwlock);
 #endif
+
+/* ═══════════════════════════════════════════════════════════════
+ * Barrier
+ * ═══════════════════════════════════════════════════════════════*/
+
+static inline int pthread_barrierattr_init(pthread_barrierattr_t* attr) {
+    if (!attr) return EINVAL;
+    attr->pshared = PTHREAD_PROCESS_PRIVATE;
+    return 0;
+}
+
+static inline int pthread_barrierattr_destroy(pthread_barrierattr_t* attr) {
+    if (!attr) return EINVAL;
+    attr->pshared = PTHREAD_PROCESS_PRIVATE;
+    return 0;
+}
+
+static inline int pthread_barrierattr_setpshared(pthread_barrierattr_t* attr,
+                                                  int pshared) {
+    if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
+                  pshared != PTHREAD_PROCESS_SHARED))
+        return EINVAL;
+    attr->pshared = pshared;
+    return 0;
+}
+
+static inline int pthread_barrierattr_getpshared(
+    const pthread_barrierattr_t* attr, int* pshared) {
+    if (!attr || !pshared ||
+        (attr->pshared != PTHREAD_PROCESS_PRIVATE &&
+         attr->pshared != PTHREAD_PROCESS_SHARED))
+        return EINVAL;
+    *pshared = attr->pshared;
+    return 0;
+}
+
+extern int pthread_barrier_init(pthread_barrier_t* barrier,
+                                const pthread_barrierattr_t* attr,
+                                unsigned int count);
+extern int pthread_barrier_destroy(pthread_barrier_t* barrier);
+extern int pthread_barrier_wait(pthread_barrier_t* barrier);
 
 /* ═══════════════════════════════════════════════════════════════
  * スレッドローカルストレージ (TLS)
