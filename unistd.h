@@ -1380,9 +1380,9 @@ static inline int usleep(useconds_t usec) {
     }
     if (usec == 0) return 0;
 
-    /* マイクロ秒をミリ秒に変換 (最小1ms) */
-    uintptr_t ms = (uintptr_t)(usec / 1000u);
-    if (ms == 0) ms = 1;
+    /* SYS_SLEEP has millisecond granularity; round up so it never returns
+     * before the requested microsecond interval has elapsed. */
+    uintptr_t ms = ((uintptr_t)usec + 999u) / 1000u;
     result = _RIN_UNISTD_SLEEP(ms);
     if (result < 0) {
         if (__rin_syscall_posixize(result) != -1) errno = EIO;
