@@ -59,6 +59,7 @@ static inline void _rin_getopt_diagnostic(char* const argv[],
  * ═══════════════════════════════════════════════════════════════*/
 
 static inline int getopt(int argc, char* const argv[], const char* optstring) {
+    optarg = NULL;
     if (optreset) {
         optind = 1;
         _rin_getopt_pos = 0;
@@ -137,6 +138,7 @@ static inline int getopt_long(int argc, char* const argv[],
                               const char* optstring,
                               const struct option* longopts,
                               int* longindex) {
+    optarg = NULL;
     if (optreset) {
         optind = 1;
         _rin_getopt_pos = 0;
@@ -188,6 +190,8 @@ static inline int getopt_long(int argc, char* const argv[],
                 if (longindex) *longindex = i;
 
                 /* 引数処理 */
+                if (longopts[i].has_arg == no_argument && eq)
+                    return '?';
                 if (longopts[i].has_arg == required_argument ||
                     longopts[i].has_arg == optional_argument) {
                     if (eq) {
@@ -227,6 +231,7 @@ static inline int getopt_long_only(int argc, char* const argv[],
                                    const char* optstring,
                                    const struct option* longopts,
                                    int* longindex) {
+    optarg = NULL;
     if (optreset) {
         optind = 1;
         _rin_getopt_pos = 0;
@@ -270,6 +275,8 @@ static inline int getopt_long_only(int argc, char* const argv[],
             ++optind;
             _rin_getopt_pos = 0;
             if (longindex) *longindex = i;
+            if (longopts[i].has_arg == no_argument && eq)
+                return '?';
             if (longopts[i].has_arg == required_argument ||
                 longopts[i].has_arg == optional_argument) {
                 if (eq) {
