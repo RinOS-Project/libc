@@ -285,27 +285,49 @@ int swscanf(const wchar_t* s, const wchar_t* format, ...);
 
 typedef rin_unicode_mbstate_t mbstate_t;
 
+#ifndef MB_CUR_MAX
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+#define MB_CUR_MAX rin_locale_current_mb_cur_max()
+#else
 #define MB_CUR_MAX 4
+#endif
+#endif
 
 /* これらの関数は stdlib.h でも定義されているので、重複を避ける */
 #if !defined(_MSVCRT_COMPAT) && !defined(_STDLIB_WCHAR_FUNCS_DEFINED)
 #define _STDLIB_WCHAR_FUNCS_DEFINED
 
 static inline int mbtowc(wchar_t* pwc, const char* s, size_t n) {
+#if defined(RIN_USERSPACE)
+    return rin_locale_current_mbtowc32((uint32_t*)pwc, s, n);
+#else
     return rin_unicode_mbtowc32((uint32_t*)pwc, s, n);
+#endif
 }
 
 static inline int wctomb(char* s, wchar_t wc) {
+#if defined(RIN_USERSPACE)
+    return rin_locale_current_wctomb32(s, (uint32_t)wc);
+#else
     if (!s) return 0;
     return rin_unicode_wctomb32(s, (uint32_t)wc);
+#endif
 }
 
 static inline size_t mbstowcs(wchar_t* dest, const char* src, size_t n) {
+#if defined(RIN_USERSPACE)
+    return rin_locale_current_mbstowcs32((uint32_t*)dest, src, n);
+#else
     return rin_unicode_mbstowcs32((uint32_t*)dest, src, n);
+#endif
 }
 
 static inline size_t wcstombs(char* dest, const wchar_t* src, size_t n) {
+#if defined(RIN_USERSPACE)
+    return rin_locale_current_wcstombs32(dest, (const uint32_t*)src, n);
+#else
     return rin_unicode_wcstombs32(dest, (const uint32_t*)src, n);
+#endif
 }
 
 #endif /* !_MSVCRT_COMPAT && !_STDLIB_WCHAR_FUNCS_DEFINED */
@@ -594,12 +616,36 @@ static inline unsigned long long wcstoull(const wchar_t* nptr, wchar_t** endptr,
 
 static inline wint_t btowc(int c) {
     if (c == EOF) return WEOF;
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    if (c < 0 || c > 255) return WEOF;
+    {
+        char byte = (char)(unsigned char)c;
+        uint32_t character = 0u;
+        rin_unicode_mbstate_t state = {0u, 0u};
+        size_t converted = rin_locale_current_mbrtowc32(
+            &character, &byte, 1u, &state);
+        if (converted != 1u) return WEOF;
+        return (wint_t)character;
+    }
+#else
     return (wint_t)(uint32_t)(unsigned char)c;
+#endif
 }
 
 static inline int wctob(wint_t c) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    char encoded[4];
+    rin_unicode_mbstate_t state = {0u, 0u};
+    size_t converted;
+    if (c == WEOF) return EOF;
+    converted = rin_locale_current_wcrtomb32(
+        encoded, (uint32_t)c, &state);
+    if (converted != 1u) return EOF;
+    return (int)(unsigned char)encoded[0];
+#else
     if (c == WEOF || !rin_unicode_is_valid_scalar((uint32_t)c) || c > 0xFF) return EOF;
     return (int)(unsigned char)c;
+#endif
 }
 
 static inline int mbsinit(const mbstate_t* ps) {
@@ -607,23 +653,48 @@ static inline int mbsinit(const mbstate_t* ps) {
 }
 
 static inline size_t mbrlen(const char* s, size_t n, mbstate_t* ps) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    return rin_locale_current_mbrlen(
+        s, n, (struct rin_unicode_mbstate*)ps);
+#else
     return rin_unicode_mbrlen(s, n, (rin_unicode_mbstate_t*)ps);
+#endif
 }
 
 static inline size_t mbrtowc(wchar_t* pwc, const char* s, size_t n, mbstate_t* ps) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    return rin_locale_current_mbrtowc32(
+        (uint32_t*)pwc, s, n, (struct rin_unicode_mbstate*)ps);
+#else
     return rin_unicode_mbrtowc32((uint32_t*)pwc, s, n, (rin_unicode_mbstate_t*)ps);
+#endif
 }
 
 static inline size_t wcrtomb(char* s, wchar_t wc, mbstate_t* ps) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    return rin_locale_current_wcrtomb32(
+        s, (uint32_t)wc, (struct rin_unicode_mbstate*)ps);
+#else
     return rin_unicode_wcrtomb32(s, (uint32_t)wc, (rin_unicode_mbstate_t*)ps);
+#endif
 }
 
 static inline size_t mbsrtowcs(wchar_t* dest, const char** src, size_t len, mbstate_t* ps) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    return rin_locale_current_mbsrtowcs32(
+        (uint32_t*)dest, src, len, (struct rin_unicode_mbstate*)ps);
+#else
     return rin_unicode_mbsrtowcs32((uint32_t*)dest, src, len, (rin_unicode_mbstate_t*)ps);
+#endif
 }
 
 static inline size_t wcsrtombs(char* dest, const wchar_t** src, size_t len, mbstate_t* ps) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    return rin_locale_current_wcsrtombs32(
+        dest, (const uint32_t**)src, len, (struct rin_unicode_mbstate*)ps);
+#else
     return rin_unicode_wcsrtombs32(dest, (const uint32_t**)src, len, (rin_unicode_mbstate_t*)ps);
+#endif
 }
 
 static inline size_t wcsnrtombs(char* dest, const wchar_t** src, size_t nwc,
@@ -633,8 +704,15 @@ static inline size_t wcsnrtombs(char* dest, const wchar_t** src, size_t nwc,
     if (!src || !(cursor = *src)) return 0u;
     while (nwc != 0u && *cursor != L'\0') {
         char encoded[4];
-        size_t written = rin_unicode_wcrtomb32(
-            encoded, (uint32_t)*cursor, (rin_unicode_mbstate_t*)ps);
+        size_t written =
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+            rin_locale_current_wcrtomb32(
+                encoded, (uint32_t)*cursor,
+                (struct rin_unicode_mbstate*)ps);
+#else
+            rin_unicode_wcrtomb32(
+                encoded, (uint32_t)*cursor, (rin_unicode_mbstate_t*)ps);
+#endif
         if (written == (size_t)-1) return (size_t)-1;
         if (dest && (converted > len || written > len - converted)) break;
         if (dest) {
@@ -667,8 +745,15 @@ static inline size_t mbsnrtowcs(wchar_t* dest, const char** src, size_t nms,
            (!dest || converted < len)) {
         uint32_t codepoint = 0u;
         size_t remaining = nms;
-        size_t read = rin_unicode_mbrtowc32(
-            &codepoint, cursor, remaining, (rin_unicode_mbstate_t*)ps);
+        size_t read =
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+            rin_locale_current_mbrtowc32(
+                &codepoint, cursor, remaining,
+                (struct rin_unicode_mbstate*)ps);
+#else
+            rin_unicode_mbrtowc32(
+                &codepoint, cursor, remaining, (rin_unicode_mbstate_t*)ps);
+#endif
         if (read == (size_t)-1 || read == (size_t)-2) return (size_t)-1;
         if (dest) dest[converted] = (wchar_t)codepoint;
         ++converted;

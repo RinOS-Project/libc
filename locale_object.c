@@ -474,3 +474,406 @@ int rin_locale_ctype_map(locale_t locale, int character,
 int rin_locale_current_ctype_map(int character, uint32_t operation) {
     return rin_locale_ctype_map(locale_thread_current, character, operation);
 }
+
+static __thread rin_unicode_mbstate_t locale_mbrtowc_private_state = {
+    0u, 0u
+};
+static __thread rin_unicode_mbstate_t locale_mbrlen_private_state = {
+    0u, 0u
+};
+static __thread rin_unicode_mbstate_t locale_wcrtomb_private_state = {
+    0u, 0u
+};
+static __thread rin_unicode_mbstate_t locale_mbsrtowcs_private_state = {
+    0u, 0u
+};
+static __thread rin_unicode_mbstate_t locale_wcsrtombs_private_state = {
+    0u, 0u
+};
+static __thread rin_unicode_mbstate_t locale_mblen_private_state = {
+    0u, 0u
+};
+static __thread rin_unicode_mbstate_t locale_mbtowc_private_state = {
+    0u, 0u
+};
+static __thread rin_unicode_mbstate_t locale_mbstowcs_private_state = {
+    0u, 0u
+};
+static __thread rin_unicode_mbstate_t locale_wcstombs_private_state = {
+    0u, 0u
+};
+static __thread rin_unicode_mbstate_t locale_wctomb_private_state = {
+    0u, 0u
+};
+
+static void locale_mbstate_reset(rin_unicode_mbstate_t* state) {
+    if (!state) return;
+    state->state = 0u;
+    state->codepoint = 0u;
+}
+
+static int locale_mbstate_valid(locale_t locale) {
+    return locale == LC_GLOBAL_LOCALE || locale_object_valid(locale);
+}
+
+static int locale_codeset_is_utf8(locale_t locale) {
+    const char* codeset;
+    if (locale == LC_GLOBAL_LOCALE) {
+        codeset = rin_locale_codeset();
+        return codeset && (locale_equal(codeset, "UTF-8") ||
+                           locale_equal(codeset, "UTF8"));
+    }
+    return locale_object_valid(locale) &&
+           locale_kind_is_utf8(locale->categories[LC_CTYPE]);
+}
+
+static int locale_codeset_is_ascii(locale_t locale) {
+    const char* codeset;
+    if (locale == LC_GLOBAL_LOCALE) {
+        codeset = rin_locale_codeset();
+        return !codeset || locale_equal(codeset, "ASCII") ||
+               locale_equal(codeset, "US-ASCII");
+    }
+    return !locale_object_valid(locale) ||
+           locale->categories[LC_CTYPE] == RIN_LOCALE_KIND_C;
+}
+
+static int locale_conversion_state(locale_t locale,
+                                   rin_unicode_mbstate_t** state,
+                                   rin_unicode_mbstate_t* private_state) {
+    if (!locale_mbstate_valid(locale) || !state) {
+        errno = EINVAL;
+        return 0;
+    }
+    if (!*state) *state = private_state;
+    return 1;
+}
+
+int rin_locale_current_mb_cur_max(void) {
+    return locale_codeset_is_utf8(locale_thread_current) ? 4 : 1;
+}
+
+static size_t locale_mbrtowc32(locale_t locale, uint32_t* character,
+                               const char* source, size_t length,
+                               rin_unicode_mbstate_t* state) {
+    unsigned char byte;
+    if (!locale_mbstate_valid(locale)) {
+        errno = EINVAL;
+        return (size_t)-1;
+    }
+    if (!state) {
+        errno = EINVAL;
+        return (size_t)-1;
+    }
+    if (!source) {
+        locale_mbstate_reset(state);
+        return 0u;
+    }
+    if (length == 0u) return (size_t)-2;
+    if (locale_codeset_is_utf8(locale)) {
+        size_t result = rin_unicode_mbrtowc32(character, source, length,
+                                              state);
+        if (result == (size_t)-1) errno = EILSEQ;
+        return result;
+    }
+    if (!rin_unicode_mbsinit(state)) {
+        locale_mbstate_reset(state);
+        errno = EILSEQ;
+        return (size_t)-1;
+    }
+    byte = (unsigned char)source[0];
+    if (byte == 0u) {
+        if (character) *character = 0u;
+        return 0u;
+    }
+    if (locale_codeset_is_ascii(locale) && byte >= 0x80u) {
+        errno = EILSEQ;
+        return (size_t)-1;
+    }
+    if (character) *character = (uint32_t)byte;
+    return 1u;
+}
+
+static size_t locale_wcrtomb32(locale_t locale, char* destination,
+                               uint32_t character,
+                               rin_unicode_mbstate_t* state) {
+    char reset_buffer[4];
+    if (!locale_mbstate_valid(locale)) {
+        errno = EINVAL;
+        return (size_t)-1;
+    }
+    if (!state) {
+        errno = EINVAL;
+        return (size_t)-1;
+    }
+    if (!destination) {
+        locale_mbstate_reset(state);
+        destination = reset_buffer;
+        character = 0u;
+    }
+    if (locale_codeset_is_utf8(locale)) {
+        size_t result = rin_unicode_wcrtomb32(destination, character, state);
+        if (result == (size_t)-1) errno = EILSEQ;
+        return result;
+    }
+    if (!rin_unicode_is_valid_scalar(character) || character > 0xffu ||
+        (locale_codeset_is_ascii(locale) && character > 0x7fu)) {
+        locale_mbstate_reset(state);
+        errno = EILSEQ;
+        return (size_t)-1;
+    }
+    destination[0] = (char)(unsigned char)character;
+    locale_mbstate_reset(state);
+    return 1u;
+}
+
+size_t rin_locale_current_mbrlen(const char* source, size_t length,
+                                 struct rin_unicode_mbstate* state) {
+    rin_unicode_mbstate_t* active = (rin_unicode_mbstate_t*)state;
+    if (!locale_conversion_state(locale_thread_current, &active,
+                                 &locale_mbrlen_private_state))
+        return (size_t)-1;
+    return locale_mbrtowc32(locale_thread_current, (uint32_t*)0, source,
+                            length, active);
+}
+
+size_t rin_locale_current_mbrtowc32(
+    uint32_t* character, const char* source, size_t length,
+    struct rin_unicode_mbstate* state) {
+    rin_unicode_mbstate_t* active = (rin_unicode_mbstate_t*)state;
+    if (!locale_conversion_state(locale_thread_current, &active,
+                                 &locale_mbrtowc_private_state))
+        return (size_t)-1;
+    return locale_mbrtowc32(locale_thread_current, character, source, length,
+                            active);
+}
+
+size_t rin_locale_current_wcrtomb32(
+    char* destination, uint32_t character,
+    struct rin_unicode_mbstate* state) {
+    rin_unicode_mbstate_t* active = (rin_unicode_mbstate_t*)state;
+    if (!locale_conversion_state(locale_thread_current, &active,
+                                 &locale_wcrtomb_private_state))
+        return (size_t)-1;
+    return locale_wcrtomb32(locale_thread_current, destination, character,
+                            active);
+}
+
+static size_t locale_multibyte_available(locale_t locale,
+                                         const char* source) {
+    size_t maximum = locale_codeset_is_utf8(locale) ? 4u : 1u;
+    size_t available = 1u;
+    while (available < maximum && source[available] != '\0') ++available;
+    return available;
+}
+
+size_t rin_locale_current_mbsrtowcs32(
+    uint32_t* destination, const char** source, size_t length,
+    struct rin_unicode_mbstate* state) {
+    rin_unicode_mbstate_t* active = (rin_unicode_mbstate_t*)state;
+    const char* cursor;
+    size_t converted = 0u;
+    if (!source) {
+        errno = EINVAL;
+        return (size_t)-1;
+    }
+    if (!locale_conversion_state(locale_thread_current, &active,
+                                 &locale_mbsrtowcs_private_state))
+        return (size_t)-1;
+    cursor = *source;
+    if (!cursor) return 0u;
+    while (*cursor != '\0' && (!destination || converted < length)) {
+        uint32_t character = 0u;
+        size_t available = locale_multibyte_available(locale_thread_current,
+                                                       cursor);
+        size_t consumed = locale_mbrtowc32(locale_thread_current, &character,
+                                           cursor, available, active);
+        if (consumed == (size_t)-1 || consumed == (size_t)-2) {
+            if (consumed == (size_t)-2) errno = EILSEQ;
+            *source = cursor;
+            return (size_t)-1;
+        }
+        if (consumed == 0u) break;
+        if (converted == (size_t)-1) {
+            errno = EOVERFLOW;
+            return (size_t)-1;
+        }
+        if (destination) destination[converted] = character;
+        ++converted;
+        cursor += consumed;
+    }
+    if (*cursor == '\0') {
+        if (!destination || converted < length) {
+            if (destination) destination[converted] = 0u;
+            *source = (const char*)0;
+        } else {
+            *source = cursor;
+        }
+    } else {
+        *source = cursor;
+    }
+    return converted;
+}
+
+size_t rin_locale_current_wcsrtombs32(
+    char* destination, const uint32_t** source, size_t length,
+    struct rin_unicode_mbstate* state) {
+    rin_unicode_mbstate_t* active = (rin_unicode_mbstate_t*)state;
+    const uint32_t* cursor;
+    size_t converted = 0u;
+    if (!source) {
+        errno = EINVAL;
+        return (size_t)-1;
+    }
+    if (!locale_conversion_state(locale_thread_current, &active,
+                                 &locale_wcsrtombs_private_state))
+        return (size_t)-1;
+    cursor = *source;
+    if (!cursor) return 0u;
+    while (*cursor != 0u) {
+        char encoded[4];
+        rin_unicode_mbstate_t candidate_state = *active;
+        size_t written = locale_wcrtomb32(locale_thread_current, encoded,
+                                          *cursor, &candidate_state);
+        if (written == (size_t)-1) {
+            *source = cursor;
+            return (size_t)-1;
+        }
+        if (destination && (converted > length ||
+                            written > length - converted))
+            break;
+        if (destination) {
+            size_t index;
+            for (index = 0u; index < written; ++index)
+                destination[converted + index] = encoded[index];
+        }
+        if (converted > (size_t)-1 - written) {
+            errno = EOVERFLOW;
+            *source = cursor;
+            return (size_t)-1;
+        }
+        converted += written;
+        *active = candidate_state;
+        ++cursor;
+    }
+    if (*cursor == 0u) {
+        if (!destination || converted < length) {
+            if (destination) destination[converted] = '\0';
+            *source = (const uint32_t*)0;
+        } else {
+            *source = cursor;
+        }
+    } else {
+        *source = cursor;
+    }
+    return converted;
+}
+
+int rin_locale_current_mblen(const char* source, size_t length) {
+    size_t result;
+    locale_mbstate_reset(&locale_mblen_private_state);
+    if (!source) return 0;
+    result = locale_mbrtowc32(locale_thread_current, (uint32_t*)0, source,
+                              length, &locale_mblen_private_state);
+    if (result == (size_t)-1 || result == (size_t)-2) {
+        if (result == (size_t)-2) errno = EILSEQ;
+        locale_mbstate_reset(&locale_mblen_private_state);
+        return -1;
+    }
+    return (int)result;
+}
+
+int rin_locale_current_mbtowc32(uint32_t* character, const char* source,
+                                size_t length) {
+    size_t result;
+    locale_mbstate_reset(&locale_mbtowc_private_state);
+    if (!source) return 0;
+    result = locale_mbrtowc32(locale_thread_current, character, source,
+                              length, &locale_mbtowc_private_state);
+    if (result == (size_t)-1 || result == (size_t)-2) {
+        if (result == (size_t)-2) errno = EILSEQ;
+        locale_mbstate_reset(&locale_mbtowc_private_state);
+        return -1;
+    }
+    return (int)result;
+}
+
+int rin_locale_current_wctomb32(char* destination, uint32_t character) {
+    size_t result;
+    if (!destination) {
+        locale_mbstate_reset(&locale_wctomb_private_state);
+        return 0;
+    }
+    result = locale_wcrtomb32(locale_thread_current, destination, character,
+                              &locale_wctomb_private_state);
+    return result == (size_t)-1 ? -1 : (int)result;
+}
+
+size_t rin_locale_current_mbstowcs32(uint32_t* destination,
+                                     const char* source, size_t length) {
+    const char* cursor = source;
+    size_t converted = 0u;
+    if (!source) {
+        errno = EINVAL;
+        return (size_t)-1;
+    }
+    locale_mbstate_reset(&locale_mbstowcs_private_state);
+    while (*cursor != '\0' && (!destination || converted < length)) {
+        uint32_t character = 0u;
+        size_t available = locale_multibyte_available(locale_thread_current,
+                                                       cursor);
+        size_t consumed = locale_mbrtowc32(
+            locale_thread_current, &character, cursor, available,
+            &locale_mbstowcs_private_state);
+        if (consumed == (size_t)-1 || consumed == (size_t)-2) {
+            if (consumed == (size_t)-2) errno = EILSEQ;
+            return (size_t)-1;
+        }
+        if (converted == (size_t)-1) {
+            errno = EOVERFLOW;
+            return (size_t)-1;
+        }
+        if (destination) destination[converted] = character;
+        ++converted;
+        cursor += consumed;
+    }
+    if (*cursor == '\0' && destination && converted < length)
+        destination[converted] = 0u;
+    return converted;
+}
+
+size_t rin_locale_current_wcstombs32(char* destination,
+                                     const uint32_t* source, size_t length) {
+    const uint32_t* cursor = source;
+    size_t converted = 0u;
+    if (!source) {
+        errno = EINVAL;
+        return (size_t)-1;
+    }
+    locale_mbstate_reset(&locale_wcstombs_private_state);
+    while (*cursor != 0u) {
+        char encoded[4];
+        rin_unicode_mbstate_t candidate_state = locale_wcstombs_private_state;
+        size_t written = locale_wcrtomb32(locale_thread_current, encoded,
+                                          *cursor, &candidate_state);
+        if (written == (size_t)-1) return (size_t)-1;
+        if (destination && (converted > length ||
+                            written > length - converted))
+            break;
+        if (destination) {
+            size_t index;
+            for (index = 0u; index < written; ++index)
+                destination[converted + index] = encoded[index];
+        }
+        if (converted > (size_t)-1 - written) {
+            errno = EOVERFLOW;
+            return (size_t)-1;
+        }
+        converted += written;
+        locale_wcstombs_private_state = candidate_state;
+        ++cursor;
+    }
+    if (*cursor == 0u && destination && converted < length)
+        destination[converted] = '\0';
+    return converted;
+}

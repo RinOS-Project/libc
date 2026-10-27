@@ -1070,10 +1070,17 @@ int system(const char* command);
  * ═══════════════════════════════════════════════════════════════*/
 
 #ifndef MB_CUR_MAX
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+#define MB_CUR_MAX rin_locale_current_mb_cur_max()
+#else
 #define MB_CUR_MAX 4
+#endif
 #endif
 
 static inline int mblen(const char* s, size_t n) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    return rin_locale_current_mblen(s, n);
+#else
     rin_unicode_mbstate_t st;
     size_t rc;
     st.state = 0;
@@ -1082,6 +1089,7 @@ static inline int mblen(const char* s, size_t n) {
     rc = rin_unicode_mbrlen(s, n, &st);
     if (rc == (size_t)-1 || rc == (size_t)-2) return -1;
     return (int)rc;
+#endif
 }
 
 /* wchar.hとの重複を避けるためのガード */
@@ -1090,20 +1098,36 @@ static inline int mblen(const char* s, size_t n) {
 
 #ifndef _MSVCRT_COMPAT
 static inline int mbtowc(wchar_t* pwc, const char* s, size_t n) {
+#if defined(RIN_USERSPACE)
+    return rin_locale_current_mbtowc32((uint32_t*)pwc, s, n);
+#else
     return rin_unicode_mbtowc32((uint32_t*)pwc, s, n);
+#endif
 }
 
 static inline int wctomb(char* s, wchar_t wc) {
+#if defined(RIN_USERSPACE)
+    return rin_locale_current_wctomb32(s, (uint32_t)wc);
+#else
     if (!s) return 0;
     return rin_unicode_wctomb32(s, (uint32_t)wc);
+#endif
 }
 
 static inline size_t mbstowcs(wchar_t* dest, const char* src, size_t n) {
+#if defined(RIN_USERSPACE)
+    return rin_locale_current_mbstowcs32((uint32_t*)dest, src, n);
+#else
     return rin_unicode_mbstowcs32((uint32_t*)dest, src, n);
+#endif
 }
 
 static inline size_t wcstombs(char* dest, const wchar_t* src, size_t n) {
+#if defined(RIN_USERSPACE)
+    return rin_locale_current_wcstombs32(dest, (const uint32_t*)src, n);
+#else
     return rin_unicode_wcstombs32(dest, (const uint32_t*)src, n);
+#endif
 }
 #endif /* !_MSVCRT_COMPAT */
 

@@ -12,6 +12,17 @@
 typedef char rin_sscanf_ptrdiff_unsigned_width_must_match[
     sizeof(size_t) == sizeof(ptrdiff_t) ? 1 : -1];
 
+static size_t rin_sscanf_mbrtowc32(uint32_t* character, const char* source,
+                                   size_t length,
+                                   rin_unicode_mbstate_t* state) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    return rin_locale_current_mbrtowc32(
+        character, source, length, (struct rin_unicode_mbstate*)state);
+#else
+    return rin_unicode_mbrtowc32(character, source, length, state);
+#endif
+}
+
 static int rin_sscanf_digit(unsigned char value, unsigned int* digit_out) {
     if (value >= '0' && value <= '9') {
         *digit_out = (unsigned int)(value - '0');
@@ -573,9 +584,9 @@ static int rin_sscanf_store_count(va_list* arguments,
 }
 
 /* Decode a narrow input item into a private wide candidate before touching
- * the caller's destination.  The narrow scanf contract is UTF-8 in RinOS;
- * accepting only complete scalar sequences avoids byte-casting malformed
- * input into a wchar_t and keeps `%lc`/`%ls` failure-atomic. */
+ * the caller's destination.  Accepting only complete locale sequences avoids
+ * byte-casting malformed input into a wchar_t and keeps `%lc`/`%ls`
+ * failure-atomic. */
 static int rin_sscanf_decode_wide_candidate(
         const char* input, size_t input_size, wchar_t* output,
         size_t output_capacity, size_t* output_count) {
@@ -590,7 +601,7 @@ static int rin_sscanf_decode_wide_candidate(
     state.codepoint = 0u;
     while (input_offset < input_size) {
         uint32_t value = 0u;
-        size_t consumed = rin_unicode_mbrtowc32(
+        size_t consumed = rin_sscanf_mbrtowc32(
             &value, input + input_offset, input_size - input_offset, &state);
         if (consumed == (size_t)-1 || consumed == (size_t)-2) {
             errno = EILSEQ;
@@ -610,8 +621,9 @@ static int rin_sscanf_decode_wide_candidate(
     return 0;
 }
 
-static int rin_sscanf_utf8_first(const char* input, size_t input_size,
-                                 size_t* consumed_out, uint32_t* value_out) {
+static int rin_sscanf_first_multibyte(const char* input, size_t input_size,
+                                      size_t* consumed_out,
+                                      uint32_t* value_out) {
     rin_unicode_mbstate_t state;
     size_t probe;
     if (!input || !consumed_out || !value_out || input_size == 0u) return 0;
@@ -620,7 +632,7 @@ static int rin_sscanf_utf8_first(const char* input, size_t input_size,
         uint32_t value = 0u;
         state.state = 0u;
         state.codepoint = 0u;
-        consumed = rin_unicode_mbrtowc32(&value, input, probe, &state);
+        consumed = rin_sscanf_mbrtowc32(&value, input, probe, &state);
         if (consumed == (size_t)-1) {
             errno = EILSEQ;
             return -1;
@@ -651,7 +663,7 @@ static int rin_sscanf_wide_scanset_contains(
     while (offset < spec->scanset_bytes) {
         size_t consumed;
         uint32_t member;
-        int parsed = rin_sscanf_utf8_first(
+        int parsed = rin_sscanf_first_multibyte(
             spec->scanset_data + offset, spec->scanset_bytes - offset,
             &consumed, &member);
         if (parsed <= 0) return -1;
@@ -659,7 +671,7 @@ static int rin_sscanf_wide_scanset_contains(
         if (member == (uint32_t)'-' && have_previous &&
             offset < spec->scanset_bytes) {
             uint32_t range_end;
-            parsed = rin_sscanf_utf8_first(
+            parsed = rin_sscanf_first_multibyte(
                 spec->scanset_data + offset,
                 spec->scanset_bytes - offset, &consumed, &range_end);
             if (parsed <= 0) return -1;
@@ -711,7 +723,7 @@ static int rin_sscanf_wide_field(
     while (current < input_size && scalar_count < scalar_limit) {
         size_t consumed;
         uint32_t value;
-        first_result = rin_sscanf_utf8_first(
+        first_result = rin_sscanf_first_multibyte(
             input + current, input_size - current, &consumed, &value);
         if (first_result <= 0) return -1;
         if (spec->conversion == 's' && rin_sscanf_space(value)) break;
@@ -1149,7 +1161,7 @@ static int rin_fscanf_stream_wide_field(
                 }
                 scalar_bytes[scalar_byte_count++] = byte;
                 candidate[byte_count++] = byte;
-                conversion = rin_unicode_mbrtowc32(
+                conversion = rin_sscanf_mbrtowc32(
                     &value, &byte, 1u, &state);
                 if (conversion == (size_t)-1) {
                     errno = EILSEQ;

@@ -143,8 +143,13 @@ static int rin_wprintf_narrow_character(RinWprintfEmit emit, void* context,
                                         unsigned char byte) {
     rin_unicode_mbstate_t state = {0u, 0u};
     uint32_t value = 0u;
-    size_t conversion = rin_unicode_mbrtowc32(
-        &value, (const char*)&byte, 1u, &state);
+    size_t conversion =
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+        rin_locale_current_mbrtowc32(
+            &value, (const char*)&byte, 1u, &state);
+#else
+        rin_unicode_mbrtowc32(&value, (const char*)&byte, 1u, &state);
+#endif
     if (conversion == (size_t)-1 || conversion == (size_t)-2) {
         errno = EILSEQ;
         return -1;
@@ -171,8 +176,14 @@ static int rin_wprintf_narrow_string(RinWprintfEmit emit, void* context,
             }
             return 0;
         }
-        conversion = rin_unicode_mbrtowc32(
-            &value, (const char*)&byte, 1u, &state);
+        conversion =
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+            rin_locale_current_mbrtowc32(
+                &value, (const char*)&byte, 1u, &state);
+#else
+            rin_unicode_mbrtowc32(
+                &value, (const char*)&byte, 1u, &state);
+#endif
         if (conversion == (size_t)-1) {
             errno = EILSEQ;
             return -1;
@@ -1475,7 +1486,12 @@ static wint_t _rin_fgetwc_unlocked(FILE* stream) {
             stream->error = 1;
             return WEOF;
         }
-        conversion = rin_unicode_mbrtowc32(&codepoint, &byte, 1u, &state);
+        conversion =
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+            rin_locale_current_mbrtowc32(&codepoint, &byte, 1u, &state);
+#else
+            rin_unicode_mbrtowc32(&codepoint, &byte, 1u, &state);
+#endif
         if (conversion == (size_t)-1) {
             errno = EILSEQ;
             stream->error = 1;
@@ -1556,7 +1572,12 @@ static wint_t _rin_fputwc_unlocked(wchar_t c, FILE* stream) {
         stream->error = 1;
         return WEOF;
     }
-    length = rin_unicode_wcrtomb32(encoded, value, &state);
+    length =
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+        rin_locale_current_wcrtomb32(encoded, value, &state);
+#else
+        rin_unicode_wcrtomb32(encoded, value, &state);
+#endif
     if (length == (size_t)-1 || length == 0u || length > sizeof(encoded)) {
         errno = EILSEQ;
         stream->error = 1;

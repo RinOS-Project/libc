@@ -190,6 +190,29 @@ uint32_t rin_locale_wide_ctype_towctrans(locale_t locobj, uint32_t character,
                                          unsigned long descriptor);
 uint32_t rin_locale_current_wide_ctype_towctrans(uint32_t character,
                                                  unsigned long descriptor);
+struct rin_unicode_mbstate;
+int rin_locale_current_mb_cur_max(void);
+size_t rin_locale_current_mbrlen(const char* source, size_t length,
+                                 struct rin_unicode_mbstate* state);
+size_t rin_locale_current_mbrtowc32(uint32_t* character, const char* source,
+                                    size_t length,
+                                    struct rin_unicode_mbstate* state);
+size_t rin_locale_current_wcrtomb32(char* destination, uint32_t character,
+                                    struct rin_unicode_mbstate* state);
+size_t rin_locale_current_mbsrtowcs32(uint32_t* destination,
+                                      const char** source, size_t length,
+                                      struct rin_unicode_mbstate* state);
+size_t rin_locale_current_wcsrtombs32(char* destination,
+                                      const uint32_t** source, size_t length,
+                                      struct rin_unicode_mbstate* state);
+int rin_locale_current_mblen(const char* source, size_t length);
+int rin_locale_current_mbtowc32(uint32_t* character, const char* source,
+                                size_t length);
+int rin_locale_current_wctomb32(char* destination, uint32_t character);
+size_t rin_locale_current_mbstowcs32(uint32_t* destination,
+                                    const char* source, size_t length);
+size_t rin_locale_current_wcstombs32(char* destination,
+                                     const uint32_t* source, size_t length);
 /* XSI wcwidth uses this predicate to reject non-printing characters. */
 int rin_locale_current_wide_print_test(uint32_t character);
 int rin_locale_ctype_map(locale_t locobj, int character,
