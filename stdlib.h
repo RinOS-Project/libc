@@ -802,25 +802,52 @@ void srandom(unsigned int seed);
 
 typedef int (*_qsort_cmp_t)(const void*, const void*);
 
+static inline void _rin_qsort_swap_bytes(unsigned char* left,
+                                         unsigned char* right,
+                                         size_t size) {
+    for (size_t index = 0u; index < size; ++index) {
+        unsigned char temporary = left[index];
+        left[index] = right[index];
+        right[index] = temporary;
+    }
+}
+
+static inline void _rin_qsort_sift_down(unsigned char* bytes, size_t root,
+                                        size_t end, size_t size,
+                                        _qsort_cmp_t compar) {
+    if (end == 0u) return;
+    while (root <= (end - 1u) / 2u) {
+        size_t child = root * 2u + 1u;
+        size_t selected = root;
+        if (compar(bytes + selected * size, bytes + child * size) < 0)
+            selected = child;
+        if (child < end &&
+            compar(bytes + selected * size, bytes + (child + 1u) * size) < 0)
+            selected = child + 1u;
+        if (selected == root) return;
+        _rin_qsort_swap_bytes(bytes + root * size,
+                              bytes + selected * size, size);
+        root = selected;
+    }
+}
+
 static inline void qsort(void* base, size_t nmemb, size_t size, _qsort_cmp_t compar) {
-    /* 簡易バブルソート */
     unsigned char* arr = (unsigned char*)base;
     if (!arr || !compar || size == 0u || nmemb < 2u ||
         nmemb > (size_t)-1 / size)
         return;
-    for (size_t i = 0; i < nmemb - 1; i++) {
-        for (size_t j = 0; j < nmemb - i - 1; j++) {
-            void* a = arr + j * size;
-            void* b = arr + (j + 1) * size;
-            if (compar(a, b) > 0) {
-                /* スワップ */
-                for (size_t k = 0; k < size; k++) {
-                    unsigned char tmp = ((unsigned char*)a)[k];
-                    ((unsigned char*)a)[k] = ((unsigned char*)b)[k];
-                    ((unsigned char*)b)[k] = tmp;
-                }
-            }
-        }
+
+    size_t start = (nmemb - 2u) / 2u + 1u;
+    while (start != 0u) {
+        --start;
+        _rin_qsort_sift_down(arr, start, nmemb - 1u, size, compar);
+    }
+
+    size_t end = nmemb - 1u;
+    while (end != 0u) {
+        _rin_qsort_swap_bytes(arr, arr + end * size, size);
+        --end;
+        _rin_qsort_sift_down(arr, 0u, end, size, compar);
     }
 }
 
