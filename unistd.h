@@ -17,6 +17,7 @@
 #include "fcntl.h"
 #include "sys/stat.h"
 #include "sys/ioctl.h"
+#include "termios.h"
 #if !defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
 #include "rin_account_compat.h"
 #endif
@@ -1396,9 +1397,11 @@ static inline int usleep(useconds_t usec) {
  * ═══════════════════════════════════════════════════════════════*/
 
 static inline int isatty(int fd) {
-    struct stat st;
-    if (fstat(fd, &st) < 0) return 0;
-    return S_ISCHR(st.st_mode) ? 1 : 0;
+    struct termios settings;
+    int saved_errno = errno;
+    if (tcgetattr(fd, &settings) < 0) return 0;
+    errno = saved_errno;
+    return 1;
 }
 
 static inline long sysconf(int name) {
