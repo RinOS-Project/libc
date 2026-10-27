@@ -62,6 +62,10 @@ _Static_assert(sizeof(__rin_statvfs_usage_v1) == 96,
 #define __RIN_FILESYSTEM_USAGE_FLAG_BLOCKS_VALID 1u
 #define __RIN_FILESYSTEM_USAGE_FLAG_READ_ONLY 4u
 
+#ifndef ST_RDONLY
+#define ST_RDONLY 1u
+#endif
+
 #ifndef _RIN_STATVFS_SYSCALL2
 #define _RIN_STATVFS_SYSCALL2(number, path, output) \
     _syscall2((uintptr_t)(number), (uintptr_t)(path), (uintptr_t)(output))
@@ -128,7 +132,8 @@ static inline int statvfs(const char* path, struct statvfs* buf) {
     buf->f_favail = (fsfilcnt_t)usage.free_inodes;
     buf->f_fsid = usage.filesystem_type;
     buf->f_flag =
-        (usage.flags & __RIN_FILESYSTEM_USAGE_FLAG_READ_ONLY) != 0u ? 1u : 0u;
+        (usage.flags & __RIN_FILESYSTEM_USAGE_FLAG_READ_ONLY) != 0u
+            ? ST_RDONLY : 0u;
     buf->f_namemax = usage.name_max;
     return 0;
 }
