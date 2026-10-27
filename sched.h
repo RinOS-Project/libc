@@ -523,7 +523,8 @@ static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
     uint32_t milliseconds = 0u;
     int result;
     result = platform_thread_sched_rr_interval(
-        (void*)(uintptr_t)(pid == 0 ? platform_thread_current_tid() : pid),
+        (void*)(pid == 0 ? (uintptr_t)platform_thread_current_tid()
+                         : (uintptr_t)pid),
         &milliseconds);
     if (result != 0) {
         errno = result;
@@ -576,11 +577,11 @@ static inline int rin_sched_get_numa_policy(RinNumaMemoryPolicyV1* policy)
         return -1;
     }
     /* Do not expose a partial policy copy-out after a backend failure. */
-    __builtin_memset(policy, 0, sizeof(*policy));
+    *policy = (RinNumaMemoryPolicyV1){0};
     if (_rin_sched_status(_RIN_SCHED_SYSCALL2(
             SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_GET,
             (uintptr_t)policy)) < 0) {
-        __builtin_memset(policy, 0, sizeof(*policy));
+        *policy = (RinNumaMemoryPolicyV1){0};
         return -1;
     }
     return 0;
