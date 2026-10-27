@@ -54,6 +54,15 @@ static inline void _rin_getopt_diagnostic(char* const argv[],
     fprintf(stderr, "%s: %s -- '%c'\n", program, message, option);
 }
 
+static inline void _rin_getopt_long_diagnostic(char* const argv[],
+                                               const char* message,
+                                               const char* argument) {
+    if (!opterr) return;
+    const char* program = argv && argv[0] ? argv[0] : "?";
+    fprintf(stderr, "%s: %s -- '%s'\n", program, message,
+            argument ? argument : "?");
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * getopt関数
  * ═══════════════════════════════════════════════════════════════*/
@@ -190,8 +199,11 @@ static inline int getopt_long(int argc, char* const argv[],
                 if (longindex) *longindex = i;
 
                 /* 引数処理 */
-                if (longopts[i].has_arg == no_argument && eq)
+                if (longopts[i].has_arg == no_argument && eq) {
+                    _rin_getopt_long_diagnostic(
+                        argv, "option does not allow an argument", arg);
                     return '?';
+                }
                 if (longopts[i].has_arg == required_argument ||
                     longopts[i].has_arg == optional_argument) {
                     if (eq) {
@@ -201,6 +213,8 @@ static inline int getopt_long(int argc, char* const argv[],
                     } else if (longopts[i].has_arg == required_argument) {
                         optopt = longopts[i].val;
                         if (optstring && optstring[0] == ':') return ':';
+                        _rin_getopt_long_diagnostic(
+                            argv, "option requires an argument", arg);
                         return '?';
                     }
                 }
@@ -215,6 +229,7 @@ static inline int getopt_long(int argc, char* const argv[],
 
         /* 見つからない */
         optind++;
+        _rin_getopt_long_diagnostic(argv, "unrecognized option", arg);
         return '?';
     }
 
@@ -275,8 +290,11 @@ static inline int getopt_long_only(int argc, char* const argv[],
             ++optind;
             _rin_getopt_pos = 0;
             if (longindex) *longindex = i;
-            if (longopts[i].has_arg == no_argument && eq)
+            if (longopts[i].has_arg == no_argument && eq) {
+                _rin_getopt_long_diagnostic(
+                    argv, "option does not allow an argument", arg);
                 return '?';
+            }
             if (longopts[i].has_arg == required_argument ||
                 longopts[i].has_arg == optional_argument) {
                 if (eq) {
@@ -287,6 +305,8 @@ static inline int getopt_long_only(int argc, char* const argv[],
                 } else if (longopts[i].has_arg == required_argument) {
                     optopt = longopts[i].val;
                     if (optstring[0] == ':') return ':';
+                    _rin_getopt_long_diagnostic(
+                        argv, "option requires an argument", arg);
                     return '?';
                 }
             }
