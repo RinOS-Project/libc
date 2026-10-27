@@ -40,10 +40,20 @@ typedef struct {
     int waiters;
 } sem_t;
 
+#if defined(__cplusplus)
+static_assert(sizeof(sem_t) == 8u, "sem_t shared ABI drift");
+static_assert(offsetof(sem_t, waiters) == sizeof(int),
+              "sem_t waiter offset drift");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(sem_t) == 8u, "sem_t shared ABI drift");
+_Static_assert(offsetof(sem_t, waiters) == sizeof(int),
+               "sem_t waiter offset drift");
+#endif
+
 /* Preserve sem_t's two-word ABI while storing whether its futex key is
  * process-shared in the high bit of the waiter count. */
-#define RIN_SEM_PSHARED_FLAG UINT32_C(0x80000000)
-#define RIN_SEM_WAITER_MASK  UINT32_C(0x7fffffff)
+#define RIN_SEM_PSHARED_FLAG RIN_POSIX_SEMAPHORE_WAITERS_SHARED_FLAG
+#define RIN_SEM_WAITER_MASK  RIN_POSIX_SEMAPHORE_WAITERS_COUNT_MASK
 
 static inline uint32_t rin_sem_state_load(const sem_t* sem) {
     return __atomic_load_n((const uint32_t*)&sem->waiters, __ATOMIC_ACQUIRE);
@@ -333,9 +343,10 @@ static inline int sem_getvalue(sem_t* sem, int* sval) {
 }
 
 /*
- * 名前付きセマフォは libc runtime の bounded process-local namespace が
- * 所有する。無名セマフォと違い、sem_open() の varargs は O_CREAT のとき
- * mode_t と初期値をこの順で受け取る。
+ * 名前付きセマフォはkernelのshared-memory objectが所有し、プロセス間で
+ * 同じsem_t stateを共有する。sem_open()のvarargsはO_CREATのときmode_tと
+ * 初期値をこの順で受け取る。mode_tのpermissionはcurrent-session namespace
+ * 内では適用されない。
  */
 sem_t* sem_open(const char* name, int oflag, ...);
 int sem_close(sem_t* sem);
