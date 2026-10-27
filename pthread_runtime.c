@@ -230,6 +230,7 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                 timed_out = 1;
                 continue;
             }
+            if (wait_error == EINTR) continue;
             if (wait_error != 0) {
                 rin_pthread_mutex_robust_owner_release(mutex, owner);
                 return wait_error;
@@ -998,6 +999,11 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
                     2, NULL);
                 int wait_error = rin_pthread_futex_wait_error(wait_result,
                                                                errno);
+                if (wait_error == EINTR) {
+                    c = __atomic_exchange_n(&mutex->locked, 2,
+                                            __ATOMIC_ACQUIRE);
+                    continue;
+                }
                 if (wait_error != 0) return wait_error;
                 c = __atomic_exchange_n(&mutex->locked, 2, __ATOMIC_ACQUIRE);
             }
@@ -1048,6 +1054,11 @@ int pthread_mutex_timedlock(pthread_mutex_t* mutex,
                     2, abstime, FUTEX_BITSET_MATCH_ANY);
                 int wait_error = rin_pthread_futex_wait_error(wait_result,
                                                                errno);
+                if (wait_error == EINTR) {
+                    c = __atomic_exchange_n(&mutex->locked, 2,
+                                            __ATOMIC_ACQUIRE);
+                    continue;
+                }
                 if (wait_error == ETIMEDOUT) {
                     /* Resolve a concurrent unlock before returning timeout. */
                     c = __atomic_exchange_n(&mutex->locked, 2,
