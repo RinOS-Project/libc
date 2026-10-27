@@ -12,6 +12,7 @@
 #include "limits.h"
 #include "fcntl_flags.h"
 #include "stdlib.h"
+#include "sys/stat.h"
 #include "sys/syscall.h"
 
 #ifdef __cplusplus
@@ -129,7 +130,21 @@ static inline DIR* opendir(const char* name) {
  * descriptor itself. */
 static inline DIR* fdopendir(int fd) {
     DIR* dir;
+    struct stat status;
+    intptr_t open_flags;
     if (fd < 0) {
+        errno = EBADF;
+        return NULL;
+    }
+    if (fstat(fd, &status) < 0) return NULL;
+    if (!S_ISDIR(status.st_mode)) {
+        errno = ENOTDIR;
+        return NULL;
+    }
+    open_flags = _rin_dir_result(_RIN_DIRENT_SYSCALL3(
+        SYS_FCNTL, (uintptr_t)fd, (uintptr_t)F_GETFL, (uintptr_t)0u));
+    if (open_flags < 0) return NULL;
+    if ((open_flags & O_ACCMODE) == O_WRONLY || (open_flags & O_PATH) != 0) {
         errno = EBADF;
         return NULL;
     }
