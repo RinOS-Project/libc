@@ -290,8 +290,8 @@ static inline int _fcntl_dupfd_at_least(int fd, int minfd, int cloexec) {
 static inline int open(const char* pathname, int flags, ...) {
     unsigned int mode = 0644;  /* デフォルト */
 
-    /* O_CREAT指定時はmode引数を取得 */
-    if (flags & O_CREAT) {
+    /* O_CREAT/O_TMPFILE creation modes come from the variadic argument. */
+    if (flags & (O_CREAT | O_TMPFILE)) {
         va_list ap;
         va_start(ap, flags);
         mode = va_arg(ap, unsigned int);
@@ -354,7 +354,7 @@ static inline int openat(int dirfd, const char* pathname, int flags, ...) {
         errno = ENOENT;
         return -1;
     }
-    if (flags & O_CREAT) {
+    if (flags & (O_CREAT | O_TMPFILE)) {
         va_list ap;
         va_start(ap, flags);
         mode = va_arg(ap, unsigned int);
