@@ -147,6 +147,15 @@ typedef struct {
     int pshared;
 } pthread_rwlockattr_t;
 
+#define RIN_PTHREAD_RWLOCK_WRITER_ACTIVE 0x1
+#define RIN_PTHREAD_RWLOCK_PROCESS_SHARED 0x2
+
+static inline int rin_pthread_rwlock_writer_active(
+    const pthread_rwlock_t* rwlock) {
+    return rwlock &&
+           (rwlock->writer & RIN_PTHREAD_RWLOCK_WRITER_ACTIVE) != 0;
+}
+
 typedef struct {
     uint32_t magic;
     uint32_t count;
@@ -963,7 +972,6 @@ static inline int pthread_rwlockattr_setpshared(pthread_rwlockattr_t* attr,
     if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
                   pshared != PTHREAD_PROCESS_SHARED))
         return EINVAL;
-    if (pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
     attr->pshared = pshared;
     return 0;
 }
@@ -1008,7 +1016,7 @@ static inline int pthread_rwlock_init(pthread_rwlock_t* rwlock, const pthread_rw
 
 static inline int pthread_rwlock_destroy(pthread_rwlock_t* rwlock) {
     if (!rwlock) return EINVAL;
-    if (rwlock->readers > 0 || rwlock->writer ||
+    if (rwlock->readers > 0 || rin_pthread_rwlock_writer_active(rwlock) ||
         rwlock->waiting_readers > 0 || rwlock->waiting_writers > 0) return EBUSY;
     pthread_cond_destroy(&rwlock->can_read);
     pthread_cond_destroy(&rwlock->can_write);
@@ -1020,7 +1028,8 @@ static inline int pthread_rwlock_rdlock(pthread_rwlock_t* rwlock) {
     if (!rwlock) return EINVAL;
     pthread_mutex_lock(&rwlock->mutex);
     /* Writer-preference: block new readers when writers are waiting. */
-    while (rwlock->writer || rwlock->waiting_writers > 0) {
+    while (rin_pthread_rwlock_writer_active(rwlock) ||
+           rwlock->waiting_writers > 0) {
         rwlock->waiting_readers++;
         pthread_cond_wait(&rwlock->can_read, &rwlock->mutex);
         rwlock->waiting_readers--;
@@ -1034,11 +1043,11 @@ static inline int pthread_rwlock_wrlock(pthread_rwlock_t* rwlock) {
     if (!rwlock) return EINVAL;
     pthread_mutex_lock(&rwlock->mutex);
     rwlock->waiting_writers++;
-    while (rwlock->writer || rwlock->readers > 0) {
+    while (rin_pthread_rwlock_writer_active(rwlock) || rwlock->readers > 0) {
         pthread_cond_wait(&rwlock->can_write, &rwlock->mutex);
     }
     rwlock->waiting_writers--;
-    rwlock->writer = 1;
+    rwlock->writer |= RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
     pthread_mutex_unlock(&rwlock->mutex);
     return 0;
 }
@@ -1046,7 +1055,8 @@ static inline int pthread_rwlock_wrlock(pthread_rwlock_t* rwlock) {
 static inline int pthread_rwlock_tryrdlock(pthread_rwlock_t* rwlock) {
     if (!rwlock) return EINVAL;
     if (pthread_mutex_trylock(&rwlock->mutex) != 0) return EBUSY;
-    if (rwlock->writer || rwlock->waiting_writers > 0) {
+    if (rin_pthread_rwlock_writer_active(rwlock) ||
+        rwlock->waiting_writers > 0) {
         pthread_mutex_unlock(&rwlock->mutex);
         return EBUSY;
     }
@@ -1058,11 +1068,11 @@ static inline int pthread_rwlock_tryrdlock(pthread_rwlock_t* rwlock) {
 static inline int pthread_rwlock_trywrlock(pthread_rwlock_t* rwlock) {
     if (!rwlock) return EINVAL;
     if (pthread_mutex_trylock(&rwlock->mutex) != 0) return EBUSY;
-    if (rwlock->writer || rwlock->readers > 0) {
+    if (rin_pthread_rwlock_writer_active(rwlock) || rwlock->readers > 0) {
         pthread_mutex_unlock(&rwlock->mutex);
         return EBUSY;
     }
-    rwlock->writer = 1;
+    rwlock->writer |= RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
     pthread_mutex_unlock(&rwlock->mutex);
     return 0;
 }
@@ -1070,8 +1080,8 @@ static inline int pthread_rwlock_trywrlock(pthread_rwlock_t* rwlock) {
 static inline int pthread_rwlock_unlock(pthread_rwlock_t* rwlock) {
     if (!rwlock) return EINVAL;
     pthread_mutex_lock(&rwlock->mutex);
-    if (rwlock->writer) {
-        rwlock->writer = 0;
+    if (rin_pthread_rwlock_writer_active(rwlock)) {
+        rwlock->writer &= ~RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
     } else if (rwlock->readers > 0) {
         rwlock->readers--;
     } else {
@@ -1080,7 +1090,8 @@ static inline int pthread_rwlock_unlock(pthread_rwlock_t* rwlock) {
     }
 
     if (rwlock->waiting_writers > 0) {
-        if (rwlock->writer == 0 && rwlock->readers == 0) {
+        if (!rin_pthread_rwlock_writer_active(rwlock) &&
+            rwlock->readers == 0) {
             pthread_cond_signal(&rwlock->can_write);
         }
     } else if (rwlock->waiting_readers > 0) {
