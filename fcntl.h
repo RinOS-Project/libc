@@ -165,50 +165,6 @@ static inline void _fcntl_init(void) {
     _fcntl_initialized = 1;
 }
 
-static inline int _fcntl_probe_socket(int fd) {
-    int type = 0;
-    socklen_t len = (socklen_t)sizeof(type);
-    int saved_errno = errno;
-    int is_socket = getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) == 0;
-    errno = saved_errno;
-    return is_socket;
-}
-
-static inline int _fcntl_sync_socket_nonblocking_from_kernel(int fd, int* flags) {
-    int nonblocking = 0;
-    socklen_t len = (socklen_t)sizeof(nonblocking);
-
-    if (!flags) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (getsockopt(fd, SOL_SOCKET, SO_NONBLOCK, &nonblocking, &len) != 0)
-        return -1;
-    if (len < sizeof(int)) {
-        errno = EIO;
-        return -1;
-    }
-
-    if (nonblocking) {
-        *flags |= O_NONBLOCK;
-    } else {
-        *flags &= ~O_NONBLOCK;
-    }
-
-    if (fd >= 0 && fd < _FCNTL_MAX_FDS) {
-        _fcntl_fl_flags[fd] = *flags;
-    }
-    return 0;
-}
-
-static inline int _fcntl_sync_socket_nonblocking_to_kernel(int fd, int flags) {
-    int nonblocking;
-
-    nonblocking = (flags & O_NONBLOCK) ? 1 : 0;
-    return setsockopt(fd, SOL_SOCKET, SO_NONBLOCK, &nonblocking,
-                      (socklen_t)sizeof(nonblocking));
-}
-
 static inline void _fcntl_track_new_fd(int fd, int fl_flags, int fd_flags) {
     _fcntl_init();
     if (fd >= 0 && fd < _FCNTL_MAX_FDS) {
@@ -469,62 +425,39 @@ static inline int fcntl(int fd, int cmd, ...) {
                 result = -1;
                 break;
             }
-            result = _fcntl_fl_flags[fd];
-            if (_fcntl_probe_socket(fd)) {
-                if (_fcntl_sync_socket_nonblocking_from_kernel(fd, &result) < 0)
-                    result = -1;
-            } else {
-                /* パイプ等: カーネルから非ブロッキング状態を取得 */
-                intptr_t kr = _fcntl_result_to_int(_syscall3(
-                    (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
-                    (uintptr_t)F_GETFL, 0u));
-                if (kr >= 0) {
-                    if (kr & O_NONBLOCK) {
-                        result |= O_NONBLOCK;
-                    } else {
-                        result &= ~O_NONBLOCK;
-                    }
-                    if (fd >= 0 && fd < _FCNTL_MAX_FDS) {
-                        _fcntl_fl_flags[fd] = result;
-                    }
-                } else {
-                    result = -1;
-                }
-            }
+            result = _fcntl_result_to_int(_syscall3(
+                (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
+                (uintptr_t)F_GETFL, 0u));
+            if (result >= 0) _fcntl_fl_flags[fd] = result;
             break;
 
         case F_SETFL: {
             int flags = va_arg(ap, int);
+            int current_flags;
             int new_flags;
             if (fd < 0 || fd >= _FCNTL_MAX_FDS) {
                 errno = EBADF;
                 result = -1;
                 break;
             }
-            /* アクセスモードは変更不可、ステータスフラグのみ変更 */
-            {
-                int access_mode = _fcntl_fl_flags[fd] & O_ACCMODE;
-                new_flags = access_mode | (flags & ~O_ACCMODE);
+            /* The process may have inherited this descriptor through exec.
+             * Read its access mode from the kernel instead of trusting the
+             * per-process cache before passing status flags to F_SETFL. */
+            current_flags = _fcntl_result_to_int(_syscall3(
+                (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
+                (uintptr_t)F_GETFL, 0u));
+            if (current_flags < 0) {
+                result = -1;
+                break;
             }
-            if (_fcntl_probe_socket(fd)) {
-                if (_fcntl_sync_socket_nonblocking_to_kernel(fd,
-                                                              new_flags) < 0) {
-                    result = -1;
-                } else {
-                    _fcntl_fl_flags[fd] = new_flags;
-                    result = 0;
-                }
-            } else {
-                /* パイプ等: カーネルへ非ブロッキング状態を同期 */
+            new_flags = (current_flags & O_ACCMODE) |
+                (flags & ~O_ACCMODE);
+            {
                 intptr_t kernel_result = _syscall3(
                     (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
                     (uintptr_t)F_SETFL, (uintptr_t)new_flags);
-                if (_fcntl_result_status_zero(kernel_result) < 0) {
-                    result = -1;
-                } else {
-                    _fcntl_fl_flags[fd] = new_flags;
-                    result = 0;
-                }
+                result = _fcntl_result_status_zero(kernel_result);
+                if (result == 0) _fcntl_fl_flags[fd] = new_flags;
             }
             break;
         }
