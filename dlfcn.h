@@ -14,6 +14,7 @@
 #include "link.h"
 #include <rin/dynlink/addr_abi.h>
 #include <rin/dynlink/flags.h>
+#include <rin/dynlink/memory_abi.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -119,6 +120,35 @@ static inline void* dynlink_load_flags(const char* path, unsigned int flags) {
 static inline void* dynlink_load(const char* path) {
     return _dynlink_pointer_result(_RIN_DYNLINK_SYSCALL1(
         SYS_DLOPEN, (uintptr_t)path));
+}
+
+/* Load a legacy RLL from a caller buffer only when the kernel can compare an
+ * exact process-memory snapshot with the authenticated installed/system file. */
+static inline void* dynlink_load_memory_v1(const char* library_name,
+                                           const void* image,
+                                           size_t image_size) {
+    RinDynlinkOpenMemoryV1 request = {0};
+    size_t name_size = 0u;
+    if (!library_name || !image || image_size == 0u ||
+        (uint64_t)image_size > RIN_DYNLINK_OPEN_MEMORY_V1_MAX_IMAGE_BYTES) {
+        errno = EINVAL;
+        return NULL;
+    }
+    while (name_size < sizeof(request.library_name) &&
+           library_name[name_size] != '\0') {
+        request.library_name[name_size] = library_name[name_size];
+        ++name_size;
+    }
+    if (name_size == 0u || name_size >= sizeof(request.library_name)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_DYNLINK_OPEN_MEMORY_V1_VERSION;
+    request.image_address = (uint64_t)(uintptr_t)image;
+    request.image_size = (uint64_t)image_size;
+    return _dynlink_pointer_result(_RIN_DYNLINK_SYSCALL1(
+        SYS_DLOPEN_MEMORY_V1, (uintptr_t)&request));
 }
 
 static inline int dynlink_unload(void* handle) {
