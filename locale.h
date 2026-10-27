@@ -174,6 +174,8 @@ static inline struct lconv* localeconv(void) {
 int rin_locale_ctype_test(locale_t locobj, int character,
                           uint32_t operation);
 int rin_locale_current_ctype_test(int character, uint32_t operation);
+/* Wide-character classification used by XSI terminal-width APIs. */
+int rin_locale_current_wide_print_test(uint32_t character);
 int rin_locale_ctype_map(locale_t locobj, int character,
                          uint32_t operation);
 int rin_locale_current_ctype_map(int character, uint32_t operation);

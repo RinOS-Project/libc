@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "locale.h"
 #include "stdlib.h"
+#include "../libunicode/rin_unicode.h"
 
 #ifndef RIN_LOCALE_OBJECT_ALLOC
 #define RIN_LOCALE_OBJECT_ALLOC(size) malloc(size)
@@ -305,6 +306,23 @@ int rin_locale_ctype_test(locale_t locale, int character,
 
 int rin_locale_current_ctype_test(int character, uint32_t operation) {
     return rin_locale_ctype_test(locale_thread_current, character, operation);
+}
+
+int rin_locale_current_wide_print_test(uint32_t character) {
+    locale_t locale = locale_thread_current;
+    const char* name;
+
+    if (!rin_unicode_is_valid_scalar(character)) return 0;
+    if (locale == LC_GLOBAL_LOCALE) {
+        name = rin_locale_name(LC_CTYPE);
+        if (!name || locale_equal(name, "C") || locale_equal(name, "POSIX"))
+            return character >= 0x20u && character <= 0x7eu;
+    } else {
+        if (!locale_object_valid(locale)) return 0;
+        if (locale->categories[LC_CTYPE] == RIN_LOCALE_KIND_C)
+            return character >= 0x20u && character <= 0x7eu;
+    }
+    return rin_unicode_isprint(character);
 }
 
 int rin_locale_ctype_map(locale_t locale, int character,

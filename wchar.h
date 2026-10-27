@@ -213,6 +213,34 @@ static inline wchar_t* wmemset(wchar_t* s, wchar_t c, size_t n) {
     return s;
 }
 
+#ifndef _MSVCRT_COMPAT
+/* XSI display-column width helpers.  The locale-aware predicate keeps the
+ * C/POSIX locale's printable repertoire ASCII-only; other supported locales
+ * use the Unicode classification snapshot. */
+static inline int wcwidth(wchar_t wc) {
+    uint32_t character = (uint32_t)wc;
+    if (character == 0u) return 0;
+#if defined(RIN_USERSPACE) && !defined(MIDL_PASS)
+    if (!rin_locale_current_wide_print_test(character)) return -1;
+#else
+    if (!rin_unicode_isprint(character)) return -1;
+#endif
+    return rin_unicode_cell_width(character);
+}
+
+static inline int wcswidth(const wchar_t* string, size_t count) {
+    int columns = 0;
+    if (!string) return -1;
+    while (count != 0u && *string != L'\0') {
+        int width = wcwidth(*string++);
+        if (width < 0 || width > INT_MAX - columns) return -1;
+        columns += width;
+        --count;
+    }
+    return columns;
+}
+#endif /* !_MSVCRT_COMPAT */
+
 /* ═══════════════════════════════════════════════════════════════
  * ワイド文字I/O
  * ═══════════════════════════════════════════════════════════════*/
