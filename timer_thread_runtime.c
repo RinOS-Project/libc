@@ -17,6 +17,9 @@ typedef struct RinTimerThreadEntry {
 } RinTimerThreadEntry;
 typedef struct RinTimerThreadJob {
     volatile sig_atomic_t active;
+    unsigned int slot;
+    timer_t timer_id;
+    unsigned int generation;
     void (*function)(union sigval);
     union sigval value;
 } RinTimerThreadJob;
@@ -82,6 +85,9 @@ static void* rin_timer_thread_job(void* argument) {
     if (job && job->function) job->function(job->value);
     if (job) {
         job->function = (void (*)(union sigval))0;
+        job->timer_id = 0;
+        job->slot = 0u;
+        job->generation = 0u;
         __atomic_store_n(&job->active, 0, __ATOMIC_RELEASE);
     }
     return (void*)0;
@@ -127,6 +133,56 @@ static RinTimerThreadJob* rin_timer_thread_job_reserve(void) {
     return job;
 }
 
+static void rin_timer_thread_job_release(RinTimerThreadJob* job) {
+    if (!job) return;
+    job->function = (void (*)(union sigval))0;
+    job->timer_id = 0;
+    job->slot = 0u;
+    job->generation = 0u;
+    __atomic_store_n(&job->active, 0, __ATOMIC_RELEASE);
+}
+
+/* A consumed timer event stays in its bounded job slot until a worker can be
+ * created.  Returning the slot to the pool after pthread_create() fails would
+ * silently discard that one-shot notification. */
+static unsigned int rin_timer_thread_launch_pending_jobs(void) {
+    unsigned int dispatched = 0u;
+    for (unsigned int index = 0u; index < RIN_TIMER_THREAD_JOBS; ++index) {
+        RinTimerThreadJob* job = &g_jobs[index];
+        RinTimerThreadSnapshot snapshot;
+        pthread_t thread;
+        sig_atomic_t expected = 1;
+        if (__atomic_load_n(&job->active, __ATOMIC_ACQUIRE) != 1 ||
+            !job->function)
+            continue;
+        snapshot.slot = job->slot;
+        snapshot.timer_id = job->timer_id;
+        snapshot.function = job->function;
+        snapshot.value = job->value;
+        snapshot.generation = job->generation;
+        if (!rin_timer_thread_snapshot_current(&snapshot)) {
+            rin_timer_thread_job_release(job);
+            continue;
+        }
+        if (!__atomic_compare_exchange_n(&job->active, &expected, 2, 0,
+                                         __ATOMIC_ACQ_REL,
+                                         __ATOMIC_ACQUIRE))
+            continue;
+        if (pthread_create(&thread, (const pthread_attr_t*)0,
+                           rin_timer_thread_job, job) != 0) {
+            /* No worker owns the job after a failed create.  Keep the
+             * callback and timer generation for the next dispatcher pass. */
+            __atomic_store_n(&job->active, 1, __ATOMIC_RELEASE);
+            continue;
+        }
+        /* A successful create transfers ownership of the job record to the
+         * worker even when detach itself fails. */
+        (void)pthread_detach(thread);
+        ++dispatched;
+    }
+    return dispatched;
+}
+
 static unsigned int rin_timer_thread_dispatch_once(void) {
     RinTimerThreadSnapshot snapshots[RIN_TIMER_THREAD_SLOTS];
     unsigned int snapshot_count = 0u;
@@ -146,11 +202,12 @@ static unsigned int rin_timer_thread_dispatch_once(void) {
     }
     rin_timer_thread_unlock();
 
+    dispatched += rin_timer_thread_launch_pending_jobs();
+
     for (unsigned int i = 0u; i < snapshot_count; ++i) {
         const RinTimerThreadSnapshot* snapshot = &snapshots[i];
         for (;;) {
             RinTimerThreadJob* job;
-            pthread_t thread;
             intptr_t pending;
 
             if (!rin_timer_thread_snapshot_current(snapshot)) break;
@@ -162,23 +219,20 @@ static unsigned int rin_timer_thread_dispatch_once(void) {
             pending = RIN_TIMER_THREAD_POLL(snapshot->timer_id);
             if (pending <= 0 ||
                 !rin_timer_thread_snapshot_current(snapshot)) {
-                job->function = (void (*)(union sigval))0;
-                __atomic_store_n(&job->active, 0, __ATOMIC_RELEASE);
+                rin_timer_thread_job_release(job);
                 break;
             }
+            job->slot = snapshot->slot;
+            job->timer_id = snapshot->timer_id;
+            job->generation = snapshot->generation;
             job->function = snapshot->function;
             job->value = snapshot->value;
-            if (pthread_create(&thread, (const pthread_attr_t*)0,
-                               rin_timer_thread_job, job) != 0) {
-                job->function = (void (*)(union sigval))0;
-                __atomic_store_n(&job->active, 0, __ATOMIC_RELEASE);
+            dispatched += rin_timer_thread_launch_pending_jobs();
+            /* A create failure leaves this consumed notification in its
+             * reserved slot.  Do not consume a second event for this timer
+             * until that callback has a worker. */
+            if (__atomic_load_n(&job->active, __ATOMIC_ACQUIRE) == 1)
                 break;
-            }
-            /* A successful create transfers ownership of the job record to
-             * the worker even when detach itself fails; clearing it here
-             * would race the worker's first read. */
-            if (pthread_detach(thread) != 0) break;
-            ++dispatched;
         }
     }
     return dispatched;
