@@ -295,14 +295,18 @@ static inline pid_t wait3(int* wstatus, int options, struct rusage* rusage) {
         return (pid_t)-1;
     }
     if (rusage) {
-        __rin_wait_clear_rusage(rusage);
+        struct rusage temporary_rusage;
+        __rin_wait_clear_rusage(&temporary_rusage);
         __rin_wait_clear_status(wstatus);
         result = __rin_wait_pid_result(
             _RIN_WAIT_SYSCALL4(SYS_WAIT4, (uintptr_t)(intptr_t)-1,
                                (uintptr_t)wstatus, (uintptr_t)(unsigned int)options,
-                               (uintptr_t)rusage));
-        if (result < 0) __rin_wait_clear_rusage(rusage);
-        if (result < 0) __rin_wait_clear_status(wstatus);
+                               (uintptr_t)&temporary_rusage));
+        if (result < 0) {
+            __rin_wait_clear_status(wstatus);
+            return result;
+        }
+        *rusage = temporary_rusage;
         return result;
     }
     return waitpid(-1, wstatus, options);
@@ -315,14 +319,18 @@ static inline pid_t wait4(pid_t pid, int* wstatus, int options, struct rusage* r
         return (pid_t)-1;
     }
     if (rusage) {
-        __rin_wait_clear_rusage(rusage);
+        struct rusage temporary_rusage;
+        __rin_wait_clear_rusage(&temporary_rusage);
         __rin_wait_clear_status(wstatus);
         result = __rin_wait_pid_result(
             _RIN_WAIT_SYSCALL4(SYS_WAIT4, (uintptr_t)(intptr_t)pid,
                                (uintptr_t)wstatus, (uintptr_t)(unsigned int)options,
-                               (uintptr_t)rusage));
-        if (result < 0) __rin_wait_clear_rusage(rusage);
-        if (result < 0) __rin_wait_clear_status(wstatus);
+                               (uintptr_t)&temporary_rusage));
+        if (result < 0) {
+            __rin_wait_clear_status(wstatus);
+            return result;
+        }
+        *rusage = temporary_rusage;
         return result;
     }
     return waitpid(pid, wstatus, options);
