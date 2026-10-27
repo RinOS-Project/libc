@@ -14,6 +14,7 @@
 #include "time.h"
 #include "sys/types.h"
 #include "sys/syscall.h"
+#include "signal.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -70,15 +71,6 @@ typedef uint64_t sigset_t;
  * poll関数
  * ═══════════════════════════════════════════════════════════════*/
 
-#ifndef _RIN_POLL_SYSCALL3
-#define _RIN_POLL_SYSCALL3(number, argument1, argument2, argument3) \
-    _syscall3((uintptr_t)(number), (uintptr_t)(argument1), \
-              (uintptr_t)(argument2), (uintptr_t)(argument3))
-#endif
-#ifndef _RIN_POLL_SYSCALL1
-#define _RIN_POLL_SYSCALL1(number, argument1) \
-    _syscall1((uintptr_t)(number), (uintptr_t)(argument1))
-#endif
 #ifndef _RIN_POLL_SYSCALL5
 #define _RIN_POLL_SYSCALL5(number, argument1, argument2, argument3, \
                           argument4, argument5) \
@@ -111,21 +103,6 @@ static inline void __rin_select_clear_sets(fd_set* readfds,
     if (exceptfds) FD_ZERO(exceptfds);
 }
 
-static inline int __rin_poll_syscall_once(struct pollfd* fds, nfds_t nfds, int timeout) {
-    intptr_t result = __rin_poll_result(_RIN_POLL_SYSCALL3(
-        SYS_POLL, fds, nfds, timeout));
-    if (result < 0) {
-        __rin_poll_clear_revents(fds, nfds);
-        return -1;
-    }
-    if (result > (intptr_t)INT_MAX) {
-        errno = EOVERFLOW;
-        __rin_poll_clear_revents(fds, nfds);
-        return -1;
-    }
-    return (int)result;
-}
-
 static inline int __rin_ppoll_syscall_once(
     struct pollfd* fds, nfds_t nfds, int timeout_ms,
     const sigset_t* sigmask) {
@@ -143,35 +120,22 @@ static inline int __rin_ppoll_syscall_once(
     return (int)result;
 }
 
-static inline long long __rin_poll_now_ms(void) {
-    struct timespec now;
-    long long seconds;
-    long long milliseconds;
-    unsigned long long seconds_unsigned;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+static inline int __rin_poll_current_sigmask(sigset_t* mask_out) {
+    if (!mask_out) {
+        errno = EINVAL;
         return -1;
     }
-    if (now.tv_sec < 0 || now.tv_nsec < 0 || now.tv_nsec >= 1000000000L) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    seconds_unsigned = (unsigned long long)now.tv_sec;
-    if (seconds_unsigned > (unsigned long long)(LLONG_MAX / 1000LL)) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    seconds = (long long)now.tv_sec;
-    milliseconds = seconds * 1000LL;
-    if (milliseconds > LLONG_MAX -
-            (long long)(now.tv_nsec / 1000000L)) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    return milliseconds + (long long)(now.tv_nsec / 1000000L);
+    return sigprocmask(SIG_SETMASK, NULL, mask_out);
 }
 
-static inline void __rin_poll_sleep_ms(uintptr_t ms) {
-    (void)_RIN_POLL_SYSCALL1(SYS_SLEEP, ms);
+static inline int __rin_poll_syscall_with_current_mask(
+    struct pollfd* fds, nfds_t nfds, int timeout_ms) {
+    sigset_t current_mask = 0u;
+    if (__rin_poll_current_sigmask(&current_mask) != 0) {
+        __rin_poll_clear_revents(fds, nfds);
+        return -1;
+    }
+    return __rin_ppoll_syscall_once(fds, nfds, timeout_ms, &current_mask);
 }
 
 static inline int __rin_poll_timespec_to_ms(const struct timespec* timeout,
@@ -246,53 +210,8 @@ static inline int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
         errno = fds == NULL && nfds != 0u ? EFAULT : EINVAL;
         return -1;
     }
-    if (timeout == 0) {
-        return __rin_poll_syscall_once(fds, nfds, 0);
-    }
-
-    long long deadline_ms = -1;
-    if (timeout > 0) {
-        long long now_ms = __rin_poll_now_ms();
-        if (now_ms < 0) {
-            return __rin_poll_syscall_once(fds, nfds, timeout);
-        }
-        if (now_ms > LLONG_MAX - (long long)timeout) {
-            /* Keep the finite timeout finite without signed overflow.  A
-             * monotonic source reaching this boundary is already outside the
-             * representable API range; treating the deadline as the largest
-             * representable value preserves bounded progress. */
-            deadline_ms = LLONG_MAX;
-        } else {
-            deadline_ms = now_ms + (long long)timeout;
-        }
-    }
-
-    for (;;) {
-        int rc = __rin_poll_syscall_once(fds, nfds, 0);
-        if (rc != 0) {
-            return rc;
-        }
-
-        if (timeout > 0) {
-            long long now_ms = __rin_poll_now_ms();
-            if (now_ms < 0 || now_ms >= deadline_ms) {
-                return 0;
-            }
-
-            long long remaining_ms = deadline_ms - now_ms;
-            uintptr_t sleep_ms = 10u;
-            if (remaining_ms < (long long)sleep_ms) {
-                sleep_ms = (uintptr_t)remaining_ms;
-            }
-            if (sleep_ms == 0) {
-                sleep_ms = 1;
-            }
-            __rin_poll_sleep_ms(sleep_ms);
-            continue;
-        }
-
-        __rin_poll_sleep_ms(1);
-    }
+    if (timeout < 0) timeout = -1;
+    return __rin_poll_syscall_with_current_mask(fds, nfds, timeout);
 }
 
 /* ppoll - シグナルマスク付きpoll */
@@ -306,7 +225,8 @@ static inline int ppoll(struct pollfd* fds, nfds_t nfds,
         return -1;
     }
     if (__rin_poll_timespec_to_ms(timeout_ts, &timeout) != 0) return -1;
-    if (!sigmask) return poll(fds, nfds, timeout);
+    if (!sigmask)
+        return __rin_poll_syscall_with_current_mask(fds, nfds, timeout);
     return __rin_ppoll_syscall_once(fds, nfds, timeout, sigmask);
 }
 
