@@ -226,6 +226,9 @@ static inline int _rin_unistd_status(intptr_t result) {
 #define _SC_VERSION             29  /* POSIXバージョン */
 #define _SC_PAGESIZE            30  /* ページサイズ */
 #define _SC_PAGE_SIZE           _SC_PAGESIZE
+#ifndef _POSIX_CHILD_MAX
+#define _POSIX_CHILD_MAX        25
+#endif
 #define _SC_RTSIG_MAX           31  /* リアルタイムシグナル最大 */
 #define _SC_SEM_NSEMS_MAX       32  /* セマフォ数最大 */
 #define _SC_SEM_VALUE_MAX       33  /* セマフォ値最大 */
