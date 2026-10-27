@@ -123,7 +123,10 @@ typedef unsigned int   tcflag_t;
  * ═══════════════════════════════════════════════════════════════*/
 
 #define CBAUD    0x0000F  /* ボーレートマスク */
-#define  B0      0x00000  /* 回線切断 */
+/* Keep B0 as an enum constant rather than a macro.  CoreCLR's debugger
+ * controller has a legitimate bit-field named B0; a macro here would rewrite
+ * that field when the hosted C++ PAL includes termios.h. */
+enum { B0 = 0x00000 };      /* 回線切断 */
 #define  B50     0x00001
 #define  B75     0x00002
 #define  B110    0x00003
