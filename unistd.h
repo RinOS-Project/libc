@@ -1738,8 +1738,8 @@ static inline int getdomainname(char* name, size_t len) {
  * 0..2. PTY slave names are accepted only when the namespace path resolves to
  * the same character-device number as the descriptor. */
 static inline int _rin_ttyname_resolve(int fd, char* output, size_t capacity) {
-    struct stat status;
-    struct stat pty_status;
+    struct stat status = {0};
+    struct stat pty_status = {0};
     char pty_path[32];
     const char* name;
     size_t length;
