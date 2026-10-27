@@ -551,10 +551,6 @@ mqd_t mq_open(const char* name, int oflag, ...)
     request.value[2] = flags;
     request.value[3] = mode;
     if (attributes && (oflag & O_CREAT) != 0) {
-        if (attributes->mq_maxmsg <= 0 || attributes->mq_msgsize <= 0) {
-            errno = EINVAL;
-            return (mqd_t)-1;
-        }
         wire_attributes.struct_size = sizeof(wire_attributes);
         wire_attributes.version = RIN_POSIX_MQ_ABI_VERSION;
         wire_attributes.mq_flags = 0u;
