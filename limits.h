@@ -102,7 +102,7 @@
 #define ARG_MAX     (256 * 1024)
 #endif
 #ifndef CHILD_MAX
-#define CHILD_MAX   16
+#define CHILD_MAX   25
 #endif
 #ifndef NGROUPS_MAX
 #define NGROUPS_MAX 8

@@ -107,7 +107,7 @@ extern "C" {
 #endif
 
 #ifndef CHILD_MAX
-#define CHILD_MAX       256         /* Maximum child processes */
+#define CHILD_MAX       25          /* POSIX minimum supported by the kernel */
 #endif
 
 #ifndef OPEN_MAX
