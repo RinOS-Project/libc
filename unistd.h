@@ -28,6 +28,11 @@
 #include <rin/process/image_range_abi.h>
 #include <rin/process/memory_abi.h>
 
+/* The kernel preserves saved UID/GID values per process. */
+#ifndef _POSIX_SAVED_IDS
+#define _POSIX_SAVED_IDS 1
+#endif
+
 /* Preserve caller-provided syscall hooks before installing defaults.  A
  * hosted unit that supplies a hook is intentionally asking for the Rin
  * frontend even when the compiler reports a hosted environment. */
@@ -1485,6 +1490,8 @@ static inline long sysconf(int name) {
             /* Process groups, sessions, controlling TTY ownership and the
              * signal paths used for job control are kernel-owned. */
             return 1;
+        case _SC_SAVED_IDS:
+            return 1;
         case _SC_PRIORITY_SCHEDULING:
             return 1;
         case _SC_TIMERS:
@@ -1499,7 +1506,6 @@ static inline long sysconf(int name) {
             return 1;
         case _SC_MEMLOCK:
             return 1;
-        case _SC_SAVED_IDS:
         case _SC_REALTIME_SIGNALS:
         case _SC_ASYNCHRONOUS_IO:
         case _SC_PRIORITIZED_IO:
