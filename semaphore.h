@@ -10,6 +10,7 @@
 #include "stddef.h"
 #include "stdint.h"
 #include "errno.h"
+#include "internal/pthread_cancel_point.h"
 #include "sys/types.h"
 #include "time.h"
 #include "sys/syscall.h"
@@ -134,6 +135,7 @@ static inline int sem_destroy(sem_t* sem) {
 
 /* セマフォのデクリメント (P操作/wait) */
 static inline int sem_wait(sem_t* sem) {
+    __rin_pthread_cancel_point_if_linked();
     if (!sem) {
         errno = EINVAL;
         return -1;
@@ -178,6 +180,7 @@ static inline int sem_wait(sem_t* sem) {
         
         /* Woke up (or error) - decrement waiters */
         rin_sem_waiter_remove(sem);
+        __rin_pthread_cancel_point_if_linked();
 
         if (ret < 0 && errno != EAGAIN) {
             if (errno == 0) errno = EIO;
@@ -213,6 +216,7 @@ static inline int sem_trywait(sem_t* sem) {
 
 /* セマフォのタイムアウト付きデクリメント */
 static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
+    __rin_pthread_cancel_point_if_linked();
     if (!sem || !abstime) {
         errno = EINVAL;
         return -1;
@@ -254,6 +258,7 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
                 sem, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME),
             0, abstime, FUTEX_BITSET_MATCH_ANY);
         rin_sem_waiter_remove(sem);
+        __rin_pthread_cancel_point_if_linked();
 
         if (ret < 0) {
             int err = errno;

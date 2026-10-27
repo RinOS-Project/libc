@@ -561,6 +561,12 @@ static int rin_aio_list_has_completion_locked(
     return 0;
 }
 
+static void rin_aio_unlock_mutex_cleanup(void* argument)
+{
+    pthread_mutex_t* mutex = (pthread_mutex_t*)argument;
+    if (mutex) (void)pthread_mutex_unlock(mutex);
+}
+
 int aio_suspend(const struct aiocb* const requests[], int count,
                 const struct timespec* timeout)
 {
@@ -586,11 +592,16 @@ int aio_suspend(const struct aiocb* const requests[], int count,
         }
     }
 
-    (void)pthread_mutex_lock(&g_rin_aio_mutex);
+    wait_error = pthread_mutex_lock(&g_rin_aio_mutex);
+    if (wait_error != 0) {
+        errno = wait_error;
+        return -1;
+    }
+    pthread_cleanup_push(rin_aio_unlock_mutex_cleanup, &g_rin_aio_mutex);
     for (;;) {
         if (rin_aio_list_has_completion_locked(requests, count)) {
-            (void)pthread_mutex_unlock(&g_rin_aio_mutex);
-            return 0;
+            wait_error = 0;
+            break;
         }
         if (timeout)
             wait_error = pthread_cond_timedwait(&g_rin_aio_changed,
@@ -599,20 +610,21 @@ int aio_suspend(const struct aiocb* const requests[], int count,
             wait_error = pthread_cond_wait(&g_rin_aio_changed,
                                            &g_rin_aio_mutex);
         if (wait_error != 0 && wait_error != ETIMEDOUT) {
-            (void)pthread_mutex_unlock(&g_rin_aio_mutex);
             errno = wait_error;
-            return -1;
+            break;
         }
         if (wait_error == ETIMEDOUT) {
             if (rin_aio_list_has_completion_locked(requests, count)) {
-                (void)pthread_mutex_unlock(&g_rin_aio_mutex);
-                return 0;
+                wait_error = 0;
+                break;
             }
-            (void)pthread_mutex_unlock(&g_rin_aio_mutex);
             errno = EAGAIN;
-            return -1;
+            wait_error = EAGAIN;
+            break;
         }
     }
+    pthread_cleanup_pop(1);
+    return wait_error == 0 ? 0 : -1;
 }
 
 static void rin_aio_release_prepared(struct aiocb* const requests[],

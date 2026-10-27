@@ -554,7 +554,9 @@ void __rin_pthread_run_exit_destructors(void) {
 
 /* スレッド終了ラッパー: デストラクタ反復 → SYS_THREAD_EXIT */
 void pthread_exit(void* retval) {
-    rin_pthread_cancel_exit(_RIN_PTHREAD_RUNTIME_SELF(), retval);
+    pthread_t self = _RIN_PTHREAD_RUNTIME_SELF();
+    rin_pthread_cancel_run_cleanups(self);
+    rin_pthread_cancel_exit(self, retval);
     __rin_pthread_run_exit_destructors();
 #if defined(__x86_64__) || defined(_M_X64)
     __asm__ volatile(
@@ -578,7 +580,7 @@ void pthread_exit(void* retval) {
     __builtin_unreachable();
 }
 
-static void __thread_exit_wrapper(void);
+static void __thread_exit_wrapper(void* retval);
 
 /* start_routine が return した時に __thread_exit_wrapper を呼ぶ */
 static void __attribute__((naked, used)) __thread_exit_trampoline(void) {
@@ -604,13 +606,12 @@ static void* __attribute__((used)) __pthread_thread_bootstrap(void* raw_arg) {
         result = record.start_routine(record.arg);
     }
 
-    (void)result;
-    __thread_exit_wrapper();
+    __thread_exit_wrapper(result);
     __builtin_unreachable();
 }
 
-static void __attribute__((used)) __thread_exit_wrapper(void) {
-    pthread_exit(NULL);
+static void __attribute__((used)) __thread_exit_wrapper(void* retval) {
+    pthread_exit(retval);
 }
 
 int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
@@ -842,6 +843,8 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
 int pthread_join(pthread_t thread, void** retval) {
     int detached = 0;
     if (retval) *retval = NULL;
+    if (thread == 0u) return ESRCH;
+    pthread_testcancel();
 
     rin_thread_stack_lock_acquire();
     rin_thread_stack_rec_t* rec = rin_thread_stack_find_locked(thread);
@@ -852,9 +855,27 @@ int pthread_join(pthread_t thread, void** retval) {
         return EINVAL;
     }
 
+    /* SYS_THREAD_JOIN has no timeout form.  Poll liveness in short bounded
+     * sleeps so deferred cancellation remains observable while a join waits;
+     * the final join syscall still owns the single reap operation. */
+    for (;;) {
+        int probe = pthread_kill(thread, 0);
+        if (probe == ESRCH) break;
+        if (probe != 0) return probe;
+        {
+            struct timespec pause = {0, 10000000L};
+            (void)nanosleep(&pause, NULL);
+        }
+        pthread_testcancel();
+    }
+
     {
         intptr_t ret = _RIN_PTHREAD_RUNTIME_JOIN(thread);
         if (ret != 0) {
+            if (rin_pthread_syscall_error(ret) == EINTR) {
+                pthread_testcancel();
+                return EINTR;
+            }
             return rin_pthread_syscall_error(ret);
         }
     }
@@ -1259,6 +1280,7 @@ int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
     int mutex_result;
 
     if (!cond || !mutex) return EINVAL;
+    pthread_testcancel();
 
     unsigned int gen = __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE);
     __atomic_fetch_add(&cond->waiting, 1, __ATOMIC_SEQ_CST);
@@ -1269,11 +1291,36 @@ int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
     }
 
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-        long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
+        struct timespec now;
+        struct timespec slice_deadline;
+        long wait_result;
+        if (clock_gettime(cond->clock_id, &now) != 0) {
+            result = errno ? errno : EIO;
+            break;
+        }
+        slice_deadline.tv_sec = now.tv_sec;
+        slice_deadline.tv_nsec = now.tv_nsec + 50000000L;
+        if (slice_deadline.tv_nsec >= 1000000000L) {
+            ++slice_deadline.tv_sec;
+            slice_deadline.tv_nsec -= 1000000000L;
+        }
+        wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
             &cond->generation,
-            rin_pthread_cond_futex_operation(cond, FUTEX_WAIT),
-            (int)gen, NULL);
+            rin_pthread_cond_futex_operation(
+                cond, FUTEX_WAIT_BITSET |
+                          (cond->clock_id == CLOCK_REALTIME
+                               ? FUTEX_CLOCK_REALTIME : 0)),
+            (int)gen, &slice_deadline, FUTEX_BITSET_MATCH_ANY);
         int wait_error = rin_pthread_futex_wait_error(wait_result, errno);
+        if (rin_pthread_cancel_pending_enabled(_RIN_PTHREAD_RUNTIME_SELF())) {
+            result = EINTR;
+            break;
+        }
+        if (wait_error == ETIMEDOUT) continue;
+        if (wait_error == EINTR) {
+            result = EINTR;
+            break;
+        }
         if (wait_error != 0) {
             result = wait_error;
             break;
@@ -1282,7 +1329,9 @@ int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
 
     __atomic_fetch_sub(&cond->waiting, 1, __ATOMIC_SEQ_CST);
     mutex_result = pthread_mutex_lock(mutex);
-    return mutex_result != 0 ? mutex_result : result;
+    if (mutex_result != 0) return mutex_result;
+    if (result == EINTR) pthread_testcancel();
+    return result == EINTR ? 0 : result;
 }
 
 int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
@@ -1290,6 +1339,7 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
     int mutex_result;
 
     if (!cond || !mutex || !abstime) return EINVAL;
+    pthread_testcancel();
     if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
         return EINVAL;
     if (cond->clock_id != CLOCK_REALTIME &&
@@ -1306,21 +1356,57 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
 
     int result = 0;
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
+        struct timespec now;
+        struct timespec slice_deadline;
+        if (clock_gettime(cond->clock_id, &now) != 0) {
+            result = errno ? errno : EIO;
+            break;
+        }
+        if (now.tv_sec > abstime->tv_sec ||
+            (now.tv_sec == abstime->tv_sec &&
+             now.tv_nsec >= abstime->tv_nsec)) {
+            result = ETIMEDOUT;
+            break;
+        }
+        slice_deadline.tv_sec = now.tv_sec;
+        slice_deadline.tv_nsec = now.tv_nsec + 50000000L;
+        if (slice_deadline.tv_nsec >= 1000000000L) {
+            ++slice_deadline.tv_sec;
+            slice_deadline.tv_nsec -= 1000000000L;
+        }
+        if (slice_deadline.tv_sec > abstime->tv_sec ||
+            (slice_deadline.tv_sec == abstime->tv_sec &&
+             slice_deadline.tv_nsec > abstime->tv_nsec))
+            slice_deadline = *abstime;
         int operation = FUTEX_WAIT_BITSET |
             (cond->clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
         long ret = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
             &cond->generation,
             rin_pthread_cond_futex_operation(cond, operation),
-            (int)gen, abstime, FUTEX_BITSET_MATCH_ANY);
+            (int)gen, &slice_deadline, FUTEX_BITSET_MATCH_ANY);
         if (ret == -1 && errno == ETIMEDOUT) {
             if (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) != gen)
-                result = 0;
-            else
+                break;
+            if (rin_pthread_cancel_pending_enabled(
+                    _RIN_PTHREAD_RUNTIME_SELF())) {
+                result = EINTR;
+                break;
+            }
+            if (slice_deadline.tv_sec == abstime->tv_sec &&
+                slice_deadline.tv_nsec == abstime->tv_nsec) {
                 result = ETIMEDOUT;
-            break;
+                break;
+            }
+            continue;
         }
         {
             int wait_error = rin_pthread_futex_wait_error(ret, errno);
+            if (wait_error == EINTR && rin_pthread_cancel_pending_enabled(
+                    _RIN_PTHREAD_RUNTIME_SELF())) {
+                result = EINTR;
+                break;
+            }
+            if (wait_error == EINTR) continue;
             if (wait_error != 0) {
                 result = wait_error;
                 break;
@@ -1330,7 +1416,9 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
 
     __atomic_fetch_sub(&cond->waiting, 1, __ATOMIC_SEQ_CST);
     mutex_result = pthread_mutex_lock(mutex);
-    return mutex_result != 0 ? mutex_result : result;
+    if (mutex_result != 0) return mutex_result;
+    if (result == EINTR) pthread_testcancel();
+    return result == EINTR ? 0 : result;
 }
 
 int pthread_cond_signal(pthread_cond_t* cond) {

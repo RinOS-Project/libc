@@ -18,6 +18,8 @@
 #include "sys/stat.h"
 #include "sys/ioctl.h"
 #include "termios.h"
+#include "time.h"
+#include "internal/pthread_cancel_point.h"
 #if !defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
 #include "rin_account_compat.h"
 #endif
@@ -387,8 +389,10 @@ static inline int _rin_unistd_status(intptr_t result) {
  * ═══════════════════════════════════════════════════════════════*/
 
 static inline ssize_t read(int fd, void* buf, size_t count) {
+    __rin_pthread_cancel_point_if_linked();
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL3(
         SYS_READ, (uintptr_t)(intptr_t)fd, (uintptr_t)buf, (uintptr_t)count));
+    __rin_pthread_cancel_point_if_linked();
     if (result < 0) return -1;
     if ((uintptr_t)result > (uintptr_t)count) {
         errno = EIO;
@@ -402,8 +406,10 @@ static inline ssize_t read(int fd, void* buf, size_t count) {
 }
 
 static inline ssize_t write(int fd, const void* buf, size_t count) {
+    __rin_pthread_cancel_point_if_linked();
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL3(
         SYS_WRITE, (uintptr_t)(intptr_t)fd, (uintptr_t)buf, (uintptr_t)count));
+    __rin_pthread_cancel_point_if_linked();
     if (result < 0) return -1;
     if ((uintptr_t)result > (uintptr_t)count) {
         errno = EIO;
@@ -433,6 +439,7 @@ static inline ssize_t _rin_unistd_positional_io(int fd, void const* buffer,
         return -1;
     }
     base_offset = (uint64_t)offset;
+    __rin_pthread_cancel_point_if_linked();
 
     do {
         size_t chunk = count - total;
@@ -451,6 +458,7 @@ static inline ssize_t _rin_unistd_positional_io(int fd, void const* buffer,
             (uintptr_t)(intptr_t)fd, (uintptr_t)buffer + total,
             (uintptr_t)chunk, (uintptr_t)(uint32_t)current_offset,
             (uintptr_t)(uint32_t)(current_offset >> 32)));
+        __rin_pthread_cancel_point_if_linked();
         if (result < 0)
             return total ? (ssize_t)total : -1;
         if ((uintptr_t)result > (uintptr_t)chunk) {
@@ -488,11 +496,13 @@ static inline ssize_t pwrite64(int fd, const void* buf, size_t count,
 }
 
 static inline int close(int fd) {
+    __rin_pthread_cancel_point_if_linked();
     int rc = _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
         SYS_CLOSE, (uintptr_t)(intptr_t)fd));
     if (rc == 0) {
         _fcntl_track_close_fd(fd);
     }
+    __rin_pthread_cancel_point_if_linked();
     return rc;
 }
 
@@ -1360,8 +1370,10 @@ __attribute__((noreturn)) static inline void _exit(int status) {
     _RIN_UNISTD_SYSCALL3((number), (argument1), (argument2), (argument3))
 #endif
 static inline pid_t wait(int* wstatus) {
+    __rin_pthread_cancel_point_if_linked();
     intptr_t result = _rin_unistd_result(_RIN_WAIT_SYSCALL3(
         SYS_WAIT, (uintptr_t)(intptr_t)-1, (uintptr_t)wstatus, 0u));
+    __rin_pthread_cancel_point_if_linked();
     if (result < 0) return -1;
     if ((uintptr_t)result > (uintptr_t)INT_MAX) {
         errno = EOVERFLOW;
@@ -1467,10 +1479,12 @@ static inline unsigned int sleep(unsigned int seconds) {
     unsigned long long remaining_ms = (unsigned long long)seconds * 1000ULL;
 
     while (remaining_ms != 0) {
+        __rin_pthread_cancel_point_if_linked();
         /* SYS_SLEEP is a uint32_t millisecond ABI on both x86 targets. */
         unsigned long chunk = remaining_ms > 0xffffffffULL
             ? 0xffffffffUL : (unsigned long)remaining_ms;
         intptr_t result = _RIN_UNISTD_SLEEP(chunk);
+        __rin_pthread_cancel_point_if_linked();
         if (result != 0) {
             if (result < 0) {
                 if (__rin_syscall_posixize(result) != -1) errno = EIO;
@@ -1494,7 +1508,9 @@ static inline int usleep(useconds_t usec) {
 
     /* SYS_SLEEP has millisecond granularity; round up so it never returns
      * before the requested microsecond interval has elapsed. */
+    __rin_pthread_cancel_point_if_linked();
     uintptr_t ms = ((uintptr_t)usec + 999u) / 1000u;
+    __rin_pthread_cancel_point_if_linked();
     result = _RIN_UNISTD_SLEEP(ms);
     if (result < 0) {
         if (__rin_syscall_posixize(result) != -1) errno = EIO;
@@ -2163,7 +2179,10 @@ static inline unsigned int alarm(unsigned int seconds) {
  * signal is queued.  A successful return is malformed (pause has no success
  * value), so it is converted to EIO instead of being exposed as success. */
 static inline int pause(void) {
-    intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_PAUSE));
+    intptr_t result;
+    __rin_pthread_cancel_point_if_linked();
+    result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_PAUSE));
+    __rin_pthread_cancel_point_if_linked();
     if (result >= 0) errno = EIO;
     return -1;
 }
@@ -2270,7 +2289,10 @@ static inline void sync(void) {
 }
 
 static inline int fsync(int fd) {
-    return _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
+    __rin_pthread_cancel_point_if_linked();
+    int result = _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
+    __rin_pthread_cancel_point_if_linked();
+    return result;
         SYS_FSYNC, (uintptr_t)(intptr_t)fd));
 }
 

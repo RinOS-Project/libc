@@ -1226,7 +1226,7 @@ static inline int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset
     if (set && how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK)
         return EINVAL;
     if (set) {
-        snapshot = *set;
+        snapshot = *set & ~(UINT64_C(1) << __RIN_SIGCANCEL);
         set_argument = &snapshot;
     }
     result = _RIN_PTHREAD_SIGMASK_SYSCALL4(
@@ -1241,7 +1241,7 @@ static inline int pthread_kill(pthread_t thread, int sig) {
     intptr_t result;
     intptr_t process_id;
     int saved_errno = errno;
-    if (sig < 0 || sig >= NSIG) return EINVAL;
+    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL) return EINVAL;
     process_id = _RIN_PTHREAD_SYSCALL0(SYS_GETPID);
     if (process_id <= 0) {
         int error = _rin_pthread_error_from_result(process_id);
@@ -1264,7 +1264,8 @@ static inline int pthread_sigqueue(pthread_t thread, int sig,
     intptr_t result;
     intptr_t process_id;
     int saved_errno = errno;
-    if (sig <= 0 || sig >= NSIG || sig == SIGKILL || sig == SIGSTOP)
+    if (sig <= 0 || sig >= NSIG || sig == __RIN_SIGCANCEL ||
+        sig == SIGKILL || sig == SIGSTOP)
         return EINVAL;
     process_id = _RIN_PTHREAD_SYSCALL0(SYS_GETPID);
     if (process_id <= 0) {
@@ -1293,6 +1294,40 @@ int pthread_setcancelstate(int state, int* oldstate);
 int pthread_setcanceltype(int type, int* oldtype);
 int pthread_cancel(pthread_t thread);
 void pthread_testcancel(void);
+
+typedef struct __rin_pthread_cleanup_buffer {
+    struct __rin_pthread_cleanup_buffer* next;
+    void (*routine)(void*);
+    void* argument;
+    int active;
+} __rin_pthread_cleanup_buffer;
+
+void __rin_pthread_cleanup_push_node(__rin_pthread_cleanup_buffer* buffer,
+                                     void (*routine)(void*), void* argument);
+void __rin_pthread_cleanup_pop_node(int execute);
+void rin_pthread_cancel_run_cleanups(pthread_t thread);
+int rin_pthread_cancel_pending_enabled(pthread_t thread);
+
+#define __RIN_PTHREAD_CLEANUP_CAT_INNER(left, right) left##right
+#define __RIN_PTHREAD_CLEANUP_CAT(left, right) \
+    __RIN_PTHREAD_CLEANUP_CAT_INNER(left, right)
+#define __RIN_PTHREAD_CLEANUP_PUSH(routine, argument, suffix) \
+    { \
+        __rin_pthread_cleanup_buffer \
+            __RIN_PTHREAD_CLEANUP_CAT(__rin_cleanup_buffer_, suffix); \
+        __rin_pthread_cleanup_push_node( \
+            &__RIN_PTHREAD_CLEANUP_CAT(__rin_cleanup_buffer_, suffix), \
+            (routine), (argument));
+#if defined(__COUNTER__)
+#define pthread_cleanup_push(routine, argument) \
+    __RIN_PTHREAD_CLEANUP_PUSH(routine, argument, __COUNTER__)
+#else
+#define pthread_cleanup_push(routine, argument) \
+    __RIN_PTHREAD_CLEANUP_PUSH(routine, argument, __LINE__)
+#endif
+#define pthread_cleanup_pop(execute) \
+        __rin_pthread_cleanup_pop_node((execute)); \
+    }
 
 #if defined(RIN_USERSPACE) || defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
 int rin_pthread_cancel_register(pthread_t thread);

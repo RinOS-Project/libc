@@ -10,6 +10,7 @@
 #include "types.h"
 #include "syscall.h"
 #include "../errno.h"
+#include "../internal/pthread_cancel_point.h"
 #include <rin/mman_abi.h>
 #include <stdarg.h>
 
@@ -229,10 +230,13 @@ static inline int mprotect(void* addr, size_t length, int prot) {
  * ═══════════════════════════════════════════════════════════════*/
 
 static inline int msync(void* addr, size_t length, int flags) {
+    __rin_pthread_cancel_point_if_linked();
     intptr_t ret = _RIN_MMAN_SYSCALL3(
         SYS_MSYNC, (uintptr_t)addr, (uintptr_t)length,
         (uintptr_t)(intptr_t)flags);
-    return __rin_mman_zero_result(ret);
+    int result = __rin_mman_zero_result(ret);
+    __rin_pthread_cancel_point_if_linked();
+    return result;
 }
 
 static inline int madvise(void* addr, size_t length, int advice) {

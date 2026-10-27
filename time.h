@@ -11,6 +11,7 @@
 #include "stdint.h"
 #include "limits.h"
 #include "sys/syscall.h"
+#include "internal/pthread_cancel_point.h"
 #include "linux/futex.h"
 #include <rin/time/cpu_time_abi.h>
 #include <rin/time/timer_abi.h>
@@ -90,9 +91,10 @@ typedef void* RinStrptimeLocale;
 
 #ifndef _RIN_TIME_FUTEX_WAIT
 #define _RIN_TIME_FUTEX_WAIT(address, operation, expected, timeout, bitset) \
-    syscall(SYS_futex, (uintptr_t)(address), (uintptr_t)(operation), \
-            (uintptr_t)(expected), (uintptr_t)(timeout), 0u, \
-            (uintptr_t)(bitset))
+    __rin_syscall_posixize( \
+        _syscall6((uintptr_t)SYS_futex, (uintptr_t)(address), \
+                  (uintptr_t)(operation), (uintptr_t)(expected), \
+                  (uintptr_t)(timeout), 0u, (uintptr_t)(bitset)))
 #endif
 
 #ifndef _RIN_TIME_GETTIMEOFDAY
@@ -1270,6 +1272,7 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
     int entry_errno;
     int32_t futex_word = 0;
     intptr_t wait_result;
+    __rin_pthread_cancel_point_if_linked();
     if (!req) {
         errno = EFAULT;
         return -1;
@@ -1314,6 +1317,7 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
         wait_result = _RIN_TIME_FUTEX_WAIT(
             &futex_word, FUTEX_WAIT_BITSET_PRIVATE, 0, &deadline,
             FUTEX_BITSET_MATCH_ANY);
+        __rin_pthread_cancel_point_if_linked();
         if (wait_result < 0) {
             int wait_errno = wait_result == -1
                 ? errno : (wait_result >= -4095 ? (int)-wait_result : EIO);
@@ -1390,6 +1394,7 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
     int saved_errno;
     int result;
 
+    __rin_pthread_cancel_point_if_linked();
     if (!request) return EFAULT;
     if ((flags & ~TIMER_ABSTIME) != 0) return EINVAL;
     if (request->tv_sec < 0 || request->tv_nsec < 0 ||
@@ -1438,6 +1443,7 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
             wait_result = _RIN_TIME_FUTEX_WAIT(
                 &futex_word, operation, 0, request,
                 FUTEX_BITSET_MATCH_ANY);
+            __rin_pthread_cancel_point_if_linked();
             if (wait_result < 0) {
                 saved_errno = wait_result == -1
                     ? errno : (wait_result >= -4095 ? (int)-wait_result : EIO);

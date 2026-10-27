@@ -15,6 +15,7 @@
 #include "sys/socket.h"
 #include "sys/syscall.h"
 #include "sys/types.h"
+#include "internal/pthread_cancel_point.h"
 #include <rin/fs/path_at_abi.h>
 #include <rin/fs/fcntl_lock_abi.h>
 
@@ -202,6 +203,14 @@ static inline int _fcntl_result_to_int(intptr_t raw_result) {
     return (int)raw_result;
 }
 
+static inline void _fcntl_cancel_close_fd(void* argument) {
+    const int fd = argument ? *(const int*)argument : -1;
+    if (fd < 0) return;
+    if (_syscall1((uintptr_t)SYS_CLOSE,
+                  (uintptr_t)(intptr_t)fd) >= 0)
+        _fcntl_track_close_fd(fd);
+}
+
 static inline int _fcntl_result_status_zero(intptr_t raw_result) {
     if (raw_result < 0) {
         if (raw_result >= (intptr_t)-4095) {
@@ -245,6 +254,7 @@ static inline int _fcntl_dupfd_at_least(int fd, int minfd, int cloexec) {
 
 static inline int open(const char* pathname, int flags, ...) {
     unsigned int mode = 0644;  /* デフォルト */
+    __rin_pthread_cancel_point_if_linked();
 
     /* O_CREAT/O_TMPFILE creation modes come from the variadic argument. */
     if (flags & (O_CREAT | O_TMPFILE)) {
@@ -258,7 +268,14 @@ static inline int open(const char* pathname, int flags, ...) {
         (uintptr_t)SYS_OPEN, (uintptr_t)pathname, (uintptr_t)flags,
         (uintptr_t)mode));
 
-    _fcntl_track_new_fd(fd, flags, (flags & O_CLOEXEC) ? FD_CLOEXEC : 0);
+    if (fd < 0) {
+        __rin_pthread_cancel_point_if_linked();
+    } else {
+        _fcntl_track_new_fd(fd, flags,
+                            (flags & O_CLOEXEC) ? FD_CLOEXEC : 0);
+        __rin_pthread_cancel_point_cleanup_if_linked(_fcntl_cancel_close_fd,
+                                                      &fd);
+    }
 
     return fd;
 }
@@ -302,6 +319,7 @@ static inline int openat(int dirfd, const char* pathname, int flags, ...) {
     unsigned int mode = 0644u;
     intptr_t result;
 
+    __rin_pthread_cancel_point_if_linked();
     if (!pathname) {
         errno = EFAULT;
         return -1;
@@ -324,10 +342,16 @@ static inline int openat(int dirfd, const char* pathname, int flags, ...) {
     result = _fcntl_path_at_value(&call);
     if (result < 0 || (uintptr_t)result > (uintptr_t)INT32_MAX) {
         if (result >= 0) errno = EOVERFLOW;
+        __rin_pthread_cancel_point_if_linked();
         return -1;
     }
     _fcntl_track_new_fd((int)result, flags,
                          (flags & O_CLOEXEC) ? FD_CLOEXEC : 0);
+    {
+        int fd = (int)result;
+        __rin_pthread_cancel_point_cleanup_if_linked(_fcntl_cancel_close_fd,
+                                                      &fd);
+    }
     return (int)result;
 }
 

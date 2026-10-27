@@ -3,6 +3,7 @@
 #include "mqueue.h"
 
 #include "pthread.h"
+#include "internal/pthread_cancel_point.h"
 #include "stdarg.h"
 #include "string.h"
 #include "sys/syscall.h"
@@ -253,7 +254,7 @@ static int mq_wait_ready(mqd_t queue, uint32_t events,
         RinSdkArgsV1 request;
         RinWaitItemV1 item;
         uint32_t index = UINT32_MAX;
-        uint64_t timeout_ns = RIN_SDK_INFINITE;
+        uint64_t timeout_ns = RIN_LIBC_MQ_WAIT_RECHECK_NS;
         int32_t result;
         if (absolute) {
             uint64_t deadline_ns;
@@ -292,9 +293,9 @@ static int mq_wait_ready(mqd_t queue, uint32_t events,
                                        RIN_LIBC_SDK_IPC_WAIT_MANY, 0);
             return -1;
         }
-        if (!absolute) continue;
-        /* Recompute CLOCK_REALTIME after each bounded wait so clock changes
-         * are observed while retaining the caller's absolute deadline. */
+        /* Return after each bounded wait so deferred cancellation is checked
+         * and absolute CLOCK_REALTIME deadlines are recomputed by the caller. */
+        return 1;
     }
 }
 
@@ -337,6 +338,8 @@ static int mq_send_common(mqd_t queue, const char* message, size_t length,
 {
     for (;;) {
         RinPosixMqAttrV1 attributes;
+        int wait_result;
+        __rin_pthread_cancel_point_if_linked();
         int32_t result = mq_send_once(queue, message, length, priority);
         if (result == RIN_SUCCESS) return 0;
         if (result != RIN_ERROR_WOULD_BLOCK)
@@ -350,8 +353,9 @@ static int mq_send_common(mqd_t queue, const char* message, size_t length,
             errno = EAGAIN;
             return -1;
         }
-        if (mq_wait_ready(queue, RIN_WAIT_EVENT_WRITABLE, absolute) != 0)
-            return -1;
+        wait_result = mq_wait_ready(queue, RIN_WAIT_EVENT_WRITABLE, absolute);
+        __rin_pthread_cancel_point_if_linked();
+        if (wait_result < 0) return -1;
     }
 }
 
@@ -363,6 +367,8 @@ static ssize_t mq_receive_common(mqd_t queue, char* message, size_t capacity,
     for (;;) {
         RinPosixMqAttrV1 attributes;
         RinPosixMqReceiveResultV1 received;
+        int wait_result;
+        __rin_pthread_cancel_point_if_linked();
         int32_t result = mq_receive_once(queue, message, capacity,
                                          waiter_token, &received);
         if (result == RIN_SUCCESS) {
@@ -397,10 +403,11 @@ static ssize_t mq_receive_common(mqd_t queue, char* message, size_t capacity,
             if (waiter_token == RIN_POSIX_MQ_WAIT_TOKEN_INVALID)
                 continue;
         }
-        if (mq_wait_ready(queue, RIN_WAIT_EVENT_READABLE, absolute) != 0) {
-            (void)mq_wait_receive_end(waiter_token);
-            return -1;
-        }
+        wait_result = mq_wait_ready(queue, RIN_WAIT_EVENT_READABLE, absolute);
+        (void)mq_wait_receive_end(waiter_token);
+        waiter_token = RIN_POSIX_MQ_WAIT_TOKEN_INVALID;
+        __rin_pthread_cancel_point_if_linked();
+        if (wait_result < 0) return -1;
     }
 }
 

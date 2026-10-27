@@ -22,6 +22,7 @@
 #undef RIN_LIBC_TERMIOS_SET_HOSTED_ERRNO_OWNER
 #endif
 #include "stdint.h"
+#include "internal/pthread_cancel_point.h"
 #include "sys/ioctl.h"
 #include "sys/types.h"
 #include <rin/tty/abi.h>
@@ -313,8 +314,12 @@ static inline int tcsendbreak(int fd, int duration) {
 }
 
 static inline int tcdrain(int fd) {
-    return _rin_termios_ioctl_status(fd, TCSBRK,
-                                     _rin_termios_scalar_argument(UINT32_C(1)));
+    int result;
+    __rin_pthread_cancel_point_if_linked();
+    result = _rin_termios_ioctl_status(
+        fd, TCSBRK, _rin_termios_scalar_argument(UINT32_C(1)));
+    __rin_pthread_cancel_point_if_linked();
+    return result;
 }
 
 static inline int tcflush(int fd, int queue_selector) {

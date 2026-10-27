@@ -15,6 +15,7 @@
 #include "sys/types.h"
 #include "sys/syscall.h"
 #include "signal.h"
+#include "internal/pthread_cancel_point.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -206,12 +207,17 @@ static inline int __rin_poll_timeval_to_ms(const struct timeval* timeout,
  * 戻り値: イベントが発生したfdの数、0=タイムアウト、-1=エラー
  */
 static inline int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
+    __rin_pthread_cancel_point_if_linked();
     if (nfds > RIN_POLL_MAX_FDS || (fds == NULL && nfds != 0u)) {
         errno = fds == NULL && nfds != 0u ? EFAULT : EINVAL;
         return -1;
     }
     if (timeout < 0) timeout = -1;
-    return __rin_poll_syscall_with_current_mask(fds, nfds, timeout);
+    {
+        int result = __rin_poll_syscall_with_current_mask(fds, nfds, timeout);
+        __rin_pthread_cancel_point_if_linked();
+        return result;
+    }
 }
 
 /* ppoll - シグナルマスク付きpoll */
@@ -219,15 +225,19 @@ static inline int ppoll(struct pollfd* fds, nfds_t nfds,
                         const struct timespec* timeout_ts,
                         const sigset_t* sigmask) {
     int timeout;
+    int result;
+    __rin_pthread_cancel_point_if_linked();
 
     if (nfds > RIN_POLL_MAX_FDS || (fds == NULL && nfds != 0u)) {
         errno = fds == NULL && nfds != 0u ? EFAULT : EINVAL;
         return -1;
     }
     if (__rin_poll_timespec_to_ms(timeout_ts, &timeout) != 0) return -1;
-    if (!sigmask)
-        return __rin_poll_syscall_with_current_mask(fds, nfds, timeout);
-    return __rin_ppoll_syscall_once(fds, nfds, timeout, sigmask);
+    result = !sigmask
+        ? __rin_poll_syscall_with_current_mask(fds, nfds, timeout)
+        : __rin_ppoll_syscall_once(fds, nfds, timeout, sigmask);
+    __rin_pthread_cancel_point_if_linked();
+    return result;
 }
 
 /* ═══════════════════════════════════════════════════════════════

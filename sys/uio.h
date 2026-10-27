@@ -9,6 +9,7 @@
 #include "../stdint.h"
 #include "../limits.h"
 #include "../errno.h"
+#include "../internal/pthread_cancel_point.h"
 
 #ifndef RIN_LIBC_IOVEC_DEFINED
 #define RIN_LIBC_IOVEC_DEFINED 1
@@ -43,6 +44,7 @@ static inline ssize_t __rin_uio_result(intptr_t result) {
 
 static inline ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
     intptr_t result;
+    __rin_pthread_cancel_point_if_linked();
     if (iovcnt < 0 || (unsigned int)iovcnt > RIN_UIO_MAX_IOV ||
         (iovcnt != 0 && !iov)) {
         errno = EINVAL;
@@ -50,11 +52,13 @@ static inline ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
     }
     result = _RIN_UIO_SYSCALL3(SYS_READV, (uintptr_t)(intptr_t)fd,
                                (uintptr_t)iov, (uintptr_t)(unsigned)iovcnt);
+    __rin_pthread_cancel_point_if_linked();
     return __rin_uio_result(result);
 }
 
 static inline ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
     intptr_t result;
+    __rin_pthread_cancel_point_if_linked();
     if (iovcnt < 0 || (unsigned int)iovcnt > RIN_UIO_MAX_IOV ||
         (iovcnt != 0 && !iov)) {
         errno = EINVAL;
@@ -62,6 +66,7 @@ static inline ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
     }
     result = _RIN_UIO_SYSCALL3(SYS_WRITEV, (uintptr_t)(intptr_t)fd,
                                (uintptr_t)iov, (uintptr_t)(unsigned)iovcnt);
+    __rin_pthread_cancel_point_if_linked();
     return __rin_uio_result(result);
 }
 

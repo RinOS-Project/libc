@@ -11,6 +11,7 @@
 #include "syscall.h"
 #include "../stdint.h"
 #include "../time.h"
+#include "../internal/pthread_cancel_point.h"
 #include "../limits.h"
 #define RIN_SOCKET_ABI_TYPES_PROVIDED 1
 #include <rin/net/socket_abi.h>
@@ -484,13 +485,27 @@ static inline int __rin_socket_accept_backoff(int sockfd,
     return 1;
 }
 
+static inline void __rin_socket_cancel_close_fd(void* argument) {
+    const int fd = argument ? *(const int*)argument : -1;
+    if (fd >= 0)
+        (void)_RIN_SOCKET_SYSCALL1(SYS_CLOSE, (uintptr_t)(intptr_t)fd);
+}
+
 static inline int accept(int sockfd, struct sockaddr* addr,
                          socklen_t* addrlen) {
     uint32_t delay_ms = 1u;
+    __rin_pthread_cancel_point_if_linked();
     for (;;) {
         const intptr_t result =
             _RIN_SOCKET_SYSCALL3(SYS_ACCEPT, sockfd, addr, addrlen);
-        if (result >= 0) return __rin_socket_fd_result(result);
+        if (result >= 0) {
+            int accepted = __rin_socket_fd_result(result);
+            if (accepted >= 0)
+                __rin_pthread_cancel_point_cleanup_if_linked(
+                    __rin_socket_cancel_close_fd, &accepted);
+            return accepted;
+        }
+        __rin_pthread_cancel_point_if_linked();
         (void)__rin_socket_raw_error(result);
         if (errno != EAGAIN ||
             !__rin_socket_accept_backoff(sockfd, &delay_ms))
@@ -503,10 +518,12 @@ static inline int connect(int sockfd, const struct sockaddr* addr, socklen_t add
     (void)addrlen;
     uint32_t retry_count = 0u;
     uint32_t delay_ms = 1u;
+    __rin_pthread_cancel_point_if_linked();
 
     for (;;) {
         const intptr_t result =
             _RIN_SOCKET_SYSCALL3(SYS_CONNECT, sockfd, addr, addrlen);
+        __rin_pthread_cancel_point_if_linked();
         if (result == 0) return 0;
         if (result > 0) {
             errno = EIO;
@@ -539,27 +556,39 @@ static inline int connect(int sockfd, const struct sockaddr* addr, socklen_t add
 }
 
 static inline ssize_t send(int sockfd, const void* buf, size_t len, int flags) {
-    return __rin_socket_count_result(
+    __rin_pthread_cancel_point_if_linked();
+    ssize_t result = __rin_socket_count_result(
         _RIN_SOCKET_SYSCALL4(SYS_SEND, sockfd, buf, len, flags), len);
+    __rin_pthread_cancel_point_if_linked();
+    return result;
 }
 
 static inline ssize_t recv(int sockfd, void* buf, size_t len, int flags) {
-    return __rin_socket_count_result(
+    __rin_pthread_cancel_point_if_linked();
+    ssize_t result = __rin_socket_count_result(
         _RIN_SOCKET_SYSCALL4(SYS_RECV, sockfd, buf, len, flags), len);
+    __rin_pthread_cancel_point_if_linked();
+    return result;
 }
 
 static inline ssize_t sendto(int sockfd, const void* buf, size_t len, int flags,
                              const struct sockaddr* dest_addr, socklen_t addrlen) {
-    return __rin_socket_count_result(
+    __rin_pthread_cancel_point_if_linked();
+    ssize_t result = __rin_socket_count_result(
         _RIN_SOCKET_SYSCALL6(SYS_SENDTO, sockfd, buf, len, flags,
                              dest_addr, addrlen), len);
+    __rin_pthread_cancel_point_if_linked();
+    return result;
 }
 
 static inline ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags,
                                struct sockaddr* src_addr, socklen_t* addrlen) {
-    return __rin_socket_count_result(
+    __rin_pthread_cancel_point_if_linked();
+    ssize_t result = __rin_socket_count_result(
         _RIN_SOCKET_SYSCALL6(SYS_RECVFROM, sockfd, buf, len, flags,
                              src_addr, addrlen), len);
+    __rin_pthread_cancel_point_if_linked();
+    return result;
 }
 
 static inline int shutdown(int sockfd, int how) {
@@ -598,18 +627,24 @@ static inline int socketpair(int domain, int type, int protocol, int sv[2]) {
 
 static inline ssize_t sendmsg(int sockfd, const struct msghdr* msg, int flags) {
     size_t requested;
+    __rin_pthread_cancel_point_if_linked();
     if (__rin_socket_message_length(msg, &requested) != 0)
         return (ssize_t)-1;
-    return __rin_socket_count_result(
+    ssize_t result = __rin_socket_count_result(
         _RIN_SOCKET_SYSCALL3(SYS_SENDMSG, sockfd, msg, flags), requested);
+    __rin_pthread_cancel_point_if_linked();
+    return result;
 }
 
 static inline ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags) {
     size_t requested;
+    __rin_pthread_cancel_point_if_linked();
     if (__rin_socket_message_length(msg, &requested) != 0)
         return (ssize_t)-1;
-    return __rin_socket_count_result(
+    ssize_t result = __rin_socket_count_result(
         _RIN_SOCKET_SYSCALL3(SYS_RECVMSG, sockfd, msg, flags), requested);
+    __rin_pthread_cancel_point_if_linked();
+    return result;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -619,10 +654,18 @@ static inline ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags) {
 static inline int accept4(int sockfd, struct sockaddr* addr,
                           socklen_t* addrlen, int flags) {
     uint32_t delay_ms = 1u;
+    __rin_pthread_cancel_point_if_linked();
     for (;;) {
         const intptr_t result = _RIN_SOCKET_SYSCALL5(
             SYS_ACCEPT4, sockfd, addr, addrlen, flags, 0u);
-        if (result >= 0) return __rin_socket_fd_result(result);
+        if (result >= 0) {
+            int accepted = __rin_socket_fd_result(result);
+            if (accepted >= 0)
+                __rin_pthread_cancel_point_cleanup_if_linked(
+                    __rin_socket_cancel_close_fd, &accepted);
+            return accepted;
+        }
+        __rin_pthread_cancel_point_if_linked();
         (void)__rin_socket_raw_error(result);
         if (errno != EAGAIN ||
             !__rin_socket_accept_backoff(sockfd, &delay_ms))
