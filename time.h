@@ -11,6 +11,7 @@
 #include "stdint.h"
 #include "limits.h"
 #include "sys/syscall.h"
+#include "linux/futex.h"
 #include <rin/time/cpu_time_abi.h>
 #include <rin/time/timer_abi.h>
 
@@ -32,7 +33,7 @@ typedef void* RinStrptimeLocale;
     defined(_RIN_TIME_TIMER_CREATE) || defined(_RIN_TIME_TIMER_SETTIME) || \
     defined(_RIN_TIME_TIMER_GETTIME) || defined(_RIN_TIME_TIMER_DELETE) || \
     defined(_RIN_TIME_TIMER_GETOVERRUN) || defined(_RIN_TIME_TIMER_POLL) || \
-    defined(_RIN_TIME_CLOCK_SETTIME)
+    defined(_RIN_TIME_CLOCK_SETTIME) || defined(_RIN_TIME_FUTEX_WAIT)
 #define RIN_TIME_CUSTOM_SYSCALL_HOOK 1
 #endif
 
@@ -85,6 +86,13 @@ typedef void* RinStrptimeLocale;
 #ifndef _RIN_TIME_SLEEP
 #define _RIN_TIME_SLEEP(milliseconds) \
     _RIN_TIME_SYSCALL1(SYS_SLEEP, (uintptr_t)(milliseconds))
+#endif
+
+#ifndef _RIN_TIME_FUTEX_WAIT
+#define _RIN_TIME_FUTEX_WAIT(address, operation, expected, timeout, bitset) \
+    syscall(SYS_futex, (uintptr_t)(address), (uintptr_t)(operation), \
+            (uintptr_t)(expected), (uintptr_t)(timeout), 0u, \
+            (uintptr_t)(bitset))
 #endif
 
 #ifndef _RIN_TIME_GETTIMEOFDAY
@@ -1304,15 +1312,13 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
 }
 
 /* POSIX clock_nanosleep returns an errno value directly rather than using
- * errno as its result channel.  Keep the existing nanosleep owner as the
- * single relative-delay backend, and derive an absolute request from one
- * clock snapshot so a realtime adjustment cannot be observed halfway through
- * the subtraction. */
+ * errno as its result channel.  Relative waits keep the nanosleep owner;
+ * absolute waits pass their original deadline to FUTEX_WAIT_BITSET so the
+ * kernel can re-evaluate realtime clock changes while the thread is blocked. */
 static inline int clock_nanosleep(clockid_t clock_id, int flags,
                                   const struct timespec* request,
                                   struct timespec* remain) {
     struct timespec now;
-    struct timespec relative;
     int saved_errno;
     int result;
 
@@ -1331,35 +1337,66 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
         return saved_errno != 0 ? saved_errno : EIO;
     }
 
-    if (clock_gettime(clock_id, &now) != 0) {
-        saved_errno = errno;
-        return saved_errno != 0 ? saved_errno : EIO;
-    }
-    if (now.tv_sec < 0 || now.tv_nsec < 0 ||
-        now.tv_nsec >= 1000000000L)
-        return EIO;
-    if (now.tv_sec > request->tv_sec ||
-        (now.tv_sec == request->tv_sec &&
-         now.tv_nsec >= request->tv_nsec)) {
-        if (remain) {
-            remain->tv_sec = 0;
-            remain->tv_nsec = 0;
-        }
-        return 0;
-    }
+    {
+        int entry_errno = errno;
+        int operation = FUTEX_WAIT_BITSET_PRIVATE;
+        int32_t futex_word = 0;
 
-    relative.tv_sec = request->tv_sec - now.tv_sec;
-    if (request->tv_nsec < now.tv_nsec) {
-        --relative.tv_sec;
-        relative.tv_nsec = (long)(request->tv_nsec + 1000000000L -
-                                  now.tv_nsec);
-    } else {
-        relative.tv_nsec = request->tv_nsec - now.tv_nsec;
+        if (clock_id == CLOCK_REALTIME)
+            operation |= FUTEX_CLOCK_REALTIME;
+        if (clock_gettime(clock_id, &now) != 0) {
+            saved_errno = errno;
+            errno = entry_errno;
+            return saved_errno != 0 ? saved_errno : EIO;
+        }
+        if (now.tv_sec < 0 || now.tv_nsec < 0 ||
+            now.tv_nsec >= 1000000000L) {
+            errno = entry_errno;
+            return EIO;
+        }
+        if (now.tv_sec > request->tv_sec ||
+            (now.tv_sec == request->tv_sec &&
+             now.tv_nsec >= request->tv_nsec))
+            return 0;
+
+        for (;;) {
+            intptr_t wait_result;
+            errno = 0;
+            wait_result = _RIN_TIME_FUTEX_WAIT(
+                &futex_word, operation, 0, request,
+                FUTEX_BITSET_MATCH_ANY);
+            if (wait_result < 0) {
+                saved_errno = wait_result == -1
+                    ? errno : (wait_result >= -4095 ? (int)-wait_result : EIO);
+                if (saved_errno == ETIMEDOUT) {
+                    errno = entry_errno;
+                    return 0;
+                }
+                errno = entry_errno;
+                return saved_errno != 0 ? saved_errno : EIO;
+            }
+            if (wait_result != 0) {
+                errno = entry_errno;
+                return EIO;
+            }
+            if (clock_gettime(clock_id, &now) != 0) {
+                saved_errno = errno;
+                errno = entry_errno;
+                return saved_errno != 0 ? saved_errno : EIO;
+            }
+            if (now.tv_sec < 0 || now.tv_nsec < 0 ||
+                now.tv_nsec >= 1000000000L) {
+                errno = entry_errno;
+                return EIO;
+            }
+            if (now.tv_sec > request->tv_sec ||
+                (now.tv_sec == request->tv_sec &&
+                 now.tv_nsec >= request->tv_nsec)) {
+                errno = entry_errno;
+                return 0;
+            }
+        }
     }
-    result = nanosleep(&relative, remain);
-    if (result == 0) return 0;
-    saved_errno = errno;
-    return saved_errno != 0 ? saved_errno : EIO;
 }
 
 /* ═══════════════════════════════════════════════════════════════
