@@ -451,10 +451,14 @@ static int rin_ftw_run(const char* path, int fd_limit, int flags,
         while (length > 1u && path[length - 1u] == '/') --length;
         if (length >= PATH_MAX) {
             errno = ENAMETOOLONG;
-            return -1;
+            result = -1;
+            goto done;
         }
         walk_path = rin_ftw_copy(path, length);
-        if (!walk_path) return -1;
+        if (!walk_path) {
+            result = -1;
+            goto done;
+        }
     }
 
     state.flags = flags;
