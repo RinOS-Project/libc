@@ -2376,17 +2376,90 @@ _RIN_STDIO_API int fileno(FILE* stream) {
  * sprintfがマクロ未定義 または _STDIO_GLOBAL_IMPL定義時に有効。
  * カーネルコンポーネント(rin.h/msvcrt.c)ではsprintfがマクロ定義済みのためスキップ。 */
 #if !defined(sprintf) || defined(_STDIO_GLOBAL_IMPL)
+typedef struct _RinStdioFormatSink {
+    char* buffer;
+    size_t capacity;
+    size_t length;
+} _RinStdioFormatSink;
+
+static inline int _rin_stdio_format_emit(_RinStdioFormatSink* sink,
+                                         char value) {
+    if (!sink || sink->length >= (size_t)INT_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    if (sink->buffer && sink->capacity > 0u &&
+        sink->length < sink->capacity - 1u)
+        sink->buffer[sink->length] = value;
+    ++sink->length;
+    return 0;
+}
+
+static inline int _rin_stdio_format_repeat(_RinStdioFormatSink* sink,
+                                          char value, size_t count) {
+    size_t original_count = count;
+    size_t writable = 0u;
+    if (!sink || count > (size_t)INT_MAX - sink->length) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    if (sink->buffer && sink->capacity > 0u &&
+        sink->length < sink->capacity - 1u) {
+        writable = sink->capacity - 1u - sink->length;
+        if (writable > count) writable = count;
+        for (size_t index = 0u; index < writable; ++index)
+            sink->buffer[sink->length + index] = value;
+    }
+    sink->length += original_count;
+    return 0;
+}
+
+static inline int _rin_stdio_format_append(_RinStdioFormatSink* sink,
+                                           const char* text, size_t length) {
+    if (!sink || (!text && length != 0u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (length > (size_t)INT_MAX - sink->length) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    if (sink->buffer && sink->capacity > 0u &&
+        sink->length < sink->capacity - 1u) {
+        size_t writable = sink->capacity - 1u - sink->length;
+        if (writable > length) writable = length;
+        for (size_t index = 0u; index < writable; ++index)
+            sink->buffer[sink->length + index] = text[index];
+    }
+    sink->length += length;
+    return 0;
+}
+
 _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap) {
+    _RinStdioFormatSink sink = {buf, size, 0u};
+    char* format_allocation = (char*)0;
+    if (!fmt || (!buf && size != 0u)) {
+        errno = EINVAL;
+        return -1;
+    }
 
-    char* p = buf;
-    char* end = buf + size - 1;
+#define _RIN_STDIO_FORMAT_PUT(value) \
+    do { if (_rin_stdio_format_emit(&sink, (char)(value)) != 0) goto format_error; } while (0)
+#define _RIN_STDIO_FORMAT_REPEAT(value, count) \
+    do { if (_rin_stdio_format_repeat(&sink, (char)(value), (size_t)(count)) != 0) goto format_error; } while (0)
+#define _RIN_STDIO_FORMAT_APPEND(text, count) \
+    do { if (_rin_stdio_format_append(&sink, (text), (size_t)(count)) != 0) goto format_error; } while (0)
 
-    while (*fmt && p < end) {
+    while (*fmt) {
         if (*fmt != '%') {
-            *p++ = *fmt++;
+            _RIN_STDIO_FORMAT_PUT(*fmt++);
             continue;
         }
         fmt++; /* skip '%' */
+        if (!*fmt) {
+            _RIN_STDIO_FORMAT_PUT('%');
+            break;
+        }
 
         /* フラグとパディング */
         int pad = 0, zero = 0, left_align = 0;
@@ -2405,11 +2478,17 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
         /* 幅 (dynamic: %*d も扱う) */
         if (*fmt == '*') {
             pad = va_arg(ap, int);
+            if (pad == INT_MIN) { errno = EOVERFLOW; goto format_error; }
             if (pad < 0) { left_align = 1; pad = -pad; }
             fmt++;
         } else {
             while (*fmt >= '0' && *fmt <= '9') {
-                pad = pad * 10 + (*fmt++ - '0');
+                int digit = *fmt++ - '0';
+                if (pad > (INT_MAX - digit) / 10) {
+                    errno = EOVERFLOW;
+                    goto format_error;
+                }
+                pad = pad * 10 + digit;
             }
         }
 
@@ -2422,7 +2501,12 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
             } else {
                 precision = 0;
                 while (*fmt >= '0' && *fmt <= '9') {
-                    precision = precision * 10 + (*fmt++ - '0');
+                    int digit = *fmt++ - '0';
+                    if (precision > (INT_MAX - digit) / 10) {
+                        errno = EOVERFLOW;
+                        goto format_error;
+                    }
+                    precision = precision * 10 + digit;
                 }
             }
         }
@@ -2449,20 +2533,40 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
         switch (*fmt) {
             case 'd':
             case 'i': {
-                long long n;
-                if (is_longlong) n = va_arg(ap, long long);
-                else if (is_long) n = va_arg(ap, long);
-                else n = va_arg(ap, int);
-
-                if (n < 0) { if (p < end) *p++ = '-'; n = -n; }
+                long long signed_value;
+                unsigned long long n;
+                int negative;
+                if (is_longlong) signed_value = va_arg(ap, long long);
+                else if (is_long) signed_value = va_arg(ap, long);
+                else signed_value = va_arg(ap, int);
+                negative = signed_value < 0;
+                n = negative
+                    ? (unsigned long long)(-(signed_value + 1)) + 1u
+                    : (unsigned long long)signed_value;
                 char tmp[24]; int i = 0;
                 do { tmp[i++] = '0' + n % 10; n /= 10; } while (n);
-                if (!left_align) {
-                    while (pad > i && p < end) { *p++ = zero ? '0' : ' '; pad--; }
+                int digits = i;
+                int sign_width = negative || plus;
+                if (!left_align && zero) {
+                    if (sign_width)
+                        _RIN_STDIO_FORMAT_PUT(negative ? '-' : '+');
+                    _RIN_STDIO_FORMAT_REPEAT('0',
+                        pad > digits + sign_width ?
+                            (size_t)(pad - digits - sign_width) : 0u);
+                } else {
+                    if (negative || plus)
+                        _RIN_STDIO_FORMAT_PUT(negative ? '-' : '+');
+                    if (!left_align) {
+                        _RIN_STDIO_FORMAT_REPEAT(' ',
+                            pad > digits + sign_width ?
+                                (size_t)(pad - digits - sign_width) : 0u);
+                    }
                 }
-                while (i-- && p < end) *p++ = tmp[i];
+                while (i--) _RIN_STDIO_FORMAT_PUT(tmp[i]);
                 if (left_align) {
-                    while (pad > 0 && p < end) { *p++ = ' '; pad--; }
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        pad > digits + sign_width ?
+                            (size_t)(pad - digits - sign_width) : 0u);
                 }
                 break;
             }
@@ -2474,12 +2578,15 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
 
                 char tmp[24]; int i = 0;
                 do { tmp[i++] = '0' + n % 10; n /= 10; } while (n);
+                int digits = i;
                 if (!left_align) {
-                    while (pad > i && p < end) { *p++ = zero ? '0' : ' '; pad--; }
+                    _RIN_STDIO_FORMAT_REPEAT(zero ? '0' : ' ',
+                        pad > digits ? (size_t)(pad - digits) : 0u);
                 }
-                while (i-- && p < end) *p++ = tmp[i];
+                while (i--) _RIN_STDIO_FORMAT_PUT(tmp[i]);
                 if (left_align) {
-                    while (pad > 0 && p < end) { *p++ = ' '; pad--; }
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        pad > digits ? (size_t)(pad - digits) : 0u);
                 }
                 break;
             }
@@ -2493,23 +2600,26 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                 const char* hex = (*fmt == 'x') ? "0123456789abcdef" : "0123456789ABCDEF";
                 char tmp[24]; int i = 0;
                 do { tmp[i++] = hex[n & 0xF]; n >>= 4; } while (n);
+                int digits = i;
                 if (!left_align) {
-                    while (pad > i && p < end) { *p++ = zero ? '0' : ' '; pad--; }
+                    _RIN_STDIO_FORMAT_REPEAT(zero ? '0' : ' ',
+                        pad > digits ? (size_t)(pad - digits) : 0u);
                 }
-                while (i-- && p < end) *p++ = tmp[i];
+                while (i--) _RIN_STDIO_FORMAT_PUT(tmp[i]);
                 if (left_align) {
-                    while (pad > 0 && p < end) { *p++ = ' '; pad--; }
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        pad > digits ? (size_t)(pad - digits) : 0u);
                 }
                 break;
             }
             case 'p': {
                 uintptr_t n = (uintptr_t)va_arg(ap, void*);
-                if (p < end) *p++ = '0';
-                if (p < end) *p++ = 'x';
+                _RIN_STDIO_FORMAT_PUT('0');
+                _RIN_STDIO_FORMAT_PUT('x');
                 char tmp[2u * sizeof(uintptr_t)]; int i = 0;
                 do { tmp[i++] = "0123456789abcdef"[n & 0xF]; n >>= 4; } while (n);
                 while (i < (int)(2u * sizeof(uintptr_t))) tmp[i++] = '0';
-                while (i-- && p < end) *p++ = tmp[i];
+                while (i--) _RIN_STDIO_FORMAT_PUT(tmp[i]);
                 break;
             }
             case 'f':
@@ -2522,15 +2632,27 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                     ? va_arg(ap, long double)
                     : (long double)va_arg(ap, double);
                 int prec = (precision >= 0) ? precision : 6;
-                char ftmp[4096];
+                char stack_ftmp[4096];
+                size_t fcapacity = prec > 4000
+                    ? (size_t)prec + 64u : sizeof(stack_ftmp);
+                char* ftmp = stack_ftmp;
                 int fi = 0;
+                if (fcapacity > sizeof(stack_ftmp)) {
+                    format_allocation = (char*)malloc(fcapacity);
+                    if (!format_allocation) {
+                        errno = ENOMEM;
+                        goto format_error;
+                    }
+                    ftmp = format_allocation;
+                }
 
                 /* Handle special values */
                 /* Check for NaN: NaN != NaN */
                 if (val != val) {
                     const char* ns = "nan";
                     if (*fmt == 'F' || *fmt == 'E' || *fmt == 'G') ns = "NAN";
-                    while (*ns && fi < 4095) ftmp[fi++] = *ns++;
+                    while (*ns && (size_t)fi + 1u < fcapacity)
+                        ftmp[fi++] = *ns++;
                 } else {
                     /* Check for infinity: val > large or val < -large */
                     int is_inf = 0;
@@ -2545,10 +2667,12 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                         if (t < -1e18) is_inf = 1;
                     }
                     if (is_inf) {
-                        if (val < 0 && fi < 4095) ftmp[fi++] = '-';
+                        if (val < 0 && (size_t)fi + 1u < fcapacity)
+                            ftmp[fi++] = '-';
                         const char* ns = "inf";
                         if (*fmt == 'F' || *fmt == 'E' || *fmt == 'G') ns = "INF";
-                        while (*ns && fi < 4095) ftmp[fi++] = *ns++;
+                        while (*ns && (size_t)fi + 1u < fcapacity)
+                            ftmp[fi++] = *ns++;
                     } else {
                         /* Normal number */
                         if (val < 0) { ftmp[fi++] = '-'; val = -val; }
@@ -2583,7 +2707,8 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
 
                         /* Round the fractional part */
                         long double round_add = 0.5L;
-                        for (int k = 0; k < prec; k++) round_add *= 0.1L;
+                        for (int k = 0; k < prec && round_add != 0.0L; k++)
+                            round_add *= 0.1L;
                         frac += round_add;
                         if (frac >= 1.0) { ipart++; frac -= 1.0; }
 
@@ -2591,7 +2716,8 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                         char itmp[24]; int ii = 0;
                         if (ipart == 0) { itmp[ii++] = '0'; }
                         else { while (ipart > 0 && ii < 23) { itmp[ii++] = '0' + (int)(ipart % 10); ipart /= 10; } }
-                        while (ii-- > 0 && fi < 4095) ftmp[fi++] = itmp[ii];
+                        while (ii-- > 0 && (size_t)fi + 1u < fcapacity)
+                            ftmp[fi++] = itmp[ii];
 
                         /* Decimal point and fractional digits */
                         int fractional_precision = scientific
@@ -2604,9 +2730,9 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                                 fractional_precision = 0;
                         }
                         if (fractional_precision > 0) {
-                            if (fi < 4095) ftmp[fi++] = '.';
+                            if ((size_t)fi + 1u < fcapacity) ftmp[fi++] = '.';
                             for (int k = 0; k < fractional_precision &&
-                                 fi < 4095; k++) {
+                                 (size_t)fi + 1u < fcapacity; k++) {
                                 frac *= 10.0;
                                 int digit = (int)frac;
                                 if (digit > 9) digit = 9;
@@ -2614,7 +2740,7 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                                 frac -= (long double)digit;
                             }
                         }
-                        if (scientific && fi < 4095) {
+                        if (scientific && (size_t)fi + 1u < fcapacity) {
                             ftmp[fi++] = (*fmt == 'E' || *fmt == 'G') ? 'E' : 'e';
                             if (scientific_exponent < 0) {
                                 ftmp[fi++] = '-';
@@ -2630,7 +2756,8 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                                 scientific_exponent /= 10;
                             } while (scientific_exponent != 0);
                             if (exponent_size < 2) exponent_digits[exponent_size++] = '0';
-                            while (exponent_size-- > 0 && fi < 4095)
+                            while (exponent_size-- > 0 &&
+                                   (size_t)fi + 1u < fcapacity)
                                 ftmp[fi++] = exponent_digits[exponent_size];
                         }
                         if (general && !alternate) {
@@ -2666,12 +2793,14 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                 ftmp[fi] = '\0';
 
                 /* Apply width/padding */
-                if (plus && (fi == 0 || ftmp[0] != '-') && fi < 4095) {
+                if (plus && (fi == 0 || ftmp[0] != '-') &&
+                    (size_t)fi + 1u < fcapacity) {
                     for (int k = fi; k > 0; --k) ftmp[k] = ftmp[k - 1];
                     ftmp[0] = '+';
                     ++fi;
                 }
-                if (alternate && prec == 0 && fi < 4095) {
+                if (alternate && prec == 0 &&
+                    (size_t)fi + 1u < fcapacity) {
                     int point = 0;
                     while (point < fi && ftmp[point] != 'e' &&
                            ftmp[point] != 'E') ++point;
@@ -2683,48 +2812,82 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                         ++fi;
                     }
                 }
-                if (!left_align) {
-                    while (pad > fi && p < end) { *p++ = zero ? '0' : ' '; pad--; }
+                if (!left_align && zero && fi > 0 &&
+                    (ftmp[0] == '-' || ftmp[0] == '+')) {
+                    _RIN_STDIO_FORMAT_PUT(ftmp[0]);
+                    _RIN_STDIO_FORMAT_REPEAT('0',
+                        pad > fi ? (size_t)(pad - fi) : 0u);
+                    _RIN_STDIO_FORMAT_APPEND(ftmp + 1, (size_t)(fi - 1));
+                } else {
+                    if (!left_align) {
+                        _RIN_STDIO_FORMAT_REPEAT(' ',
+                            pad > fi ? (size_t)(pad - fi) : 0u);
+                    }
+                    _RIN_STDIO_FORMAT_APPEND(ftmp, (size_t)fi);
                 }
-                for (int k = 0; k < fi && p < end; k++) *p++ = ftmp[k];
                 if (left_align) {
-                    while (pad > fi && p < end) { *p++ = ' '; pad--; }
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        pad > fi ? (size_t)(pad - fi) : 0u);
+                }
+                if (format_allocation) {
+                    free(format_allocation);
+                    format_allocation = (char*)0;
                 }
                 break;
             }
             case 's': {
                 const char* s = va_arg(ap, const char*);
                 if (!s) s = "(null)";
-                int len = 0;
+                size_t len = 0u;
                 if (precision >= 0) {
                     /* %.*s: 非 null 終端バッファも許容、precision まで読む */
-                    while (len < precision && s[len]) len++;
+                    while (len < (size_t)precision && s[len]) len++;
                 } else {
                     while (s[len]) len++;
                 }
                 if (!left_align) {
-                    while (pad > len && p < end) { *p++ = ' '; pad--; }
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        (size_t)pad > len ? (size_t)pad - len : 0u);
                 }
-                int copied = 0;
-                while (copied < len && p < end) { *p++ = s[copied]; copied++; }
+                _RIN_STDIO_FORMAT_APPEND(s, len);
                 if (left_align) {
-                    while (pad > len && p < end) { *p++ = ' '; pad--; }
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        (size_t)pad > len ? (size_t)pad - len : 0u);
                 }
                 break;
             }
             case 'c':
-                if (p < end) *p++ = (char)va_arg(ap, int);
+                _RIN_STDIO_FORMAT_PUT(va_arg(ap, int));
                 break;
             case '%':
-                if (p < end) *p++ = '%';
+                _RIN_STDIO_FORMAT_PUT('%');
                 break;
             default:
                 break;
         }
         fmt++;
     }
-    *p = '\0';
-    return (int)(p - buf);
+    if (sink.buffer && sink.capacity > 0u) {
+        size_t terminator = sink.length < sink.capacity
+            ? sink.length : sink.capacity - 1u;
+        sink.buffer[terminator] = '\0';
+    }
+#undef _RIN_STDIO_FORMAT_PUT
+#undef _RIN_STDIO_FORMAT_REPEAT
+#undef _RIN_STDIO_FORMAT_APPEND
+    return (int)sink.length;
+
+format_error:
+    if (format_allocation) free(format_allocation);
+    if (sink.buffer && sink.capacity > 0u) {
+        size_t terminator = sink.length < sink.capacity
+            ? sink.length : sink.capacity - 1u;
+        sink.buffer[terminator] = '\0';
+    }
+#undef _RIN_STDIO_FORMAT_PUT
+#undef _RIN_STDIO_FORMAT_REPEAT
+#undef _RIN_STDIO_FORMAT_APPEND
+    return -1;
 }
 
 _STDIO_PRINTF_FN int snprintf(char* buf, size_t size, const char* fmt, ...) {
@@ -2747,12 +2910,50 @@ _STDIO_PRINTF_FN int vsprintf(char* buf, const char* fmt, va_list ap) {
     return vsnprintf(buf, 4096, fmt, ap);
 }
 
+static inline int _rin_stdio_vformat_write(FILE* stream, const char* fmt,
+                                           va_list ap) {
+    va_list copy;
+    int required;
+    int written;
+    char* buffer;
+    size_t capacity;
+
+    if (!stream || !fmt) {
+        errno = EINVAL;
+        return -1;
+    }
+    va_copy(copy, ap);
+    required = vsnprintf((char*)0, 0u, fmt, copy);
+    va_end(copy);
+    if (required < 0) return -1;
+    if ((size_t)required >= (size_t)-1) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    capacity = (size_t)required + 1u;
+    buffer = (char*)malloc(capacity);
+    if (!buffer) {
+        errno = ENOMEM;
+        return -1;
+    }
+    va_copy(copy, ap);
+    written = vsnprintf(buffer, capacity, fmt, copy);
+    va_end(copy);
+    if (written < 0 || written != required) {
+        free(buffer);
+        if (written >= 0) errno = EINVAL;
+        return -1;
+    }
+    if (_rin_stdio_write_all(stream, buffer, (size_t)written) != 0) {
+        free(buffer);
+        return -1;
+    }
+    free(buffer);
+    return written;
+}
+
 _STDIO_PRINTF_FN int vprintf(const char* fmt, va_list ap) {
-    char buf[512];
-    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
-    if (n < 0) return -1;
-    if (_rin_stdio_write_all(stdout, buf, (size_t)n) != 0) return -1;
-    return n;
+    return _rin_stdio_vformat_write(stdout, fmt, ap);
 }
 
 _STDIO_PRINTF_FN int printf(const char* fmt, ...) {
@@ -2764,11 +2965,7 @@ _STDIO_PRINTF_FN int printf(const char* fmt, ...) {
 }
 
 _STDIO_PRINTF_FN int vfprintf(FILE* stream, const char* fmt, va_list ap) {
-    char buf[512];
-    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
-    if (n < 0) return -1;
-    if (_rin_stdio_write_all(stream, buf, (size_t)n) != 0) return -1;
-    return n;
+    return _rin_stdio_vformat_write(stream, fmt, ap);
 }
 
 _STDIO_PRINTF_FN int fprintf(FILE* stream, const char* fmt, ...) {
@@ -2780,50 +2977,57 @@ _STDIO_PRINTF_FN int fprintf(FILE* stream, const char* fmt, ...) {
 }
 #endif /* !sprintf || _STDIO_GLOBAL_IMPL */
 
-/* POSIX formatted-allocation helper used by libc++'s locale fallback.  Keep
- * the allocation bounded and use va_copy so the caller's va_list remains
- * usable after the sizing/growth passes. */
+/* POSIX formatted-allocation helpers.  Size the allocation from the formatter's
+ * required-length result and preserve the caller's va_list with va_copy. */
 #if !defined(vasprintf) || defined(_STDIO_GLOBAL_IMPL)
 _STDIO_PRINTF_FN int vasprintf(char** result, const char* fmt, va_list ap) {
-    size_t capacity = 128u;
+    size_t capacity;
+    va_list copy;
+    int required;
+    int written;
+    char* buffer;
     if (!result || !fmt) {
         errno = EINVAL;
         return -1;
     }
     *result = (char*)0;
-    for (;;) {
-        char* buffer = (char*)malloc(capacity);
-        int required;
-        va_list copy;
-        if (!buffer) {
-            errno = ENOMEM;
-            return -1;
-        }
-        va_copy(copy, ap);
-        required = vsnprintf(buffer, capacity, fmt, copy);
-        va_end(copy);
-        if (required >= 0 && (size_t)required < capacity) {
-            *result = buffer;
-            return required;
-        }
-        free(buffer);
-        if (required >= 0) {
-            if ((size_t)required == (size_t)-1 ||
-                (size_t)required >= (size_t)-1 - 1u) {
-                errno = EOVERFLOW;
-                return -1;
-            }
-            capacity = (size_t)required + 1u;
-        } else {
-            if (capacity > (size_t)-1 / 2u) {
-                errno = EOVERFLOW;
-                return -1;
-            }
-            capacity *= 2u;
-        }
+    va_copy(copy, ap);
+    required = vsnprintf((char*)0, 0u, fmt, copy);
+    va_end(copy);
+    if (required < 0) return -1;
+    if ((size_t)required >= (size_t)-1) {
+        errno = EOVERFLOW;
+        return -1;
     }
+    capacity = (size_t)required + 1u;
+    buffer = (char*)malloc(capacity);
+    if (!buffer) {
+        errno = ENOMEM;
+        return -1;
+    }
+    va_copy(copy, ap);
+    written = vsnprintf(buffer, capacity, fmt, copy);
+    va_end(copy);
+    if (written < 0 || written != required) {
+        free(buffer);
+        if (written >= 0) errno = EINVAL;
+        return -1;
+    }
+    *result = buffer;
+    return written;
 }
 #endif /* !vasprintf || _STDIO_GLOBAL_IMPL */
+
+#if !defined(asprintf) || defined(_STDIO_GLOBAL_IMPL)
+_STDIO_PRINTF_FN int asprintf(char** result, const char* fmt, ...) {
+    va_list ap;
+    int written;
+    va_start(ap, fmt);
+    written = vasprintf(result, fmt, ap);
+    va_end(ap);
+    return written;
+}
+#endif /* !asprintf || _STDIO_GLOBAL_IMPL */
 
 /* ═══════════════════════════════════════════════════════════════
  * フォーマット入力

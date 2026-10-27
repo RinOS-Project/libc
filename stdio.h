@@ -136,6 +136,7 @@ int printf(const char* fmt, ...);
 int vfprintf(FILE* stream, const char* fmt, va_list ap);
 int fprintf(FILE* stream, const char* fmt, ...);
 int vasprintf(char** result, const char* fmt, va_list ap);
+int asprintf(char** result, const char* fmt, ...);
 
 #include "stdio_scanf.h"
 
