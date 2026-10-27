@@ -1727,25 +1727,48 @@ static inline int getdomainname(char* name, size_t len) {
 
 /* ttyname - TTY名取得
  *
- * The kernel's stdio owner exposes an authenticated character-device
- * identity: descriptors 0..2 have st_rdev equal to their public descriptor
- * number.  Resolve only that exact identity.  A random character device is
- * not enough evidence for a TTY name, so it remains ENOTTY instead of being
- * turned into a guessed path. */
+ * The kernel's stdio owner exposes an authenticated identity for descriptors
+ * 0..2. PTY slave names are accepted only when the namespace path resolves to
+ * the same character-device number as the descriptor. */
 static inline int _rin_ttyname_resolve(int fd, char* output, size_t capacity) {
     struct stat status;
+    struct stat pty_status;
+    char pty_path[32];
     const char* name;
     size_t length;
     size_t index;
 
     if (fd < 0) return EBADF;
     if (fstat(fd, &status) < 0) return errno ? errno : EIO;
-    if (!S_ISCHR(status.st_mode) || fd > 2 ||
-        status.st_rdev != (dev_t)fd)
+    if (!S_ISCHR(status.st_mode)) return ENOTTY;
+    if (fd <= 2 && status.st_rdev == (dev_t)fd) {
+        name = (fd == 0) ? "/dev/tty0" :
+               (fd == 1) ? "/dev/tty1" : "/dev/tty2";
+    } else if ((uint64_t)status.st_rdev >= UINT64_C(0x8800)) {
+        static const char prefix[] = "/dev/pts/";
+        char digits[20];
+        uint64_t number = (uint64_t)status.st_rdev - UINT64_C(0x8800);
+        size_t prefix_length = sizeof(prefix) - 1u;
+        size_t digit_count = 0u;
+        do {
+            if (digit_count == sizeof(digits)) return ENOTTY;
+            digits[digit_count++] = (char)('0' + number % 10u);
+            number /= 10u;
+        } while (number != 0u);
+        for (index = 0u; index < prefix_length; ++index)
+            pty_path[index] = prefix[index];
+        while (digit_count != 0u)
+            pty_path[prefix_length++] = digits[--digit_count];
+        if (prefix_length >= sizeof(pty_path)) return ENOTTY;
+        pty_path[prefix_length] = '\0';
+        if (stat(pty_path, &pty_status) < 0 ||
+            !S_ISCHR(pty_status.st_mode) ||
+            pty_status.st_rdev != status.st_rdev)
+            return ENOTTY;
+        name = pty_path;
+    } else {
         return ENOTTY;
-
-    name = (fd == 0) ? "/dev/tty0" :
-           (fd == 1) ? "/dev/tty1" : "/dev/tty2";
+    }
     length = 0;
     while (name[length] != '\0') ++length;
     if (!output || capacity <= length) return ERANGE;
