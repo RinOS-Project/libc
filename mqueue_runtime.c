@@ -427,13 +427,15 @@ static RinLibcMqNotifySlot* mq_notify_reserve(void)
     return NULL;
 }
 
-static int32_t mq_notify_call(mqd_t queue, RinEvent event, uint32_t action)
+static int32_t mq_notify_call(mqd_t queue, RinEvent event, uint32_t action,
+                              uint64_t argument3)
 {
     RinSdkArgsV1 request;
     mq_sdk_request_init(&request);
     request.value[0] = queue;
     request.value[1] = event;
     request.value[2] = action;
+    request.value[3] = argument3;
     return mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
                            RIN_LIBC_SDK_IPC_POSIX_MQ_NOTIFY,
                            &request, NULL, 0u);
@@ -699,7 +701,7 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
     if (!notification) {
         result = mq_notify_call(
             mqdes, RIN_OBJECT_HANDLE_INVALID,
-            RIN_POSIX_MQ_NOTIFY_CANCEL);
+            RIN_POSIX_MQ_NOTIFY_CANCEL, 0u);
         if (result == RIN_ERROR_NOT_FOUND) return 0;
         if (mq_error_from_result(result,
                                  RIN_LIBC_SDK_IPC_POSIX_MQ_NOTIFY, 0) != 0)
@@ -717,10 +719,19 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
             errno = EINVAL;
             return -1;
         }
-        /* The current signal ABI cannot carry SI_MESGQ or sigev_value.
-         * Reject this mode until the kernel can deliver that payload. */
-        errno = ENOTSUP;
-        return -1;
+        {
+            uint64_t signal_value = 0u;
+            const size_t value_size = sizeof(notification->sigev_value) <
+                                              sizeof(signal_value)
+                                          ? sizeof(notification->sigev_value)
+                                          : sizeof(signal_value);
+            memcpy(&signal_value, &notification->sigev_value, value_size);
+            return mq_error_from_result(
+                mq_notify_call(mqdes,
+                               (RinEvent)(uint32_t)notification->sigev_signo,
+                               RIN_POSIX_MQ_NOTIFY_SIGNAL, signal_value),
+                RIN_LIBC_SDK_IPC_POSIX_MQ_NOTIFY, 0);
+        }
     } else if (notification->sigev_notify == SIGEV_THREAD) {
         if (!notification->sigev_notify_function) {
             errno = EINVAL;
@@ -733,7 +744,7 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
     }
     if (action == RIN_POSIX_MQ_NOTIFY_NONE)
         return mq_error_from_result(
-            mq_notify_call(mqdes, RIN_OBJECT_HANDLE_INVALID, action),
+            mq_notify_call(mqdes, RIN_OBJECT_HANDLE_INVALID, action, 0u),
             RIN_LIBC_SDK_IPC_POSIX_MQ_NOTIFY, 0);
 
     slot = mq_notify_reserve();
@@ -773,7 +784,7 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
      * kernel may signal the event before mq_notify returns, so a worker must
      * already be waiting when registration succeeds. */
     __atomic_store_n(&slot->state, 2u, __ATOMIC_RELEASE);
-    result = mq_notify_call(mqdes, event, RIN_POSIX_MQ_NOTIFY_EVENT);
+    result = mq_notify_call(mqdes, event, RIN_POSIX_MQ_NOTIFY_EVENT, 0u);
     if (result != RIN_SUCCESS) {
         __atomic_store_n(&slot->state, 3u, __ATOMIC_RELEASE);
         (void)mq_event_signal(event, 1u);
