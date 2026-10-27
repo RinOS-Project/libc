@@ -1432,8 +1432,8 @@ static inline long sysconf(int name) {
         case _SC_TZNAME_MAX:
             return TZNAME_MAX;
         case _SC_TTY_NAME_MAX:
-            /* ttyname() publishes /dev/tty0..2 through a 16-byte TLS
-             * buffer; expose that actual device-name bound. */
+            /* TTY paths /dev/tty0..2 and PTY paths /dev/pts/0..31
+             * fit in ttyname()'s 16-byte TLS buffer. */
             return 16;
         case _SC_VERSION:
             return 200809L;
