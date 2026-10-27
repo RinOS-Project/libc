@@ -216,35 +216,71 @@ static inline int getopt_long_only(int argc, char* const argv[],
                                    const char* optstring,
                                    const struct option* longopts,
                                    int* longindex) {
+    if (optreset) {
+        optind = 1;
+        _rin_getopt_pos = 0;
+        optreset = 0;
+    }
     if (optind >= argc) return -1;
 
     const char* arg = argv[optind];
     if (!arg || arg[0] != '-' || arg[1] == '\0') return -1;
 
-    /* -xxxを--xxxとして処理を試みる */
-    if (arg[1] != '-' && longopts) {
+    /* GNU getopt_long_only gives a matching short option precedence. */
+    if (arg[1] != '-' && longopts && optstring) {
+        const char* short_options = optstring;
+        if (*short_options == ':' || *short_options == '+' ||
+            *short_options == '-')
+            ++short_options;
+        int short_match = 0;
+        for (const char* option = short_options; *option; ++option) {
+            if (*option == arg[1]) {
+                short_match = 1;
+                break;
+            }
+            if (option[1] == ':') ++option;
+            if (option[1] == ':') ++option;
+        }
+        if (short_match) return getopt_long(argc, argv, optstring,
+                                            longopts, longindex);
+
         const char* name = arg + 1;
         int name_len = 0;
-        while (name[name_len] && name[name_len] != '=') name_len++;
+        const char* eq = NULL;
+        while (name[name_len] && name[name_len] != '=') ++name_len;
+        if (name[name_len] == '=') eq = name + name_len + 1;
 
-        /* 長いオプションとして検索 */
         for (int i = 0; longopts[i].name; i++) {
             const char* opt_name = longopts[i].name;
-            int match = 1;
-            for (int j = 0; j < name_len; j++) {
-                if (opt_name[j] != name[j]) {
-                    match = 0;
-                    break;
+            int j = 0;
+            while (j < name_len && opt_name[j] == name[j]) ++j;
+            if (j != name_len || opt_name[j] != '\0') continue;
+
+            ++optind;
+            _rin_getopt_pos = 0;
+            if (longindex) *longindex = i;
+            if (longopts[i].has_arg == required_argument ||
+                longopts[i].has_arg == optional_argument) {
+                if (eq) {
+                    optarg = (char*)eq;
+                } else if (longopts[i].has_arg == required_argument &&
+                           optind < argc) {
+                    optarg = argv[optind++];
+                } else if (longopts[i].has_arg == required_argument) {
+                    optopt = longopts[i].val;
+                    if (optstring[0] == ':') return ':';
+                    return '?';
                 }
             }
-            if (match && opt_name[name_len] == '\0') {
-                /* 長いオプションとして処理 */
-                return getopt_long(argc, argv, optstring, longopts, longindex);
+            if (longopts[i].flag) {
+                *longopts[i].flag = longopts[i].val;
+                return 0;
             }
+            return longopts[i].val;
         }
     }
 
-    /* 通常のgetopt_long */
+    /* Preserve short-option clusters and unknown-option handling. */
     return getopt_long(argc, argv, optstring, longopts, longindex);
 }
 
