@@ -9,7 +9,6 @@
 #include "rin_pthread_futex_policy.h"
 #include "rin_thread_detach_policy.h"
 #include "rin_thread_stack_policy.h"
-#include "rin_thread_timeout_policy.h"
 #include "stdlib.h"
 #include "string.h"
 #include "unistd.h"
@@ -1282,6 +1281,9 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
     if (!cond || !mutex || !abstime) return EINVAL;
     if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
         return EINVAL;
+    if (cond->clock_id != CLOCK_REALTIME &&
+        cond->clock_id != CLOCK_MONOTONIC)
+        return EINVAL;
 
     unsigned int gen = __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE);
     __atomic_fetch_add(&cond->waiting, 1, __ATOMIC_SEQ_CST);
@@ -1293,34 +1295,12 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
 
     int result = 0;
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-        struct timespec now;
-        struct rin_thread_relative_timeout relative;
-        enum rin_thread_timeout_outcome timeout_outcome;
-
-        if (clock_gettime(cond->clock_id, &now) != 0) {
-            result = errno ? errno : EIO;
-            break;
-        }
-        timeout_outcome = rin_thread_relative_timeout(
-            (long)abstime->tv_sec, abstime->tv_nsec,
-            (long)now.tv_sec, now.tv_nsec, __LONG_MAX__, &relative);
-        if (timeout_outcome == RIN_THREAD_TIMEOUT_INVALID) {
-            result = EIO;
-            break;
-        }
-        if (timeout_outcome == RIN_THREAD_TIMEOUT_EXPIRED) {
-            result = ETIMEDOUT;
-            break;
-        }
-
-        struct timespec ts;
-        ts.tv_sec = (time_t)relative.seconds;
-        ts.tv_nsec = relative.nanoseconds;
-
-        long ret = _RIN_PTHREAD_RUNTIME_FUTEX(
+        int operation = FUTEX_WAIT_BITSET |
+            (cond->clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
+        long ret = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
             &cond->generation,
-            rin_pthread_cond_futex_operation(cond, FUTEX_WAIT),
-            (int)gen, &ts);
+            rin_pthread_cond_futex_operation(cond, operation),
+            (int)gen, abstime, FUTEX_BITSET_MATCH_ANY);
         if (ret == -1 && errno == ETIMEDOUT) {
             if (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) != gen)
                 result = 0;

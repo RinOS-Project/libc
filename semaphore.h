@@ -14,7 +14,6 @@
 #include "time.h"
 #include "sys/syscall.h"
 #include "linux/futex.h"
-#include "rin_thread_timeout_policy.h"
 #include <rin/ipc/posix_semaphore_abi.h>
 
 #ifndef _RIN_SEMAPHORE_FUTEX
@@ -22,9 +21,9 @@
     syscall(SYS_futex, address, operation, value, timeout, NULL, 0)
 #endif
 
-#ifndef _RIN_SEMAPHORE_CLOCK_GETTIME
-#define _RIN_SEMAPHORE_CLOCK_GETTIME(clock_id, output) \
-    clock_gettime(clock_id, output)
+#ifndef _RIN_SEMAPHORE_FUTEX_BITSET
+#define _RIN_SEMAPHORE_FUTEX_BITSET(address, operation, value, timeout, bitset) \
+    syscall(SYS_futex, address, operation, value, timeout, NULL, bitset)
 #endif
 
 #ifdef __cplusplus
@@ -228,32 +227,11 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
             continue;
         }
 
-        struct timespec now;
-        struct rin_thread_relative_timeout relative;
-        enum rin_thread_timeout_outcome timeout_outcome;
-        if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L) {
+        if (abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
+            abstime->tv_nsec >= 1000000000L) {
             errno = EINVAL;
             return -1;
         }
-        if (_RIN_SEMAPHORE_CLOCK_GETTIME(CLOCK_REALTIME, &now) != 0) {
-            if (errno == 0) errno = EIO;
-            return -1;
-        }
-        timeout_outcome = rin_thread_relative_timeout(
-            (long)abstime->tv_sec, abstime->tv_nsec,
-            (long)now.tv_sec, now.tv_nsec, __LONG_MAX__, &relative);
-        if (timeout_outcome == RIN_THREAD_TIMEOUT_INVALID) {
-            errno = EIO;
-            return -1;
-        }
-        if (timeout_outcome == RIN_THREAD_TIMEOUT_EXPIRED) {
-            errno = ETIMEDOUT;
-            return -1;
-        }
-
-        struct timespec rel;
-        rel.tv_sec = (time_t)relative.seconds;
-        rel.tv_nsec = relative.nanoseconds;
 
         if (rin_sem_waiter_add(sem) != 0) {
             errno = EAGAIN;
@@ -270,12 +248,22 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
             continue;
         }
 
-        long ret = _RIN_SEMAPHORE_FUTEX(
-            &sem->value, rin_sem_futex_operation(sem, FUTEX_WAIT), 0, &rel);
+        long ret = _RIN_SEMAPHORE_FUTEX_BITSET(
+            &sem->value,
+            rin_sem_futex_operation(
+                sem, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME),
+            0, abstime, FUTEX_BITSET_MATCH_ANY);
         rin_sem_waiter_remove(sem);
 
         if (ret < 0) {
             int err = errno;
+            if (err == ETIMEDOUT) {
+                /* A post can race with the timeout wake; take a token if it
+                 * is already available before reporting the deadline. */
+                if (sem_trywait(sem) == 0) return 0;
+                errno = ETIMEDOUT;
+                return -1;
+            }
             if (err != EAGAIN) {
                 if (err == 0) errno = EIO;
                 return -1;
