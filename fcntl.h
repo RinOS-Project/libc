@@ -626,23 +626,19 @@ static inline int posix_fallocate(int fd, off_t offset, off_t len) {
     uint64_t unsigned_length;
     intptr_t result;
 
-    if (offset < 0 || len < 0) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (offset < 0 || len < 0) return EINVAL;
     unsigned_offset = (uint64_t)offset;
     unsigned_length = (uint64_t)len;
-    if (unsigned_offset > UINT64_MAX - unsigned_length) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (unsigned_offset > UINT64_MAX - unsigned_length) return EOVERFLOW;
     result = _RIN_FCNTL_SYSCALL6(
         SYS_FALLOCATE, (uintptr_t)fd,
         (uintptr_t)(uint32_t)unsigned_offset,
         (uintptr_t)(uint32_t)(unsigned_offset >> 32),
         (uintptr_t)(uint32_t)unsigned_length,
         (uintptr_t)(uint32_t)(unsigned_length >> 32), 0u);
-    return _fcntl_result_status_zero(result);
+    if (result == 0) return 0;
+    if (result < 0 && result >= (intptr_t)-4095) return (int)-result;
+    return EIO;
 }
 
 /* xxxat系関数 */
