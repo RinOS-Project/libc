@@ -41,6 +41,12 @@
     syscall(SYS_futex, address, operation, value, timeout, NULL, 0)
 #endif
 
+#ifndef _RIN_PTHREAD_RUNTIME_FUTEX_BITSET
+#define _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(address, operation, value, timeout, \
+                                         bitset) \
+    syscall(SYS_futex, address, operation, value, timeout, NULL, bitset)
+#endif
+
 static int rin_pthread_mutexattr_is_shared(const pthread_mutexattr_t* attr) {
     return attr &&
         (attr->pshared & RIN_PTHREAD_MUTEXATTR_PSHARED_MASK) ==
@@ -143,8 +149,10 @@ static void rin_pthread_mutex_robust_owner_release(pthread_mutex_t* mutex,
 
 static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                                         pthread_t owner, int type,
-                                        int try_only) {
+                                        int try_only,
+                                        const struct timespec* abstime) {
     uint32_t owner_id;
+    int timed_out = 0;
     int register_error = rin_pthread_mutex_robust_owner_id(
         mutex, owner, &owner_id);
     if (register_error != 0) return register_error;
@@ -164,7 +172,8 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                 return 0;
             }
             if (type == PTHREAD_MUTEX_ERRORCHECK) return EDEADLK;
-            if (try_only) return EBUSY;
+            if (try_only || timed_out)
+                return timed_out ? ETIMEDOUT : EBUSY;
         }
         if (current_owner == 0u) {
             uint32_t desired = (state & (RIN_PTHREAD_ROBUST_OWNER_DIED |
@@ -186,9 +195,9 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
             }
             continue;
         }
-        if (try_only) {
+        if (try_only || timed_out) {
             rin_pthread_mutex_robust_owner_release(mutex, owner);
-            return EBUSY;
+            return timed_out ? ETIMEDOUT : EBUSY;
         }
         if ((state & RIN_PTHREAD_ROBUST_WAITERS) == 0u) {
             uint32_t expected = state;
@@ -201,12 +210,27 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
             state = desired;
         }
         {
-            long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
-                &mutex->locked,
-                rin_pthread_mutex_futex_operation(mutex, FUTEX_WAIT),
-                (int)state, NULL);
+            long wait_result;
+            if (abstime) {
+                wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
+                    &mutex->locked,
+                    rin_pthread_mutex_futex_operation(
+                        mutex, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME),
+                    (int)state, abstime, FUTEX_BITSET_MATCH_ANY);
+            } else {
+                wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
+                    &mutex->locked,
+                    rin_pthread_mutex_futex_operation(mutex, FUTEX_WAIT),
+                    (int)state, NULL);
+            }
             int wait_error = rin_pthread_futex_wait_error(wait_result,
                                                            errno);
+            if (wait_error == ETIMEDOUT && abstime) {
+                /* An unlock can race with the deadline; retry acquisition
+                 * before deciding that the timed operation has failed. */
+                timed_out = 1;
+                continue;
+            }
             if (wait_error != 0) {
                 rin_pthread_mutex_robust_owner_release(mutex, owner);
                 return wait_error;
@@ -948,7 +972,7 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
 
     if (rin_pthread_mutex_is_robust(mutex) ||
         rin_pthread_mutex_is_prio_inherit(mutex)) {
-        return rin_pthread_mutex_robust_lock(mutex, owner, type, 0);
+        return rin_pthread_mutex_robust_lock(mutex, owner, type, 0, NULL);
     }
 
     if (type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == owner) {
@@ -986,6 +1010,63 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
     return 0;
 }
 
+int pthread_mutex_timedlock(pthread_mutex_t* mutex,
+                            const struct timespec* abstime) {
+    if (!mutex || !abstime) return EINVAL;
+    if (abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
+        abstime->tv_nsec >= 1000000000L)
+        return EINVAL;
+
+    pthread_t self = _RIN_PTHREAD_RUNTIME_SELF();
+    pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
+    int type = rin_pthread_mutex_type(mutex);
+
+    if (rin_pthread_mutex_is_robust(mutex) ||
+        rin_pthread_mutex_is_prio_inherit(mutex)) {
+        return rin_pthread_mutex_robust_lock(mutex, owner, type, 0, abstime);
+    }
+
+    if (type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == owner) {
+        if (mutex->recursion == __INT_MAX__) return EAGAIN;
+        mutex->recursion++;
+        return 0;
+    }
+    if (type == PTHREAD_MUTEX_ERRORCHECK && mutex->owner == owner)
+        return EDEADLK;
+
+    {
+        int c = 0;
+        if (!__atomic_compare_exchange_n(&mutex->locked, &c, 1, 0,
+                                         __ATOMIC_ACQUIRE,
+                                         __ATOMIC_RELAXED)) {
+            if (c != 2)
+                c = __atomic_exchange_n(&mutex->locked, 2, __ATOMIC_ACQUIRE);
+            while (c != 0) {
+                long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
+                    &mutex->locked,
+                    rin_pthread_mutex_futex_operation(
+                        mutex, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME),
+                    2, abstime, FUTEX_BITSET_MATCH_ANY);
+                int wait_error = rin_pthread_futex_wait_error(wait_result,
+                                                               errno);
+                if (wait_error == ETIMEDOUT) {
+                    /* Resolve a concurrent unlock before returning timeout. */
+                    c = __atomic_exchange_n(&mutex->locked, 2,
+                                            __ATOMIC_ACQUIRE);
+                    if (c != 0) return ETIMEDOUT;
+                    break;
+                }
+                if (wait_error != 0) return wait_error;
+                c = __atomic_exchange_n(&mutex->locked, 2, __ATOMIC_ACQUIRE);
+            }
+        }
+    }
+
+    mutex->owner = owner;
+    mutex->recursion = 1;
+    return 0;
+}
+
 int pthread_mutex_trylock(pthread_mutex_t* mutex) {
     if (!mutex) return EINVAL;
 
@@ -995,7 +1076,7 @@ int pthread_mutex_trylock(pthread_mutex_t* mutex) {
 
     if (rin_pthread_mutex_is_robust(mutex) ||
         rin_pthread_mutex_is_prio_inherit(mutex)) {
-        return rin_pthread_mutex_robust_lock(mutex, owner, type, 1);
+        return rin_pthread_mutex_robust_lock(mutex, owner, type, 1, NULL);
     }
 
     if (type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == owner) {

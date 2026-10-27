@@ -773,6 +773,8 @@ static inline int pthread_mutex_unlock(pthread_mutex_t* mutex) {
 extern int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexattr_t* attr);
 extern int pthread_mutex_destroy(pthread_mutex_t* mutex);
 extern int pthread_mutex_lock(pthread_mutex_t* mutex);
+extern int pthread_mutex_timedlock(pthread_mutex_t* mutex,
+                                  const struct timespec* abstime);
 extern int pthread_mutex_trylock(pthread_mutex_t* mutex);
 extern int pthread_mutex_unlock(pthread_mutex_t* mutex);
 extern int pthread_mutex_consistent(pthread_mutex_t* mutex);
