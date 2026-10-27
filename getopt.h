@@ -200,6 +200,7 @@ static inline int getopt_long(int argc, char* const argv[],
 
                 /* 引数処理 */
                 if (longopts[i].has_arg == no_argument && eq) {
+                    optopt = longopts[i].val;
                     _rin_getopt_long_diagnostic(
                         argv, "option does not allow an argument", arg);
                     return '?';
@@ -229,6 +230,7 @@ static inline int getopt_long(int argc, char* const argv[],
 
         /* 見つからない */
         optind++;
+        optopt = 0;
         _rin_getopt_long_diagnostic(argv, "unrecognized option", arg);
         return '?';
     }
@@ -291,6 +293,7 @@ static inline int getopt_long_only(int argc, char* const argv[],
             _rin_getopt_pos = 0;
             if (longindex) *longindex = i;
             if (longopts[i].has_arg == no_argument && eq) {
+                optopt = longopts[i].val;
                 _rin_getopt_long_diagnostic(
                     argv, "option does not allow an argument", arg);
                 return '?';
