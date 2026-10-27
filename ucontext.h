@@ -201,6 +201,29 @@ typedef struct __ucontext ucontext_t;
 #define RIN_UCONTEXT_FLAG_MADE         0x00000002UL
 #define RIN_UCONTEXT_FLAG_RESUMED      0x00000004UL
 #define RIN_UCONTEXT_MAX_ARGS          16
+#define RIN_UCONTEXT_SIG_SETMASK       2u
+
+/* signal.hとの循環includeを避け、スレッド単位のmask syscallを直接使う。 */
+static inline int rin_ucontext_sigmask(const sigset_t* new_mask,
+                                      sigset_t* old_mask) {
+    intptr_t result = _syscall4((uintptr_t)SYS_rt_sigprocmask,
+                                (uintptr_t)RIN_UCONTEXT_SIG_SETMASK,
+                                (uintptr_t)new_mask,
+                                (uintptr_t)old_mask,
+                                (uintptr_t)sizeof(sigset_t));
+    if (result < 0) {
+        uintptr_t magnitude = (uintptr_t)0 - (uintptr_t)result;
+        errno = magnitude != 0u && magnitude <= 4095u ?
+            (int)magnitude : EIO;
+        return -1;
+    }
+    if (result != 0) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+
 #define RIN_UCONTEXT_RETURNS_TWICE __attribute__((returns_twice))
 #define RIN_UCONTEXT_NOINLINE          __attribute__((noinline))
 #define RIN_UCONTEXT_UNUSED            __attribute__((unused))
@@ -395,7 +418,8 @@ getcontext(ucontext_t* context) {
     context->uc_mcontext.fpregs = &context->__fpregs_mem;
     context->uc_mcontext.oldmask = 0u;
     context->uc_mcontext.cr2 = 0u;
-    context->uc_sigmask = 0u;
+    if (rin_ucontext_sigmask(NULL, &context->uc_sigmask) != 0)
+        return -1;
     return rin_ucontext_amd64_capture(context);
 }
 
@@ -412,6 +436,8 @@ setcontext(const ucontext_t* context) {
         errno = EINVAL;
         return -1;
     }
+    if (rin_ucontext_sigmask(&context->uc_sigmask, NULL) != 0)
+        return -1;
     rin_ucontext_amd64_restore(context);
     __builtin_unreachable();
 }
@@ -687,7 +713,8 @@ getcontext(ucontext_t* context) {
     context->uc_mcontext.fpregs = &context->__fpregs_mem;
     context->uc_mcontext.oldmask = 0u;
     context->uc_mcontext.cr2 = 0u;
-    context->uc_sigmask = 0u;
+    if (rin_ucontext_sigmask(NULL, &context->uc_sigmask) != 0)
+        return -1;
     return rin_ucontext_i386_capture(context);
 }
 
@@ -701,6 +728,8 @@ setcontext(const ucontext_t* context) {
         errno = EINVAL;
         return -1;
     }
+    if (rin_ucontext_sigmask(&context->uc_sigmask, NULL) != 0)
+        return -1;
     rin_ucontext_i386_restore(context);
     __builtin_unreachable();
 }
