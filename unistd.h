@@ -25,6 +25,7 @@
 #include <rin/process/process_group_abi.h>
 #include <rin/process/namespace_abi.h>
 #include <rin/process/image_path_abi.h>
+#include <rin/process/image_range_abi.h>
 #include <rin/process/memory_abi.h>
 
 /* Preserve caller-provided syscall hooks before installing defaults.  A
@@ -547,6 +548,34 @@ static inline int rin_process_image_path_get(
         SYS_PROCESS_IMAGE_PATH_GET, (uintptr_t)response,
         (uintptr_t)sizeof(*response)));
     return result < 0 ? -1 : 0;
+}
+
+/* Return the kernel-owned current executable allocation range for address
+ * ownership queries. The operation is self-only and does not enumerate VMAs. */
+static inline int rin_process_image_range_get(
+    RinProcessImageRangeV1* response) {
+    intptr_t result;
+    if (response == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    result = _rin_unistd_result(_RIN_UNISTD_SYSCALL1(
+        SYS_PROCESS_IMAGE_RANGE_GET, (uintptr_t)response));
+    if (result < 0) return -1;
+    if (result != 0) {
+        errno = (uintptr_t)result > (uintptr_t)INT_MAX ? EOVERFLOW : EIO;
+        return -1;
+    }
+    if (response->struct_size != sizeof(*response) ||
+        response->version != RIN_PROCESS_IMAGE_RANGE_ABI_VERSION ||
+        response->flags != RIN_PROCESS_IMAGE_RANGE_FLAG_AUTHENTICATED ||
+        response->image_base == 0u || response->image_size == 0u ||
+        response->image_size > UINT64_MAX - response->image_base ||
+        response->reserved != 0u) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
 }
 
 /* Return a fixed-width, self-only process memory snapshot.  The product
