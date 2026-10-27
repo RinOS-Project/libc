@@ -291,7 +291,7 @@ extern void rin_timer_thread_unregister(timer_t timer_id)
 #define SIGSTOP 19
 #endif
 #ifndef NSIG
-#define NSIG 32
+#define NSIG 64
 #endif
 
 /* A target syscall result is a signed machine word.  Keep it in intptr_t

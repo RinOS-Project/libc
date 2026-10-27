@@ -129,6 +129,7 @@ typedef struct rin_thread_stack_info_v1 {
 #endif
 #define SYS_sigaltstack     SYS_SIGALTSTACK
 #define SYS_rt_sigsuspend   SYS_RT_SIGSUSPEND
+#define SYS_tgkill          SYS_TGKILL
 #define SYS_ppoll           SYS_PPOLL
 
 /* Thread-related syscalls */

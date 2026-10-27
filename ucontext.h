@@ -145,7 +145,7 @@ typedef struct {
 
 #ifndef _SIGSET_T_DEFINED
 #define _SIGSET_T_DEFINED
-typedef unsigned long sigset_t;
+typedef uint64_t sigset_t;
 #endif
 
 /* ═══════════════════════════════════════════════════════════════

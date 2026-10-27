@@ -8,6 +8,7 @@
 #define _POLL_H
 
 #include "stddef.h"
+#include "stdint.h"
 #include "errno.h"
 #include "limits.h"
 #include "time.h"
@@ -32,7 +33,7 @@ typedef unsigned int nfds_t;
 
 #ifndef _SIGSET_T_DEFINED
 #define _SIGSET_T_DEFINED
-typedef unsigned long sigset_t;
+typedef uint64_t sigset_t;
 #endif
 
 /* ═══════════════════════════════════════════════════════════════

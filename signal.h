@@ -7,6 +7,7 @@
 #define _SIGNAL_H
 
 #include "stddef.h"
+#include "stdint.h"
 #include "sys/syscall.h"
 #include "errno.h"
 
@@ -17,6 +18,11 @@
 #define _RIN_SIGNAL_SYSCALL2(number, argument1, argument2) \
     _syscall2((uintptr_t)(number), (uintptr_t)(argument1), \
               (uintptr_t)(argument2))
+#endif
+#ifndef _RIN_SIGNAL_SYSCALL3
+#define _RIN_SIGNAL_SYSCALL3(number, argument1, argument2, argument3) \
+    _syscall3((uintptr_t)(number), (uintptr_t)(argument1), \
+              (uintptr_t)(argument2), (uintptr_t)(argument3))
 #endif
 #ifndef _RIN_SIGNAL_SYSCALL4
 #define _RIN_SIGNAL_SYSCALL4(number, argument1, argument2, argument3, argument4) \
@@ -52,7 +58,7 @@ typedef void (*sighandler_t)(int);
 
 #ifndef _SIGSET_T_DEFINED
 #define _SIGSET_T_DEFINED
-typedef unsigned long sigset_t;
+typedef uint64_t sigset_t;
 #endif
 
 struct timespec;
@@ -94,7 +100,9 @@ struct timespec;
 #define SIGPWR      30  /* 電源異常 */
 #define SIGSYS      31  /* 不正システムコール */
 
-#define NSIG        32  /* シグナル数 */
+#define SIGRTMIN    32
+#define SIGRTMAX    63
+#define NSIG        64  /* valid signal numbers are 1 through 63 */
 
 /* ═══════════════════════════════════════════════════════════════
  * シグナルハンドラ定数
@@ -366,7 +374,7 @@ static inline int sigfillset(sigset_t* set) {
         errno = EINVAL;
         return -1;
     }
-    *set = ~0UL;
+    *set = UINT64_MAX;
     return 0;
 }
 
@@ -375,7 +383,7 @@ static inline int sigaddset(sigset_t* set, int signum) {
         errno = EINVAL;
         return -1;
     }
-    *set |= (1UL << signum);
+    *set |= (UINT64_C(1) << (unsigned)signum);
     return 0;
 }
 
@@ -384,7 +392,7 @@ static inline int sigdelset(sigset_t* set, int signum) {
         errno = EINVAL;
         return -1;
     }
-    *set &= ~(1UL << signum);
+    *set &= ~(UINT64_C(1) << (unsigned)signum);
     return 0;
 }
 
@@ -393,7 +401,7 @@ static inline int sigismember(const sigset_t* set, int signum) {
         errno = EINVAL;
         return -1;
     }
-    return (*set & (1UL << signum)) ? 1 : 0;
+    return (*set & (UINT64_C(1) << (unsigned)signum)) ? 1 : 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -490,6 +498,25 @@ static inline int kill(int pid, int sig) {
     }
     return __rin_signal_status_result(
         _RIN_SIGNAL_SYSCALL2(SYS_KILL, pid, sig));
+}
+
+static inline int sigqueue(int pid, int signum, union sigval value) {
+    siginfo_t information;
+    intptr_t result;
+    unsigned char* bytes = (unsigned char*)&information;
+    if (pid <= 0 || signum <= 0 || signum >= NSIG ||
+        signum == SIGKILL || signum == SIGSTOP) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (size_t index = 0u; index < sizeof(information); ++index)
+        bytes[index] = 0u;
+    information.si_signo = signum;
+    information.si_code = SI_QUEUE;
+    information.si_value = value;
+    result = _RIN_SIGNAL_SYSCALL3(SYS_rt_sigqueueinfo, pid, signum,
+                                  &information);
+    return __rin_signal_status_result(result);
 }
 
 static inline int raise(int sig) {

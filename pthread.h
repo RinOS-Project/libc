@@ -16,6 +16,7 @@
 #include "limits.h"
 #include "errno.h"
 #include "time.h"
+#include "signal.h"
 #include "sys/syscall.h"
 #include "linux/futex.h"
 #include <rin/thread/name_abi.h>
@@ -1201,7 +1202,7 @@ extern int pthread_once(pthread_once_t* once_control, void (*init_routine)(void)
 /* Forward declare sigset_t if not already defined */
 #ifndef _SIGSET_T_DEFINED
 #define _SIGSET_T_DEFINED
-typedef unsigned long sigset_t;
+typedef uint64_t sigset_t;
 #endif
 
 /* SIG_BLOCK, SIG_UNBLOCK, SIG_SETMASK may be defined in signal.h */
@@ -1235,13 +1236,53 @@ static inline int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset
 
 /* pthread_kill - send signal to a thread */
 static inline int pthread_kill(pthread_t thread, int sig) {
-    /* SYS_TKILL(500): thread = kernel scheduler TID; the kernel enforces
-     * process-namespace visibility and generation checks. */
     intptr_t result;
+    intptr_t process_id;
+    int saved_errno = errno;
     if (sig < 0 || sig >= NSIG) return EINVAL;
-    result = _syscall2((uintptr_t)SYS_TKILL, (uintptr_t)thread,
-                       (uintptr_t)sig);
-    return _rin_pthread_error_from_result(result);
+    process_id = _RIN_PTHREAD_SYSCALL0(SYS_GETPID);
+    if (process_id <= 0) {
+        int error = _rin_pthread_error_from_result(process_id);
+        errno = saved_errno;
+        return error;
+    }
+    result = _syscall3((uintptr_t)SYS_tgkill, (uintptr_t)process_id,
+                       (uintptr_t)thread, (uintptr_t)sig);
+    {
+        int error = _rin_pthread_error_from_result(result);
+        errno = saved_errno;
+        return error;
+    }
+}
+
+static inline int pthread_sigqueue(pthread_t thread, int sig,
+                                   union sigval value) {
+    siginfo_t information;
+    unsigned char* bytes = (unsigned char*)&information;
+    intptr_t result;
+    intptr_t process_id;
+    int saved_errno = errno;
+    if (sig <= 0 || sig >= NSIG || sig == SIGKILL || sig == SIGSTOP)
+        return EINVAL;
+    process_id = _RIN_PTHREAD_SYSCALL0(SYS_GETPID);
+    if (process_id <= 0) {
+        int error = _rin_pthread_error_from_result(process_id);
+        errno = saved_errno;
+        return error;
+    }
+    for (size_t index = 0u; index < sizeof(information); ++index)
+        bytes[index] = 0u;
+    information.si_signo = sig;
+    information.si_code = SI_QUEUE;
+    information.si_value = value;
+    result = _syscall4((uintptr_t)SYS_rt_tgsigqueueinfo,
+                       (uintptr_t)process_id, (uintptr_t)thread,
+                       (uintptr_t)sig, (uintptr_t)&information);
+    {
+        int error = _rin_pthread_error_from_result(result);
+        errno = saved_errno;
+        return error;
+    }
 }
 
 /* Product-owned deferred cancellation.  The implementation keeps the
