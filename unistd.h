@@ -1744,6 +1744,7 @@ static inline int _rin_ttyname_resolve(int fd, char* output, size_t capacity) {
     if (fd < 0) return EBADF;
     if (fstat(fd, &status) < 0) return errno ? errno : EIO;
     if (!S_ISCHR(status.st_mode)) return ENOTTY;
+    if (!isatty(fd)) return ENOTTY;
     if (fd <= 2 && status.st_rdev == (dev_t)fd) {
         name = (fd == 0) ? "/dev/tty0" :
                (fd == 1) ? "/dev/tty1" : "/dev/tty2";
