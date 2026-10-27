@@ -1489,6 +1489,12 @@ static inline long sysconf(int name) {
             return 1;
         case _SC_TIMERS:
             return 1;
+        case _SC_MESSAGE_PASSING:
+            return 1;
+        case _SC_MQ_OPEN_MAX:
+            return 64;
+        case _SC_MQ_PRIO_MAX:
+            return 32;
         case _SC_SEMAPHORES:
             return 1;
         case _SC_MEMLOCK:
@@ -1498,13 +1504,10 @@ static inline long sysconf(int name) {
         case _SC_ASYNCHRONOUS_IO:
         case _SC_PRIORITIZED_IO:
         case _SC_SHARED_MEMORY_OBJECTS:
-        case _SC_MESSAGE_PASSING:
         case _SC_AIO_LISTIO_MAX:
         case _SC_AIO_MAX:
         case _SC_AIO_PRIO_DELTA_MAX:
         case _SC_DELAYTIMER_MAX:
-        case _SC_MQ_OPEN_MAX:
-        case _SC_MQ_PRIO_MAX:
         case _SC_RTSIG_MAX:
         case _SC_SEM_NSEMS_MAX:
         case _SC_SEM_VALUE_MAX:

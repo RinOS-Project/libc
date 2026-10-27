@@ -11,6 +11,7 @@
 
 /* POSIX version compatibility (minimal) */
 #define _POSIX_VERSION 200809L
+#define _POSIX_MESSAGE_PASSING 200809L
 
 /* GNU extensions disabled */
 #undef _GNU_SOURCE
