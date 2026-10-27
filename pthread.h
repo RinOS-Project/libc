@@ -390,7 +390,8 @@ static inline int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
         if (attr->detachstate != PTHREAD_CREATE_JOINABLE &&
             attr->detachstate != PTHREAD_CREATE_DETACHED)
             return EINVAL;
-        if (attr->scope != PTHREAD_SCOPE_SYSTEM) return ENOTSUP;
+        if (attr->scope == PTHREAD_SCOPE_PROCESS) return ENOTSUP;
+        if (attr->scope != PTHREAD_SCOPE_SYSTEM) return EINVAL;
         stack_size = attr->stacksize;
         stack = attr->stackaddr;
         detached = attr->detachstate == PTHREAD_CREATE_DETACHED;
