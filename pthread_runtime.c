@@ -289,6 +289,9 @@ static rin_thread_name_rec_t g_thread_name_recs[RIN_THREAD_NAME_REC_MAX];
 extern void __pthread_run_destructors(void);
 /* rin_atexit_registry.inc で定義 */
 extern void __rin_cxa_thread_finalize(void);
+/* The stdio owner is optional in small runtimes. When linked, release any
+ * FILE locks left by the exiting thread after its TLS destructors run. */
+extern void rin_stdio_thread_exit_cleanup(void) __attribute__((weak));
 void rin_log(const char* msg);
 
 typedef struct {
@@ -514,6 +517,8 @@ void __rin_pthread_run_exit_destructors(void) {
     /* Itanium C++ ABI thread_local objects precede POSIX TSD cleanup. */
     __rin_cxa_thread_finalize();
     __pthread_run_destructors();
+    if (rin_stdio_thread_exit_cleanup)
+        rin_stdio_thread_exit_cleanup();
 }
 
 /* スレッド終了ラッパー: デストラクタ反復 → SYS_THREAD_EXIT */
