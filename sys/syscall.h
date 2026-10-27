@@ -121,6 +121,12 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_rt_sigreturn    SYS_RT_SIGRETURN
 #define SYS_rt_sigpending   SYS_RT_SIGPENDING
 #define SYS_rt_sigtimedwait SYS_RT_SIGTIMEDWAIT
+#if defined(RIN_SYS_RT_SIGQUEUEINFO)
+#define SYS_rt_sigqueueinfo SYS_RT_SIGQUEUEINFO
+#endif
+#if defined(RIN_SYS_RT_TGSIGQUEUEINFO)
+#define SYS_rt_tgsigqueueinfo SYS_RT_TGSIGQUEUEINFO
+#endif
 #define SYS_sigaltstack     SYS_SIGALTSTACK
 #define SYS_rt_sigsuspend   SYS_RT_SIGSUSPEND
 #define SYS_ppoll           SYS_PPOLL
@@ -164,6 +170,12 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_rt_sigprocmask 175
 #define __NR_rt_sigpending  176
 #define __NR_rt_sigtimedwait SYS_RT_SIGTIMEDWAIT
+#if defined(SYS_rt_sigqueueinfo)
+#define __NR_rt_sigqueueinfo SYS_rt_sigqueueinfo
+#endif
+#if defined(SYS_rt_tgsigqueueinfo)
+#define __NR_rt_tgsigqueueinfo SYS_rt_tgsigqueueinfo
+#endif
 #define __NR_rt_sigreturn   173
 #define __NR_sigaltstack    SYS_sigaltstack
 #define __NR_rt_sigsuspend  SYS_rt_sigsuspend
