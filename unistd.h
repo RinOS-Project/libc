@@ -229,6 +229,9 @@ static inline int _rin_unistd_status(intptr_t result) {
 #ifndef _POSIX_CHILD_MAX
 #define _POSIX_CHILD_MAX        25
 #endif
+#ifndef _POSIX_VDISABLE
+#define _POSIX_VDISABLE         0
+#endif
 #define _SC_RTSIG_MAX           31  /* リアルタイムシグナル最大 */
 #define _SC_SEM_NSEMS_MAX       32  /* セマフォ数最大 */
 #define _SC_SEM_VALUE_MAX       33  /* セマフォ値最大 */
@@ -256,6 +259,68 @@ static inline int _rin_unistd_status(intptr_t result) {
 #define _SC_LOGIN_NAME_MAX      71  /* ログイン名最大長 */
 #define _SC_TTY_NAME_MAX        72  /* TTY名最大長 */
 
+/* POSIX.1-2008 names added after the original RinOS assignments above.
+ * Their values are private to this libc ABI; existing values stay stable. */
+#define _SC_2_C_BIND                         1000
+#define _SC_2_CHAR_TERM                     1001
+#define _SC_2_PBS                           1002
+#define _SC_2_PBS_ACCOUNTING                1003
+#define _SC_2_PBS_CHECKPOINT                1004
+#define _SC_2_PBS_LOCATE                    1005
+#define _SC_2_PBS_MESSAGE                   1006
+#define _SC_2_PBS_TRACK                     1007
+#define _SC_2_UPE                           1008
+#define _SC_ADVISORY_INFO                   1009
+#define _SC_ATEXIT_MAX                      1010
+#define _SC_BARRIERS                        1011
+#define _SC_CLOCK_SELECTION                 1012
+#define _SC_CPUTIME                         1013
+#define _SC_GETGR_R_SIZE_MAX                1014
+#define _SC_GETPW_R_SIZE_MAX                1015
+#define _SC_IOV_MAX                         1016
+#define _SC_IPV6                            1017
+#define _SC_MONOTONIC_CLOCK                 1018
+#define _SC_READER_WRITER_LOCKS             1019
+#define _SC_REGEXP                          1020
+#define _SC_SHELL                           1021
+#define _SC_SPAWN                           1022
+#define _SC_SPIN_LOCKS                      1023
+#define _SC_SPORADIC_SERVER                 1024
+#define _SC_SS_REPL_MAX                     1025
+#define _SC_SYMLOOP_MAX                     1026
+#define _SC_THREAD_ATTR_STACKADDR           1027
+#define _SC_THREAD_ATTR_STACKSIZE           1028
+#define _SC_THREAD_CPUTIME                  1029
+#define _SC_THREAD_DESTRUCTOR_ITERATIONS    1030
+#define _SC_THREAD_KEYS_MAX                 1031
+#define _SC_THREAD_PRIO_INHERIT             1032
+#define _SC_THREAD_PRIO_PROTECT             1033
+#define _SC_THREAD_PRIORITY_SCHEDULING      1034
+#define _SC_THREAD_PROCESS_SHARED           1035
+#define _SC_THREAD_ROBUST_PRIO_INHERIT      1036
+#define _SC_THREAD_ROBUST_PRIO_PROTECT      1037
+#define _SC_THREAD_SAFE_FUNCTIONS           1038
+#define _SC_THREAD_SPORADIC_SERVER          1039
+#define _SC_THREAD_STACK_MIN                1040
+#define _SC_THREAD_THREADS_MAX              1041
+#define _SC_THREADS                         1042
+#define _SC_TIMEOUTS                        1043
+#define _SC_TYPED_MEMORY_OBJECTS            1044
+#define _SC_V7_ILP32_OFF32                  1045
+#define _SC_V7_ILP32_OFFBIG                 1046
+#define _SC_V7_LP64_OFF64                   1047
+#define _SC_V7_LPBIG_OFFBIG                 1048
+#define _SC_XOPEN_CRYPT                     1049
+#define _SC_XOPEN_ENH_I18N                  1050
+#define _SC_XOPEN_REALTIME                  1051
+#define _SC_XOPEN_REALTIME_THREADS          1052
+#define _SC_XOPEN_SHM                       1053
+#define _SC_XOPEN_STREAMS                   1054
+#define _SC_XOPEN_UNIX                      1055
+#define _SC_XOPEN_UUCP                      1056
+#define _SC_XOPEN_VERSION                   1057
+#define _SC_XOPEN_LEGACY                    1058
+
 /* pathconf/fpathconf定数 */
 #define _PC_LINK_MAX            0
 #define _PC_MAX_CANON           1
@@ -266,6 +331,18 @@ static inline int _rin_unistd_status(intptr_t result) {
 #define _PC_CHOWN_RESTRICTED    6
 #define _PC_NO_TRUNC            7
 #define _PC_VDISABLE            8
+#define _PC_SYNC_IO             9
+#define _PC_ASYNC_IO            10
+#define _PC_PRIO_IO             11
+#define _PC_FILESIZEBITS        13
+#define _PC_REC_INCR_XFER_SIZE  14
+#define _PC_REC_MAX_XFER_SIZE   15
+#define _PC_REC_MIN_XFER_SIZE   16
+#define _PC_REC_XFER_ALIGN      17
+#define _PC_ALLOC_SIZE_MIN      18
+#define _PC_SYMLINK_MAX         19
+#define _PC_2_SYMLINKS          20
+#define _PC_TIMESTAMP_RESOLUTION 21
 
 /* confstr constants */
 #define _CS_PATH                0
@@ -1533,11 +1610,70 @@ static inline long sysconf(int name) {
         case _SC_EXPR_NEST_MAX:
         case _SC_RE_DUP_MAX:
         case _SC_2_VERSION:
+        case _SC_2_C_BIND:
         case _SC_2_C_DEV:
+        case _SC_2_CHAR_TERM:
         case _SC_2_FORT_DEV:
         case _SC_2_FORT_RUN:
         case _SC_2_LOCALEDEF:
+        case _SC_2_PBS:
+        case _SC_2_PBS_ACCOUNTING:
+        case _SC_2_PBS_CHECKPOINT:
+        case _SC_2_PBS_LOCATE:
+        case _SC_2_PBS_MESSAGE:
+        case _SC_2_PBS_TRACK:
         case _SC_2_SW_DEV:
+        case _SC_2_UPE:
+        case _SC_ADVISORY_INFO:
+        case _SC_ATEXIT_MAX:
+        case _SC_BARRIERS:
+        case _SC_CLOCK_SELECTION:
+        case _SC_CPUTIME:
+        case _SC_GETGR_R_SIZE_MAX:
+        case _SC_GETPW_R_SIZE_MAX:
+        case _SC_IOV_MAX:
+        case _SC_IPV6:
+        case _SC_MONOTONIC_CLOCK:
+        case _SC_READER_WRITER_LOCKS:
+        case _SC_REGEXP:
+        case _SC_SHELL:
+        case _SC_SPAWN:
+        case _SC_SPIN_LOCKS:
+        case _SC_SPORADIC_SERVER:
+        case _SC_SS_REPL_MAX:
+        case _SC_SYMLOOP_MAX:
+        case _SC_THREAD_ATTR_STACKADDR:
+        case _SC_THREAD_ATTR_STACKSIZE:
+        case _SC_THREAD_CPUTIME:
+        case _SC_THREAD_DESTRUCTOR_ITERATIONS:
+        case _SC_THREAD_KEYS_MAX:
+        case _SC_THREAD_PRIO_INHERIT:
+        case _SC_THREAD_PRIO_PROTECT:
+        case _SC_THREAD_PRIORITY_SCHEDULING:
+        case _SC_THREAD_PROCESS_SHARED:
+        case _SC_THREAD_ROBUST_PRIO_INHERIT:
+        case _SC_THREAD_ROBUST_PRIO_PROTECT:
+        case _SC_THREAD_SAFE_FUNCTIONS:
+        case _SC_THREAD_SPORADIC_SERVER:
+        case _SC_THREAD_STACK_MIN:
+        case _SC_THREAD_THREADS_MAX:
+        case _SC_THREADS:
+        case _SC_TIMEOUTS:
+        case _SC_TYPED_MEMORY_OBJECTS:
+        case _SC_V7_ILP32_OFF32:
+        case _SC_V7_ILP32_OFFBIG:
+        case _SC_V7_LP64_OFF64:
+        case _SC_V7_LPBIG_OFFBIG:
+        case _SC_XOPEN_CRYPT:
+        case _SC_XOPEN_ENH_I18N:
+        case _SC_XOPEN_REALTIME:
+        case _SC_XOPEN_REALTIME_THREADS:
+        case _SC_XOPEN_SHM:
+        case _SC_XOPEN_STREAMS:
+        case _SC_XOPEN_UNIX:
+        case _SC_XOPEN_UUCP:
+        case _SC_XOPEN_VERSION:
+        case _SC_XOPEN_LEGACY:
             /* POSIX reserves errno changes for invalid names.  A known but
              * unsupported option returns -1 without changing errno. */
             return -1;
@@ -1557,9 +1693,64 @@ static inline int getpagesize(void) {
     return 4096;
 }
 
+static inline int _rin_pathconf_name_is_known(int name) {
+    switch (name) {
+        case _PC_LINK_MAX:
+        case _PC_MAX_CANON:
+        case _PC_MAX_INPUT:
+        case _PC_NAME_MAX:
+        case _PC_PATH_MAX:
+        case _PC_PIPE_BUF:
+        case _PC_CHOWN_RESTRICTED:
+        case _PC_NO_TRUNC:
+        case _PC_VDISABLE:
+        case _PC_SYNC_IO:
+        case _PC_ASYNC_IO:
+        case _PC_PRIO_IO:
+        case _PC_FILESIZEBITS:
+        case _PC_REC_INCR_XFER_SIZE:
+        case _PC_REC_MAX_XFER_SIZE:
+        case _PC_REC_MIN_XFER_SIZE:
+        case _PC_REC_XFER_ALIGN:
+        case _PC_ALLOC_SIZE_MIN:
+        case _PC_SYMLINK_MAX:
+        case _PC_2_SYMLINKS:
+        case _PC_TIMESTAMP_RESOLUTION:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* A character device is a terminal only when its terminal ioctl contract is
+ * present.  Keep the probe's errno and temporary descriptor private. */
+static inline int _rin_pathconf_path_is_terminal(const char* path) {
+    int saved_errno = errno;
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    int result;
+    if (fd < 0) return -1;
+    result = isatty(fd);
+    (void)close(fd);
+    errno = saved_errno;
+    return result;
+}
+
+static inline int _rin_pathconf_fd_is_terminal(int fd) {
+    int saved_errno = errno;
+    int result = isatty(fd);
+    errno = saved_errno;
+    return result;
+}
+
 static inline long pathconf(const char* path, int name) {
     struct stat status;
+    int saved_errno;
+    int terminal;
     if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!_rin_pathconf_name_is_known(name)) {
         errno = EINVAL;
         return -1;
     }
@@ -1568,32 +1759,45 @@ static inline long pathconf(const char* path, int name) {
         case _PC_NAME_MAX:
             return 255;
         case _PC_PATH_MAX:
-            return 4096;
+            return PATH_MAX;
         case _PC_PIPE_BUF:
-            return 4096;
+            if (S_ISFIFO(status.st_mode)) return 4096;
+            return -1;
         case _PC_CHOWN_RESTRICTED:
             return 1;
         case _PC_NO_TRUNC:
             return 1;
         case _PC_MAX_CANON:
         case _PC_MAX_INPUT:
-            if (!S_ISCHR(status.st_mode)) {
-                errno = EINVAL;
-                return -1;
-            }
-            return 256;
         case _PC_VDISABLE:
-            if (!S_ISCHR(status.st_mode)) {
-                errno = EINVAL;
-                return -1;
-            }
-            return 0;
+            if (!S_ISCHR(status.st_mode)) return -1;
+            saved_errno = errno;
+            terminal = _rin_pathconf_path_is_terminal(path);
+            if (terminal < 0) return -1;
+            errno = saved_errno;
+            if (!terminal) return -1;
+            if (name == _PC_VDISABLE) return _POSIX_VDISABLE;
+            /* The terminal ioctl ABI does not publish canonical/input queue
+             * limits.  Report an indeterminate limit instead of guessing. */
+            return -1;
         case _PC_LINK_MAX:
-            /* RinFS persists i_links as uint32_t and rejects the next link
-             * with EMLINK before incrementing.  A 32-bit long cannot carry
-             * UINT32_MAX, so expose the largest representable value there. */
-            return UINT32_MAX > (uintmax_t)LONG_MAX
-                ? LONG_MAX : (long)UINT32_MAX;
+            /* VFS stat does not expose the backing filesystem's link limit;
+             * report it as indeterminate instead of assuming every mount is
+             * a writable RinFS volume. */
+            return -1;
+        case _PC_SYNC_IO:
+        case _PC_ASYNC_IO:
+        case _PC_PRIO_IO:
+        case _PC_FILESIZEBITS:
+        case _PC_REC_INCR_XFER_SIZE:
+        case _PC_REC_MAX_XFER_SIZE:
+        case _PC_REC_MIN_XFER_SIZE:
+        case _PC_REC_XFER_ALIGN:
+        case _PC_ALLOC_SIZE_MIN:
+        case _PC_SYMLINK_MAX:
+        case _PC_2_SYMLINKS:
+        case _PC_TIMESTAMP_RESOLUTION:
+            return -1;
         default:
             errno = EINVAL;
             return -1;
@@ -1602,33 +1806,49 @@ static inline long pathconf(const char* path, int name) {
 
 static inline long fpathconf(int fd, int name) {
     struct stat status;
+    int saved_errno;
+    int terminal;
+    if (!_rin_pathconf_name_is_known(name)) {
+        errno = EINVAL;
+        return -1;
+    }
     if (fstat(fd, &status) < 0) return -1;
     switch (name) {
         case _PC_NAME_MAX:
             return 255;
         case _PC_PATH_MAX:
-            return 4096;
+            return PATH_MAX;
         case _PC_PIPE_BUF:
-            return 4096;
+            if (S_ISFIFO(status.st_mode)) return 4096;
+            return -1;
         case _PC_CHOWN_RESTRICTED:
         case _PC_NO_TRUNC:
             return 1;
         case _PC_MAX_CANON:
         case _PC_MAX_INPUT:
-            if (!S_ISCHR(status.st_mode)) {
-                errno = EINVAL;
-                return -1;
-            }
-            return 256;
         case _PC_VDISABLE:
-            if (!S_ISCHR(status.st_mode)) {
-                errno = EINVAL;
-                return -1;
-            }
-            return 0;
+            if (!S_ISCHR(status.st_mode)) return -1;
+            saved_errno = errno;
+            terminal = _rin_pathconf_fd_is_terminal(fd);
+            errno = saved_errno;
+            if (!terminal) return -1;
+            if (name == _PC_VDISABLE) return _POSIX_VDISABLE;
+            return -1;
         case _PC_LINK_MAX:
-            return UINT32_MAX > (uintmax_t)LONG_MAX
-                ? LONG_MAX : (long)UINT32_MAX;
+            return -1;
+        case _PC_SYNC_IO:
+        case _PC_ASYNC_IO:
+        case _PC_PRIO_IO:
+        case _PC_FILESIZEBITS:
+        case _PC_REC_INCR_XFER_SIZE:
+        case _PC_REC_MAX_XFER_SIZE:
+        case _PC_REC_MIN_XFER_SIZE:
+        case _PC_REC_XFER_ALIGN:
+        case _PC_ALLOC_SIZE_MIN:
+        case _PC_SYMLINK_MAX:
+        case _PC_2_SYMLINKS:
+        case _PC_TIMESTAMP_RESOLUTION:
+            return -1;
         default:
             errno = EINVAL;
             return -1;
