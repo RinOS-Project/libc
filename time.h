@@ -1265,7 +1265,11 @@ static inline int timer_getoverrun(timer_t timer_id) {
 }
 
 static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
-    unsigned long long total_ms;
+    struct timespec deadline;
+    struct timespec now;
+    int entry_errno;
+    int32_t futex_word = 0;
+    intptr_t wait_result;
     if (!req) {
         errno = EFAULT;
         return -1;
@@ -1275,40 +1279,104 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
         errno = EINVAL;
         return -1;
     }
-    if ((unsigned long long)req->tv_sec >
-        (~0ULL - 999999ULL) / 1000ULL) {
+    if (req->tv_sec == 0 && req->tv_nsec == 0) {
+        if (rem) {
+            rem->tv_sec = 0;
+            rem->tv_nsec = 0;
+        }
+        return 0;
+    }
+
+    entry_errno = errno;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    if (now.tv_sec < 0 || now.tv_nsec < 0 ||
+        now.tv_nsec >= 1000000000L) {
+        errno = EIO;
+        return -1;
+    }
+    if (req->tv_sec > LONG_MAX - now.tv_sec) {
         errno = EOVERFLOW;
         return -1;
     }
-
-    /* The kernel sleep ABI is millisecond based. Round up so a non-zero
-     * request is never reported complete after sleeping for less time. */
-    total_ms = (unsigned long long)req->tv_sec * 1000ULL +
-               ((unsigned long long)req->tv_nsec + 999999ULL) / 1000000ULL;
-
-    while (total_ms != 0) {
-        uintptr_t chunk = total_ms > UINT64_C(0xffffffff)
-            ? (uintptr_t)UINT64_C(0xffffffff) : (uintptr_t)total_ms;
-#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-        extern void platform_sleep_ms(unsigned int ms);
-        platform_sleep_ms((unsigned int)chunk);
-#else
-        if (_rin_time_status(_RIN_TIME_SLEEP(chunk)) != 0) {
-            if (rem) {
-                rem->tv_sec = (time_t)(total_ms / 1000ULL);
-                rem->tv_nsec = (long)((total_ms % 1000ULL) * 1000000ULL);
-            }
+    deadline.tv_sec = now.tv_sec + req->tv_sec;
+    deadline.tv_nsec = now.tv_nsec + req->tv_nsec;
+    if (deadline.tv_nsec >= 1000000000L) {
+        if (deadline.tv_sec == LONG_MAX) {
+            errno = EOVERFLOW;
             return -1;
         }
-#endif
-        total_ms -= (uint64_t)chunk;
+        ++deadline.tv_sec;
+        deadline.tv_nsec -= 1000000000L;
     }
 
-    if (rem) {
-        rem->tv_sec = 0;
-        rem->tv_nsec = 0;
+    for (;;) {
+        errno = 0;
+        wait_result = _RIN_TIME_FUTEX_WAIT(
+            &futex_word, FUTEX_WAIT_BITSET_PRIVATE, 0, &deadline,
+            FUTEX_BITSET_MATCH_ANY);
+        if (wait_result < 0) {
+            int wait_errno = wait_result == -1
+                ? errno : (wait_result >= -4095 ? (int)-wait_result : EIO);
+            if (wait_errno == ETIMEDOUT) {
+                if (rem) {
+                    rem->tv_sec = 0;
+                    rem->tv_nsec = 0;
+                }
+                errno = entry_errno;
+                return 0;
+            }
+            if (wait_errno == EINTR) {
+                if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+                if (now.tv_sec < 0 || now.tv_nsec < 0 ||
+                    now.tv_nsec >= 1000000000L) {
+                    errno = EIO;
+                    return -1;
+                }
+                if (now.tv_sec > deadline.tv_sec ||
+                    (now.tv_sec == deadline.tv_sec &&
+                     now.tv_nsec >= deadline.tv_nsec)) {
+                    if (rem) {
+                        rem->tv_sec = 0;
+                        rem->tv_nsec = 0;
+                    }
+                    errno = entry_errno;
+                    return 0;
+                }
+                if (rem) {
+                    rem->tv_sec = deadline.tv_sec - now.tv_sec;
+                    rem->tv_nsec = deadline.tv_nsec - now.tv_nsec;
+                    if (rem->tv_nsec < 0) {
+                        --rem->tv_sec;
+                        rem->tv_nsec += 1000000000L;
+                    }
+                }
+                errno = EINTR;
+                return -1;
+            }
+            errno = wait_errno != 0 ? wait_errno : EIO;
+            return -1;
+        }
+        if (wait_result != 0) {
+            errno = EIO;
+            return -1;
+        }
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+        if (now.tv_sec < 0 || now.tv_nsec < 0 ||
+            now.tv_nsec >= 1000000000L) {
+            errno = EIO;
+            return -1;
+        }
+        if (now.tv_sec > deadline.tv_sec ||
+            (now.tv_sec == deadline.tv_sec &&
+             now.tv_nsec >= deadline.tv_nsec)) {
+            if (rem) {
+                rem->tv_sec = 0;
+                rem->tv_nsec = 0;
+            }
+            errno = entry_errno;
+            return 0;
+        }
     }
-    return 0;
 }
 
 /* POSIX clock_nanosleep returns an errno value directly rather than using
@@ -1331,9 +1399,14 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
         return EINVAL;
 
     if ((flags & TIMER_ABSTIME) == 0) {
+        int entry_errno = errno;
         result = nanosleep(request, remain);
-        if (result == 0) return 0;
+        if (result == 0) {
+            errno = entry_errno;
+            return 0;
+        }
         saved_errno = errno;
+        errno = entry_errno;
         return saved_errno != 0 ? saved_errno : EIO;
     }
 
