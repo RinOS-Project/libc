@@ -188,6 +188,9 @@ typedef struct {
 extern void  platform_thread_init(void);
 extern void* platform_thread_create(void (*entry)(void*), void* arg);
 extern void* platform_thread_create_result(void* (*entry)(void*), void* arg);
+extern void* platform_thread_create_result_with_stack(
+    void* (*entry)(void*), void* arg, void* stack, size_t stack_size,
+    int detached);
 extern void  platform_thread_join(void* thread);
 extern int   platform_thread_join_result(void* thread, void** result_out);
 extern int   platform_thread_detach(void* thread);
@@ -256,7 +259,7 @@ static inline int pthread_attr_getscope(const pthread_attr_t* attr, int* scope) 
 }
 
 static inline int pthread_attr_setstacksize(pthread_attr_t* attr, size_t stacksize) {
-    if (!attr || stacksize < 4096) return EINVAL;
+    if (!attr || stacksize < PTHREAD_STACK_MIN) return EINVAL;
     attr->stacksize = stacksize;
     return 0;
 }
@@ -291,6 +294,7 @@ static inline int pthread_attr_getstack(const pthread_attr_t* attr, void** stack
 static inline int pthread_attr_setstack(pthread_attr_t* attr, void* stackaddr, size_t stacksize) {
     if (!attr || !stackaddr) return EINVAL;
     if (stacksize < PTHREAD_STACK_MIN) return EINVAL;
+    if (stacksize > UINTPTR_MAX - (uintptr_t)stackaddr) return EINVAL;
     attr->stackaddr = stackaddr;
     attr->stacksize = stacksize;
     return 0;
@@ -378,9 +382,25 @@ static inline int pthread_setname_np(pthread_t thread, const char* name) {
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
 static inline int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
                                   void* (*start_routine)(void*), void* arg) {
-    (void)attr;
+    size_t stack_size = 8u * 1024u * 1024u;
+    void* stack = NULL;
+    int detached = 0;
     if (!thread || !start_routine) return EINVAL;
-    void* kthread = platform_thread_create_result(start_routine, arg);
+    if (attr) {
+        if (attr->detachstate != PTHREAD_CREATE_JOINABLE &&
+            attr->detachstate != PTHREAD_CREATE_DETACHED)
+            return EINVAL;
+        if (attr->scope != PTHREAD_SCOPE_SYSTEM) return ENOTSUP;
+        stack_size = attr->stacksize;
+        stack = attr->stackaddr;
+        detached = attr->detachstate == PTHREAD_CREATE_DETACHED;
+    }
+    if (stack_size < PTHREAD_STACK_MIN || stack_size > UINT32_MAX)
+        return EINVAL;
+    if (stack && stack_size > UINTPTR_MAX - (uintptr_t)stack)
+        return EINVAL;
+    void* kthread = platform_thread_create_result_with_stack(
+        start_routine, arg, stack, stack_size, detached);
     if (!kthread) return EAGAIN;
     *thread = (pthread_t)(uintptr_t)kthread;
     return 0;
