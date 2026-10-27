@@ -246,7 +246,8 @@ _Static_assert(sizeof(struct termios) == sizeof(RinTtyTermiosV1),
 
 #ifndef _RIN_TERMIOS_IOCTL
 #define _RIN_TERMIOS_IOCTL(fd, request, argument) \
-    ioctl((fd), (request), (argument))
+    _RIN_IOCTL_SYSCALL3(SYS_IOCTL, (uintptr_t)(fd), \
+                        (uintptr_t)(request), (uintptr_t)(argument))
 #endif
 
 static inline int _rin_termios_ioctl_status(int fd, unsigned long request,
