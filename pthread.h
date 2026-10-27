@@ -187,13 +187,17 @@ typedef struct {
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
 extern void  platform_thread_init(void);
 extern void* platform_thread_create(void (*entry)(void*), void* arg);
+extern void* platform_thread_create_result(void* (*entry)(void*), void* arg);
 extern void  platform_thread_join(void* thread);
+extern int   platform_thread_join_result(void* thread, void** result_out);
 extern int   platform_thread_detach(void* thread);
 extern int   platform_thread_sched_get(void* thread, int* policy, int* priority);
 extern int   platform_thread_sched_set(void* thread, int policy, int priority);
 extern int   platform_thread_name_set(void* thread, const char* name);
 extern int   platform_thread_name_get(void* thread, char* name, size_t length);
 extern void  platform_thread_exit(void);
+extern void  platform_thread_exit_with_result(void* result)
+    __attribute__((noreturn));
 extern void  platform_thread_yield(void);
 extern uint32_t platform_thread_current_tid(void);
 
@@ -376,16 +380,14 @@ static inline int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
                                   void* (*start_routine)(void*), void* arg) {
     (void)attr;
     if (!thread || !start_routine) return EINVAL;
-    void* kthread = platform_thread_create((void (*)(void*))start_routine, arg);
+    void* kthread = platform_thread_create_result(start_routine, arg);
     if (!kthread) return EAGAIN;
     *thread = (pthread_t)(uintptr_t)kthread;
     return 0;
 }
 
 static inline int pthread_join(pthread_t thread, void** retval) {
-    if (retval) *retval = NULL;
-    platform_thread_join((void*)(uintptr_t)thread);
-    return 0;
+    return platform_thread_join_result((void*)(uintptr_t)thread, retval);
 }
 
 static inline int pthread_detach(pthread_t thread) {
@@ -469,8 +471,7 @@ static inline int pthread_getname_np(pthread_t thread, char* name, size_t len) {
 
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
 static inline void pthread_exit(void* retval) {
-    (void)retval;
-    platform_thread_exit();
+    platform_thread_exit_with_result(retval);
     for (;;) {}  /* Never returns */
 }
 #else
