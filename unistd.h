@@ -1624,13 +1624,17 @@ static inline long sysconf(int name) {
             return 1;
         case _SC_MEMLOCK:
             return 1;
-        case _SC_REALTIME_SIGNALS:
         case _SC_ASYNCHRONOUS_IO:
+            return 1;
+        case _SC_AIO_LISTIO_MAX:
+            return 64;
+        case _SC_AIO_MAX:
+            return 64;
+        case _SC_AIO_PRIO_DELTA_MAX:
+            return 0;
+        case _SC_REALTIME_SIGNALS:
         case _SC_PRIORITIZED_IO:
         case _SC_SHARED_MEMORY_OBJECTS:
-        case _SC_AIO_LISTIO_MAX:
-        case _SC_AIO_MAX:
-        case _SC_AIO_PRIO_DELTA_MAX:
         case _SC_DELAYTIMER_MAX:
         case _SC_RTSIG_MAX:
         case _SC_SEM_NSEMS_MAX:
