@@ -387,7 +387,7 @@ static inline int fchmod(int fd, mode_t mode) {
         errno = EBADF;
         return -1;
     }
-    if (((unsigned long)mode & ~(unsigned long)0777u) != 0u) {
+    if (((unsigned long)mode & ~(unsigned long)01777u) != 0u) {
         errno = EINVAL;
         return -1;
     }
@@ -417,7 +417,7 @@ static inline int fchmodat(int dirfd, const char* pathname, mode_t mode,
     }
     if (pathname[0] == '\0') {
         if ((flags & AT_EMPTY_PATH) != 0) {
-            if (((unsigned long)mode & ~(unsigned long)0777u) != 0u) {
+            if (((unsigned long)mode & ~(unsigned long)01777u) != 0u) {
                 errno = EINVAL;
                 return -1;
             }
@@ -435,7 +435,7 @@ static inline int fchmodat(int dirfd, const char* pathname, mode_t mode,
         errno = EINVAL;
         return -1;
     }
-    if (((unsigned long)mode & ~(unsigned long)0777u) != 0u) {
+    if (((unsigned long)mode & ~(unsigned long)01777u) != 0u) {
         errno = EINVAL;
         return -1;
     }
