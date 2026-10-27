@@ -7,6 +7,7 @@
 #define _GETOPT_H
 
 #include "stddef.h"
+#include "stdio.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,6 +46,13 @@ struct option {
  * ═══════════════════════════════════════════════════════════════*/
 
 extern int _rin_getopt_pos;  /* 現在のargv[optind]内の位置 */
+
+static inline void _rin_getopt_diagnostic(char* const argv[],
+                                          const char* message, int option) {
+    if (!opterr) return;
+    const char* program = argv && argv[0] ? argv[0] : "?";
+    fprintf(stderr, "%s: %s -- '%c'\n", program, message, option);
+}
 
 /* ═══════════════════════════════════════════════════════════════
  * getopt関数
@@ -103,6 +111,8 @@ static inline int getopt(int argc, char* const argv[], const char* optstring) {
                     /* 必須引数がない */
                     optopt = c;
                     if (optstring[0] == ':') return ':';
+                    _rin_getopt_diagnostic(argv,
+                                           "option requires an argument", c);
                     return '?';
                 }
             }
@@ -115,6 +125,7 @@ static inline int getopt(int argc, char* const argv[], const char* optstring) {
 
     /* オプションが見つからない */
     optopt = c;
+    _rin_getopt_diagnostic(argv, "invalid option", c);
     return '?';
 }
 
