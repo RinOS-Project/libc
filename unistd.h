@@ -1538,7 +1538,8 @@ static inline long sysconf(int name) {
         case _SC_2_FORT_RUN:
         case _SC_2_LOCALEDEF:
         case _SC_2_SW_DEV:
-            errno = ENOSYS;
+            /* POSIX reserves errno changes for invalid names.  A known but
+             * unsupported option returns -1 without changing errno. */
             return -1;
         case _SC_SYNCHRONIZED_IO:
         case _SC_FSYNC:
