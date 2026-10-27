@@ -616,12 +616,16 @@ static inline char* realpath(const char* path, char* resolved_path) {
     char candidate[PATH_MAX];
     size_t cursor;
     size_t resolved_length;
+    size_t original_path_length;
     unsigned int symlink_count = 0u;
+    int require_directory;
 
     if (!path || path[0] == '\0') {
         errno = path ? ENOENT : EFAULT;
         return NULL;
     }
+    original_path_length = _rin_realpath_length(path);
+    require_directory = path[original_path_length - 1u] == '/';
 
     pending = (char*)malloc(RIN_REALPATH_PENDING_CAPACITY);
     if (!pending) {
@@ -672,8 +676,35 @@ static inline char* realpath(const char* path, char* resolved_path) {
             component[index] = pending[component_start + index];
         component[component_length] = '\0';
 
-        if (component_length == 1u && component[0] == '.') continue;
-        if (component_length == 2u && component[0] == '.' && component[1] == '.') {
+        if ((component_length == 1u && component[0] == '.') ||
+            (component_length == 2u && component[0] == '.' &&
+             component[1] == '.')) {
+            if (resolved_length > 1u) {
+                if (resolved_length + 1u + component_length + 1u >
+                    sizeof(candidate)) {
+                    errno = ENAMETOOLONG;
+                    goto fail;
+                }
+                for (size_t index = 0u; index < resolved_length; ++index)
+                    candidate[index] = resolved[index];
+                candidate[resolved_length] = '/';
+                for (size_t index = 0u; index <= component_length; ++index)
+                    candidate[resolved_length + 1u + index] = component[index];
+            } else {
+                if (component_length + 2u > sizeof(candidate)) {
+                    errno = ENAMETOOLONG;
+                    goto fail;
+                }
+                candidate[0] = '/';
+                for (size_t index = 0u; index <= component_length; ++index)
+                    candidate[1u + index] = component[index];
+            }
+            if (lstat(candidate, &status) < 0) goto fail;
+            if (!S_ISDIR(status.st_mode)) {
+                errno = ENOTDIR;
+                goto fail;
+            }
+            if (component_length == 1u) continue;
             while (resolved_length > 1u && resolved[resolved_length - 1u] != '/')
                 --resolved_length;
             if (resolved_length > 1u) --resolved_length;
@@ -717,6 +748,11 @@ static inline char* realpath(const char* path, char* resolved_path) {
                 goto fail;
             }
             link_target[link_length] = '\0';
+            if (link_length > 0 && link_target[link_length - 1] == '/') {
+                size_t remaining_cursor = cursor;
+                while (pending[remaining_cursor] == '/') ++remaining_cursor;
+                if (pending[remaining_cursor] == '\0') require_directory = 1;
+            }
             next_pending = (char*)malloc(RIN_REALPATH_PENDING_CAPACITY);
             if (!next_pending) {
                 errno = ENOMEM;
@@ -756,6 +792,15 @@ static inline char* realpath(const char* path, char* resolved_path) {
 
         resolved_length = _rin_realpath_length(candidate);
         if (_rin_realpath_copy(resolved, sizeof(resolved), candidate) < 0) goto fail;
+    }
+
+    if (require_directory) {
+        struct stat final_status;
+        if (stat(resolved, &final_status) < 0) goto fail;
+        if (!S_ISDIR(final_status.st_mode)) {
+            errno = ENOTDIR;
+            goto fail;
+        }
     }
 
     free(pending);
