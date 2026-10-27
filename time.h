@@ -29,6 +29,7 @@ typedef void* RinStrptimeLocale;
     defined(_RIN_TIME_SLEEP) || defined(_RIN_TIME_GETTIMEOFDAY) || \
     defined(_RIN_TIME_NS64) || defined(_RIN_TIME_NS32) || \
     defined(_RIN_TIME_REALTIME_NS64) || defined(_RIN_TIME_REALTIME_NS32) || \
+    defined(_RIN_TIME_CLOCKSOURCE_RESOLUTION) || \
     defined(_RIN_TIME_CPU_GET) || defined(_RIN_TIME_SETITIMER) || \
     defined(_RIN_TIME_GETITIMER) || \
     defined(_RIN_TIME_TIMER_CREATE) || defined(_RIN_TIME_TIMER_SETTIME) || \
@@ -119,6 +120,11 @@ typedef void* RinStrptimeLocale;
 #ifndef _RIN_TIME_REALTIME_NS32
 #define _RIN_TIME_REALTIME_NS32(output) \
     _RIN_TIME_SYSCALL1(SYS_REALTIME_NS, (uintptr_t)(output))
+#endif
+
+#ifndef _RIN_TIME_CLOCKSOURCE_RESOLUTION
+#define _RIN_TIME_CLOCKSOURCE_RESOLUTION() \
+    _RIN_TIME_SYSCALL1(SYS_CLOCKSOURCE_RESOLUTION, 0u)
 #endif
 
 #ifndef _RIN_TIME_CPU_GET
@@ -977,11 +983,29 @@ static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
         errno = EINVAL;
         return -1;
     }
+#if defined(RIN_FREESTANDING) && \
+    (defined(RIN_KERNEL) || defined(RIN_USERSPACE))
+    {
+        intptr_t result = _rin_time_result(
+            _RIN_TIME_CLOCKSOURCE_RESOLUTION());
+        if (result < 0) return -1;
+        if (result == 0) {
+            errno = EIO;
+            return -1;
+        }
+        if (res) {
+            res->tv_sec = 0;
+            res->tv_nsec = (long)result;
+        }
+        return 0;
+    }
+#else
     if (res) {
         res->tv_sec = 0;
         res->tv_nsec = 1000000;  /* 1ms resolution */
     }
     return 0;
+#endif
 }
 
 static inline int _rin_time_timespec_to_ns(const struct timespec* input,
