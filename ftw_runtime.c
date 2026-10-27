@@ -418,8 +418,8 @@ static int rin_ftw_run(const char* path, int fd_limit, int flags,
         errno = EFAULT;
         return -1;
     }
-    if (fd_limit < 1 || (flags & ~(FTW_PHYS | FTW_MOUNT |
-                                   FTW_CHDIR | FTW_DEPTH)) != 0) {
+    if (fd_limit < 1 || (!is_nftw && fd_limit > OPEN_MAX) ||
+        (flags & ~(FTW_PHYS | FTW_MOUNT | FTW_CHDIR | FTW_DEPTH)) != 0) {
         errno = EINVAL;
         return -1;
     }
