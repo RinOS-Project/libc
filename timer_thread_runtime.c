@@ -154,12 +154,18 @@ static unsigned int rin_timer_thread_dispatch_once(void) {
             intptr_t pending;
 
             if (!rin_timer_thread_snapshot_current(snapshot)) break;
-            pending = RIN_TIMER_THREAD_POLL(snapshot->timer_id);
-            if (pending <= 0) break;
-            if (!rin_timer_thread_snapshot_current(snapshot)) break;
-
+            /* Reserve capacity before TIMER_POLL consumes the one-shot
+             * expiration.  If every worker slot is occupied, leave the
+             * kernel notification pending for the next dispatcher pass. */
             job = rin_timer_thread_job_reserve();
             if (!job) break;
+            pending = RIN_TIMER_THREAD_POLL(snapshot->timer_id);
+            if (pending <= 0 ||
+                !rin_timer_thread_snapshot_current(snapshot)) {
+                job->function = (void (*)(union sigval))0;
+                __atomic_store_n(&job->active, 0, __ATOMIC_RELEASE);
+                break;
+            }
             job->function = snapshot->function;
             job->value = snapshot->value;
             if (pthread_create(&thread, (const pthread_attr_t*)0,

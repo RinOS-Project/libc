@@ -2901,13 +2901,13 @@ _STDIO_PRINTF_FN int snprintf(char* buf, size_t size, const char* fmt, ...) {
 _STDIO_PRINTF_FN int sprintf(char* buf, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    int n = vsnprintf(buf, 4096, fmt, ap);
+    int n = vsnprintf(buf, (size_t)-1, fmt, ap);
     va_end(ap);
     return n;
 }
 
 _STDIO_PRINTF_FN int vsprintf(char* buf, const char* fmt, va_list ap) {
-    return vsnprintf(buf, 4096, fmt, ap);
+    return vsnprintf(buf, (size_t)-1, fmt, ap);
 }
 
 static inline int _rin_stdio_vformat_write(FILE* stream, const char* fmt,
