@@ -473,7 +473,7 @@ size_t strftime(char* destination, size_t maximum, const char* format,
                 const struct tm* value) {
 #if defined(RIN_USERSPACE)
     return rin_strftime_run(destination, maximum, format, value,
-                            LC_GLOBAL_LOCALE);
+                            uselocale(NULL));
 #else
     return rin_strftime_run(destination, maximum, format, value);
 #endif

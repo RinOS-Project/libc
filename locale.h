@@ -128,10 +128,6 @@ static inline char* setlocale(int category, const char* locale) {
     return rin_setlocale(category, locale);
 }
 
-/* localeconv - ロケールのフォーマット情報を取得 */
-static inline struct lconv* localeconv(void) {
-    return rin_localeconv();
-}
 #endif
 
 /* strcoll と strxfrm は string.h で定義 (C standard) */
@@ -149,6 +145,16 @@ locale_t newlocale(int category_mask, const char* locale, locale_t base);
 locale_t duplocale(locale_t locobj);
 void freelocale(locale_t locobj);
 locale_t uselocale(locale_t newloc);
+
+/* localeconvは呼出スレッドのlocaleを使う。返却領域は呼出スレッドに属し、
+ * 次のlocaleconv呼出しまで有効とする。 */
+struct lconv* rin_localeconv_for_locale(locale_t locobj);
+
+#ifndef _MSVCRT_COMPAT
+static inline struct lconv* localeconv(void) {
+    return rin_localeconv_for_locale(uselocale(NULL));
+}
+#endif
 
 #define RIN_LOCALE_CTYPE_ALNUM 1u
 #define RIN_LOCALE_CTYPE_ALPHA 2u

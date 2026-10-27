@@ -241,7 +241,7 @@ size_t wcsftime(wchar_t* destination, size_t maximum,
                 const wchar_t* format, const struct tm* value) {
 #if defined(RIN_USERSPACE)
     return rin_wcsftime_run(destination, maximum, format, value,
-                            LC_GLOBAL_LOCALE);
+                            uselocale(NULL));
 #else
     return rin_wcsftime_run(destination, maximum, format, value);
 #endif

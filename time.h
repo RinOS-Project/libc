@@ -2173,7 +2173,7 @@ static inline char* strptime(const char* s, const char* format, struct tm* tm) {
     if (!s || !format || !tm) return NULL;
     state.value = *tm;
 #if defined(RIN_USERSPACE)
-    state.locale = LC_GLOBAL_LOCALE;
+    state.locale = uselocale(NULL);
 #else
     state.locale = NULL;
 #endif
