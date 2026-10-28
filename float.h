@@ -25,20 +25,24 @@ extern "C" {
 
 #define FLT_RADIX 2  /* 基数 */
 
+/* RinOS keeps long double distinct in the C type system and rank, while its
+ * x86 ABI uses the same binary64 representation and calling convention as
+ * double. */
+
 /* 10進精度 */
 #define FLT_DIG        6
 #define DBL_DIG        15
-#define LDBL_DIG       18
+#define LDBL_DIG       DBL_DIG
 
 /* 2進精度 (仮数部ビット数) */
 #define FLT_MANT_DIG   24
 #define DBL_MANT_DIG   53
-#define LDBL_MANT_DIG  64
+#define LDBL_MANT_DIG  DBL_MANT_DIG
 
 /* ε (1.0と次の表現可能な値の差) */
 #define FLT_EPSILON    1.19209290e-07F
 #define DBL_EPSILON    2.2204460492503131e-16
-#define LDBL_EPSILON   1.08420217248550443401e-19L
+#define LDBL_EPSILON   2.2204460492503131e-16L
 
 /* ═══════════════════════════════════════════════════════════════
  * 指数範囲
@@ -47,22 +51,22 @@ extern "C" {
 /* 最小指数 (2進) */
 #define FLT_MIN_EXP    (-125)
 #define DBL_MIN_EXP    (-1021)
-#define LDBL_MIN_EXP   (-16381)
+#define LDBL_MIN_EXP   DBL_MIN_EXP
 
 /* 最大指数 (2進) */
 #define FLT_MAX_EXP    128
 #define DBL_MAX_EXP    1024
-#define LDBL_MAX_EXP   16384
+#define LDBL_MAX_EXP   DBL_MAX_EXP
 
 /* 最小指数 (10進) */
 #define FLT_MIN_10_EXP  (-37)
 #define DBL_MIN_10_EXP  (-307)
-#define LDBL_MIN_10_EXP (-4931)
+#define LDBL_MIN_10_EXP DBL_MIN_10_EXP
 
 /* 最大指数 (10進) */
 #define FLT_MAX_10_EXP  38
 #define DBL_MAX_10_EXP  308
-#define LDBL_MAX_10_EXP 4932
+#define LDBL_MAX_10_EXP DBL_MAX_10_EXP
 
 /* ═══════════════════════════════════════════════════════════════
  * 最小・最大値
@@ -71,12 +75,12 @@ extern "C" {
 /* 最小正規化正数 */
 #define FLT_MIN        1.17549435e-38F
 #define DBL_MIN        2.2250738585072014e-308
-#define LDBL_MIN       3.36210314311209350626e-4932L
+#define LDBL_MIN       2.2250738585072014e-308L
 
 /* 最大有限値 */
 #define FLT_MAX        3.40282347e+38F
 #define DBL_MAX        1.7976931348623157e+308
-#define LDBL_MAX       1.18973149535723176502e+4932L
+#define LDBL_MAX       1.7976931348623157e+308L
 
 /* ═══════════════════════════════════════════════════════════════
  * C11追加定数
@@ -85,13 +89,13 @@ extern "C" {
 /* 有効10進桁数 (正確な往復変換) */
 #define FLT_DECIMAL_DIG  9
 #define DBL_DECIMAL_DIG  17
-#define LDBL_DECIMAL_DIG 21
+#define LDBL_DECIMAL_DIG DBL_DECIMAL_DIG
 #define DECIMAL_DIG      LDBL_DECIMAL_DIG
 
 /* 最小非正規化正数 */
 #define FLT_TRUE_MIN   1.40129846e-45F
 #define DBL_TRUE_MIN   4.9406564584124654e-324
-#define LDBL_TRUE_MIN  3.64519953188247460253e-4951L
+#define LDBL_TRUE_MIN  4.9406564584124654e-324L
 
 /* 非正規化数サポート */
 #define FLT_HAS_SUBNORM  1
