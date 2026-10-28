@@ -1583,6 +1583,8 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     size_t numeric_service_length;
     int formatted;
     if (!sa) return EAI_FAMILY;
+    if ((host && hostlen == 0u) || (serv && servlen == 0u))
+        return EAI_OVERFLOW;
     if (sa->sa_family == AF_INET) {
         if (salen < (socklen_t)sizeof(struct sockaddr_in)) return EAI_FAMILY;
         sin = (const struct sockaddr_in*)sa;
