@@ -94,6 +94,12 @@
 #ifndef _POSIX_TIMEOUTS
 #define _POSIX_TIMEOUTS 200809L
 #endif
+#ifndef _POSIX_REALTIME_SIGNALS
+#define _POSIX_REALTIME_SIGNALS 200809L
+#endif
+#ifndef _POSIX_REGEXP
+#define _POSIX_REGEXP 1
+#endif
 
 /* Preserve caller-provided syscall hooks before installing defaults.  A
  * hosted unit that supplies a hook is intentionally asking for the Rin
@@ -1749,6 +1755,8 @@ static inline long sysconf(int name) {
             return AIO_LISTIO_MAX;
         case _SC_AIO_MAX:
             return AIO_MAX;
+        case _SC_RTSIG_MAX:
+            return RTSIG_MAX;
         case _SC_AIO_PRIO_DELTA_MAX:
             return AIO_PRIO_DELTA_MAX;
         case _SC_ATEXIT_MAX:
@@ -1771,6 +1779,7 @@ static inline long sysconf(int name) {
             return PTHREAD_KEYS_MAX;
         case _SC_REGEXP:
         case _SC_THREADS:
+        case _SC_REALTIME_SIGNALS:
         case _SC_BARRIERS:
         case _SC_CLOCK_SELECTION:
         case _SC_MONOTONIC_CLOCK:
@@ -1797,10 +1806,8 @@ static inline long sysconf(int name) {
                           sizeof(((__rin_account_info_v1*)0)->home_dir) +
                           sizeof(((__rin_account_info_v1*)0)->shell));
 #endif
-        case _SC_REALTIME_SIGNALS:
         case _SC_PRIORITIZED_IO:
         case _SC_SHARED_MEMORY_OBJECTS:
-        case _SC_RTSIG_MAX:
         case _SC_SIGQUEUE_MAX:
         case _SC_BC_BASE_MAX:
         case _SC_BC_DIM_MAX:

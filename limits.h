@@ -136,6 +136,15 @@
 #ifndef _POSIX_SYMLINK_MAX
 #define _POSIX_SYMLINK_MAX 255
 #endif
+#ifndef _POSIX_RTSIG_MAX
+#define _POSIX_RTSIG_MAX 8
+#endif
+#ifndef _POSIX_SIGQUEUE_MAX
+#define _POSIX_SIGQUEUE_MAX 32
+#endif
+#ifndef RTSIG_MAX
+#define RTSIG_MAX 31
+#endif
 #ifndef _POSIX2_LINE_MAX
 #define _POSIX2_LINE_MAX 2048
 #endif
