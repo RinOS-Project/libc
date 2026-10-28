@@ -523,16 +523,16 @@ static inline int _rin_glob_commit(glob_t* pglob, int flags,
     size_t old_count;
     size_t total;
     char** paths;
-    char** old_paths = pglob->gl_pathv;
-    size_t old_offsets = pglob->gl_offs;
-    size_t old_pathc = pglob->gl_pathc;
     int append = (flags & GLOB_APPEND) != 0;
+    size_t old_pathc = append ? pglob->gl_pathc : 0u;
+    char** old_paths = append && old_pathc != 0u ? pglob->gl_pathv : NULL;
+    size_t old_offsets = (append || (flags & GLOB_DOOFFS) != 0) ?
+                         pglob->gl_offs : 0u;
     if (append && old_pathc != 0u && !old_paths) {
         errno = EINVAL;
         return GLOB_ABORTED;
     }
-    offsets = append ? old_offsets :
-              ((flags & GLOB_DOOFFS) ? pglob->gl_offs : 0u);
+    offsets = old_offsets;
     old_count = append ? old_pathc : 0u;
     if (offsets > (size_t)-1 - old_count ||
         offsets + old_count > (size_t)-1 - matches->count - 1u)
@@ -561,6 +561,19 @@ static inline int _rin_glob_commit(glob_t* pglob, int flags,
     pglob->gl_offs = offsets;
     pglob->gl_flags = append ? pglob->gl_flags | flags : flags;
     return 0;
+}
+
+/* A fresh no-match result must not leave uninitialized or stale output
+ * counters behind.  With GLOB_APPEND the prior result remains valid. */
+static inline int _rin_glob_no_match(glob_t* pglob, int flags)
+{
+    if (!(flags & GLOB_APPEND)) {
+        pglob->gl_pathc = 0u;
+        pglob->gl_pathv = NULL;
+        pglob->gl_flags = flags;
+        if (!(flags & GLOB_DOOFFS)) pglob->gl_offs = 0u;
+    }
+    return GLOB_NOMATCH;
 }
 
 /* Locate the first unescaped brace pair containing a top-level comma.  The
@@ -725,7 +738,7 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
             if (_rin_glob_match_list_add(&matches, pattern) != 0)
                 return GLOB_NOSPACE;
         } else {
-            return GLOB_NOMATCH;
+            return _rin_glob_no_match(pglob, flags);
         }
     } else {
         matches.items = (char**)malloc(
@@ -833,8 +846,9 @@ static inline int glob(const char* pattern, int flags,
         if (brace_handled) return brace_result;
     }
     pattern_length = _rin_glob_strlen(pattern);
-    if (pattern_length == 0u || pattern_length >= _RIN_GLOB_MAX_PATTERN)
-        return pattern_length == 0u ? GLOB_NOMATCH : GLOB_NOSPACE;
+    if (pattern_length == 0u)
+        return _rin_glob_no_match(pglob, flags);
+    if (pattern_length >= _RIN_GLOB_MAX_PATTERN) return GLOB_NOSPACE;
     prefix[0] = '\0';
     if (pattern[0] == '/') {
         prefix[0] = '/';
@@ -903,7 +917,7 @@ static inline int glob(const char* pattern, int flags,
             }
         } else {
             _rin_glob_match_list_free(&matches);
-            return GLOB_NOMATCH;
+            return _rin_glob_no_match(pglob, flags);
         }
     }
     if (!(flags & GLOB_NOSORT)) _rin_glob_sort(&matches);
