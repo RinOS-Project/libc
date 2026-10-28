@@ -77,6 +77,28 @@ RIN_STRING_INLINE void* memchr(const void* s, int c, size_t n) {
 }
 #endif /* memcpy */
 
+/* C23/POSIX copy-through-byte operation. Keep an exported declaration for
+ * the runtime owner and a header-local implementation for freestanding users. */
+#ifndef memccpy
+#ifdef RIN_STRING_IMPLEMENTATION
+void* memccpy(void* destination, const void* source, int stop_byte, size_t size);
+#else
+RIN_STRING_INLINE void* memccpy(void* destination, const void* source,
+                                int stop_byte, size_t size) {
+    unsigned char* output = (unsigned char*)destination;
+    const unsigned char* input = (const unsigned char*)source;
+    const unsigned char stop = (unsigned char)stop_byte;
+    while (size != 0u) {
+        unsigned char value = *input++;
+        *output++ = value;
+        --size;
+        if (value == stop) return output;
+    }
+    return NULL;
+}
+#endif
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * 文字列操作
  * rin.hでマクロ定義済みの場合はスキップ
