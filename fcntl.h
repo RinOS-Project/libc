@@ -880,10 +880,6 @@ static inline ssize_t readlinkat(int dirfd, const char* pathname, char* buf, siz
         errno = EFAULT;
         return -1;
     }
-    if (bufsiz == 0u) {
-        errno = EINVAL;
-        return -1;
-    }
     _fcntl_path_at_init(&call, RIN_PATH_AT_READLINK);
     call.dirfd = dirfd;
     call.path1 = (uint64_t)(uintptr_t)pathname;
