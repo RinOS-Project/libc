@@ -17,7 +17,4 @@
 #undef _GNU_SOURCE
 #undef __USE_GNU
 
-/* Standard C version */
-#define __STDC_VERSION__ 201710L
-
 #endif /* _FEATURES_H */
