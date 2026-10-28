@@ -727,6 +727,7 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
     else if (notification->sigev_notify == SIGEV_SIGNAL) {
         if (notification->sigev_signo <= 0 ||
             notification->sigev_signo >= NSIG ||
+            notification->sigev_signo == __RIN_SIGCANCEL ||
             notification->sigev_signo == SIGKILL ||
             notification->sigev_signo == SIGSTOP) {
             errno = EINVAL;

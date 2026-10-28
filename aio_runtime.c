@@ -85,6 +85,7 @@ static int rin_aio_notification_snapshot(const struct sigevent* source,
         /* ゼロ初期化されたsigeventは通知なしとして扱う。 */
         if (source->sigev_signo == 0) return 0;
         if (source->sigev_signo < 0 || source->sigev_signo >= NSIG ||
+            source->sigev_signo == __RIN_SIGCANCEL ||
             source->sigev_signo == SIGKILL ||
             source->sigev_signo == SIGSTOP)
             return EINVAL;

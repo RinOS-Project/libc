@@ -1113,7 +1113,8 @@ static inline int timer_create(clockid_t clock_id,
         }
     }
     if (notify == SIGEV_SIGNAL &&
-        (signo <= 0 || signo >= NSIG || signo == SIGKILL || signo == SIGSTOP)) {
+        (signo <= 0 || signo >= NSIG || signo == __RIN_SIGCANCEL ||
+         signo == SIGKILL || signo == SIGSTOP)) {
         errno = EINVAL;
         return -1;
     }
