@@ -1252,128 +1252,304 @@ static inline int _regex_instruction_matches(
 }
 
 typedef struct {
+    uint32_t pc;
+    size_t position;
+    size_t first_end;
+    size_t saved_slot;
+    size_t saved_value;
+    int first_result;
+    uint8_t stage;
+    size_t* original;
+    size_t* first_captures;
+} _regex_backref_frame_t;
+
+typedef struct {
     const _regex_internal_t* internal;
     const unsigned char* input;
     size_t input_size;
     int eflags;
     size_t capture_slots;
     uint64_t steps;
+    _regex_backref_frame_t* frames;
+    size_t* snapshots;
 } _regex_backref_context_t;
 
-/* Backreferences are not regular and therefore cannot be represented by the
- * one-byte-at-a-time Thompson state set above.  Keep them on a separate,
- * bounded DFS path.  The caller supplies a capture array that is copied at
- * alternation points, so failed branches never leak partial captures. */
+static inline void _regex_backref_frame_init(
+        _regex_backref_context_t* context, size_t index,
+        uint32_t pc, size_t position) {
+    _regex_backref_frame_t* frame = &context->frames[index];
+    frame->pc = pc;
+    frame->position = position;
+    frame->stage = 0u;
+    if (context->capture_slots != 0u) {
+        size_t slots_per_frame = context->capture_slots * 2u;
+        frame->original = context->snapshots + index * slots_per_frame;
+        frame->first_captures = frame->original + context->capture_slots;
+    } else {
+        frame->original = NULL;
+        frame->first_captures = NULL;
+    }
+}
+
+/* Backreferences need DFS because they cannot be represented by the
+ * one-byte-at-a-time Thompson state set above.  Keep continuation and capture
+ * snapshots in a bounded heap workspace so a small caller stack cannot be
+ * exhausted by a deep path. */
 static inline int _regex_backref_match(
         _regex_backref_context_t* context, uint32_t pc, size_t position,
-        size_t* captures, size_t* end_out, uint32_t depth) {
+        size_t* captures, size_t* end_out) {
     const size_t none = (size_t)-1;
-    const _regex_instruction_t* instruction;
-    size_t slots = context->capture_slots;
-    size_t original[_REGEX_MAX_GROUPS * 2u];
-    size_t candidate[_REGEX_MAX_GROUPS * 2u];
-    size_t end_first = none;
-    size_t end_second = none;
-    int first_result;
-    int second_result;
-    if (depth >= _REGEX_MAX_BACKREF_DEPTH ||
-        ++context->steps > _REGEX_MAX_STEPS ||
-        pc >= context->internal->instruction_count) return -1;
-    instruction = &context->internal->instructions[pc];
-    switch (instruction->operation) {
-        case _REGEX_OP_MATCH:
-            *end_out = position;
-            return 1;
-        case _REGEX_OP_BYTE:
-        case _REGEX_OP_ANY:
-        case _REGEX_OP_CLASS:
-            if (position >= context->input_size ||
-                !_regex_instruction_matches(context->internal, instruction,
-                                             context->input[position]))
-                return 0;
-            return _regex_backref_match(context, pc + 1u, position + 1u,
-                                        captures, end_out, depth + 1u);
-        case _REGEX_OP_BACKREF: {
-            size_t slot = (size_t)instruction->first * 2u;
-            size_t begin;
-            size_t end;
-            size_t length;
-            size_t index;
-            if (slot + 1u >= slots) return -1;
-            begin = captures[slot];
-            end = captures[slot + 1u];
-            if (begin == none || end == none || end < begin) return 0;
-            length = end - begin;
-            if (position > context->input_size ||
-                length > _REGEX_MAX_BACKREF_CAPTURE ||
-                length > context->input_size - position) return 0;
-            for (index = 0u; index < length; ++index) {
-                unsigned char expected = context->input[begin + index];
-                unsigned char actual = context->input[position + index];
-                if ((context->internal->cflags & REG_ICASE) != 0) {
-                    expected = (unsigned char)_regex_ascii_fold((char)expected);
-                    actual = (unsigned char)_regex_ascii_fold((char)actual);
+    const size_t slots = context->capture_slots;
+    size_t frame_count = 1u;
+    size_t returned_end = none;
+    int returned_result = 0;
+    int returning = 0;
+
+    _regex_backref_frame_init(context, 0u, pc, position);
+    for (;;) {
+        _regex_backref_frame_t* frame =
+            &context->frames[frame_count - 1u];
+        if (returning) {
+            if (frame->stage == 0u) {
+                --frame_count;
+                if (frame_count == 0u) {
+                    if (returned_result > 0) *end_out = returned_end;
+                    return returned_result;
                 }
-                if (expected != actual) return 0;
+                continue;
             }
-            return _regex_backref_match(context, pc + 1u,
-                                        position + length, captures, end_out,
-                                        depth + 1u);
-        }
-        case _REGEX_OP_BOL:
-            if (!_regex_bol(context->internal, context->input, position,
-                            context->eflags)) return 0;
-            return _regex_backref_match(context, pc + 1u, position, captures,
-                                        end_out, depth + 1u);
-        case _REGEX_OP_EOL:
-            if (!_regex_eol(context->internal, context->input,
-                            context->input_size, position, context->eflags))
-                return 0;
-            return _regex_backref_match(context, pc + 1u, position, captures,
-                                        end_out, depth + 1u);
-        case _REGEX_OP_JUMP:
-            return _regex_backref_match(context, instruction->first, position,
-                                        captures, end_out, depth + 1u);
-        case _REGEX_OP_SAVE_START:
-        case _REGEX_OP_SAVE_END: {
-            size_t slot = (size_t)instruction->first * 2u +
-                          (instruction->operation == _REGEX_OP_SAVE_END);
-            size_t previous;
-            int result;
-            if (slot >= slots) return -1;
-            previous = captures[slot];
-            captures[slot] = position;
-            result = _regex_backref_match(context, pc + 1u, position,
-                                          captures, end_out, depth + 1u);
-            if (result <= 0) captures[slot] = previous;
-            return result;
-        }
-        case _REGEX_OP_SPLIT:
-            for (size_t index = 0u; index < slots; ++index)
-                original[index] = captures[index];
-            first_result = _regex_backref_match(
-                context, instruction->first, position, captures, &end_first,
-                depth + 1u);
-            for (size_t index = 0u; index < slots; ++index)
-                candidate[index] = captures[index];
-            for (size_t index = 0u; index < slots; ++index)
-                captures[index] = original[index];
-            second_result = _regex_backref_match(
-                context, instruction->second, position, captures, &end_second,
-                depth + 1u);
-            if (first_result < 0 || second_result < 0) return -1;
-            if (first_result == 0 && second_result == 0) return 0;
-            if (second_result != 0 &&
-                (first_result == 0 || end_second > end_first)) {
-                *end_out = end_second;
-                return 1;
+            if (frame->stage == 1u) {
+                --frame_count;
+                if (frame_count == 0u) {
+                    if (returned_result > 0) *end_out = returned_end;
+                    return returned_result;
+                }
+                continue;
             }
-            for (size_t index = 0u; index < slots; ++index)
-                captures[index] = candidate[index];
-            *end_out = end_first;
-            return 1;
-        default:
-            return -1;
+            if (frame->stage == 2u) {
+                if (returned_result <= 0)
+                    captures[frame->saved_slot] = frame->saved_value;
+                --frame_count;
+                if (frame_count == 0u) {
+                    if (returned_result > 0) *end_out = returned_end;
+                    return returned_result;
+                }
+                continue;
+            }
+            if (frame->stage == 3u) {
+                const _regex_instruction_t* split =
+                    &context->internal->instructions[frame->pc];
+                size_t index;
+                frame->first_result = returned_result;
+                frame->first_end = returned_end;
+                for (index = 0u; index < slots; ++index)
+                    frame->first_captures[index] = captures[index];
+                for (index = 0u; index < slots; ++index)
+                    captures[index] = frame->original[index];
+                frame->stage = 4u;
+                if (frame_count >= _REGEX_MAX_BACKREF_DEPTH) {
+                    returned_result = -1;
+                    returned_end = none;
+                    continue;
+                }
+                _regex_backref_frame_init(context, frame_count,
+                                          split->second, frame->position);
+                ++frame_count;
+                returning = 0;
+                continue;
+            }
+            if (frame->stage == 4u) {
+                size_t second_end = returned_end;
+                int second_result = returned_result;
+                size_t index;
+                if (frame->first_result < 0 || second_result < 0) {
+                    returned_result = -1;
+                    returned_end = none;
+                } else if (frame->first_result == 0 && second_result == 0) {
+                    returned_result = 0;
+                    returned_end = none;
+                } else if (second_result != 0 &&
+                           (frame->first_result == 0 ||
+                            second_end > frame->first_end)) {
+                    returned_result = 1;
+                    returned_end = second_end;
+                } else {
+                    for (index = 0u; index < slots; ++index)
+                        captures[index] = frame->first_captures[index];
+                    returned_result = 1;
+                    returned_end = frame->first_end;
+                }
+                --frame_count;
+                if (frame_count == 0u) {
+                    if (returned_result > 0) *end_out = returned_end;
+                    return returned_result;
+                }
+                continue;
+            }
+            returned_result = -1;
+            returned_end = none;
+            --frame_count;
+            if (frame_count == 0u) return -1;
+            continue;
+        }
+
+        if (++context->steps > _REGEX_MAX_STEPS ||
+            frame->pc >= context->internal->instruction_count) {
+            returned_result = -1;
+            returned_end = none;
+            returning = 1;
+            continue;
+        }
+        {
+            const _regex_instruction_t* instruction =
+                &context->internal->instructions[frame->pc];
+            uint32_t child_pc = 0u;
+            size_t child_position = frame->position;
+            uint8_t wait_stage = 1u;
+            int push_child = 1;
+            switch (instruction->operation) {
+                case _REGEX_OP_MATCH:
+                    returned_result = 1;
+                    returned_end = frame->position;
+                    returning = 1;
+                    continue;
+                case _REGEX_OP_BYTE:
+                case _REGEX_OP_ANY:
+                case _REGEX_OP_CLASS:
+                    if (frame->position >= context->input_size ||
+                        !_regex_instruction_matches(
+                            context->internal, instruction,
+                            context->input[frame->position])) {
+                        returned_result = 0;
+                        returned_end = none;
+                        returning = 1;
+                        continue;
+                    }
+                    child_pc = frame->pc + 1u;
+                    child_position = frame->position + 1u;
+                    break;
+                case _REGEX_OP_BACKREF: {
+                    size_t slot = (size_t)instruction->first * 2u;
+                    size_t begin;
+                    size_t end;
+                    size_t length;
+                    size_t index;
+                    if (slot + 1u >= slots) {
+                        returned_result = -1;
+                        returned_end = none;
+                        returning = 1;
+                        continue;
+                    }
+                    begin = captures[slot];
+                    end = captures[slot + 1u];
+                    if (begin == none || end == none || end < begin) {
+                        returned_result = 0;
+                        returned_end = none;
+                        returning = 1;
+                        continue;
+                    }
+                    length = end - begin;
+                    if (frame->position > context->input_size ||
+                        length > _REGEX_MAX_BACKREF_CAPTURE ||
+                        length > context->input_size - frame->position) {
+                        returned_result = 0;
+                        returned_end = none;
+                        returning = 1;
+                        continue;
+                    }
+                    for (index = 0u; index < length; ++index) {
+                        unsigned char expected = context->input[begin + index];
+                        unsigned char actual =
+                            context->input[frame->position + index];
+                        if ((context->internal->cflags & REG_ICASE) != 0) {
+                            expected = (unsigned char)_regex_ascii_fold(
+                                (char)expected);
+                            actual = (unsigned char)_regex_ascii_fold(
+                                (char)actual);
+                        }
+                        if (expected != actual) break;
+                    }
+                    if (index != length) {
+                        returned_result = 0;
+                        returned_end = none;
+                        returning = 1;
+                        continue;
+                    }
+                    child_pc = frame->pc + 1u;
+                    child_position = frame->position + length;
+                    break;
+                }
+                case _REGEX_OP_BOL:
+                    if (!_regex_bol(context->internal, context->input,
+                                    frame->position, context->eflags)) {
+                        returned_result = 0;
+                        returned_end = none;
+                        returning = 1;
+                        continue;
+                    }
+                    child_pc = frame->pc + 1u;
+                    break;
+                case _REGEX_OP_EOL:
+                    if (!_regex_eol(context->internal, context->input,
+                                    context->input_size, frame->position,
+                                    context->eflags)) {
+                        returned_result = 0;
+                        returned_end = none;
+                        returning = 1;
+                        continue;
+                    }
+                    child_pc = frame->pc + 1u;
+                    break;
+                case _REGEX_OP_JUMP:
+                    child_pc = instruction->first;
+                    break;
+                case _REGEX_OP_SAVE_START:
+                case _REGEX_OP_SAVE_END: {
+                    size_t slot = (size_t)instruction->first * 2u +
+                        (instruction->operation == _REGEX_OP_SAVE_END);
+                    if (slot >= slots) {
+                        returned_result = -1;
+                        returned_end = none;
+                        returning = 1;
+                        continue;
+                    }
+                    frame->saved_slot = slot;
+                    frame->saved_value = captures[slot];
+                    captures[slot] = frame->position;
+                    frame->stage = 2u;
+                    child_pc = frame->pc + 1u;
+                    wait_stage = 2u;
+                    break;
+                }
+                case _REGEX_OP_SPLIT: {
+                    size_t index;
+                    for (index = 0u; index < slots; ++index)
+                        frame->original[index] = captures[index];
+                    frame->stage = 3u;
+                    child_pc = instruction->first;
+                    wait_stage = 3u;
+                    break;
+                }
+                default:
+                    push_child = 0;
+                    returned_result = -1;
+                    returned_end = none;
+                    returning = 1;
+                    continue;
+            }
+            if (push_child) {
+                if (frame_count >= _REGEX_MAX_BACKREF_DEPTH) {
+                    returned_result = -1;
+                    returned_end = none;
+                    returning = 1;
+                    continue;
+                }
+                frame->stage = wait_stage;
+                _regex_backref_frame_init(context, frame_count,
+                                          child_pc, child_position);
+                ++frame_count;
+            }
+        }
     }
 }
 
@@ -1387,6 +1563,8 @@ static inline int regexec(const regex_t* preg, const char* string,
     size_t *active = NULL, *next = NULL, *queue = NULL;
     size_t *active_captures = NULL, *next_captures = NULL;
     size_t *best_captures = NULL;
+    _regex_backref_frame_t* backref_frames = NULL;
+    size_t* backref_snapshots = NULL;
     uint8_t* queued = NULL;
     size_t best_begin = none, best_end = 0u, position;
     uint64_t steps = 0u;
@@ -1445,9 +1623,42 @@ static inline int regexec(const regex_t* preg, const char* string,
             (size_t)count * capture_slots * sizeof(*next_captures));
         best_captures = (size_t*)malloc(capture_slots * sizeof(*best_captures));
     }
+    if (has_backref) {
+        size_t slots_per_frame;
+        size_t snapshot_slots;
+        if ((size_t)_REGEX_MAX_BACKREF_DEPTH >
+            (size_t)-1 / sizeof(*backref_frames)) {
+            result = REG_ESPACE;
+            goto regex_exec_done;
+        }
+        if (capture_slots > (size_t)-1 / 2u) {
+            result = REG_ESPACE;
+            goto regex_exec_done;
+        }
+        slots_per_frame = capture_slots * 2u;
+        if (slots_per_frame != 0u &&
+            (size_t)_REGEX_MAX_BACKREF_DEPTH >
+                (size_t)-1 / slots_per_frame) {
+            result = REG_ESPACE;
+            goto regex_exec_done;
+        }
+        snapshot_slots = (size_t)_REGEX_MAX_BACKREF_DEPTH * slots_per_frame;
+        if (snapshot_slots > (size_t)-1 / sizeof(*backref_snapshots)) {
+            result = REG_ESPACE;
+            goto regex_exec_done;
+        }
+        backref_frames = (_regex_backref_frame_t*)malloc(
+            (size_t)_REGEX_MAX_BACKREF_DEPTH * sizeof(*backref_frames));
+        if (snapshot_slots != 0u)
+            backref_snapshots = (size_t*)malloc(
+                snapshot_slots * sizeof(*backref_snapshots));
+    }
     if (!active || !next || !queue || !queued ||
         (capture_slots != 0u &&
-         (!active_captures || !next_captures || !best_captures))) {
+         (!active_captures || !next_captures || !best_captures)) ||
+        (has_backref &&
+         (!backref_frames ||
+          (capture_slots != 0u && !backref_snapshots)))) {
         result = REG_ESPACE;
         goto regex_exec_done;
     }
@@ -1469,6 +1680,8 @@ static inline int regexec(const regex_t* preg, const char* string,
         context.eflags = eflags;
         context.capture_slots = capture_slots;
         context.steps = 0u;
+        context.frames = backref_frames;
+        context.snapshots = backref_snapshots;
         for (position = 0u; position <= input_size; ++position) {
             size_t capture_index;
             int backref_result;
@@ -1477,7 +1690,7 @@ static inline int regexec(const regex_t* preg, const char* string,
                 captures[capture_index] = none;
             candidate_end = none;
             backref_result = _regex_backref_match(
-                &context, 0u, position, captures, &candidate_end, 0u);
+                &context, 0u, position, captures, &candidate_end);
             if (backref_result < 0) {
                 result = REG_ESPACE;
                 goto regex_exec_done;
@@ -1613,6 +1826,8 @@ static inline int regexec(const regex_t* preg, const char* string,
         result = 0;
     }
 regex_exec_done:
+    free(backref_frames);
+    free(backref_snapshots);
     free(queued);
     free(queue);
     free(best_captures);
