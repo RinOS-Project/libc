@@ -158,6 +158,8 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 static inline void* mmap(void* addr, size_t length, int prot, int flags,
                          int fd, off_t offset) {
     intptr_t ret;
+    /* Linux keeps MAP_DENYWRITE for compatibility but ignores it. */
+    flags &= ~MAP_DENYWRITE;
     if (fd == -1 || (flags & MAP_ANONYMOUS) != 0) {
         ret = _RIN_MMAN_SYSCALL6(SYS_MMAP,
                                  (uintptr_t)addr,
@@ -184,6 +186,8 @@ static inline void* mmap64(void* addr, size_t length, int prot, int flags,
     RinMmapFdCallV1 call = {0};
     intptr_t result;
 
+    /* Keep mmap64 consistent with mmap for the ignored legacy flag. */
+    flags &= ~MAP_DENYWRITE;
     if (offset < 0) {
         errno = EINVAL;
         return MAP_FAILED;
