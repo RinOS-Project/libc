@@ -2737,11 +2737,9 @@ static inline int execvp(const char* file, char* const argv[]) {
 }
 #endif /* RIN_UNISTD_TARGET_PROCESS_FRONTEND */
 
-/* getopt - コマンドライン引数解析 (簡易版) */
-extern char* optarg;
-extern int optind;
-extern int opterr;
-extern int optopt;
+/* POSIX declares getopt() and its state in <unistd.h>.  The implementation
+ * is shared with the optional getopt_long() API in getopt.h. */
+#include "getopt.h"
 
 /* sbrk - ヒープポインタ操作
  * NOTE: noinline to prevent compiler optimization issues with syscalls */
