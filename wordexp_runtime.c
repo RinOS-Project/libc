@@ -469,8 +469,15 @@ static int wordexp_shell_run(char* script, int capture, int show_errors,
         size_t argument_count = 0u;
         if (capture) {
             (void)close(pipe_fds[0]);
-            if (dup2(pipe_fds[1], STDOUT_FILENO) < 0) _exit(126);
-            (void)close(pipe_fds[1]);
+            if (pipe_fds[1] == STDOUT_FILENO) {
+                /* pipe2() can return stdout itself when the caller closed
+                 * fd 1.  dup2(fd, fd) would preserve FD_CLOEXEC, so clear it
+                 * before exec and keep this descriptor open. */
+                if (fcntl(pipe_fds[1], F_SETFD, 0) < 0) _exit(126);
+            } else {
+                if (dup2(pipe_fds[1], STDOUT_FILENO) < 0) _exit(126);
+                (void)close(pipe_fds[1]);
+            }
         }
         if (!show_errors) {
             int null_fd = open("/dev/null", O_WRONLY);
