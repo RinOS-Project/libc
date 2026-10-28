@@ -16,6 +16,22 @@ static volatile unsigned int g_environment_epoch;
 static volatile unsigned int g_environment_readers[2];
 static RinEnvironmentAllocation* g_environment_allocations;
 
+#if defined(RIN_ENVIRONMENT_RUNTIME_TESTING)
+static size_t g_environment_reclaim_comparisons;
+
+void __rin_env_test_reset_reclaim_comparisons(void) {
+    g_environment_reclaim_comparisons = 0u;
+}
+
+size_t __rin_env_test_reclaim_comparisons(void) {
+    return g_environment_reclaim_comparisons;
+}
+#define ENVIRONMENT_RECLAIM_COUNT_COMPARISON() \
+    (++g_environment_reclaim_comparisons)
+#else
+#define ENVIRONMENT_RECLAIM_COUNT_COMPARISON() ((void)0)
+#endif
+
 static void environment_lock(void) {
     while (__sync_lock_test_and_set(&g_environment_writer_lock, 1)) {
         while (__atomic_load_n(&g_environment_writer_lock, __ATOMIC_RELAXED))
@@ -108,22 +124,6 @@ static int environment_track_allocation(void* pointer,
     return 1;
 }
 
-static void environment_untrack_and_free(void* pointer,
-                                         unsigned int is_table) {
-    RinEnvironmentAllocation** link = &g_environment_allocations;
-    while (*link) {
-        RinEnvironmentAllocation* allocation = *link;
-        if (allocation->pointer == pointer &&
-            allocation->is_table == is_table) {
-            *link = allocation->next;
-            free(allocation->pointer);
-            free(allocation);
-            return;
-        }
-        link = &allocation->next;
-    }
-}
-
 static char** environment_allocate_table(size_t entry_count) {
     char** table;
     if (entry_count >= SIZE_MAX / sizeof(char*)) {
@@ -143,10 +143,30 @@ static char** environment_allocate_table(size_t entry_count) {
     return table;
 }
 
-static int environment_table_references(char** table, const void* pointer) {
-    if (!table) return 0;
-    for (size_t index = 0u; table[index] != NULL; ++index)
-        if (table[index] == pointer) return 1;
+static int environment_pointer_compare(const void* left, const void* right) {
+    uintptr_t left_value = *(const uintptr_t*)left;
+    uintptr_t right_value = *(const uintptr_t*)right;
+    ENVIRONMENT_RECLAIM_COUNT_COMPARISON();
+    if (left_value < right_value) return -1;
+    if (left_value > right_value) return 1;
+    return 0;
+}
+
+static int environment_sorted_references(const uintptr_t* references,
+                                         size_t count,
+                                         const void* pointer) {
+    uintptr_t target = (uintptr_t)pointer;
+    size_t low = 0u;
+    size_t high = count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2u;
+        ENVIRONMENT_RECLAIM_COUNT_COMPARISON();
+        if (references[middle] == target) return 1;
+        if (references[middle] < target)
+            low = middle + 1u;
+        else
+            high = middle;
+    }
     return 0;
 }
 
@@ -155,13 +175,33 @@ static int environment_table_references(char** table, const void* pointer) {
  * can now be reclaimed. */
 static void environment_reclaim(char** survivor) {
     RinEnvironmentAllocation** link = &g_environment_allocations;
+    uintptr_t* references = NULL;
+    int saved_errno = errno;
     size_t survivor_count = environment_count(survivor);
-    if (survivor_count == SIZE_MAX) return;
+    if (survivor_count == SIZE_MAX ||
+        survivor_count > SIZE_MAX / sizeof(*references)) {
+        errno = saved_errno;
+        return;
+    }
+    if (survivor_count != 0u) {
+        references = (uintptr_t*)malloc(survivor_count * sizeof(*references));
+        if (!references) {
+            /* Reclamation is best-effort: retain allocations until a later
+             * pass rather than risk freeing a value still in use. */
+            errno = saved_errno;
+            return;
+        }
+        for (size_t index = 0u; index < survivor_count; ++index)
+            references[index] = (uintptr_t)survivor[index];
+        qsort(references, survivor_count, sizeof(*references),
+              environment_pointer_compare);
+    }
     while (*link) {
         RinEnvironmentAllocation* allocation = *link;
         int keep = allocation->is_table
             ? allocation->pointer == survivor
-            : environment_table_references(survivor, allocation->pointer);
+            : environment_sorted_references(references, survivor_count,
+                                            allocation->pointer);
         if (keep) {
             link = &allocation->next;
             continue;
@@ -170,6 +210,8 @@ static void environment_reclaim(char** survivor) {
         free(allocation->pointer);
         free(allocation);
     }
+    free(references);
+    errno = saved_errno;
 }
 
 static void environment_synchronize_and_reclaim(char** survivor) {
