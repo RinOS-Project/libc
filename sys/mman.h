@@ -256,14 +256,20 @@ static inline int madvise(void* addr, size_t length, int advice) {
 }
 
 static inline int posix_madvise(void* addr, size_t length, int advice) {
+    int saved_errno = errno;
+    int error;
     /* POSIX advice may influence performance but must not change memory
      * contents. Linux MADV_DONTNEED is destructive, so treat the POSIX
      * DONTNEED hint as NORMAL while retaining kernel range validation. */
     if (advice == POSIX_MADV_DONTNEED)
         advice = MADV_NORMAL;
-    if (madvise(addr, length, advice) == 0)
+    if (madvise(addr, length, advice) == 0) {
+        errno = saved_errno;
         return 0;
-    return errno;
+    }
+    error = errno;
+    errno = saved_errno;
+    return error;
 }
 
 static inline int mlock(const void* addr, size_t length) {
