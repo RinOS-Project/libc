@@ -77,10 +77,17 @@ extern "C" {
 struct flock {
     short l_type;   /* ロックタイプ: F_RDLCK, F_WRLCK, F_UNLCK */
     short l_whence; /* 開始位置: SEEK_SET, SEEK_CUR, SEEK_END */
-    long  l_start;  /* オフセット */
-    long  l_len;    /* 長さ (0 = EOF まで) */
+    off_t l_start;  /* オフセット */
+    off_t l_len;    /* 長さ (0 = EOF まで) */
     int   l_pid;    /* プロセスID */
 };
+
+#define F_GETLK64   12  /* 64ビット範囲のロック照会 */
+#define F_SETLK64   13  /* 64ビット範囲のロック設定 */
+#define F_SETLKW64  14  /* 64ビット範囲のロック設定 (ブロッキング) */
+#define F_OFD_GETLK64   1024 /* 64ビット範囲のOFDロック照会 */
+#define F_OFD_SETLK64   1025 /* 64ビット範囲のOFDロック設定 */
+#define F_OFD_SETLKW64  1026 /* 64ビット範囲のOFDロック設定 (ブロッキング) */
 
 /* ═══════════════════════════════════════════════════════════════
  * fcntl追加コマンド
@@ -225,6 +232,80 @@ static inline int _fcntl_result_status_zero(intptr_t raw_result) {
         return -1;
     }
     return 0;
+}
+
+static inline int _fcntl_lock64_wire(
+    int fd, int command, RinNativeFlockAbi* wire) {
+    return _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL3(
+        SYS_FCNTL_LOCK64, (uintptr_t)fd, (uintptr_t)command,
+        (uintptr_t)wire));
+}
+
+static inline int _fcntl_lock64_get_command(int command) {
+    return command == F_GETLK || command == F_OFD_GETLK ||
+           command == F_GETLK64 || command == F_OFD_GETLK64;
+}
+
+static inline int _fcntl_lock64_flock(int fd, int command,
+                                      struct flock* lock) {
+    RinNativeFlockAbi wire = {0};
+    int kernel_command = command;
+    int result;
+    if (!lock) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (command == F_GETLK64) kernel_command = F_GETLK;
+    else if (command == F_SETLK64) kernel_command = F_SETLK;
+    else if (command == F_SETLKW64) kernel_command = F_SETLKW;
+    else if (command == F_OFD_GETLK64) kernel_command = F_OFD_GETLK;
+    else if (command == F_OFD_SETLK64) kernel_command = F_OFD_SETLK;
+    else if (command == F_OFD_SETLKW64) kernel_command = F_OFD_SETLKW;
+    wire.type = (int16_t)lock->l_type;
+    wire.whence = (int16_t)lock->l_whence;
+    wire.start = (int64_t)lock->l_start;
+    wire.length = (int64_t)lock->l_len;
+    wire.pid = (int32_t)lock->l_pid;
+    result = _fcntl_lock64_wire(fd, kernel_command, &wire);
+    if (result == 0 && _fcntl_lock64_get_command(command)) {
+        lock->l_type = wire.type;
+        lock->l_whence = wire.whence;
+        lock->l_start = (off_t)wire.start;
+        lock->l_len = (off_t)wire.length;
+        lock->l_pid = wire.pid;
+    }
+    return result;
+}
+
+static inline int _fcntl_lock64_flock64(int fd, int command,
+                                        struct flock64* lock) {
+    RinNativeFlockAbi wire = {0};
+    int kernel_command = command;
+    int result;
+    if (!lock) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (command == F_GETLK64) kernel_command = F_GETLK;
+    else if (command == F_SETLK64) kernel_command = F_SETLK;
+    else if (command == F_SETLKW64) kernel_command = F_SETLKW;
+    else if (command == F_OFD_GETLK64) kernel_command = F_OFD_GETLK;
+    else if (command == F_OFD_SETLK64) kernel_command = F_OFD_SETLK;
+    else if (command == F_OFD_SETLKW64) kernel_command = F_OFD_SETLKW;
+    wire.type = (int16_t)lock->l_type;
+    wire.whence = (int16_t)lock->l_whence;
+    wire.start = (int64_t)lock->l_start;
+    wire.length = (int64_t)lock->l_len;
+    wire.pid = (int32_t)lock->l_pid;
+    result = _fcntl_lock64_wire(fd, kernel_command, &wire);
+    if (result == 0 && _fcntl_lock64_get_command(command)) {
+        lock->l_type = wire.type;
+        lock->l_whence = wire.whence;
+        lock->l_start = (off64_t)wire.start;
+        lock->l_len = (off64_t)wire.length;
+        lock->l_pid = wire.pid;
+    }
+    return result;
 }
 
 static inline int _fcntl_dupfd_at_least(int fd, int minfd, int cloexec) {
@@ -495,9 +576,20 @@ static inline int fcntl(int fd, int cmd, ...) {
                 result = -1;
                 break;
             }
+#if defined(__RIN_FILE_OFFSET_BITS64) || defined(__x86_64__)
+            result = _fcntl_lock64_flock(fd, cmd, lock);
+#else
             result = _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL3(
                 SYS_FCNTL, (uintptr_t)fd, (uintptr_t)cmd,
                 (uintptr_t)lock));
+#endif
+            break;
+        }
+
+        case F_GETLK64:
+        case F_OFD_GETLK64: {
+            struct flock64* lock = va_arg(ap, struct flock64*);
+            result = _fcntl_lock64_flock64(fd, cmd, lock);
             break;
         }
 
@@ -512,9 +604,22 @@ static inline int fcntl(int fd, int cmd, ...) {
                 result = -1;
                 break;
             }
+#if defined(__RIN_FILE_OFFSET_BITS64) || defined(__x86_64__)
+            result = _fcntl_lock64_flock(fd, cmd, lock);
+#else
             result = _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL3(
                 SYS_FCNTL, (uintptr_t)fd, (uintptr_t)cmd,
                 (uintptr_t)lock));
+#endif
+            break;
+        }
+
+        case F_SETLK64:
+        case F_SETLKW64:
+        case F_OFD_SETLK64:
+        case F_OFD_SETLKW64: {
+            struct flock64* lock = va_arg(ap, struct flock64*);
+            result = _fcntl_lock64_flock64(fd, cmd, lock);
             break;
         }
 
