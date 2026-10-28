@@ -537,6 +537,12 @@ mqd_t mq_open(const char* name, int oflag, ...)
         errno = EINVAL;
         return (mqd_t)-1;
     }
+    if ((oflag & O_ACCMODE) != O_RDONLY &&
+        (oflag & O_ACCMODE) != O_WRONLY &&
+        (oflag & O_ACCMODE) != O_RDWR) {
+        errno = EINVAL;
+        return (mqd_t)-1;
+    }
     if ((oflag & O_CREAT) != 0) {
         va_list arguments;
         va_start(arguments, oflag);
