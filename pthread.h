@@ -464,7 +464,7 @@ static inline pthread_t pthread_self(void) {
     return (pthread_t)tid;
 #else
     return _rin_pthread_self_from_result(
-        _RIN_PTHREAD_SELF_SYSCALL0(SYS_GETPID));
+        _RIN_PTHREAD_SELF_SYSCALL0(SYS_GETTID));
 #endif
 #endif
 }
