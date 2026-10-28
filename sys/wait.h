@@ -168,12 +168,6 @@ static inline pid_t waitpid(pid_t pid, int* wstatus, int options) {
     return result;
 }
 
-static inline void __rin_waitid_clear_info(siginfo_t* information) {
-    unsigned long index;
-    for (index = 0UL; index < sizeof(*information); ++index)
-        ((unsigned char*)information)[index] = 0u;
-}
-
 static inline int waitid(idtype_t idtype, id_t id, siginfo_t* infop,
                          int options) {
     const int known_options = WNOHANG | WSTOPPED | WEXITED | WCONTINUED |
@@ -222,19 +216,12 @@ static inline int waitid(idtype_t idtype, id_t id, siginfo_t* infop,
     if ((options & WNOWAIT) != 0) wait_flags |= __RIN_WAIT_OPTION_NOWAIT;
     if ((options & WNOHANG) != 0) wait_flags |= WNOHANG;
 
-    __rin_waitid_clear_info(infop);
     result = _RIN_WAITID_SYSCALL4(
         SYS_WAITID, (uintptr_t)(int32_t)idtype, (uintptr_t)(uint32_t)id,
         (uintptr_t)infop, (uintptr_t)(unsigned int)wait_flags);
     __rin_pthread_cancel_point_if_linked();
-    if (__rin_waitid_event_result(result) != 0) {
-        __rin_waitid_clear_info(infop);
-        return -1;
-    }
-    if (result == 0) {
-        __rin_waitid_clear_info(infop);
-        return 0;
-    }
+    if (__rin_waitid_event_result(result) != 0) return -1;
+    if (result == 0) return 0;
     /* The private kernel boundary returns the visible child PID to
      * distinguish an event from WNOHANG's zero result. POSIX waitid itself
      * returns zero after the siginfo copy has committed. */
@@ -267,17 +254,6 @@ struct rusage {
 };
 #endif
 
-/* wait3/wait4 receive a caller-owned aggregate through an unversioned
- * syscall ABI.  Keep the public wrapper failure-atomic even if the kernel
- * copied only a prefix before reporting an error. */
-static inline void __rin_wait_clear_rusage(struct rusage* rusage) {
-    size_t index;
-    unsigned char* bytes;
-    if (!rusage) return;
-    bytes = (unsigned char*)rusage;
-    for (index = 0u; index < sizeof(*rusage); ++index) bytes[index] = 0u;
-}
-
 /* rusageの定数 */
 #define RUSAGE_SELF     0
 #define RUSAGE_CHILDREN (-1)
@@ -295,17 +271,11 @@ static inline pid_t wait3(int* wstatus, int options, struct rusage* rusage) {
         return (pid_t)-1;
     }
     if (rusage) {
-        struct rusage temporary_rusage;
-        __rin_wait_clear_rusage(&temporary_rusage);
         result = __rin_wait_pid_result(
             _RIN_WAIT_SYSCALL4(SYS_WAIT4, (uintptr_t)(intptr_t)-1,
                                (uintptr_t)wstatus, (uintptr_t)(unsigned int)options,
-                               (uintptr_t)&temporary_rusage));
+                               (uintptr_t)rusage));
         __rin_pthread_cancel_point_if_linked();
-        if (result < 0) {
-            return result;
-        }
-        *rusage = temporary_rusage;
         return result;
     }
     return waitpid(-1, wstatus, options);
@@ -319,17 +289,11 @@ static inline pid_t wait4(pid_t pid, int* wstatus, int options, struct rusage* r
         return (pid_t)-1;
     }
     if (rusage) {
-        struct rusage temporary_rusage;
-        __rin_wait_clear_rusage(&temporary_rusage);
         result = __rin_wait_pid_result(
             _RIN_WAIT_SYSCALL4(SYS_WAIT4, (uintptr_t)(intptr_t)pid,
                                (uintptr_t)wstatus, (uintptr_t)(unsigned int)options,
-                               (uintptr_t)&temporary_rusage));
+                               (uintptr_t)rusage));
         __rin_pthread_cancel_point_if_linked();
-        if (result < 0) {
-            return result;
-        }
-        *rusage = temporary_rusage;
         return result;
     }
     return waitpid(pid, wstatus, options);
