@@ -255,11 +255,15 @@ static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf,
             errno = ENOENT;
             return -1;
         }
-        /* AT_EMPTY_PATH resolves the already-open description.  NOFOLLOW is
-         * meaningful during pathname traversal, but cannot change the object
-         * selected by an ordinary descriptor, so the descriptor owner handles
-         * both flag combinations through the same fstat syscall. */
-        return fstat(dirfd, statbuf);
+        if (dirfd != AT_FDCWD) {
+            /* AT_EMPTY_PATH resolves the already-open description.  NOFOLLOW
+             * cannot change the object selected by an ordinary descriptor. */
+            return fstat(dirfd, statbuf);
+        }
+        /* The current working directory has no descriptor number to pass to
+         * fstat. Resolve it as "." through the path-at syscall instead. */
+        pathname = ".";
+        flags &= ~AT_EMPTY_PATH;
     }
     __rin_stat_path_at_init(&call, RIN_PATH_AT_STAT);
     /* AT_EMPTY_PATH only changes lookup when pathname is empty. Keep an
@@ -304,7 +308,11 @@ static inline int fstatat64(int dirfd, const char* pathname,
             errno = ENOENT;
             return -1;
         }
-        return fstat64(dirfd, statbuf);
+        if (dirfd != AT_FDCWD) {
+            return fstat64(dirfd, statbuf);
+        }
+        pathname = ".";
+        flags &= ~AT_EMPTY_PATH;
     }
     __rin_stat_path_at_init(&call, RIN_PATH_AT_STAT);
     call.flags = (uint32_t)(flags & ~AT_EMPTY_PATH);
