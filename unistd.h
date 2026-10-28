@@ -39,6 +39,11 @@
 #define _POSIX_SAVED_IDS 1
 #endif
 
+/* Asynchronous I/O is implemented by the libc AIO runtime. */
+#ifndef _POSIX_ASYNCHRONOUS_IO
+#define _POSIX_ASYNCHRONOUS_IO 200809L
+#endif
+
 /* Preserve caller-provided syscall hooks before installing defaults.  A
  * hosted unit that supplies a hook is intentionally asking for the Rin
  * frontend even when the compiler reports a hosted environment. */
