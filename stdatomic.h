@@ -11,6 +11,10 @@
 #include "stdbool.h"
 #include "rin_atomic_wait.h"
 
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_STDATOMIC_H__ 202311L
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -79,7 +83,9 @@ typedef struct {
 } atomic_flag;
 
 #define ATOMIC_FLAG_INIT { 0 }
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
 #define ATOMIC_VAR_INIT(value) (value)
+#endif
 #define kill_dependency(value) (value)
 
 /* ═══════════════════════════════════════════════════════════════
