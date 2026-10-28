@@ -1751,6 +1751,8 @@ static inline long sysconf(int name) {
             return AIO_MAX;
         case _SC_AIO_PRIO_DELTA_MAX:
             return AIO_PRIO_DELTA_MAX;
+        case _SC_ATEXIT_MAX:
+            return ATEXIT_MAX;
         case _SC_SEM_NSEMS_MAX:
             return SEM_NSEMS_MAX;
         case _SC_SEM_VALUE_MAX:
@@ -1805,7 +1807,6 @@ static inline long sysconf(int name) {
         case _SC_2_SW_DEV:
         case _SC_2_UPE:
         case _SC_ADVISORY_INFO:
-        case _SC_ATEXIT_MAX:
         case _SC_CPUTIME:
         case _SC_GETGR_R_SIZE_MAX:
         case _SC_GETPW_R_SIZE_MAX:

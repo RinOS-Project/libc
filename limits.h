@@ -103,6 +103,9 @@
 #ifndef _POSIX_ARG_MAX
 #define _POSIX_ARG_MAX 4096
 #endif
+#ifndef _POSIX_ATEXIT_MAX
+#define _POSIX_ATEXIT_MAX 32
+#endif
 #ifndef _POSIX_CHILD_MAX
 #define _POSIX_CHILD_MAX 25
 #endif
@@ -236,6 +239,9 @@
 #endif
 #ifndef AIO_MAX
 #define AIO_MAX 64
+#endif
+#ifndef ATEXIT_MAX
+#define ATEXIT_MAX 256
 #endif
 #ifndef AIO_LISTIO_MAX
 #define AIO_LISTIO_MAX 64
