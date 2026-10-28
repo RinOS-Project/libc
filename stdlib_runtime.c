@@ -5,6 +5,22 @@
 #include "stdlib.h"
 #include "rin_stdlib_runtime.h"
 
+#include "fcntl.h"
+#include "unistd.h"
+
+int __rin_stdlib_system_available(void) {
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    defined(RIN_USERSPACE) && RIN_USERSPACE
+    const int saved_errno = errno;
+    const int available =
+        faccessat(AT_FDCWD, "/bin/sh", X_OK, AT_EACCESS) == 0;
+    errno = saved_errno;
+    return available;
+#else
+    return 0;
+#endif
+}
+
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
     defined(RIN_USERSPACE) && RIN_USERSPACE
 #include "rin_atomic_wait.h"

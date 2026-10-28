@@ -117,18 +117,28 @@ static inline int __rin_utimens_path(
     int flags) {
     RinFutimensCallV1 call;
     RinPathAtCallV1 path_at;
+    const int supported_flags = AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW;
     if (pathname == (const char*)0) {
         errno = EFAULT;
         return -1;
     }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
-        return -1;
-    }
-    if ((flags & ~(int)AT_SYMLINK_NOFOLLOW) != 0) {
+    if ((flags & ~supported_flags) != 0) {
         errno = EINVAL;
         return -1;
     }
+    if (pathname[0] == '\0') {
+        if ((flags & AT_EMPTY_PATH) == 0) {
+            errno = ENOENT;
+            return -1;
+        }
+        if (dirfd == AT_FDCWD)
+            return __rin_utimens_path(
+                AT_FDCWD, ".", times, flags & ~(int)AT_EMPTY_PATH);
+        if (__rin_utime_prepare_call(&call, times) != 0) return -1;
+        return __rin_utime_result(_RIN_UTIME_SYSCALL2(
+            SYS_FUTIMENS, (uintptr_t)dirfd, (uintptr_t)&call));
+    }
+    flags &= ~(int)AT_EMPTY_PATH;
     if (__rin_utime_prepare_call(&call, times) != 0) return -1;
     if (pathname[0] != '/' && dirfd != AT_FDCWD) {
         __rin_utime_path_at_init(&path_at);
