@@ -968,10 +968,17 @@ static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
         clk_id == CLOCK_THREAD_CPUTIME_ID) {
 #if (defined(RIN_FREESTANDING) && defined(RIN_KERNEL)) || \
     (defined(RIN_FREESTANDING) && defined(RIN_USERSPACE))
+        intptr_t result = _rin_time_result(
+            _RIN_TIME_CLOCKSOURCE_RESOLUTION());
+        if (result < 0) return -1;
+        if (result == 0) {
+            errno = EIO;
+            return -1;
+        }
         if (res) {
             res->tv_sec = 0;
-            /* CPU intervals are sampled from the monotonic target clock. */
-            res->tv_nsec = 1000000;
+            /* CPU intervals are sampled from the same monotonic clocksource. */
+            res->tv_nsec = (long)result;
         }
         return 0;
 #else
