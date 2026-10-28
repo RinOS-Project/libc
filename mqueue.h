@@ -7,6 +7,7 @@
 #include "signal.h"
 #include "stddef.h"
 #include "stdint.h"
+#include "limits.h"
 #include "sys/types.h"
 #include "time.h"
 
@@ -15,11 +16,6 @@ extern "C" {
 #endif
 
 typedef uint64_t mqd_t;
-
-#define _POSIX_MQ_OPEN_MAX 8
-#define _POSIX_MQ_PRIO_MAX 32
-#define MQ_OPEN_MAX 64
-#define MQ_PRIO_MAX 32
 
 struct mq_attr {
     long mq_flags;

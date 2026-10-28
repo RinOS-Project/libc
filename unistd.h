@@ -1715,9 +1715,9 @@ static inline long sysconf(int name) {
         case _SC_MESSAGE_PASSING:
             return 1;
         case _SC_MQ_OPEN_MAX:
-            return 64;
+            return MQ_OPEN_MAX;
         case _SC_MQ_PRIO_MAX:
-            return 32;
+            return MQ_PRIO_MAX;
         case _SC_SEMAPHORES:
             return 1;
         case _SC_MEMLOCK:

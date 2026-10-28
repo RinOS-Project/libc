@@ -131,6 +131,12 @@
 #ifndef _POSIX_AIO_LISTIO_MAX
 #define _POSIX_AIO_LISTIO_MAX 2
 #endif
+#ifndef _POSIX_MQ_OPEN_MAX
+#define _POSIX_MQ_OPEN_MAX 8
+#endif
+#ifndef _POSIX_MQ_PRIO_MAX
+#define _POSIX_MQ_PRIO_MAX 32
+#endif
 #ifndef SEM_VALUE_MAX
 #define SEM_VALUE_MAX 0x7fffffffU
 #endif
@@ -145,6 +151,12 @@
 #endif
 #ifndef AIO_PRIO_DELTA_MAX
 #define AIO_PRIO_DELTA_MAX 0
+#endif
+#ifndef MQ_OPEN_MAX
+#define MQ_OPEN_MAX 64
+#endif
+#ifndef MQ_PRIO_MAX
+#define MQ_PRIO_MAX 32
 #endif
 #ifndef LOGIN_NAME_MAX
 #define LOGIN_NAME_MAX 32
