@@ -62,6 +62,9 @@
 #ifndef _POSIX_MEMORY_PROTECTION
 #define _POSIX_MEMORY_PROTECTION 200809L
 #endif
+#ifndef _POSIX_IPV6
+#define _POSIX_IPV6 200809L
+#endif
 #ifndef _POSIX_MAPPED_FILES
 #define _POSIX_MAPPED_FILES 200809L
 #endif
@@ -1754,6 +1757,8 @@ static inline long sysconf(int name) {
             return _POSIX_MEMLOCK;
         case _SC_ASYNCHRONOUS_IO:
             return _POSIX_ASYNCHRONOUS_IO;
+        case _SC_IPV6:
+            return _POSIX_IPV6;
         case _SC_AIO_LISTIO_MAX:
             return AIO_LISTIO_MAX;
         case _SC_AIO_MAX:
@@ -1840,7 +1845,6 @@ static inline long sysconf(int name) {
         case _SC_GETGR_R_SIZE_MAX:
         case _SC_GETPW_R_SIZE_MAX:
 #endif
-        case _SC_IPV6:
         case _SC_SHELL:
         case _SC_SPIN_LOCKS:
         case _SC_SPORADIC_SERVER:
