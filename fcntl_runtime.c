@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "fcntl.h"
 #include "sys/mman.h"
+#include "unistd.h"
 
 int _fcntl_fd_flags[_FCNTL_MAX_FDS];
 int _fcntl_fl_flags[_FCNTL_MAX_FDS];
@@ -57,4 +58,54 @@ int shm_unlink(const char* name) {
     char path[sizeof("/dev/shm/") + NAME_MAX];
     if (rin_shm_name_path(name, path) != 0) return -1;
     return unlinkat(AT_FDCWD, path, 0);
+}
+
+static unsigned int rin_memfd_sequence;
+
+static void rin_memfd_format_name(unsigned int sequence,
+                                  char name[sizeof("/.memfd-") + 8u]) {
+    static const char prefix[] = "/.memfd-";
+    static const char hex[] = "0123456789abcdef";
+    size_t prefix_length = sizeof(prefix) - 1u;
+    for (size_t index = 0u; index < prefix_length; ++index)
+        name[index] = prefix[index];
+    for (size_t index = 0u; index < 8u; ++index) {
+        unsigned int shift = (unsigned int)((7u - index) * 4u);
+        name[prefix_length + index] = hex[(sequence >> shift) & 0x0fu];
+    }
+    name[prefix_length + 8u] = '\0';
+}
+
+int memfd_create(const char* name, unsigned int flags) {
+    if (name == 0) {
+        errno = EFAULT;
+        return -1;
+    }
+    if ((flags & ~MFD_CLOEXEC) != 0u) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (unsigned int attempt = 0u; attempt < 32u; ++attempt) {
+        char shm_name[sizeof("/.memfd-") + 8u];
+        unsigned int sequence = __atomic_add_fetch(
+            &rin_memfd_sequence, 1u, __ATOMIC_RELAXED);
+        int open_flags = O_CREAT | O_EXCL | O_RDWR;
+        int fd;
+        rin_memfd_format_name(sequence, shm_name);
+        if ((flags & MFD_CLOEXEC) != 0u) open_flags |= O_CLOEXEC;
+        fd = shm_open(shm_name, open_flags, 0600);
+        if (fd < 0) {
+            if (errno == EEXIST) continue;
+            return -1;
+        }
+        if (shm_unlink(shm_name) == 0) return fd;
+        {
+            int saved_errno = errno;
+            (void)close(fd);
+            errno = saved_errno;
+        }
+        return -1;
+    }
+    errno = EAGAIN;
+    return -1;
 }

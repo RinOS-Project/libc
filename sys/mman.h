@@ -320,6 +320,11 @@ static inline void* mremap(void* old_addr, size_t old_size, size_t new_size,
 int shm_open(const char* name, int oflag, mode_t mode);
 int shm_unlink(const char* name);
 
+#ifndef MFD_CLOEXEC
+#define MFD_CLOEXEC 0x0001U
+#endif
+int memfd_create(const char* name, unsigned int flags);
+
 #ifdef __cplusplus
 }
 #endif
