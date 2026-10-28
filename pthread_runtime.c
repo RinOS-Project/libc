@@ -182,7 +182,7 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                                             &state, desired, 0,
                                             __ATOMIC_ACQUIRE,
                                             __ATOMIC_RELAXED)) {
-                __atomic_store_n(&mutex->owner, owner, __ATOMIC_RELEASE);
+                __rin_pthread_mutex_owner_store(mutex, owner);
                 mutex->recursion = 1;
                 if (rin_pthread_mutex_is_prio_inherit(mutex)) {
                     uint32_t refreshed_owner_id = 0u;
@@ -965,7 +965,7 @@ int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexattr_t* attr) 
             pshared != PTHREAD_PROCESS_SHARED) return EINVAL;
     }
     mutex->locked = 0;
-    mutex->owner = 0;
+    __rin_pthread_mutex_owner_store(mutex, 0);
     mutex->type = (attr
                        ? (attr->type & RIN_PTHREAD_MUTEX_TYPE_MASK)
                        : PTHREAD_MUTEX_DEFAULT) |
@@ -1008,13 +1008,15 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
         return rin_pthread_mutex_robust_lock(mutex, owner, type, 0, NULL);
     }
 
-    if (type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == owner) {
+    if (type == PTHREAD_MUTEX_RECURSIVE &&
+        __rin_pthread_mutex_owner_load(mutex) == owner) {
         if (mutex->recursion == __INT_MAX__) return EAGAIN;
         mutex->recursion++;
         return 0;
     }
 
-    if (type == PTHREAD_MUTEX_ERRORCHECK && mutex->owner == owner) {
+    if (type == PTHREAD_MUTEX_ERRORCHECK &&
+        __rin_pthread_mutex_owner_load(mutex) == owner) {
         return EDEADLK;
     }
 
@@ -1043,7 +1045,7 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
         }
     }
 
-    mutex->owner = owner;
+    __rin_pthread_mutex_owner_store(mutex, owner);
     mutex->recursion = 1;
     return 0;
 }
@@ -1064,12 +1066,14 @@ int pthread_mutex_timedlock(pthread_mutex_t* mutex,
         return rin_pthread_mutex_robust_lock(mutex, owner, type, 0, abstime);
     }
 
-    if (type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == owner) {
+    if (type == PTHREAD_MUTEX_RECURSIVE &&
+        __rin_pthread_mutex_owner_load(mutex) == owner) {
         if (mutex->recursion == __INT_MAX__) return EAGAIN;
         mutex->recursion++;
         return 0;
     }
-    if (type == PTHREAD_MUTEX_ERRORCHECK && mutex->owner == owner)
+    if (type == PTHREAD_MUTEX_ERRORCHECK &&
+        __rin_pthread_mutex_owner_load(mutex) == owner)
         return EDEADLK;
 
     {
@@ -1105,7 +1109,7 @@ int pthread_mutex_timedlock(pthread_mutex_t* mutex,
         }
     }
 
-    mutex->owner = owner;
+    __rin_pthread_mutex_owner_store(mutex, owner);
     mutex->recursion = 1;
     return 0;
 }
@@ -1122,7 +1126,8 @@ int pthread_mutex_trylock(pthread_mutex_t* mutex) {
         return rin_pthread_mutex_robust_lock(mutex, owner, type, 1, NULL);
     }
 
-    if (type == PTHREAD_MUTEX_RECURSIVE && mutex->owner == owner) {
+    if (type == PTHREAD_MUTEX_RECURSIVE &&
+        __rin_pthread_mutex_owner_load(mutex) == owner) {
         if (mutex->recursion == __INT_MAX__) return EAGAIN;
         mutex->recursion++;
         return 0;
@@ -1136,7 +1141,7 @@ int pthread_mutex_trylock(pthread_mutex_t* mutex) {
         }
     }
 
-    mutex->owner = owner;
+    __rin_pthread_mutex_owner_store(mutex, owner);
     mutex->recursion = 1;
     return 0;
 }
@@ -1154,7 +1159,7 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
         uint32_t previous;
         uint32_t owner_id;
         int wake_error = 0;
-        if (__atomic_load_n(&mutex->owner, __ATOMIC_ACQUIRE) != owner)
+        if (__rin_pthread_mutex_owner_load(mutex) != owner)
             return EPERM;
         wake_error = rin_pthread_mutex_robust_owner_id(mutex, owner,
                                                        &owner_id);
@@ -1216,7 +1221,8 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
     }
 
     if ((type == PTHREAD_MUTEX_ERRORCHECK ||
-         type == PTHREAD_MUTEX_RECURSIVE) && mutex->owner != owner) {
+         type == PTHREAD_MUTEX_RECURSIVE) &&
+        __rin_pthread_mutex_owner_load(mutex) != owner) {
         return EPERM;
     }
 
@@ -1228,7 +1234,7 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
         }
     }
 
-    mutex->owner = 0;
+    __rin_pthread_mutex_owner_store(mutex, 0);
     mutex->recursion = 0;
 
     if (__atomic_exchange_n(&mutex->locked, 0, __ATOMIC_RELEASE) == 2) {
@@ -1253,7 +1259,7 @@ int pthread_mutex_consistent(pthread_mutex_t* mutex) {
         return EINVAL;
     self = _RIN_PTHREAD_RUNTIME_SELF();
     owner = rin_pthread_mutex_owner_token(mutex, self);
-    if (__atomic_load_n(&mutex->owner, __ATOMIC_ACQUIRE) != owner)
+    if (__rin_pthread_mutex_owner_load(mutex) != owner)
         return EPERM;
     result = rin_pthread_mutex_robust_owner_id(mutex, owner, &owner_id);
     if (result != 0) return result;
@@ -1510,7 +1516,8 @@ int pthread_rwlock_destroy(pthread_rwlock_t* rwlock) {
 static int rin_pthread_mutex_owned_by_current_thread(
     const pthread_mutex_t* mutex) {
     return mutex && __atomic_load_n(&mutex->locked, __ATOMIC_ACQUIRE) != 0 &&
-           mutex->owner == _RIN_PTHREAD_RUNTIME_SELF();
+           __rin_pthread_mutex_owner_load(mutex) ==
+               _RIN_PTHREAD_RUNTIME_SELF();
 }
 
 static void rin_pthread_rwlock_rollback_acquire(pthread_rwlock_t* rwlock,
