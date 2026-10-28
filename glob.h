@@ -359,11 +359,17 @@ static inline int _rin_glob_entry_is_directory(const char* path,
         *is_directory = 1;
         return 0;
     }
-    if (entry && entry->d_type != DT_UNKNOWN) {
+    if (entry && entry->d_type != DT_UNKNOWN && entry->d_type != DT_LNK) {
         *is_directory = 0;
         return 0;
     }
-    if (_RIN_GLOB_STAT(path, &status) != 0) return GLOB_ABORTED;
+    if (_RIN_GLOB_STAT(path, &status) != 0) {
+        if (errno == ENOENT || errno == ENOTDIR) {
+            *is_directory = 0;
+            return 0;
+        }
+        return GLOB_ABORTED;
+    }
     *is_directory = S_ISDIR(status.st_mode) ? 1 : 0;
     return 0;
 }
