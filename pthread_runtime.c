@@ -6,6 +6,7 @@
 
 #define RIN_PTHREAD_RUNTIME_IMPLEMENTATION 1
 #include "pthread.h"
+#include "internal/pthread_cond_interrupt.h"
 #include "rin_pthread_futex_policy.h"
 #include "rin_thread_detach_policy.h"
 #include "rin_thread_stack_policy.h"
@@ -34,6 +35,8 @@
 #define RIN_PTHREAD_ROBUST_OWNER_MASK UINT32_C(0x3fffffff)
 #define RIN_PTHREAD_ROBUST_OWNER_DIED UINT32_C(0x40000000)
 #define RIN_PTHREAD_ROBUST_WAITERS UINT32_C(0x80000000)
+
+static __thread uint64_t g_rin_pthread_cond_signal_interrupt_epoch;
 
 #ifndef _RIN_PTHREAD_RUNTIME_FUTEX
 #define _RIN_PTHREAD_RUNTIME_FUTEX(address, operation, value, timeout) \
@@ -1313,8 +1316,14 @@ int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
             &cond->generation,
             rin_pthread_cond_futex_operation(cond, FUTEX_WAIT),
             (int)gen, NULL);
+        int signal_interrupted = wait_result == -1 && errno == EINTR;
         int wait_error = rin_pthread_futex_wait_error(wait_result, errno);
         if (rin_pthread_cancel_pending_enabled(_RIN_PTHREAD_RUNTIME_SELF())) {
+            result = EINTR;
+            break;
+        }
+        if (signal_interrupted) {
+            ++g_rin_pthread_cond_signal_interrupt_epoch;
             result = EINTR;
             break;
         }
@@ -1363,6 +1372,7 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
             &cond->generation,
             rin_pthread_cond_futex_operation(cond, operation),
             (int)gen, abstime, FUTEX_BITSET_MATCH_ANY);
+        int signal_interrupted = ret == -1 && errno == EINTR;
         int wait_error = rin_pthread_futex_wait_error(ret, errno);
         if (wait_error == ETIMEDOUT) {
             if (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) != gen)
@@ -1379,6 +1389,11 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
             result = EINTR;
             break;
         }
+        if (signal_interrupted) {
+            ++g_rin_pthread_cond_signal_interrupt_epoch;
+            result = EINTR;
+            break;
+        }
         if (wait_error != 0) {
             result = wait_error;
             break;
@@ -1390,6 +1405,23 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
     if (mutex_result != 0) return mutex_result;
     if (result == EINTR) pthread_testcancel();
     return result == EINTR ? 0 : result;
+}
+
+int __rin_pthread_cond_wait_interruptible(pthread_cond_t* cond,
+                                          pthread_mutex_t* mutex) {
+    uint64_t before = g_rin_pthread_cond_signal_interrupt_epoch;
+    int result = pthread_cond_wait(cond, mutex);
+    if (result != 0) return result;
+    return g_rin_pthread_cond_signal_interrupt_epoch != before ? EINTR : 0;
+}
+
+int __rin_pthread_cond_timedwait_interruptible(
+    pthread_cond_t* cond, pthread_mutex_t* mutex,
+    const struct timespec* abstime) {
+    uint64_t before = g_rin_pthread_cond_signal_interrupt_epoch;
+    int result = pthread_cond_timedwait(cond, mutex, abstime);
+    if (result != 0) return result;
+    return g_rin_pthread_cond_signal_interrupt_epoch != before ? EINTR : 0;
 }
 
 int pthread_cond_signal(pthread_cond_t* cond) {
