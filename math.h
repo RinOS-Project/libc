@@ -1273,11 +1273,19 @@ static inline int ilogbf(float x) {
 /* ldexp - 仮数と指数から合成 */
 static inline double ldexp(double x, int exp) {
     if (x == 0.0 || __builtin_isnan(x) || __builtin_isinf(x)) return x;
-    /* A binary64 value is fully scaled after 2,048 binary steps.  Clamp
-     * untrusted public exponents so INT_MIN/INT_MAX cannot turn this helper
-     * into a multi-billion-iteration denial of service. */
-    if (exp > 2048) exp = 2048;
-    else if (exp < -2048) exp = -2048;
+    /* Apply large exponents in representable chunks.  Clamping exp itself
+     * changes the result when the input exponent compensates for the value
+     * (for example, a subnormal input scaled by a large positive exponent). */
+    while (exp > 1023) {
+        x *= 0x1p1023;
+        if (__builtin_isinf(x)) return x;
+        exp -= 1023;
+    }
+    while (exp < -1022) {
+        x *= 0x1p-1022;
+        if (x == 0.0) return x;
+        exp += 1022;
+    }
     while (exp > 0) { x *= 2.0; exp--; }
     while (exp < 0) { x /= 2.0; exp++; }
     return x;
