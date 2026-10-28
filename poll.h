@@ -311,8 +311,9 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
 
     if (npfds == 0) {
         const int ret = poll(NULL, 0, timeout_ms);
-        if (ret < 0)
-            __rin_select_clear_sets(readfds, writefds, exceptfds);
+        /* No descriptor below nfds was requested, so a successful select
+         * must clear bits that were set only at or above nfds as well. */
+        __rin_select_clear_sets(readfds, writefds, exceptfds);
         free(pfds);
         return ret;
     }
