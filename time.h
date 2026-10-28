@@ -1467,8 +1467,10 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
         }
         if (now.tv_sec > request->tv_sec ||
             (now.tv_sec == request->tv_sec &&
-             now.tv_nsec >= request->tv_nsec))
+             now.tv_nsec >= request->tv_nsec)) {
+            errno = entry_errno;
             return 0;
+        }
 
         for (;;) {
             intptr_t wait_result;
