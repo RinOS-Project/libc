@@ -1030,91 +1030,164 @@ static inline int pthread_rwlock_init(pthread_rwlock_t* rwlock, const pthread_rw
 }
 
 static inline int pthread_rwlock_destroy(pthread_rwlock_t* rwlock) {
+    int result;
     if (!rwlock) return EINVAL;
     if (rwlock->readers > 0 || rin_pthread_rwlock_writer_active(rwlock) ||
         rwlock->waiting_readers > 0 || rwlock->waiting_writers > 0) return EBUSY;
-    pthread_cond_destroy(&rwlock->can_read);
-    pthread_cond_destroy(&rwlock->can_write);
-    pthread_mutex_destroy(&rwlock->mutex);
+    result = pthread_cond_destroy(&rwlock->can_read);
+    if (result != 0) return result;
+    result = pthread_cond_destroy(&rwlock->can_write);
+    if (result != 0) {
+        (void)pthread_cond_init(&rwlock->can_read, NULL);
+        return result;
+    }
+    result = pthread_mutex_destroy(&rwlock->mutex);
+    if (result != 0) {
+        (void)pthread_cond_init(&rwlock->can_read, NULL);
+        (void)pthread_cond_init(&rwlock->can_write, NULL);
+        return result;
+    }
     return 0;
 }
 
+static inline int rin_pthread_rwlock_notify_waiters(
+    pthread_rwlock_t* rwlock) {
+    if (rwlock->waiting_writers > 0) {
+        if (!rin_pthread_rwlock_writer_active(rwlock) &&
+            rwlock->readers == 0)
+            return pthread_cond_signal(&rwlock->can_write);
+    } else if (!rin_pthread_rwlock_writer_active(rwlock) &&
+               rwlock->waiting_readers > 0) {
+        return pthread_cond_broadcast(&rwlock->can_read);
+    }
+    return 0;
+}
+
+static inline void rin_pthread_rwlock_rollback_acquire(
+    pthread_rwlock_t* rwlock, int writer) {
+    if (pthread_mutex_lock(&rwlock->mutex) != 0) return;
+    if (writer)
+        rwlock->writer &= ~RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
+    else if (rwlock->readers > 0)
+        rwlock->readers--;
+    (void)rin_pthread_rwlock_notify_waiters(rwlock);
+    (void)pthread_mutex_unlock(&rwlock->mutex);
+}
+
 static inline int pthread_rwlock_rdlock(pthread_rwlock_t* rwlock) {
+    int result;
+    pthread_t self;
     if (!rwlock) return EINVAL;
-    pthread_mutex_lock(&rwlock->mutex);
+    result = pthread_mutex_lock(&rwlock->mutex);
+    if (result != 0) return result;
+    self = pthread_self();
     /* Writer-preference: block new readers when writers are waiting. */
     while (rin_pthread_rwlock_writer_active(rwlock) ||
            rwlock->waiting_writers > 0) {
         rwlock->waiting_readers++;
-        pthread_cond_wait(&rwlock->can_read, &rwlock->mutex);
+        result = pthread_cond_wait(&rwlock->can_read, &rwlock->mutex);
+        if (result != 0 && rwlock->mutex.owner != self) return result;
         rwlock->waiting_readers--;
+        if (result != 0) {
+            int unlock_result = pthread_mutex_unlock(&rwlock->mutex);
+            return unlock_result != 0 ? unlock_result : result;
+        }
     }
     rwlock->readers++;
-    pthread_mutex_unlock(&rwlock->mutex);
+    result = pthread_mutex_unlock(&rwlock->mutex);
+    if (result != 0) {
+        rin_pthread_rwlock_rollback_acquire(rwlock, 0);
+        return result;
+    }
     return 0;
 }
 
 static inline int pthread_rwlock_wrlock(pthread_rwlock_t* rwlock) {
+    int result;
+    pthread_t self;
     if (!rwlock) return EINVAL;
-    pthread_mutex_lock(&rwlock->mutex);
+    result = pthread_mutex_lock(&rwlock->mutex);
+    if (result != 0) return result;
+    self = pthread_self();
     rwlock->waiting_writers++;
     while (rin_pthread_rwlock_writer_active(rwlock) || rwlock->readers > 0) {
-        pthread_cond_wait(&rwlock->can_write, &rwlock->mutex);
+        result = pthread_cond_wait(&rwlock->can_write, &rwlock->mutex);
+        if (result != 0 && rwlock->mutex.owner != self) return result;
+        if (result != 0) {
+            rwlock->waiting_writers--;
+            {
+                int notify_result = rin_pthread_rwlock_notify_waiters(rwlock);
+                int unlock_result = pthread_mutex_unlock(&rwlock->mutex);
+                if (notify_result != 0) return notify_result;
+                return unlock_result != 0 ? unlock_result : result;
+            }
+        }
     }
     rwlock->waiting_writers--;
     rwlock->writer |= RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
-    pthread_mutex_unlock(&rwlock->mutex);
+    result = pthread_mutex_unlock(&rwlock->mutex);
+    if (result != 0) {
+        rin_pthread_rwlock_rollback_acquire(rwlock, 1);
+        return result;
+    }
     return 0;
 }
 
 static inline int pthread_rwlock_tryrdlock(pthread_rwlock_t* rwlock) {
+    int result;
     if (!rwlock) return EINVAL;
-    if (pthread_mutex_trylock(&rwlock->mutex) != 0) return EBUSY;
+    result = pthread_mutex_trylock(&rwlock->mutex);
+    if (result != 0) return result;
     if (rin_pthread_rwlock_writer_active(rwlock) ||
         rwlock->waiting_writers > 0) {
-        pthread_mutex_unlock(&rwlock->mutex);
-        return EBUSY;
+        result = pthread_mutex_unlock(&rwlock->mutex);
+        return result != 0 ? result : EBUSY;
     }
     rwlock->readers++;
-    pthread_mutex_unlock(&rwlock->mutex);
+    result = pthread_mutex_unlock(&rwlock->mutex);
+    if (result != 0) {
+        rin_pthread_rwlock_rollback_acquire(rwlock, 0);
+        return result;
+    }
     return 0;
 }
 
 static inline int pthread_rwlock_trywrlock(pthread_rwlock_t* rwlock) {
+    int result;
     if (!rwlock) return EINVAL;
-    if (pthread_mutex_trylock(&rwlock->mutex) != 0) return EBUSY;
+    result = pthread_mutex_trylock(&rwlock->mutex);
+    if (result != 0) return result;
     if (rin_pthread_rwlock_writer_active(rwlock) || rwlock->readers > 0) {
-        pthread_mutex_unlock(&rwlock->mutex);
-        return EBUSY;
+        result = pthread_mutex_unlock(&rwlock->mutex);
+        return result != 0 ? result : EBUSY;
     }
     rwlock->writer |= RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
-    pthread_mutex_unlock(&rwlock->mutex);
+    result = pthread_mutex_unlock(&rwlock->mutex);
+    if (result != 0) {
+        rin_pthread_rwlock_rollback_acquire(rwlock, 1);
+        return result;
+    }
     return 0;
 }
 
 static inline int pthread_rwlock_unlock(pthread_rwlock_t* rwlock) {
+    int result;
+    int unlock_result;
     if (!rwlock) return EINVAL;
-    pthread_mutex_lock(&rwlock->mutex);
+    result = pthread_mutex_lock(&rwlock->mutex);
+    if (result != 0) return result;
     if (rin_pthread_rwlock_writer_active(rwlock)) {
         rwlock->writer &= ~RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
     } else if (rwlock->readers > 0) {
         rwlock->readers--;
     } else {
-        pthread_mutex_unlock(&rwlock->mutex);
-        return EPERM;
+        unlock_result = pthread_mutex_unlock(&rwlock->mutex);
+        return unlock_result != 0 ? unlock_result : EPERM;
     }
 
-    if (rwlock->waiting_writers > 0) {
-        if (!rin_pthread_rwlock_writer_active(rwlock) &&
-            rwlock->readers == 0) {
-            pthread_cond_signal(&rwlock->can_write);
-        }
-    } else if (rwlock->waiting_readers > 0) {
-        pthread_cond_broadcast(&rwlock->can_read);
-    }
-
-    pthread_mutex_unlock(&rwlock->mutex);
-    return 0;
+    result = rin_pthread_rwlock_notify_waiters(rwlock);
+    unlock_result = pthread_mutex_unlock(&rwlock->mutex);
+    return result != 0 ? result : unlock_result;
 }
 #else
 extern int pthread_rwlock_init(pthread_rwlock_t* rwlock, const pthread_rwlockattr_t* attr);
