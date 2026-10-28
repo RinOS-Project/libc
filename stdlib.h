@@ -911,6 +911,73 @@ static inline void* bsearch(const void* key, const void* base, size_t nmemb,
     return NULL;
 }
 
+/* Parse the next POSIX suboption in place.  Keeping the parser inline lets
+ * freestanding consumers use the API without pulling in another runtime
+ * object; stdlib_runtime.c also exports the same implementation as a symbol. */
+static inline int _rin_stdlib_getsubopt_parse(char** optionp,
+                                               char* const* keylistp,
+                                               char** valuep) {
+    char* token;
+    char* separator;
+    char* value;
+    size_t token_length;
+    int index;
+
+    if (optionp == NULL || *optionp == NULL || keylistp == NULL ||
+        valuep == NULL)
+        return -1;
+
+    token = *optionp;
+    separator = token;
+    while (*separator != '\0' && *separator != ',') ++separator;
+    if (*separator == ',') {
+        *separator = '\0';
+        *optionp = separator + 1;
+    } else {
+        *optionp = separator;
+    }
+
+    value = NULL;
+    for (char* cursor = token; *cursor != '\0'; ++cursor) {
+        if (*cursor == '=') {
+            *cursor = '\0';
+            value = cursor + 1;
+            break;
+        }
+    }
+    token_length = 0u;
+    while (token[token_length] != '\0') ++token_length;
+
+    for (index = 0; keylistp[index] != NULL; ++index) {
+        size_t key_length = 0u;
+        while (keylistp[index][key_length] != '\0') ++key_length;
+        if (key_length != token_length) continue;
+
+        size_t offset = 0u;
+        while (offset < token_length &&
+               token[offset] == keylistp[index][offset])
+            ++offset;
+        if (offset == token_length) {
+            *valuep = value;
+            return index;
+        }
+    }
+
+    /* POSIX leaves valuep unspecified for an unknown token.  Expose the
+     * parsed value when present as a useful, compatible extension. */
+    *valuep = value;
+    return -1;
+}
+
+#if defined(RIN_STDLIB_NO_INLINE_GETSUBOPT)
+int getsubopt(char** optionp, char* const* keylistp, char** valuep);
+#else
+static inline int getsubopt(char** optionp, char* const* keylistp,
+                            char** valuep) {
+    return _rin_stdlib_getsubopt_parse(optionp, keylistp, valuep);
+}
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * 一時ファイル
  * ═══════════════════════════════════════════════════════════════*/
