@@ -11,6 +11,7 @@
 
 #include "stddef.h"
 #include "stdint.h"
+#include "errno.h"
 
 /* rin_runtime.c で定義 (userspace arena frontend) */
 extern void* rin_malloc(size_t size);
@@ -54,6 +55,14 @@ void* realloc(void* ptr, size_t size) {
     if (!ptr) return malloc(size);
     if (size == 0) { free(ptr); return 0; }
     return rin_realloc(ptr, size);
+}
+
+void* reallocarray(void* ptr, size_t nmemb, size_t size) {
+    if (size != 0 && nmemb > SIZE_MAX / size) {
+        errno = ENOMEM;
+        return 0;
+    }
+    return realloc(ptr, nmemb * size);
 }
 
 size_t malloc_usable_size(void* ptr) {

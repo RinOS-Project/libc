@@ -180,6 +180,7 @@ void* calloc(size_t nmemb, size_t size);
 #ifndef realloc
 void* realloc(void* ptr, size_t size);
 #endif
+void* reallocarray(void* ptr, size_t nmemb, size_t size);
 #ifndef free
 void free(void* ptr);
 #endif
