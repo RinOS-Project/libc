@@ -1303,33 +1303,12 @@ int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
     }
 
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-        struct timespec now;
-        struct timespec slice_deadline;
-        long wait_result;
-        if (clock_gettime(cond->clock_id, &now) != 0) {
-            result = errno ? errno : EIO;
-            break;
-        }
-        slice_deadline.tv_sec = now.tv_sec;
-        slice_deadline.tv_nsec = now.tv_nsec + 50000000L;
-        if (slice_deadline.tv_nsec >= 1000000000L) {
-            ++slice_deadline.tv_sec;
-            slice_deadline.tv_nsec -= 1000000000L;
-        }
-        wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
+        long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
             &cond->generation,
-            rin_pthread_cond_futex_operation(
-                cond, FUTEX_WAIT_BITSET |
-                          (cond->clock_id == CLOCK_REALTIME
-                               ? FUTEX_CLOCK_REALTIME : 0)),
-            (int)gen, &slice_deadline, FUTEX_BITSET_MATCH_ANY);
+            rin_pthread_cond_futex_operation(cond, FUTEX_WAIT),
+            (int)gen, NULL);
         int wait_error = rin_pthread_futex_wait_error(wait_result, errno);
         if (rin_pthread_cancel_pending_enabled(_RIN_PTHREAD_RUNTIME_SELF())) {
-            result = EINTR;
-            break;
-        }
-        if (wait_error == ETIMEDOUT) continue;
-        if (wait_error == EINTR) {
             result = EINTR;
             break;
         }
@@ -1368,35 +1347,18 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
 
     int result = 0;
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-        struct timespec now;
-        struct timespec slice_deadline;
-        if (clock_gettime(cond->clock_id, &now) != 0) {
-            result = errno ? errno : EIO;
-            break;
-        }
-        if (now.tv_sec > abstime->tv_sec ||
-            (now.tv_sec == abstime->tv_sec &&
-             now.tv_nsec >= abstime->tv_nsec)) {
+        if (abstime->tv_sec < 0) {
             result = ETIMEDOUT;
             break;
         }
-        slice_deadline.tv_sec = now.tv_sec;
-        slice_deadline.tv_nsec = now.tv_nsec + 50000000L;
-        if (slice_deadline.tv_nsec >= 1000000000L) {
-            ++slice_deadline.tv_sec;
-            slice_deadline.tv_nsec -= 1000000000L;
-        }
-        if (slice_deadline.tv_sec > abstime->tv_sec ||
-            (slice_deadline.tv_sec == abstime->tv_sec &&
-             slice_deadline.tv_nsec > abstime->tv_nsec))
-            slice_deadline = *abstime;
         int operation = FUTEX_WAIT_BITSET |
             (cond->clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
         long ret = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
             &cond->generation,
             rin_pthread_cond_futex_operation(cond, operation),
-            (int)gen, &slice_deadline, FUTEX_BITSET_MATCH_ANY);
-        if (ret == -1 && errno == ETIMEDOUT) {
+            (int)gen, abstime, FUTEX_BITSET_MATCH_ANY);
+        int wait_error = rin_pthread_futex_wait_error(ret, errno);
+        if (wait_error == ETIMEDOUT) {
             if (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) != gen)
                 break;
             if (rin_pthread_cancel_pending_enabled(
@@ -1404,25 +1366,16 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
                 result = EINTR;
                 break;
             }
-            if (slice_deadline.tv_sec == abstime->tv_sec &&
-                slice_deadline.tv_nsec == abstime->tv_nsec) {
-                result = ETIMEDOUT;
-                break;
-            }
-            continue;
+            result = ETIMEDOUT;
+            break;
         }
-        {
-            int wait_error = rin_pthread_futex_wait_error(ret, errno);
-            if (wait_error == EINTR && rin_pthread_cancel_pending_enabled(
-                    _RIN_PTHREAD_RUNTIME_SELF())) {
-                result = EINTR;
-                break;
-            }
-            if (wait_error == EINTR) continue;
-            if (wait_error != 0) {
-                result = wait_error;
-                break;
-            }
+        if (rin_pthread_cancel_pending_enabled(_RIN_PTHREAD_RUNTIME_SELF())) {
+            result = EINTR;
+            break;
+        }
+        if (wait_error != 0) {
+            result = wait_error;
+            break;
         }
     }
 
