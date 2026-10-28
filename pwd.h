@@ -30,6 +30,21 @@ struct passwd {
     char*  pw_shell;   /* ログインシェル */
 };
 
+#if defined(__cplusplus)
+#define RIN_PWD_THREAD_LOCAL thread_local
+#else
+#define RIN_PWD_THREAD_LOCAL _Thread_local
+#endif
+
+typedef struct __rin_passwd_runtime_state_v1 {
+    struct passwd entry;
+    char buffer[512];
+    uint32_t cursor;
+} __rin_passwd_runtime_state_v1;
+
+extern RIN_PWD_THREAD_LOCAL __rin_passwd_runtime_state_v1
+    __rin_passwd_runtime_state;
+
 static inline int __rin_pwd_uid_negative(uid_t uid) {
     union {
         uid_t value;
@@ -44,12 +59,6 @@ static inline int __rin_pwd_uid_negative(uid_t uid) {
 
 /* Non-reentrant passwd queries return pointers into private scratch.  Keep
  * that scratch per thread so another query cannot overwrite a live result. */
-#if defined(__cplusplus)
-#define RIN_PWD_THREAD_LOCAL thread_local
-#else
-#define RIN_PWD_THREAD_LOCAL _Thread_local
-#endif
-
 /* ═══════════════════════════════════════════════════════════════
  * パスワードデータベース関数
  * ═══════════════════════════════════════════════════════════════*/
@@ -128,10 +137,11 @@ static inline int getpwuid_r(uid_t uid, struct passwd* pwd,
 
 /* getpwnam - ユーザー名でエントリを検索 */
 static inline struct passwd* getpwnam(const char* name) {
-    static RIN_PWD_THREAD_LOCAL struct passwd entry;
-    static RIN_PWD_THREAD_LOCAL char buffer[512];
     struct passwd* result = NULL;
-    int error = getpwnam_r(name, &entry, buffer, sizeof(buffer), &result);
+    int error = getpwnam_r(name, &__rin_passwd_runtime_state.entry,
+                           __rin_passwd_runtime_state.buffer,
+                           sizeof(__rin_passwd_runtime_state.buffer),
+                           &result);
     if (error != 0) {
         errno = error;
         return NULL;
@@ -141,10 +151,11 @@ static inline struct passwd* getpwnam(const char* name) {
 
 /* getpwuid - UIDでエントリを検索 */
 static inline struct passwd* getpwuid(uid_t uid) {
-    static RIN_PWD_THREAD_LOCAL struct passwd entry;
-    static RIN_PWD_THREAD_LOCAL char buffer[512];
     struct passwd* result = NULL;
-    int error = getpwuid_r(uid, &entry, buffer, sizeof(buffer), &result);
+    int error = getpwuid_r(uid, &__rin_passwd_runtime_state.entry,
+                           __rin_passwd_runtime_state.buffer,
+                           sizeof(__rin_passwd_runtime_state.buffer),
+                           &result);
     if (error != 0) {
         errno = error;
         return NULL;
@@ -156,42 +167,41 @@ static inline struct passwd* getpwuid(uid_t uid) {
  * パスワードファイル列挙
  * ═══════════════════════════════════════════════════════════════*/
 
-static RIN_PWD_THREAD_LOCAL uint32_t __rin_passwd_cursor;
-
 /* setpwent - パスワードファイルを先頭に巻き戻す */
 static inline void setpwent(void) {
-    __rin_passwd_cursor = 0u;
+    __rin_passwd_runtime_state.cursor = 0u;
 }
 
 /* endpwent - パスワードファイルを閉じる */
 static inline void endpwent(void) {
-    __rin_passwd_cursor = 0u;
+    __rin_passwd_runtime_state.cursor = 0u;
 }
 
 /* getpwent - 次のエントリを取得 */
 static inline struct passwd* getpwent(void) {
-    static RIN_PWD_THREAD_LOCAL struct passwd entry;
-    static RIN_PWD_THREAD_LOCAL char buffer[512];
     __rin_account_info_v1 info;
     struct passwd* result = NULL;
     int error = __rin_account_query(__RIN_ACCOUNT_QUERY_BY_INDEX,
-                                    __rin_passwd_cursor, NULL, &info);
+                                    __rin_passwd_runtime_state.cursor,
+                                    NULL, &info);
     if (error == ENOENT) {
         return NULL;
     }
     if (error == 0) {
-        error = __rin_passwd_pack(&info, &entry, buffer, sizeof(buffer),
-                                  &result);
+        error = __rin_passwd_pack(
+            &info, &__rin_passwd_runtime_state.entry,
+            __rin_passwd_runtime_state.buffer,
+            sizeof(__rin_passwd_runtime_state.buffer), &result);
     }
     if (error != 0) {
         errno = error;
         return NULL;
     }
-    if (__rin_passwd_cursor == UINT32_MAX) {
+    if (__rin_passwd_runtime_state.cursor == UINT32_MAX) {
         errno = EOVERFLOW;
         return NULL;
     }
-    ++__rin_passwd_cursor;
+    ++__rin_passwd_runtime_state.cursor;
     return result;
 }
 
