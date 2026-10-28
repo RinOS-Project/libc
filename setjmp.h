@@ -9,6 +9,9 @@
 #include_next <setjmp.h>
 #else
 
+#include "signal.h"
+#include "stdlib.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -34,9 +37,35 @@ void longjmp(jmp_buf env, int val) __attribute__((noreturn));
 #define _setjmp setjmp
 #define _longjmp longjmp
 
-typedef jmp_buf sigjmp_buf;
-#define sigsetjmp(env, savesigs) setjmp(env)
-#define siglongjmp(env, val) longjmp(env, val)
+typedef struct {
+    jmp_buf __context;
+    sigset_t __saved_mask;
+    int __mask_saved;
+} __rin_sigjmp_context;
+typedef __rin_sigjmp_context sigjmp_buf[1];
+
+static inline void __rin_sigjmp_prepare(sigjmp_buf env, int save_mask) {
+    env[0].__mask_saved = 0;
+    if (save_mask &&
+        sigprocmask(SIG_SETMASK, NULL, &env[0].__saved_mask) == 0)
+        env[0].__mask_saved = 1;
+}
+
+static inline void __rin_sigjmp_restore(sigjmp_buf env) {
+    if (env[0].__mask_saved &&
+        sigprocmask(SIG_SETMASK, &env[0].__saved_mask, NULL) < 0)
+        abort();
+}
+
+/* Keep the setjmp call in the caller's frame: saving it in a helper would
+ * leave a context whose stack frame has already returned. */
+#define sigsetjmp(env, savesigs) \
+    (__rin_sigjmp_prepare((env), (savesigs)), setjmp((env)[0].__context))
+#define siglongjmp(env, val) \
+    do { \
+        __rin_sigjmp_restore((env)); \
+        longjmp((env)[0].__context, (val)); \
+    } while (0)
 
 #ifdef __cplusplus
 }
