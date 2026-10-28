@@ -76,6 +76,24 @@
 #ifndef _POSIX_THREADS
 #define _POSIX_THREADS 200809L
 #endif
+#ifndef _POSIX_BARRIERS
+#define _POSIX_BARRIERS 200809L
+#endif
+#ifndef _POSIX_CLOCK_SELECTION
+#define _POSIX_CLOCK_SELECTION 200809L
+#endif
+#ifndef _POSIX_MONOTONIC_CLOCK
+#define _POSIX_MONOTONIC_CLOCK 200809L
+#endif
+#ifndef _POSIX_READER_WRITER_LOCKS
+#define _POSIX_READER_WRITER_LOCKS 200809L
+#endif
+#ifndef _POSIX_SPAWN
+#define _POSIX_SPAWN 200809L
+#endif
+#ifndef _POSIX_TIMEOUTS
+#define _POSIX_TIMEOUTS 200809L
+#endif
 
 /* Preserve caller-provided syscall hooks before installing defaults.  A
  * hosted unit that supplies a hook is intentionally asking for the Rin
@@ -1751,6 +1769,12 @@ static inline long sysconf(int name) {
             return PTHREAD_KEYS_MAX;
         case _SC_REGEXP:
         case _SC_THREADS:
+        case _SC_BARRIERS:
+        case _SC_CLOCK_SELECTION:
+        case _SC_MONOTONIC_CLOCK:
+        case _SC_READER_WRITER_LOCKS:
+        case _SC_SPAWN:
+        case _SC_TIMEOUTS:
             return 1;
         case _SC_REALTIME_SIGNALS:
         case _SC_PRIORITIZED_IO:
@@ -1780,17 +1804,13 @@ static inline long sysconf(int name) {
         case _SC_2_UPE:
         case _SC_ADVISORY_INFO:
         case _SC_ATEXIT_MAX:
-        case _SC_BARRIERS:
-        case _SC_CLOCK_SELECTION:
         case _SC_CPUTIME:
         case _SC_GETGR_R_SIZE_MAX:
         case _SC_GETPW_R_SIZE_MAX:
         case _SC_IOV_MAX:
         case _SC_IPV6:
-        case _SC_MONOTONIC_CLOCK:
         case _SC_READER_WRITER_LOCKS:
         case _SC_SHELL:
-        case _SC_SPAWN:
         case _SC_SPIN_LOCKS:
         case _SC_SPORADIC_SERVER:
         case _SC_SS_REPL_MAX:
@@ -1807,7 +1827,6 @@ static inline long sysconf(int name) {
         case _SC_THREAD_SPORADIC_SERVER:
         case _SC_THREAD_STACK_MIN:
         case _SC_THREAD_THREADS_MAX:
-        case _SC_TIMEOUTS:
         case _SC_TYPED_MEMORY_OBJECTS:
         case _SC_V7_ILP32_OFF32:
         case _SC_V7_ILP32_OFFBIG:
