@@ -81,6 +81,7 @@ static inline int __rin_mman_zero_result(intptr_t result)
 #define MAP_SHARED      0x01   /* 他プロセスと共有 */
 #define MAP_PRIVATE     0x02   /* プライベートコピーオンライト */
 #define MAP_FIXED       0x10   /* 指定アドレスに配置 */
+#define MAP_FIXED_NOREPLACE 0x08000000 /* 既存マッピングを置換せず固定配置 */
 #define MAP_ANONYMOUS   0x20   /* ファイルなし (メモリのみ) */
 #define MAP_ANON        MAP_ANONYMOUS
 #define MAP_GROWSDOWN   0x100  /* スタック用 (下方向に拡張) */
