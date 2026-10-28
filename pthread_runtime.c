@@ -1413,11 +1413,21 @@ int pthread_cond_broadcast(pthread_cond_t* cond) {
     return 0;
 }
 
+static void rin_pthread_once_cancel_reset(void* argument) {
+    pthread_once_t* once_control = (pthread_once_t*)argument;
+    if (once_control == NULL) return;
+    __atomic_store_n(once_control, 0, __ATOMIC_RELEASE);
+    (void)_RIN_PTHREAD_RUNTIME_FUTEX(
+        once_control, FUTEX_WAKE_PRIVATE, 0x7fffffff, NULL);
+}
+
 int pthread_once(pthread_once_t* once_control, void (*init_routine)(void)) {
     if (!once_control || !init_routine) return EINVAL;
 
     if (__sync_val_compare_and_swap(once_control, 0, 1) == 0) {
+        pthread_cleanup_push(rin_pthread_once_cancel_reset, once_control);
         init_routine();
+        pthread_cleanup_pop(0);
         __atomic_store_n(once_control, 2, __ATOMIC_RELEASE);
         {
             long wake_result = _RIN_PTHREAD_RUNTIME_FUTEX(
