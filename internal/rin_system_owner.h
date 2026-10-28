@@ -23,6 +23,26 @@ extern char** environ;
 #endif
 #endif
 
+/* Process-wide signal dispositions require one lock shared by every
+ * translation unit that contains the inline system() frontend. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+int __rin_system_disposition_lock(void);
+int __rin_system_disposition_unlock(void);
+#ifdef __cplusplus
+}
+#endif
+
+#ifndef _RIN_STDLIB_SYSTEM_DISPOSITION_LOCK
+#define _RIN_STDLIB_SYSTEM_DISPOSITION_LOCK() \
+    __rin_system_disposition_lock()
+#endif
+#ifndef _RIN_STDLIB_SYSTEM_DISPOSITION_UNLOCK
+#define _RIN_STDLIB_SYSTEM_DISPOSITION_UNLOCK() \
+    __rin_system_disposition_unlock()
+#endif
+
 /* The C header supplies these seams before including this owner.  cstdlib.h
  * includes the same defaults for freestanding C++ translation units so both
  * public surfaces exercise one lifecycle contract. */
@@ -98,6 +118,7 @@ static inline int _rin_system_owner(const char* command) {
         int status = 0;
         int wait_error = 0;
         int signal_error = 0;
+        int system_lock_held = 0;
         int interrupt_ignored = 0;
         int quit_ignored = 0;
         int child_mask_blocked = 0;
@@ -119,6 +140,13 @@ static inline int _rin_system_owner(const char* command) {
             errno = E2BIG;
             return -1;
         }
+
+        wait_error = _RIN_STDLIB_SYSTEM_DISPOSITION_LOCK();
+        if (wait_error != 0) {
+            errno = wait_error;
+            return -1;
+        }
+        system_lock_held = 1;
 
         if (_RIN_STDLIB_SYSTEM_SIGACTION(SIGINT, NULL,
                                         &old_interrupt_action) != 0) {
@@ -180,7 +208,14 @@ static inline int _rin_system_owner(const char* command) {
                 __rin_env_read_end(environment_epoch);
 #endif
                 _RIN_STDLIB_SYSTEM_EXIT(127);
-                errno = exec_errno;
+                if (system_lock_held) {
+                    int unlock_error =
+                        _RIN_STDLIB_SYSTEM_DISPOSITION_UNLOCK();
+                    system_lock_held = 0;
+                    errno = unlock_error != 0 ? unlock_error : exec_errno;
+                } else {
+                    errno = exec_errno;
+                }
                 return 127 << 8;
             }
             shell_arguments[0] = (char*)"sh";
@@ -201,7 +236,13 @@ static inline int _rin_system_owner(const char* command) {
             _RIN_STDLIB_SYSTEM_EXIT(127);
             /* A test owner may return from the exit seam.  Preserve the
              * shell's conventional 127 status instead of exposing success. */
-            errno = exec_errno;
+            if (system_lock_held) {
+                int unlock_error = _RIN_STDLIB_SYSTEM_DISPOSITION_UNLOCK();
+                system_lock_held = 0;
+                errno = unlock_error != 0 ? unlock_error : exec_errno;
+            } else {
+                errno = exec_errno;
+            }
             return 127 << 8;
         }
         if (fork_result > (intptr_t)INT_MAX) {
@@ -234,6 +275,12 @@ system_signal_restore_parent:
         if (child_mask_blocked && _RIN_STDLIB_SYSTEM_SIGPROCMASK(
                 SIG_SETMASK, &old_mask, NULL) != 0 && signal_error == 0) {
             signal_error = errno;
+        }
+        if (system_lock_held) {
+            int unlock_error = _RIN_STDLIB_SYSTEM_DISPOSITION_UNLOCK();
+            system_lock_held = 0;
+            if (unlock_error != 0 && signal_error == 0)
+                signal_error = unlock_error;
         }
         if (signal_error != 0) {
             errno = signal_error;
