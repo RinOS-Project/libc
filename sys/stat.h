@@ -419,19 +419,25 @@ static inline int fchmodat(int dirfd, const char* pathname, mode_t mode,
     }
     if (pathname[0] == '\0') {
         if ((flags & AT_EMPTY_PATH) != 0) {
-            if (((unsigned long)mode & ~(unsigned long)01777u) != 0u) {
-                errno = EINVAL;
-                return -1;
+            if (dirfd == AT_FDCWD) {
+                pathname = ".";
+                flags &= ~AT_EMPTY_PATH;
+            } else {
+                if (((unsigned long)mode & ~(unsigned long)01777u) != 0u) {
+                    errno = EINVAL;
+                    return -1;
+                }
+                __rin_stat_path_at_init(&call, RIN_PATH_AT_CHMOD);
+                call.flags = (uint32_t)flags;
+                call.dirfd = dirfd;
+                call.mode = (uint32_t)mode;
+                call.path1 = (uint64_t)(uintptr_t)pathname;
+                return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
             }
-            __rin_stat_path_at_init(&call, RIN_PATH_AT_CHMOD);
-            call.flags = (uint32_t)flags;
-            call.dirfd = dirfd;
-            call.mode = (uint32_t)mode;
-            call.path1 = (uint64_t)(uintptr_t)pathname;
-            return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
+        } else {
+            errno = ENOENT;
+            return -1;
         }
-        errno = ENOENT;
-        return -1;
     }
     if ((flags & AT_EMPTY_PATH) != 0) {
         errno = EINVAL;

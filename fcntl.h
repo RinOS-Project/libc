@@ -617,6 +617,11 @@ static inline int faccessat(int dirfd, const char* pathname, int mode, int flags
         errno = ENOENT;
         return -1;
     }
+    if (pathname[0] == '\0' && dirfd == AT_FDCWD) {
+        /* AT_FDCWD is a path-resolution base, not an open descriptor. */
+        pathname = ".";
+        flags &= ~AT_EMPTY_PATH;
+    }
     _fcntl_path_at_init(&call, RIN_PATH_AT_ACCESS);
     call.dirfd = dirfd;
     call.flags = (uint32_t)(pathname[0] == '\0'
@@ -641,13 +646,17 @@ static inline int fchownat(int dirfd, const char* pathname, uid_t owner, gid_t g
             errno = ENOENT;
             return -1;
         }
-        _fcntl_path_at_init(&call, RIN_PATH_AT_CHOWN);
-        call.dirfd = dirfd;
-        call.flags = (uint32_t)flags;
-        call.owner = (uint32_t)owner;
-        call.group = (uint32_t)group;
-        call.path1 = (uint64_t)(uintptr_t)pathname;
-        return _fcntl_path_at_zero(&call);
+        if (dirfd != AT_FDCWD) {
+            _fcntl_path_at_init(&call, RIN_PATH_AT_CHOWN);
+            call.dirfd = dirfd;
+            call.flags = (uint32_t)flags;
+            call.owner = (uint32_t)owner;
+            call.group = (uint32_t)group;
+            call.path1 = (uint64_t)(uintptr_t)pathname;
+            return _fcntl_path_at_zero(&call);
+        }
+        pathname = ".";
+        flags &= ~AT_EMPTY_PATH;
     }
     _fcntl_path_at_init(&call, RIN_PATH_AT_CHOWN);
     call.dirfd = dirfd;
