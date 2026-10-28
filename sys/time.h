@@ -58,7 +58,7 @@ static inline int _rin_itimer_us_to_timeval(uint64_t value_us,
     uint64_t seconds;
     if (!output) return EFAULT;
     seconds = value_us / UINT64_C(1000000);
-    if (seconds > (uint64_t)LONG_MAX) return EOVERFLOW;
+    if (seconds > (uint64_t)RIN_TIME_T_MAX) return EOVERFLOW;
     output->tv_sec = (time_t)seconds;
     output->tv_usec = (long)(value_us % UINT64_C(1000000));
     return 0;
