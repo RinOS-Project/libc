@@ -53,6 +53,7 @@ typedef struct {
  * ═══════════════════════════════════════════════════════════════*/
 
 #include "sys/syscall.h"
+#include "internal/rin_dlerror_runtime.h"
 
 /* Hosted contract tests may inject the inventory syscall without enabling
  * the full freestanding target.  Remember that explicit hook so RTLD_NEXT
@@ -185,24 +186,14 @@ static inline int dynlink_add_search_path(const char* path) {
  * エラーメッセージバッファ (ローカル用)
  * ═══════════════════════════════════════════════════════════════*/
 
-#if defined(__cplusplus)
-#define RIN_DLERROR_THREAD_LOCAL thread_local
-#else
-#define RIN_DLERROR_THREAD_LOCAL _Thread_local
-#endif
-/* Local diagnostics must not be shared by callers on different threads.
- * The kernel error channel is copied into this owner before publication. */
-static RIN_DLERROR_THREAD_LOCAL char _dlerror_buf[256] = {0};
-static RIN_DLERROR_THREAD_LOCAL int _dlerror_flag = 0;
-#undef RIN_DLERROR_THREAD_LOCAL
-
 static inline const char* _dynlink_error_copy_v1(void) {
+    RinDlerrorState* state = __rin_dlerror_state();
     if (_dynlink_status_result(_RIN_DYNLINK_SYSCALL2(
-            SYS_DLERROR_COPY_V1, (uintptr_t)_dlerror_buf,
-            (uintptr_t)sizeof(_dlerror_buf))) != 0) {
+            SYS_DLERROR_COPY_V1, (uintptr_t)state->kernel_buffer,
+            (uintptr_t)sizeof(state->kernel_buffer))) != 0) {
         return NULL;
     }
-    return _dlerror_buf[0] ? _dlerror_buf : NULL;
+    return state->kernel_buffer[0] ? state->kernel_buffer : NULL;
 }
 
 static inline const char* dynlink_error(void) {
@@ -212,13 +203,14 @@ static inline const char* dynlink_error(void) {
 }
 
 static inline void _dl_set_error(const char* msg) {
+    RinDlerrorState* state = __rin_dlerror_state();
     int i = 0;
-    while (msg[i] && i < 255) {
-        _dlerror_buf[i] = msg[i];
+    while (msg[i] && i < (int)RIN_DLERROR_BUFFER_CAPACITY - 1) {
+        state->buffer[i] = msg[i];
         i++;
     }
-    _dlerror_buf[i] = '\0';
-    _dlerror_flag = 1;
+    state->buffer[i] = '\0';
+    state->pending = 1;
 }
 
 /* Forward declaration because the RTLD_NEXT helper is shared by dlsym and
@@ -648,26 +640,27 @@ static inline void* dlsym(void* handle, const char* symbol) {
  * @return  エラーメッセージ、エラーがなければNULL
  */
 static inline char* dlerror(void) {
+    RinDlerrorState* state = __rin_dlerror_state();
     /* まずカーネルエラーをチェック */
     const char* kernel_err = _dynlink_error_copy_v1();
     if (kernel_err && kernel_err[0]) {
         /* The kernel detail supersedes the generic local error queued by the
          * same failed dlopen/dlclose/dlsym operation. */
-        _dlerror_flag = 0;
+        state->pending = 0;
         /* カーネルエラーをローカルバッファにコピー */
         int i = 0;
-        while (kernel_err[i] && i < 255) {
-            _dlerror_buf[i] = kernel_err[i];
+        while (kernel_err[i] && i < (int)RIN_DLERROR_BUFFER_CAPACITY - 1) {
+            state->buffer[i] = kernel_err[i];
             i++;
         }
-        _dlerror_buf[i] = '\0';
-        return _dlerror_buf;
+        state->buffer[i] = '\0';
+        return state->buffer;
     }
 
     /* ローカルエラーをチェック */
-    if (_dlerror_flag) {
-        _dlerror_flag = 0;
-        return _dlerror_buf;
+    if (state->pending) {
+        state->pending = 0;
+        return state->buffer;
     }
     return NULL;
 }
