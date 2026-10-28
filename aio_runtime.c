@@ -60,7 +60,11 @@ typedef struct RinAioCallback {
 } RinAioCallback;
 
 static pthread_mutex_t g_rin_aio_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_rin_aio_changed = PTHREAD_COND_INITIALIZER;
+/* aio_suspend() accepts a relative timeout. Pair its monotonic deadline with
+ * a condition variable configured for the same clock. */
+static pthread_cond_t g_rin_aio_changed = {
+    0u, 0, CLOCK_MONOTONIC, PTHREAD_PROCESS_PRIVATE
+};
 static RinAioRequest g_rin_aio_requests[RIN_AIO_CAPACITY];
 static uint32_t g_rin_aio_worker_count;
 static uint32_t g_rin_aio_idle_worker_count;
@@ -555,7 +559,7 @@ static int rin_aio_timeout_deadline(const struct timespec* timeout,
     if (!timeout || !deadline || timeout->tv_sec < 0 || timeout->tv_nsec < 0 ||
         timeout->tv_nsec >= 1000000000L)
         return EINVAL;
-    if (clock_gettime(CLOCK_REALTIME, &now) != 0) return errno ? errno : EIO;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return errno ? errno : EIO;
     now_seconds = (uint64_t)now.tv_sec;
     delta_seconds = (uint64_t)timeout->tv_sec;
     max_seconds = sizeof(time_t) >= sizeof(int64_t)
