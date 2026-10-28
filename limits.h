@@ -137,6 +137,9 @@
 #ifndef _POSIX_MQ_PRIO_MAX
 #define _POSIX_MQ_PRIO_MAX 32
 #endif
+#ifndef _POSIX_PIPE_BUF
+#define _POSIX_PIPE_BUF 512
+#endif
 #ifndef SEM_VALUE_MAX
 #define SEM_VALUE_MAX 0x7fffffffU
 #endif
@@ -157,6 +160,9 @@
 #endif
 #ifndef MQ_PRIO_MAX
 #define MQ_PRIO_MAX 32
+#endif
+#ifndef PIPE_BUF
+#define PIPE_BUF 4096
 #endif
 #ifndef LOGIN_NAME_MAX
 #define LOGIN_NAME_MAX 32

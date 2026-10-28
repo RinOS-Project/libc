@@ -1900,7 +1900,7 @@ static inline long pathconf(const char* path, int name) {
         case _PC_PATH_MAX:
             return PATH_MAX;
         case _PC_PIPE_BUF:
-            if (S_ISFIFO(status.st_mode)) return 4096;
+            if (S_ISFIFO(status.st_mode)) return PIPE_BUF;
             return -1;
         case _PC_CHOWN_RESTRICTED:
             return 1;
@@ -1958,7 +1958,7 @@ static inline long fpathconf(int fd, int name) {
         case _PC_PATH_MAX:
             return PATH_MAX;
         case _PC_PIPE_BUF:
-            if (S_ISFIFO(status.st_mode)) return 4096;
+            if (S_ISFIFO(status.st_mode)) return PIPE_BUF;
             return -1;
         case _PC_CHOWN_RESTRICTED:
         case _PC_NO_TRUNC:
