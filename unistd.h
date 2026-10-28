@@ -957,7 +957,7 @@ static inline char* realpath(const char* path, char* resolved_path) {
                 errno = ELOOP;
                 goto fail;
             }
-            link_length = readlink(candidate, link_target, sizeof(link_target) - 1u);
+            link_length = readlink(candidate, link_target, sizeof(link_target));
             if (link_length < 0) goto fail;
             if ((size_t)link_length >= sizeof(link_target)) {
                 errno = ENAMETOOLONG;
