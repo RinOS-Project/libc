@@ -105,6 +105,7 @@ typedef struct _RinGlobMatchList {
 
 typedef struct _RinGlobContext {
     int flags;
+    int require_directory;
     int (*errfunc)(const char*, int);
     _RinGlobMatchList* matches;
 } _RinGlobContext;
@@ -426,7 +427,8 @@ static inline int _rin_glob_expand(_RinGlobContext* context,
             if (saved_errno == ENOENT || saved_errno == ENOTDIR) return 0;
             return _rin_glob_report_error(context, prefix, saved_errno);
         }
-        if ((context->flags & GLOB_ONLYDIR) && !S_ISDIR(status.st_mode))
+        if (((context->flags & GLOB_ONLYDIR) || context->require_directory) &&
+            !S_ISDIR(status.st_mode))
             return 0;
         return _rin_glob_add_marked(context->matches, prefix, context->flags,
                                     S_ISDIR(status.st_mode));
@@ -842,6 +844,7 @@ static inline int glob(const char* pattern, int flags,
     size_t cursor = 0u;
     size_t old_pathc;
     int has_wildcard = 0;
+    int trailing_slash;
     char prefix[_RIN_GLOB_MAX_PATH];
     _RinGlobComponent components[_RIN_GLOB_MAX_COMPONENTS];
     _RinGlobMatchList matches = { NULL, 0u, 0u };
@@ -869,6 +872,7 @@ static inline int glob(const char* pattern, int flags,
     if (pattern_length == 0u)
         return _rin_glob_no_match(pglob, flags);
     if (pattern_length >= _RIN_GLOB_MAX_PATTERN) return GLOB_NOSPACE;
+    trailing_slash = pattern[pattern_length - 1u] == '/';
     prefix[0] = '\0';
     if (pattern[0] == '/') {
         prefix[0] = '/';
@@ -909,9 +913,8 @@ static inline int glob(const char* pattern, int flags,
         if (components[component_count].wildcard > 0) has_wildcard = 1;
         ++component_count;
     }
-    if (pattern[pattern_length - 1u] == '/' && prefix[0] != '/')
-        return GLOB_NOSYS;
-    context.flags = flags;
+    context.flags = flags | (trailing_slash ? GLOB_MARK : 0);
+    context.require_directory = trailing_slash;
     context.errfunc = errfunc;
     context.matches = &matches;
     old_pathc = (flags & GLOB_APPEND) ? pglob->gl_pathc : 0u;
