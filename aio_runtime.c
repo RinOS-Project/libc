@@ -46,10 +46,12 @@ typedef struct RinAioRequest {
     struct aiocb* control;
     int state;
     int operation;
+    int original_fd;
     int held_fd;
     int completion_error;
     ssize_t result;
     uint64_t sequence;
+    uint64_t barrier_sequence;
     RinAioNotification notification;
     RinAioGroup* group;
 } RinAioRequest;
@@ -304,7 +306,10 @@ static int rin_aio_submit_prepared(struct aiocb* control, int operation,
         request->control = control;
         request->state = RIN_AIO_QUEUED;
         request->operation = operation;
+        request->original_fd = control->aio_fildes;
         request->held_fd = held_fd;
+        if (operation == RIN_AIO_OP_FSYNC)
+            request->barrier_sequence = g_rin_aio_next_sequence - 1u;
         request->sequence = g_rin_aio_next_sequence++;
         if (g_rin_aio_next_sequence == 0u) g_rin_aio_next_sequence = 1u;
         if (notification) request->notification = *notification;
@@ -334,6 +339,23 @@ static int rin_aio_submit(struct aiocb* control, int operation)
                                    &notification, NULL);
 }
 
+static int rin_aio_fsync_barrier_ready_locked(
+    const RinAioRequest* barrier)
+{
+    uint32_t index;
+    if (!barrier || barrier->operation != RIN_AIO_OP_FSYNC) return 1;
+    for (index = 0u; index < RIN_AIO_CAPACITY; ++index) {
+        const RinAioRequest* candidate = &g_rin_aio_requests[index];
+        if (candidate == barrier || candidate->state == RIN_AIO_FREE ||
+            candidate->state == RIN_AIO_DONE ||
+            candidate->original_fd != barrier->original_fd ||
+            candidate->sequence > barrier->barrier_sequence)
+            continue;
+        return 0;
+    }
+    return 1;
+}
+
 static int rin_aio_find_queued_locked(void)
 {
     uint32_t index;
@@ -342,6 +364,7 @@ static int rin_aio_find_queued_locked(void)
     for (index = 0u; index < RIN_AIO_CAPACITY; ++index) {
         RinAioRequest* request = &g_rin_aio_requests[index];
         if (request->state == RIN_AIO_QUEUED &&
+            rin_aio_fsync_barrier_ready_locked(request) &&
             (selected < 0 || request->sequence < sequence)) {
             selected = (int)index;
             sequence = request->sequence;
@@ -768,6 +791,7 @@ int lio_listio(int mode, struct aiocb* const requests[], int count,
                 request->control = controls[index];
                 request->state = RIN_AIO_QUEUED;
                 request->operation = operations[index];
+                request->original_fd = controls[index]->aio_fildes;
                 request->held_fd = held_fds[index];
                 request->notification = request_notifications[index];
                 request->sequence = g_rin_aio_next_sequence++;
