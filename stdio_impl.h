@@ -365,7 +365,9 @@ _RIN_STDIO_API int ftrylockfile(FILE* stream) {
 _RIN_STDIO_API void funlockfile(FILE* stream) {
     uintptr_t owner;
     size_t index;
+    int saved_errno;
     if (!stream) return;
+    saved_errno = errno;
     owner = _rin_stdio_lock_owner_token();
     _rin_stdio_lock_table_enter();
     for (index = 0u; index < _RIN_STDIO_LOCK_CAPACITY; ++index) {
@@ -388,12 +390,14 @@ _RIN_STDIO_API void funlockfile(FILE* stream) {
                 _rin_stdio_wake_word(&entry->wait_seq, 0x7fffffff);
                 _rin_stdio_wake_word(&_rin_stdio_lock_table_seq,
                                      0x7fffffff);
+                errno = saved_errno;
                 return;
             }
             break;
         }
     }
     _rin_stdio_lock_table_leave();
+    errno = saved_errno;
 }
 
 static inline void _rin_stdio_stream_lock_reset_closed(FILE* stream) {

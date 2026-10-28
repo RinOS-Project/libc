@@ -1709,6 +1709,16 @@ static wint_t _rin_fgetwc_unlocked(FILE* stream) {
             return (wint_t)value;
         }
     }
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) == RIN_STDIO_MEMSTREAM_WIDE) {
+        uint32_t value = 0u;
+        int status = rin_stdio_memstream_read_wide(stream, &value);
+        if (status > 0) return (wint_t)value;
+        if (status == 0) stream->eof = 1;
+        else stream->error = 1;
+        return WEOF;
+    }
+#endif
     for (byte_index = 0u; byte_index < 4u; ++byte_index) {
         char byte = 0;
         long count = _rin_stdio_read_block(
@@ -1812,6 +1822,13 @@ static wint_t _rin_fputwc_unlocked(wchar_t c, FILE* stream) {
         return WEOF;
     }
     if (!_rin_stdio_claim_wide_orientation(stream)) return WEOF;
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) == RIN_STDIO_MEMSTREAM_WIDE) {
+        if (rin_stdio_memstream_write_wide(stream, value) != 1)
+            return WEOF;
+        return (wint_t)value;
+    }
+#endif
     if (!rin_wchar_scalar_valid(value)) {
         errno = EILSEQ;
         stream->error = 1;
