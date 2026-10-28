@@ -141,6 +141,9 @@ struct timespec;
  * ═══════════════════════════════════════════════════════════════*/
 
 #define SI_MAX_SIZE 128
+#ifndef SYS_SECCOMP
+#define SYS_SECCOMP 1
+#endif
 
 #ifndef _SIGVAL_DEFINED
 #define _SIGVAL_DEFINED
@@ -194,6 +197,11 @@ union __rin_siginfo_fields {
         union sigval _sigval;
     } _rt;
     struct {
+        uint64_t _call_addr;
+        int32_t _syscall;
+        uint32_t _arch;
+    } _sigsys;
+    struct {
         long _band;
         int _fd;
     } _sigpoll;
@@ -220,6 +228,9 @@ typedef union siginfo {
 #define si_uid       __fields._sifields._kill._uid
 #define si_addr      __fields._sifields._sigfault._addr
 #define si_addr_lsb  __fields._sifields._sigfault._addr_lsb
+#define si_call_addr __fields._sifields._sigsys._call_addr
+#define si_syscall   __fields._sifields._sigsys._syscall
+#define si_arch      __fields._sifields._sigsys._arch
 #define si_status    __fields._sifields._sigchld._status
 #define si_utime     __fields._sifields._sigchld._utime
 #define si_stime     __fields._sifields._sigchld._stime
@@ -346,9 +357,10 @@ typedef struct {
 #define SS_ONSTACK  1   /* Currently executing on this stack */
 #define SS_DISABLE  2   /* Disable this alternate stack */
 
-/* Minimum and default stack sizes */
-#define MINSIGSTKSZ 2048
-#define SIGSTKSZ    8192
+/* The kernel may place a 4096-byte XSAVE image plus signal metadata and
+ * ABI alignment on this stack for an x86_64 SA_SIGINFO handler. */
+#define MINSIGSTKSZ 8192
+#define SIGSTKSZ    16384
 
 static inline int sigaltstack(const stack_t* ss, stack_t* old_ss) {
     /* The kernel owns the per-thread stack state and performs the atomic
