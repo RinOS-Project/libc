@@ -114,7 +114,7 @@ static inline int getopt(int argc, char* const argv[], const char* optstring) {
                     optarg = (char*)&arg[_rin_getopt_pos];
                     optind++;
                     _rin_getopt_pos = 0;
-                } else if (optind < argc) {
+                } else if (p[2] != ':' && optind < argc) {
                     /* 次のargvが引数 */
                     optarg = argv[optind++];
                 } else if (p[2] != ':') {
