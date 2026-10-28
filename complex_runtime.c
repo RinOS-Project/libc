@@ -26,16 +26,6 @@ static double complex cx_mul(double complex lhs, double complex rhs) {
     return cx_make(real, imaginary);
 }
 
-static double complex cx_add(double complex lhs, double complex rhs) {
-    return cx_make(cx_real(lhs) + cx_real(rhs),
-                   cx_imag(lhs) + cx_imag(rhs));
-}
-
-static double complex cx_sub(double complex lhs, double complex rhs) {
-    return cx_make(cx_real(lhs) - cx_real(rhs),
-                   cx_imag(lhs) - cx_imag(rhs));
-}
-
 void __rin_cmul_f64(double a, double b, double c, double d,
                     double* real, double* imaginary) {
     double x = a * c - b * d;
@@ -280,10 +270,21 @@ double complex csqrt(double complex value) {
 
 double complex cpow(double complex base, double complex exponent) {
     double complex logarithm;
-    if (cx_real(exponent) == 0.0 && cx_imag(exponent) == 0.0)
+    double exponent_real = cx_real(exponent);
+    double exponent_imaginary = cx_imag(exponent);
+    double base_real = cx_real(base);
+    double base_imaginary = cx_imag(base);
+    if (exponent_real == 0.0 && exponent_imaginary == 0.0)
         return cx_make(1.0, 0.0);
-    if (cx_real(base) == 1.0 && cx_imag(base) == 0.0)
+    if (base_real == 1.0 && base_imaginary == 0.0)
         return cx_make(1.0, 0.0);
+    if (base_real == 0.0 && base_imaginary == 0.0) {
+        if (exponent_real > 0.0)
+            return cx_make(0.0, copysign(0.0, base_imaginary));
+        if (exponent_real < 0.0)
+            return cx_make(INFINITY, copysign(0.0, base_imaginary));
+        return cx_make(NAN, NAN);
+    }
     logarithm = clog(base);
     return cexp(cx_mul(exponent, logarithm));
 }
