@@ -13,8 +13,10 @@
 #include "fcntl_flags.h"
 #include "stdlib.h"
 #include "string.h"
+#include "sys/types.h"
 #include "sys/stat.h"
 #include "sys/syscall.h"
+#include <rin/fs/dirent_abi.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -47,6 +49,30 @@ struct dirent {
     char           d_name[256];     /* ファイル名 */
 };
 
+/* 64-bit inode/cookie を全アーキテクチャで同じ幅に保つ拡張record。 */
+struct dirent64 {
+    uint64_t       d_ino;
+    int64_t        d_off;
+    unsigned short d_reclen;
+    unsigned char  d_type;
+    char           d_name[256];
+    uint8_t        d_reserved[5];
+};
+
+#if defined(__cplusplus)
+static_assert(sizeof(struct dirent64) == sizeof(RinDirent64Abi),
+              "dirent64 libc/kernel ABI drift");
+static_assert(offsetof(struct dirent64, d_name) ==
+                  offsetof(RinDirent64Abi, name),
+              "dirent64 libc/kernel name offset drift");
+#else
+_Static_assert(sizeof(struct dirent64) == sizeof(RinDirent64Abi),
+               "dirent64 libc/kernel ABI drift");
+_Static_assert(offsetof(struct dirent64, d_name) ==
+                   offsetof(RinDirent64Abi, name),
+               "dirent64 libc/kernel name offset drift");
+#endif
+
 typedef struct {
     int fd;                         /* ディレクトリのファイルディスクリプタ */
     struct dirent entry;            /* 現在のエントリ */
@@ -65,6 +91,11 @@ typedef struct {
 #define _RIN_DIRENT_SYSCALL3(number, arg1, arg2, arg3) \
     _syscall3((uintptr_t)(number), (uintptr_t)(arg1), \
               (uintptr_t)(arg2), (uintptr_t)(arg3))
+#endif
+#ifndef _RIN_DIRENT_SYSCALL5
+#define _RIN_DIRENT_SYSCALL5(number, arg1, arg2, arg3, arg4, arg5) \
+    _syscall5((uintptr_t)(number), (uintptr_t)(arg1), (uintptr_t)(arg2), \
+              (uintptr_t)(arg3), (uintptr_t)(arg4), (uintptr_t)(arg5))
 #endif
 
 static inline intptr_t _rin_dir_result(intptr_t result) {
@@ -129,11 +160,58 @@ static inline int _rin_dir_read_entry_locked(DIR* dirp,
     return 1;
 }
 
+static inline int _rin_dir_read_entry64_locked(DIR* dirp,
+                                               struct dirent64* output) {
+    intptr_t result;
+    size_t index;
+    int has_terminator = 0;
+    if (dirp->eof) return 0;
+    result = _RIN_DIRENT_SYSCALL3(
+        SYS_READDIR64, (uintptr_t)dirp->fd, (uintptr_t)output,
+        (uintptr_t)sizeof(*output));
+    if (result == 0) {
+        dirp->eof = 1;
+        return 0;
+    }
+    result = _rin_dir_result(result);
+    if (result < 0) return -1;
+    if (result != 1 || output->d_reclen != sizeof(*output)) {
+        errno = EIO;
+        return -1;
+    }
+    for (index = 0u; index < sizeof(output->d_reserved); ++index) {
+        if (output->d_reserved[index] != 0u) {
+            errno = EIO;
+            return -1;
+        }
+    }
+    for (index = 0u; index < sizeof(output->d_name); ++index) {
+        if (output->d_name[index] == '\0') {
+            has_terminator = 1;
+            break;
+        }
+    }
+    if (!has_terminator) {
+        errno = EIO;
+        return -1;
+    }
+    return 1;
+}
+
 static inline struct dirent* _rin_readdir_thread_buffer(void) {
 #if defined(__cplusplus)
     static thread_local struct dirent entry;
 #else
     static _Thread_local struct dirent entry;
+#endif
+    return &entry;
+}
+
+static inline struct dirent64* _rin_readdir64_thread_buffer(void) {
+#if defined(__cplusplus)
+    static thread_local struct dirent64 entry;
+#else
+    static _Thread_local struct dirent64 entry;
 #endif
     return &entry;
 }
@@ -246,6 +324,20 @@ static inline struct dirent* readdir(DIR* dirp) {
     return result > 0 ? output : NULL;
 }
 
+static inline struct dirent64* readdir64(DIR* dirp) {
+    struct dirent64* output;
+    int result;
+    if (!_rin_dir_valid(dirp)) {
+        errno = EBADF;
+        return NULL;
+    }
+    output = _rin_readdir64_thread_buffer();
+    _rin_dir_lock(dirp);
+    result = _rin_dir_read_entry64_locked(dirp, output);
+    _rin_dir_unlock(dirp);
+    return result > 0 ? output : NULL;
+}
+
 /* Caller-owned output keeps concurrent readers of one DIR from racing over
  * the library's internal dirent storage.  The return value is an errno code,
  * and end-of-directory is reported as success with *result == NULL. */
@@ -266,6 +358,31 @@ static inline int readdir_r(DIR* dirp, struct dirent* entry,
 
     _rin_dir_lock(dirp);
     read_result = _rin_dir_read_entry_locked(dirp, entry);
+    error = read_result < 0 ? (errno ? errno : EIO) : 0;
+    _rin_dir_unlock(dirp);
+    errno = saved_errno;
+    if (error != 0) return error;
+    if (read_result > 0) *result = entry;
+    return 0;
+}
+
+static inline int readdir64_r(DIR* dirp, struct dirent64* entry,
+                              struct dirent64** result) {
+    int saved_errno = errno;
+    int read_result;
+    int error;
+    if (result) *result = NULL;
+    if (!entry || !result) {
+        errno = saved_errno;
+        return EINVAL;
+    }
+    if (!_rin_dir_valid(dirp)) {
+        errno = saved_errno;
+        return EBADF;
+    }
+
+    _rin_dir_lock(dirp);
+    read_result = _rin_dir_read_entry64_locked(dirp, entry);
     error = read_result < 0 ? (errno ? errno : EIO) : 0;
     _rin_dir_unlock(dirp);
     errno = saved_errno;
@@ -437,48 +554,80 @@ static inline int alphasort(const struct dirent** left,
     return strcoll((*left)->d_name, (*right)->d_name);
 }
 
-static inline void rewinddir(DIR* dirp) {
+static inline int _rin_dir_seek64_locked(DIR* dirp, int64_t offset,
+                                         int whence, int64_t* position) {
+    uint64_t bits = (uint64_t)offset;
+    int64_t returned_position = 0;
     intptr_t result;
+    if (!position) {
+        errno = EFAULT;
+        return -1;
+    }
+    result = _RIN_DIRENT_SYSCALL5(
+        SYS_LSEEK64, (uintptr_t)dirp->fd,
+        (uintptr_t)(uint32_t)bits,
+        (uintptr_t)(uint32_t)(bits >> 32), (uintptr_t)whence,
+        (uintptr_t)&returned_position);
+    if (_rin_dir_status_result(result) < 0) return -1;
+    *position = returned_position;
+    return 0;
+}
+
+static inline void rewinddir(DIR* dirp) {
+    int64_t position = 0;
     if (!_rin_dir_valid(dirp)) {
         errno = EBADF;
         return;
     }
     _rin_dir_lock(dirp);
-    result = _RIN_DIRENT_SYSCALL3(
-        SYS_SEEK, (uintptr_t)dirp->fd, 0, 0); /* SEEK_SET */
-    if (_rin_dir_result(result) >= 0) dirp->eof = 0;
+    if (_rin_dir_seek64_locked(dirp, 0, 0, &position) == 0)
+        dirp->eof = 0;
     _rin_dir_unlock(dirp);
+}
+
+static inline off64_t telldir64(DIR* dirp) {
+    int64_t position = 0;
+    if (!_rin_dir_valid(dirp)) {
+        errno = EBADF;
+        return -1;
+    }
+    _rin_dir_lock(dirp);
+    if (_rin_dir_seek64_locked(dirp, 0, 1, &position) < 0) {
+        _rin_dir_unlock(dirp);
+        return -1;
+    }
+    _rin_dir_unlock(dirp);
+    if (position < 0) {
+        errno = EIO;
+        return -1;
+    }
+    return (off64_t)position;
 }
 
 static inline long telldir(DIR* dirp) {
-    intptr_t result;
-    if (!_rin_dir_valid(dirp)) {
-        errno = EBADF;
-        return -1;
-    }
-    _rin_dir_lock(dirp);
-    result = _rin_dir_result(_RIN_DIRENT_SYSCALL3(
-        SYS_SEEK, (uintptr_t)dirp->fd, 0, 1)); /* SEEK_CUR */
-    _rin_dir_unlock(dirp);
-    if (result < 0) return -1;
-    if (result > (intptr_t)LONG_MAX) {
+    off64_t position = telldir64(dirp);
+    if (position < 0) return -1;
+    if ((uint64_t)position > (uint64_t)LONG_MAX) {
         errno = EOVERFLOW;
         return -1;
     }
-    return (long)result;
+    return (long)position;
 }
 
-static inline void seekdir(DIR* dirp, long loc) {
-    intptr_t result;
+static inline void seekdir64(DIR* dirp, off64_t loc) {
+    int64_t position = 0;
     if (!_rin_dir_valid(dirp)) {
         errno = EBADF;
         return;
     }
     _rin_dir_lock(dirp);
-    result = _RIN_DIRENT_SYSCALL3(
-        SYS_SEEK, (uintptr_t)dirp->fd, (uintptr_t)(intptr_t)loc, 0);
-    if (_rin_dir_result(result) >= 0) dirp->eof = 0;
+    if (_rin_dir_seek64_locked(dirp, (int64_t)loc, 0, &position) == 0)
+        dirp->eof = 0;
     _rin_dir_unlock(dirp);
+}
+
+static inline void seekdir(DIR* dirp, long loc) {
+    seekdir64(dirp, (off64_t)loc);
 }
 
 static inline int dirfd(DIR* dirp) {
