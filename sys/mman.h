@@ -160,7 +160,11 @@ static inline void* mmap(void* addr, size_t length, int prot, int flags,
     intptr_t ret;
     /* Linux keeps MAP_DENYWRITE for compatibility but ignores it. */
     flags &= ~MAP_DENYWRITE;
-    if (fd == -1 || (flags & MAP_ANONYMOUS) != 0) {
+    if ((flags & MAP_ANONYMOUS) == 0 && fd < 0) {
+        errno = EBADF;
+        return MAP_FAILED;
+    }
+    if ((flags & MAP_ANONYMOUS) != 0) {
         ret = _RIN_MMAN_SYSCALL6(SYS_MMAP,
                                  (uintptr_t)addr,
                                  (uintptr_t)length,
