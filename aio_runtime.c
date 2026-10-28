@@ -63,6 +63,7 @@ static pthread_mutex_t g_rin_aio_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_rin_aio_changed = PTHREAD_COND_INITIALIZER;
 static RinAioRequest g_rin_aio_requests[RIN_AIO_CAPACITY];
 static uint32_t g_rin_aio_worker_count;
+static uint32_t g_rin_aio_idle_worker_count;
 static uint64_t g_rin_aio_next_sequence = 1u;
 
 static void* rin_aio_worker(void* unused);
@@ -179,9 +180,30 @@ static int rin_aio_free_slot_locked(void)
     return -1;
 }
 
-static int rin_aio_start_workers_locked(void)
+static uint32_t rin_aio_queued_count_locked(void)
 {
-    while (g_rin_aio_worker_count < RIN_AIO_WORKERS) {
+    uint32_t count = 0u;
+    uint32_t index;
+    for (index = 0u; index < RIN_AIO_CAPACITY; ++index)
+        if (g_rin_aio_requests[index].state == RIN_AIO_QUEUED)
+            ++count;
+    return count;
+}
+
+static int rin_aio_start_workers_locked(uint32_t incoming_requests)
+{
+    const uint32_t queued = rin_aio_queued_count_locked() +
+                            incoming_requests;
+    uint32_t active = g_rin_aio_worker_count;
+    uint32_t target;
+    if (g_rin_aio_idle_worker_count < active)
+        active -= g_rin_aio_idle_worker_count;
+    else
+        active = 0u;
+    if (active > RIN_AIO_WORKERS) active = RIN_AIO_WORKERS;
+    target = active + queued;
+    if (target > RIN_AIO_WORKERS) target = RIN_AIO_WORKERS;
+    while (g_rin_aio_worker_count < target) {
         pthread_attr_t attributes;
         pthread_t thread;
         int attributes_initialized = 0;
@@ -267,7 +289,7 @@ static int rin_aio_submit_prepared(struct aiocb* control, int operation,
         error = EINVAL;
     } else if ((slot = rin_aio_free_slot_locked()) < 0) {
         error = EAGAIN;
-    } else if ((error = rin_aio_start_workers_locked()) == 0) {
+    } else if ((error = rin_aio_start_workers_locked(1u)) == 0) {
         RinAioRequest* request = &g_rin_aio_requests[slot];
         memset(request, 0, sizeof(*request));
         request->control = control;
@@ -332,8 +354,12 @@ static void* rin_aio_worker(void* unused)
         ssize_t operation_result = -1;
 
         (void)pthread_mutex_lock(&g_rin_aio_mutex);
-        while ((slot = rin_aio_find_queued_locked()) < 0)
+        while ((slot = rin_aio_find_queued_locked()) < 0) {
+            ++g_rin_aio_idle_worker_count;
             (void)pthread_cond_wait(&g_rin_aio_changed, &g_rin_aio_mutex);
+            if (g_rin_aio_idle_worker_count != 0u)
+                --g_rin_aio_idle_worker_count;
+        }
         g_rin_aio_requests[slot].state = RIN_AIO_RUNNING;
         snapshot = g_rin_aio_requests[slot];
         (void)pthread_mutex_unlock(&g_rin_aio_mutex);
@@ -723,7 +749,7 @@ int lio_listio(int mode, struct aiocb* const requests[], int count,
         if (error == 0 && active_count > (int)available_slots)
             error = EAGAIN;
         if (error == 0 && active_count != 0)
-            error = rin_aio_start_workers_locked();
+            error = rin_aio_start_workers_locked((uint32_t)active_count);
         if (error == 0) {
             if (group) group->remaining = (uint32_t)active_count;
             for (index = 0; index < active_count; ++index) {
