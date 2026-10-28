@@ -13,6 +13,7 @@ extern "C" {
 
 #define PTRACE_TRACEME       0
 #define PTRACE_CONT          7
+#define PTRACE_DETACH        17
 #define PTRACE_SETOPTIONS    0x4200
 #define PTRACE_GETEVENTMSG   0x4201
 
