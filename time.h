@@ -9,6 +9,7 @@
 
 #include "stddef.h"
 #include "stdint.h"
+#include "signal.h"
 #include "limits.h"
 #include "sys/syscall.h"
 #include "internal/pthread_cancel_point.h"
