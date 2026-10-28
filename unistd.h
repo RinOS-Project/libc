@@ -95,9 +95,6 @@
 #ifndef _POSIX_MONOTONIC_CLOCK
 #define _POSIX_MONOTONIC_CLOCK 200809L
 #endif
-#ifndef _POSIX_READER_WRITER_LOCKS
-#define _POSIX_READER_WRITER_LOCKS 200809L
-#endif
 #if defined(__x86_64__) || defined(_M_X64)
 #ifndef _POSIX_SPAWN
 #define _POSIX_SPAWN 200809L
@@ -1862,7 +1859,6 @@ static inline long sysconf(int name) {
         case _SC_BARRIERS:
         case _SC_CLOCK_SELECTION:
         case _SC_MONOTONIC_CLOCK:
-        case _SC_READER_WRITER_LOCKS:
 #if defined(__x86_64__) || defined(_M_X64)
         case _SC_SPAWN:
 #endif
@@ -1888,6 +1884,7 @@ static inline long sysconf(int name) {
 #endif
         case _SC_PRIORITIZED_IO:
         case _SC_REGEXP:
+        case _SC_READER_WRITER_LOCKS:
         case _SC_SEMAPHORES:
         case _SC_TIMERS:
         case _SC_BC_BASE_MAX:
