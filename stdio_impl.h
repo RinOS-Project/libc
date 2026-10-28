@@ -831,6 +831,32 @@ static inline intptr_t _rin_stdio_syscall_result(intptr_t result) {
     return result;
 }
 
+static inline intptr_t _rin_stdio_read_backend(FILE* stream,
+                                                unsigned char* output,
+                                                size_t length) {
+#if defined(RIN_USERSPACE)
+    intptr_t result = 0;
+    if (rin_stdio_memstream_read(stream, output, length, &result))
+        return result;
+#endif
+    return _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
+        SYS_READ, (uintptr_t)stream->fd, (uintptr_t)output,
+        (uintptr_t)length));
+}
+
+static inline intptr_t _rin_stdio_write_backend(FILE* stream,
+                                                 const unsigned char* input,
+                                                 size_t length) {
+#if defined(RIN_USERSPACE)
+    intptr_t result = 0;
+    if (rin_stdio_memstream_write(stream, input, length, &result))
+        return result;
+#endif
+    return _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
+        SYS_WRITE, (uintptr_t)stream->fd, (uintptr_t)input,
+        (uintptr_t)length));
+}
+
 static inline int _rin_stdio_claim_byte_orientation(FILE* stream) {
     if (!stream) return 0;
     if (stream->orientation > 0) {
@@ -869,10 +895,9 @@ static inline int _rin_stdio_write_all_raw(FILE* stream, const char* data,
         return -1;
     }
     while (written < length) {
-        intptr_t result = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
-            SYS_WRITE, (uintptr_t)stream->fd,
-            (uintptr_t)(data + written),
-            (uintptr_t)(length - written)));
+        intptr_t result = _rin_stdio_write_backend(
+            stream, (const unsigned char*)(data + written),
+            length - written);
         if (result < 0) {
             stream->error = 1;
             return -1;
@@ -961,10 +986,8 @@ static inline int _rin_stdio_flush_output_buffer(FILE* stream) {
 
     pending = stream->buf_pos;
     while (consumed < pending) {
-        intptr_t result = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
-            SYS_WRITE, (uintptr_t)stream->fd,
-            (uintptr_t)(stream->buf + consumed),
-            (uintptr_t)(pending - consumed)));
+        intptr_t result = _rin_stdio_write_backend(
+            stream, stream->buf + consumed, pending - consumed);
         if (result < 0 || result == 0 ||
             (uintptr_t)result > (uintptr_t)(pending - consumed)) {
             if (result == 0 || (result > 0 &&
@@ -1141,9 +1164,7 @@ _RIN_STDIO_INTERNAL intptr_t _rin_stdio_read_block(FILE* stream,
     }
     if (length == 0u) return 0;
     if (!_rin_stdio_input_buffer_enabled(stream)) {
-        return _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
-            SYS_READ, (uintptr_t)stream->fd, (uintptr_t)output,
-            (uintptr_t)length));
+        return _rin_stdio_read_backend(stream, output, length);
     }
     if (!_rin_stdio_input_buffer_valid(stream)) return -1;
     available = stream->buf_end - stream->buf_pos;
@@ -1155,9 +1176,8 @@ _RIN_STDIO_INTERNAL intptr_t _rin_stdio_read_block(FILE* stream,
              * the caller-owned buffer is full; the existing cursor then keeps
              * the complete line prefix failure-atomically. */
             while (filled < stream->buf_size) {
-                result = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
-                    SYS_READ, (uintptr_t)stream->fd,
-                    (uintptr_t)(stream->buf + filled), (uintptr_t)1u));
+                result = _rin_stdio_read_backend(stream,
+                    stream->buf + filled, 1u);
                 if (result < 0) return result;
                 if (result == 0) break;
                 if (result != 1) {
@@ -1168,9 +1188,8 @@ _RIN_STDIO_INTERNAL intptr_t _rin_stdio_read_block(FILE* stream,
                 if (stream->buf[filled - 1u] == (unsigned char)'\n') break;
             }
         } else {
-            result = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
-                SYS_READ, (uintptr_t)stream->fd, (uintptr_t)stream->buf,
-                (uintptr_t)stream->buf_size));
+            result = _rin_stdio_read_backend(stream, stream->buf,
+                                             stream->buf_size);
             if (result < 0) return result;
             if ((uintptr_t)result > (uintptr_t)stream->buf_size) {
                 errno = EIO;
@@ -1566,6 +1585,9 @@ static inline int _rin_fclose_unlocked(FILE* stream) {
     intptr_t ret;
     int stream_index;
     int flush_failed;
+#if defined(RIN_USERSPACE)
+    int memstream_handled = 0;
+#endif
     unsigned char* previous_buffer;
     int previous_owned;
     if (!stream) {
@@ -1580,8 +1602,14 @@ static inline int _rin_fclose_unlocked(FILE* stream) {
     }
     flush_failed = _rin_stdio_flush_output_buffer(stream) != 0;
 
-    ret = _rin_stdio_syscall_result(
-        _RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd));
+#if defined(RIN_USERSPACE)
+    ret = rin_stdio_memstream_close(stream, &memstream_handled);
+    if (!memstream_handled)
+#endif
+    {
+        ret = _rin_stdio_syscall_result(
+            _RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd));
+    }
     if (ret != 0) {
         if (ret > 0) errno = EIO;
         stream->error = 1;
@@ -1645,6 +1673,12 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
         errno = EINVAL;
         return NULL;
     }
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
+        errno = EBADF;
+        return NULL;
+    }
+#endif
     stream_index = _rin_stdio_stream_index(stream);
     if (stream_index < 0 || !_stdio_files_used[stream_index]) {
         errno = EINVAL;
@@ -1937,9 +1971,7 @@ static inline size_t _rin_fwrite_unlocked(const void* ptr, size_t size, size_t n
                                            NULL);
         return copied / size;
     }
-    n = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
-        SYS_WRITE, (uintptr_t)stream->fd,
-        (uintptr_t)ptr, (uintptr_t)total));
+    n = _rin_stdio_write_backend(stream, (const unsigned char*)ptr, total);
     if (n < 0) { stream->error = 1; return 0; }
     if ((uintptr_t)n > (uintptr_t)total) {
         errno = EIO;
@@ -1990,9 +2022,17 @@ static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
             offset -= (long)pushback;
         }
     }
-    ret = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
-        SYS_SEEK, (uintptr_t)stream->fd,
-        (uintptr_t)(intptr_t)offset, (uintptr_t)whence));
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
+        ret = rin_stdio_memstream_seek(stream, (int64_t)offset, whence) == 0
+            ? 0 : -1;
+    } else
+#endif
+    {
+        ret = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
+            SYS_SEEK, (uintptr_t)stream->fd,
+            (uintptr_t)(intptr_t)offset, (uintptr_t)whence));
+    }
     if (ret < 0) {
         stream->error = 1;
         return -1;
@@ -2026,11 +2066,25 @@ static inline long _rin_ftell_unlocked(FILE* stream) {
         errno = EINVAL;
         return -1;
     }
-    raw_position = _rin_stdio_syscall_result(
-        _RIN_STDIO_SYSCALL3(SYS_SEEK, (uintptr_t)stream->fd,
-                            (uintptr_t)0u, (uintptr_t)SEEK_CUR));
-    if (_rin_stdio_long_from_result(raw_position, &position) != 0)
-        return -1;
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
+        int64_t memory_position;
+        if (rin_stdio_memstream_tell(stream, &memory_position) != 0)
+            return -1;
+        if (memory_position < 0 || memory_position > (int64_t)LONG_MAX) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        position = (long)memory_position;
+    } else
+#endif
+    {
+        raw_position = _rin_stdio_syscall_result(
+            _RIN_STDIO_SYSCALL3(SYS_SEEK, (uintptr_t)stream->fd,
+                                (uintptr_t)0u, (uintptr_t)SEEK_CUR));
+        if (_rin_stdio_long_from_result(raw_position, &position) != 0)
+            return -1;
+    }
     if (_rin_stdio_output_buffer_enabled(stream)) {
         if (stream->buf_pos > (size_t)__LONG_MAX__ ||
             position > __LONG_MAX__ - (long)stream->buf_pos) {
@@ -2125,11 +2179,19 @@ static inline int _rin_fseeko64_unlocked(FILE* stream, off64_t offset,
             adjusted -= (int64_t)pushback;
         }
     }
-    status = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
-        SYS_LSEEK64, (uintptr_t)stream->fd,
-        (uintptr_t)(uint32_t)(uint64_t)adjusted,
-        (uintptr_t)(uint32_t)((uint64_t)adjusted >> 32),
-        (uintptr_t)whence, (uintptr_t)&position));
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
+        status = rin_stdio_memstream_seek(stream, adjusted, whence) == 0
+            ? 0 : -1;
+    } else
+#endif
+    {
+        status = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
+            SYS_LSEEK64, (uintptr_t)stream->fd,
+            (uintptr_t)(uint32_t)(uint64_t)adjusted,
+            (uintptr_t)(uint32_t)((uint64_t)adjusted >> 32),
+            (uintptr_t)whence, (uintptr_t)&position));
+    }
     if (status < 0) {
         stream->error = 1;
         return -1;
@@ -2169,13 +2231,21 @@ static inline off64_t _rin_ftello64_unlocked(FILE* stream) {
         errno = EINVAL;
         return (off64_t)-1;
     }
-    status = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
-        SYS_LSEEK64, (uintptr_t)stream->fd, 0u, 0u,
-        (uintptr_t)SEEK_CUR, (uintptr_t)&position));
-    if (status < 0) return (off64_t)-1;
-    if (status != 0 || position < 0) {
-        errno = EIO;
-        return (off64_t)-1;
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
+        if (rin_stdio_memstream_tell(stream, &position) != 0)
+            return (off64_t)-1;
+    } else
+#endif
+    {
+        status = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
+            SYS_LSEEK64, (uintptr_t)stream->fd, 0u, 0u,
+            (uintptr_t)SEEK_CUR, (uintptr_t)&position));
+        if (status < 0) return (off64_t)-1;
+        if (status != 0 || position < 0) {
+            errno = EIO;
+            return (off64_t)-1;
+        }
     }
     if (_rin_stdio_output_buffer_enabled(stream)) {
         if (stream->buf_pos > (size_t)INT64_MAX ||
@@ -2313,6 +2383,9 @@ static inline int _rin_fflush_unlocked(FILE* stream) {
     if (stream) {
         int stream_index;
         if (_rin_stdio_flush_output_buffer(stream) != 0) return EOF;
+#if defined(RIN_USERSPACE)
+        if (rin_stdio_memstream_flush(stream) < 0) return EOF;
+#endif
         stream_index = _rin_stdio_stream_index(stream);
         if (_rin_stdio_input_buffer_enabled(stream) ||
             (stream_index >= 0 && _rin_stdio_ungetc_count(stream_index) != 0u))
@@ -2377,6 +2450,13 @@ _RIN_STDIO_API int fileno(FILE* stream) {
         return -1;
     }
     flockfile(stream);
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
+        funlockfile(stream);
+        errno = EBADF;
+        return -1;
+    }
+#endif
     result = stream->fd;
     funlockfile(stream);
     return result;

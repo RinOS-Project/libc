@@ -126,6 +126,8 @@ int remove(const char* pathname);
 int rename(const char* oldpath, const char* newpath);
 FILE* tmpfile(void);
 char* tmpnam(char* s);
+FILE* fmemopen(void* buffer, size_t size, const char* mode);
+FILE* open_memstream(char** buffer, size_t* size);
 
 int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap);
 int snprintf(char* buf, size_t size, const char* fmt, ...);

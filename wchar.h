@@ -252,6 +252,7 @@ typedef struct _FILE FILE;
 #endif
 
 int fwide(FILE* stream, int mode);
+FILE* open_wmemstream(wchar_t** buffer, size_t* size);
 wint_t fgetwc(FILE* stream);
 wchar_t* fgetws(wchar_t* s, int n, FILE* stream);
 wint_t fputwc(wchar_t c, FILE* stream);
