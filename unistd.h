@@ -2461,15 +2461,26 @@ static inline ssize_t readlink(const char* pathname, char* buf, size_t bufsiz) {
 }
 
 /* truncate/ftruncate - ファイルサイズ変更 */
+static inline int truncate64(const char* path, off64_t length);
+static inline int ftruncate64(int fd, off64_t length);
+
 static inline int truncate(const char* path, off_t length) {
+#if defined(__x86_64__) || defined(_M_X64)
+    return truncate64(path, (off64_t)length);
+#else
     return _rin_unistd_status(_RIN_UNISTD_SYSCALL2(
         SYS_TRUNCATE, (uintptr_t)path, (uintptr_t)(intptr_t)length));
+#endif
 }
 
 static inline int ftruncate(int fd, off_t length) {
+#if defined(__x86_64__) || defined(_M_X64)
+    return ftruncate64(fd, (off64_t)length);
+#else
     return _rin_unistd_status(_RIN_UNISTD_SYSCALL2(
         SYS_FTRUNCATE, (uintptr_t)(intptr_t)fd,
         (uintptr_t)(intptr_t)length));
+#endif
 }
 
 static inline int truncate64(const char* path, off64_t length) {
