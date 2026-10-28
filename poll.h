@@ -311,7 +311,7 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
                 ++ready_count;
             }
         }
-        if (pfds[i].revents & POLLOUT) {
+        if (pfds[i].revents & (POLLOUT | POLLERR)) {
             if (writefds) {
                 FD_SET(pfds[i].fd, writefds);
                 ++ready_count;
@@ -375,7 +375,7 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
                     ++ready_count;
                 }
             }
-            if (pfds[i].revents & POLLOUT) {
+            if (pfds[i].revents & (POLLOUT | POLLERR)) {
                 if (writefds) {
                     FD_SET(pfds[i].fd, writefds);
                     ++ready_count;
