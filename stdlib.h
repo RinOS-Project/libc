@@ -98,7 +98,9 @@
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
 #include "internal/rin_environment_runtime.h"
 #endif
+#if !defined(RINSDK_SPLIT_BUILD)
 #include "internal/rin_system_owner.h"
+#endif
 #endif /* !MIDL_PASS */
 
 #ifndef RIN_STDLIB_SYSTEM_COMMAND_MAX
@@ -1165,9 +1167,14 @@ static inline char* mkdtemp(char* tmpl) {
 
 #if !defined(_RIN_STDLIB_HOSTED_C_OWNER)
 #ifndef MIDL_PASS
+#if defined(RINSDK_SPLIT_BUILD)
+/* SDK libraries are linked independently from libc's process owner. */
+int system(const char* command);
+#else
 static inline int system(const char* command) {
     return _rin_system_owner(command);
 }
+#endif
 #else
 int system(const char* command);
 #endif /* !MIDL_PASS */
