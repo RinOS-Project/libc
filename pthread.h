@@ -1162,8 +1162,12 @@ extern int pthread_barrier_wait(pthread_barrier_t* barrier);
  * __thread ベースの per-thread キーバリューストア。
  * ═══════════════════════════════════════════════════════════════*/
 
+#ifndef PTHREAD_KEYS_MAX
 #define PTHREAD_KEYS_MAX              128
+#endif
+#ifndef PTHREAD_DESTRUCTOR_ITERATIONS
 #define PTHREAD_DESTRUCTOR_ITERATIONS 4
+#endif
 
 extern int   pthread_key_create(pthread_key_t* key, void (*destructor)(void*));
 extern int   pthread_key_delete(pthread_key_t key);

@@ -73,6 +73,9 @@
 #ifndef _POSIX_ASYNCHRONOUS_IO
 #define _POSIX_ASYNCHRONOUS_IO 200809L
 #endif
+#ifndef _POSIX_THREADS
+#define _POSIX_THREADS 200809L
+#endif
 
 /* Preserve caller-provided syscall hooks before installing defaults.  A
  * hosted unit that supplies a hook is intentionally asking for the Rin
@@ -1738,6 +1741,17 @@ static inline long sysconf(int name) {
             return DELAYTIMER_MAX;
         case _SC_TIMER_MAX:
             return TIMER_MAX;
+        case _SC_RE_DUP_MAX:
+            return RE_DUP_MAX;
+        case _SC_SYMLOOP_MAX:
+            return SYMLOOP_MAX;
+        case _SC_THREAD_DESTRUCTOR_ITERATIONS:
+            return PTHREAD_DESTRUCTOR_ITERATIONS;
+        case _SC_THREAD_KEYS_MAX:
+            return PTHREAD_KEYS_MAX;
+        case _SC_REGEXP:
+        case _SC_THREADS:
+            return 1;
         case _SC_REALTIME_SIGNALS:
         case _SC_PRIORITIZED_IO:
         case _SC_SHARED_MEMORY_OBJECTS:
@@ -1749,7 +1763,6 @@ static inline long sysconf(int name) {
         case _SC_BC_STRING_MAX:
         case _SC_COLL_WEIGHTS_MAX:
         case _SC_EXPR_NEST_MAX:
-        case _SC_RE_DUP_MAX:
         case _SC_2_VERSION:
         case _SC_2_C_BIND:
         case _SC_2_C_DEV:
@@ -1776,18 +1789,14 @@ static inline long sysconf(int name) {
         case _SC_IPV6:
         case _SC_MONOTONIC_CLOCK:
         case _SC_READER_WRITER_LOCKS:
-        case _SC_REGEXP:
         case _SC_SHELL:
         case _SC_SPAWN:
         case _SC_SPIN_LOCKS:
         case _SC_SPORADIC_SERVER:
         case _SC_SS_REPL_MAX:
-        case _SC_SYMLOOP_MAX:
         case _SC_THREAD_ATTR_STACKADDR:
         case _SC_THREAD_ATTR_STACKSIZE:
         case _SC_THREAD_CPUTIME:
-        case _SC_THREAD_DESTRUCTOR_ITERATIONS:
-        case _SC_THREAD_KEYS_MAX:
         case _SC_THREAD_PRIO_INHERIT:
         case _SC_THREAD_PRIO_PROTECT:
         case _SC_THREAD_PRIORITY_SCHEDULING:
@@ -1798,7 +1807,6 @@ static inline long sysconf(int name) {
         case _SC_THREAD_SPORADIC_SERVER:
         case _SC_THREAD_STACK_MIN:
         case _SC_THREAD_THREADS_MAX:
-        case _SC_THREADS:
         case _SC_TIMEOUTS:
         case _SC_TYPED_MEMORY_OBJECTS:
         case _SC_V7_ILP32_OFF32:

@@ -158,6 +158,33 @@
 #ifndef _POSIX_PIPE_BUF
 #define _POSIX_PIPE_BUF 512
 #endif
+#ifndef _POSIX_RE_DUP_MAX
+#define _POSIX_RE_DUP_MAX 255
+#endif
+#ifndef RE_DUP_MAX
+#define RE_DUP_MAX 4096
+#endif
+#ifndef _POSIX_SYMLOOP_MAX
+#define _POSIX_SYMLOOP_MAX 8
+#endif
+#ifndef SYMLOOP_MAX
+#define SYMLOOP_MAX 16
+#endif
+#ifndef _POSIX_THREAD_DESTRUCTOR_ITERATIONS
+#define _POSIX_THREAD_DESTRUCTOR_ITERATIONS 4
+#endif
+#ifndef PTHREAD_DESTRUCTOR_ITERATIONS
+#define PTHREAD_DESTRUCTOR_ITERATIONS 4
+#endif
+#ifndef _POSIX_THREAD_KEYS_MAX
+#define _POSIX_THREAD_KEYS_MAX 128
+#endif
+#ifndef PTHREAD_KEYS_MAX
+#define PTHREAD_KEYS_MAX 128
+#endif
+#ifndef _POSIX_THREAD_THREADS_MAX
+#define _POSIX_THREAD_THREADS_MAX 64
+#endif
 #ifndef SEM_VALUE_MAX
 #define SEM_VALUE_MAX 0x7fffffffU
 #endif
