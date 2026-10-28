@@ -47,6 +47,9 @@
 #ifndef _POSIX_TIMERS
 #define _POSIX_TIMERS 200809L
 #endif
+#ifndef _POSIX_MESSAGE_PASSING
+#define _POSIX_MESSAGE_PASSING 200809L
+#endif
 #ifndef _POSIX_SEMAPHORES
 #define _POSIX_SEMAPHORES 200809L
 #endif
@@ -1736,21 +1739,21 @@ static inline long sysconf(int name) {
         case _SC_SAVED_IDS:
             return 1;
         case _SC_PRIORITY_SCHEDULING:
-            return 1;
+            return _POSIX_PRIORITY_SCHEDULING;
         case _SC_TIMERS:
-            return 1;
+            return _POSIX_TIMERS;
         case _SC_MESSAGE_PASSING:
-            return 1;
+            return _POSIX_MESSAGE_PASSING;
         case _SC_MQ_OPEN_MAX:
             return MQ_OPEN_MAX;
         case _SC_MQ_PRIO_MAX:
             return MQ_PRIO_MAX;
         case _SC_SEMAPHORES:
-            return 1;
+            return _POSIX_SEMAPHORES;
         case _SC_MEMLOCK:
-            return 1;
+            return _POSIX_MEMLOCK;
         case _SC_ASYNCHRONOUS_IO:
-            return 1;
+            return _POSIX_ASYNCHRONOUS_IO;
         case _SC_AIO_LISTIO_MAX:
             return AIO_LISTIO_MAX;
         case _SC_AIO_MAX:
@@ -1778,6 +1781,7 @@ static inline long sysconf(int name) {
         case _SC_THREAD_KEYS_MAX:
             return PTHREAD_KEYS_MAX;
         case _SC_REGEXP:
+            return 1;
         case _SC_THREADS:
         case _SC_REALTIME_SIGNALS:
         case _SC_BARRIERS:
@@ -1786,7 +1790,7 @@ static inline long sysconf(int name) {
         case _SC_READER_WRITER_LOCKS:
         case _SC_SPAWN:
         case _SC_TIMEOUTS:
-            return 1;
+            return 200809L;
         case _SC_IOV_MAX:
             return IOV_MAX;
 #if !defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
