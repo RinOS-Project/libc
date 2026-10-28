@@ -1491,6 +1491,39 @@ static inline const char* gai_strerror(int errcode) {
  * getnameinfo
  * ═══════════════════════════════════════════════════════════════*/
 
+static inline int _netdb_ipv6_extract_ipv4(
+    const uint8_t address[RIN_RESOLVED_IPV6_ADDRESS_BYTES],
+    uint8_t output[RIN_RESOLVED_IPV4_ADDRESS_BYTES]) {
+    size_t index;
+    int mapped = 1;
+    int compatible = 1;
+    int all_zero = 1;
+    int loopback = 1;
+    if (!address || !output) return 0;
+    for (index = 0u; index < 10u; ++index) {
+        if (address[index] != 0u) mapped = 0;
+    }
+    if (mapped && address[10] == 0xffu && address[11] == 0xffu) {
+        memcpy(output, address + 12u, RIN_RESOLVED_IPV4_ADDRESS_BYTES);
+        return 1;
+    }
+    for (index = 0u; index < 12u; ++index) {
+        if (address[index] != 0u) compatible = 0;
+    }
+    for (index = 12u; index < RIN_RESOLVED_IPV6_ADDRESS_BYTES; ++index) {
+        if (address[index] != 0u) all_zero = 0;
+    }
+    if (address[12] != 0u || address[13] != 0u || address[14] != 0u ||
+        address[15] != 1u) {
+        loopback = 0;
+    }
+    if (compatible && !all_zero && !loopback) {
+        memcpy(output, address + 12u, RIN_RESOLVED_IPV4_ADDRESS_BYTES);
+        return 1;
+    }
+    return 0;
+}
+
 static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
                               char* host, socklen_t hostlen,
                               char* serv, socklen_t servlen,
@@ -1501,9 +1534,13 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     char numeric_host[RIN_IPV6_TEXT_MAX];
     char numeric_service[NI_MAXSERV];
     char service_text[NI_MAXSERV];
+    uint8_t embedded_ipv4[RIN_RESOLVED_IPV4_ADDRESS_BYTES];
+    const uint8_t* lookup_address;
     size_t numeric_host_length;
     size_t numeric_service_length;
     size_t service_text_length;
+    uint32_t lookup_address_length;
+    int lookup_family;
     uint16_t port;
     const char* service_protocol;
     int formatted;
@@ -1531,12 +1568,28 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
 
     memset(numeric_host, 0, sizeof(numeric_host));
     memset(numeric_service, 0, sizeof(numeric_service));
-    if (sin6) {
+    if (sin6 && _netdb_ipv6_extract_ipv4(
+                    sin6->sin6_addr.s6_addr, embedded_ipv4)) {
+        lookup_family = AF_INET;
+        lookup_address = embedded_ipv4;
+        lookup_address_length = RIN_RESOLVED_IPV4_ADDRESS_BYTES;
+    } else if (sin6) {
+        lookup_family = AF_INET6;
+        lookup_address = sin6->sin6_addr.s6_addr;
+        lookup_address_length = RIN_RESOLVED_IPV6_ADDRESS_BYTES;
+    } else {
+        lookup_family = AF_INET;
+        lookup_address = (const uint8_t*)&sin->sin_addr.s_addr;
+        lookup_address_length = RIN_RESOLVED_IPV4_ADDRESS_BYTES;
+    }
+    if (lookup_family == AF_INET6) {
         if (rin_ipv6_text_format(sin6->sin6_addr.s6_addr, numeric_host,
                                  sizeof(numeric_host)) != 0)
             return EAI_FAIL;
     } else {
-        uint32_t address = ntohl(sin->sin_addr.s_addr);
+        uint32_t address;
+        memcpy(&address, lookup_address, sizeof(address));
+        address = ntohl(address);
         formatted = snprintf(numeric_host, sizeof(numeric_host),
                              "%u.%u.%u.%u",
                              (unsigned)((address >> 24) & 0xFF),
@@ -1591,18 +1644,10 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     uint8_t outbuf[sizeof(resp) + NI_MAXHOST + NI_MAXSERV];
     memset(&req, 0, sizeof(req));
     req.flags = (uint32_t)flags;
-    req.family = sin6 ? AF_INET6 : AF_INET;
-    req.addr_len = sin6 ? RIN_RESOLVED_IPV6_ADDRESS_BYTES
-                        : RIN_RESOLVED_IPV4_ADDRESS_BYTES;
-    if (sin6) {
-        memcpy(req.addr, sin6->sin6_addr.s6_addr,
-               RIN_RESOLVED_IPV6_ADDRESS_BYTES);
-        req.port = sin6->sin6_port;
-    } else {
-        memcpy(req.addr, &sin->sin_addr.s_addr,
-               RIN_RESOLVED_IPV4_ADDRESS_BYTES);
-        req.port = sin->sin_port;
-    }
+    req.family = (uint32_t)lookup_family;
+    req.addr_len = lookup_address_length;
+    memcpy(req.addr, lookup_address, lookup_address_length);
+    req.port = sin6 ? sin6->sin6_port : sin->sin_port;
 
     if (RIN_NETDB_RESOLVED_TRANSACT(
             RIN_RESOLVED_CMD_GETNAMEINFO_V1, &req,
