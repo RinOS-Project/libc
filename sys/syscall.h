@@ -118,6 +118,11 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_PTRACE          149u
 #endif
 #define SYS_ptrace          SYS_PTRACE
+#ifndef SYS_SECCOMP
+#define SYS_SECCOMP         RIN_SYS_SECCOMP
+#endif
+#define SYS_seccomp         SYS_SECCOMP
+#define __NR_seccomp        SYS_SECCOMP
 
 /* Signal-related RinPort syscalls. */
 #define SYS_rt_sigprocmask  SYS_RT_SIGPROCMASK
