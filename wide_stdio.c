@@ -2481,13 +2481,13 @@ static int rin_wscanf_store_count(int length, size_t count,
         }
         *output = (intmax_t)count;
     } else if (length == RIN_WSCANF_LENGTH_SIZE) {
-        size_t* output = va_arg(*arguments, size_t*);
-        if (!output) {
-            errno = EFAULT;
+        ptrdiff_t* output = va_arg(*arguments, ptrdiff_t*);
+        if (!output || count > (size_t)PTRDIFF_MAX) {
+            errno = !output ? EFAULT : EOVERFLOW;
             return RIN_WSCANF_ERROR;
         }
-        *output = count;
-    } else {
+        *output = (ptrdiff_t)count;
+    } else if (length == RIN_WSCANF_LENGTH_PTRDIFF) {
         ptrdiff_t* output = va_arg(*arguments, ptrdiff_t*);
         if (!output) {
             errno = EFAULT;
@@ -2928,6 +2928,15 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                 if (status == RIN_WSCANF_MATCH)
                     status = rin_wscanf_number(input, width, conversion,
                                                &negative, &magnitude);
+                if (status == RIN_WSCANF_MATCH &&
+                    (length == RIN_WSCANF_LENGTH_WIDTH ||
+                     length == RIN_WSCANF_LENGTH_FAST_WIDTH) &&
+                    !rin_stdio_width_integer_in_range(
+                        width_bits, width_fast,
+                        conversion == (uint32_t)'d' ||
+                        conversion == (uint32_t)'i',
+                        magnitude, negative))
+                    status = RIN_WSCANF_ERROR;
                 if (status == RIN_WSCANF_MATCH && !suppress) {
                     if (length == RIN_WSCANF_LENGTH_WIDTH ||
                         length == RIN_WSCANF_LENGTH_FAST_WIDTH) {
