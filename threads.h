@@ -121,7 +121,8 @@ static inline int mtx_init(mtx_t* mutex, int type)
     pthread_mutexattr_t attr;
     int error;
     if (!mutex || (type & ~(mtx_plain | mtx_timed | mtx_recursive)) != 0 ||
-        (type & (mtx_plain | mtx_timed)) == 0)
+        (type & (mtx_plain | mtx_timed)) == 0 ||
+        (type & (mtx_plain | mtx_timed)) == (mtx_plain | mtx_timed))
         return thrd_error;
     error = pthread_mutexattr_init(&attr);
     if (error != 0) return thrd_error;
