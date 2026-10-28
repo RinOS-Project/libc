@@ -8,6 +8,7 @@
 
 #define RIN_TIMER_THREAD_SLOTS 16u
 #define RIN_TIMER_THREAD_JOBS 8u
+#define RIN_TIMER_THREAD_RETRY_NS 10000000L
 typedef struct RinTimerThreadEntry {
     volatile sig_atomic_t active;
     timer_t timer_id;
@@ -54,17 +55,18 @@ extern int RIN_TIMER_THREAD_INSTALL_HANDLER(const struct sigaction* action);
 #endif
 #ifdef RIN_TIMER_THREAD_RUNTIME_TESTING
 extern intptr_t rin_timer_thread_runtime_test_futex_wait(
-    volatile uint32_t* address, uint32_t expected);
+    volatile uint32_t* address, uint32_t expected,
+    const struct timespec* timeout);
 extern intptr_t rin_timer_thread_runtime_test_futex_wake(
     volatile uint32_t* address, unsigned int count);
-#define RIN_TIMER_THREAD_FUTEX_WAIT(address, expected) \
-    rin_timer_thread_runtime_test_futex_wait((address), (expected))
+#define RIN_TIMER_THREAD_FUTEX_WAIT(address, expected, timeout) \
+    rin_timer_thread_runtime_test_futex_wait((address), (expected), (timeout))
 #define RIN_TIMER_THREAD_FUTEX_WAKE(address, count) \
     rin_timer_thread_runtime_test_futex_wake((address), (count))
 #else
-#define RIN_TIMER_THREAD_FUTEX_WAIT(address, expected) \
+#define RIN_TIMER_THREAD_FUTEX_WAIT(address, expected, timeout) \
     _RIN_TIME_FUTEX_WAIT((address), FUTEX_WAIT_PRIVATE, (expected), \
-                         (const struct timespec*)0, FUTEX_BITSET_MATCH_ANY)
+                         (timeout), FUTEX_BITSET_MATCH_ANY)
 #define RIN_TIMER_THREAD_FUTEX_WAKE(address, count) \
     _syscall6((uintptr_t)SYS_futex, (uintptr_t)(address), \
               (uintptr_t)FUTEX_WAKE_PRIVATE, (uintptr_t)(count), \
@@ -120,13 +122,24 @@ static void rin_timer_thread_publish_wake(void) {
 }
 
 static void rin_timer_thread_wait_for_signal(uint32_t observed) {
+    struct timespec retry_delay;
+    const struct timespec* timeout = (const struct timespec*)0;
     if (__atomic_load_n(&g_signal_pending, __ATOMIC_ACQUIRE) != 0)
         return;
     if (__atomic_load_n(&g_dispatcher_event_generation, __ATOMIC_ACQUIRE) !=
         observed)
         return;
+    for (unsigned int i = 0u; i < RIN_TIMER_THREAD_JOBS; ++i) {
+        if (__atomic_load_n(&g_jobs[i].active, __ATOMIC_ACQUIRE) == 1 &&
+            g_jobs[i].function) {
+            retry_delay.tv_sec = 0;
+            retry_delay.tv_nsec = RIN_TIMER_THREAD_RETRY_NS;
+            timeout = &retry_delay;
+            break;
+        }
+    }
     (void)RIN_TIMER_THREAD_FUTEX_WAIT(&g_dispatcher_event_generation,
-                                      observed);
+                                      observed, timeout);
 }
 
 static int rin_timer_thread_snapshot_current(
