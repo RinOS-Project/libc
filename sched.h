@@ -219,15 +219,30 @@ static inline int _policy_to_rinos_priority(int policy) {
     switch (policy) {
         case SCHED_FIFO:
         case SCHED_RR:
-        case SCHED_DEADLINE:
             return _SCHED_PRIO_REALTIME;
         case SCHED_BATCH:
             return _SCHED_PRIO_LOW;
         case SCHED_IDLE:
             return _SCHED_PRIO_IDLE;
         case SCHED_OTHER:
-        default:
             return _SCHED_PRIO_NORMAL;
+        default:
+            return -1;
+    }
+}
+
+static inline int _rin_sched_policy_priority_valid(int policy,
+                                                    int priority) {
+    switch (policy) {
+        case SCHED_OTHER:
+        case SCHED_BATCH:
+        case SCHED_IDLE:
+            return priority == 0;
+        case SCHED_FIFO:
+        case SCHED_RR:
+            return priority >= 1 && priority <= 99;
+        default:
+            return 0;
     }
 }
 
@@ -296,16 +311,14 @@ static inline int sched_getscheduler(pid_t pid) {
     }
     return parameters.policy;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+    if (pid < 0) { errno = ESRCH; return -1; }
     void* task = rin_sched_task_get((int)pid);
-    if (!task) {
+    if (!task && pid == 0) {
         /* 現在のタスクを取得 */
         task = rin_sched_task_current();
     }
-    if (task) {
-        int priority = rin_sched_task_get_priority(task);
-        return _rinos_priority_to_policy(priority);
-    }
-    return -1;
+    if (!task) { errno = ESRCH; return -1; }
+    return _rinos_priority_to_policy(rin_sched_task_get_priority(task));
 #else
     (void)pid;
     errno = ENOSYS;
@@ -342,24 +355,32 @@ static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_p
     if (result != 0) { errno = EIO; return -1; }
     return 0;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+    if (!param) { errno = EINVAL; return -1; }
+    if (pid < 0) { errno = ESRCH; return -1; }
+    if (!_rin_sched_policy_priority_valid(policy, param->sched_priority)) {
+        errno = EINVAL;
+        return -1;
+    }
     void* task = rin_sched_task_get((int)pid);
     if (!task && pid == 0) {
         task = rin_sched_task_current();
     }
-    if (task) {
-        int priority = _policy_to_rinos_priority(policy);
-        /* パラメータから優先度を調整 */
-        if (param && param->sched_priority > 0) {
-            if (param->sched_priority >= 50) {
-                priority = _SCHED_PRIO_REALTIME;
-            } else if (param->sched_priority >= 25) {
-                priority = _SCHED_PRIO_HIGH;
-            }
-        }
-        rin_sched_task_set_priority(task, priority);
-        return 0;
+    if (!task) { errno = ESRCH; return -1; }
+    int priority = _policy_to_rinos_priority(policy);
+    if (priority < 0) {
+        errno = EINVAL;
+        return -1;
     }
-    return -1;
+    /* パラメータから優先度を調整 */
+    if (param->sched_priority > 0) {
+        if (param->sched_priority >= 50) {
+            priority = _SCHED_PRIO_REALTIME;
+        } else if (param->sched_priority >= 25) {
+            priority = _SCHED_PRIO_HIGH;
+        }
+    }
+    rin_sched_task_set_priority(task, priority);
+    return 0;
 #else
     (void)pid;
     (void)policy;
@@ -406,17 +427,16 @@ static inline int sched_getparam(pid_t pid, struct sched_param* param) {
     param->sched_priority = parameters.priority;
     return 0;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+    if (pid < 0) { errno = ESRCH; return -1; }
     void* task = rin_sched_task_get((int)pid);
     if (!task && pid == 0) {
         task = rin_sched_task_current();
     }
-    if (task) {
-        int priority = rin_sched_task_get_priority(task);
-        /* RinOS優先度(0-4)をPOSIX優先度(0-99)にマッピング */
-        param->sched_priority = priority * 25;
-        return 0;
-    }
-    return -1;
+    if (!task) { errno = ESRCH; return -1; }
+    int priority = rin_sched_task_get_priority(task);
+    /* RinOS優先度(0-4)をPOSIX優先度(0-99)にマッピング */
+    param->sched_priority = priority * 25;
+    return 0;
 #else
     (void)pid;
     errno = ENOSYS;
@@ -436,18 +456,23 @@ static inline int sched_setparam(pid_t pid, const struct sched_param* param) {
     if (policy < 0) return -1;
     return sched_setscheduler(pid, policy, param);
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+    if (pid < 0) { errno = ESRCH; return -1; }
     void* task = rin_sched_task_get((int)pid);
     if (!task && pid == 0) {
         task = rin_sched_task_current();
     }
-    if (task) {
-        /* POSIX優先度(0-99)をRinOS優先度(0-4)にマッピング */
-        int priority = param->sched_priority / 25;
-        if (priority > _SCHED_PRIO_REALTIME) priority = _SCHED_PRIO_REALTIME;
-        rin_sched_task_set_priority(task, priority);
-        return 0;
+    if (!task) { errno = ESRCH; return -1; }
+    int policy = _rinos_priority_to_policy(
+        rin_sched_task_get_priority(task));
+    if (!_rin_sched_policy_priority_valid(policy, param->sched_priority)) {
+        errno = EINVAL;
+        return -1;
     }
-    return -1;
+    /* POSIX優先度(0-99)をRinOS優先度(0-4)にマッピング */
+    int priority = param->sched_priority / 25;
+    if (priority > _SCHED_PRIO_REALTIME) priority = _SCHED_PRIO_REALTIME;
+    rin_sched_task_set_priority(task, priority);
+    return 0;
 #else
     (void)pid;
     errno = ENOSYS;
