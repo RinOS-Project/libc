@@ -79,6 +79,7 @@ typedef struct {
 
 #define ATOMIC_FLAG_INIT { 0 }
 #define ATOMIC_VAR_INIT(value) (value)
+#define kill_dependency(value) (value)
 
 /* ═══════════════════════════════════════════════════════════════
  * アトミック操作 (GCC built-in使用)
