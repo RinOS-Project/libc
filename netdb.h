@@ -1541,9 +1541,9 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     numeric_service_length = (size_t)formatted;
 
     if ((flags & NI_NUMERICHOST) != 0) {
-        if ((host && hostlen > 0u &&
+        if ((host &&
              numeric_host_length + 1u > (size_t)hostlen) ||
-            (serv && servlen > 0u &&
+            (serv &&
              numeric_service_length + 1u > (size_t)servlen))
             return EAI_OVERFLOW;
         if (host && hostlen > 0u)
@@ -1608,9 +1608,9 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
             return EAI_FAIL;
         }
     }
-    if ((host && hostlen > 0 &&
+    if ((host &&
          (size_t)resp.host_len + 1u > (size_t)hostlen) ||
-        (serv && servlen > 0 &&
+        (serv &&
          (size_t)resp.serv_len + 1u > (size_t)servlen)) {
         return EAI_OVERFLOW;
     }
