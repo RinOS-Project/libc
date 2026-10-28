@@ -2046,14 +2046,13 @@ static inline long pathconf(const char* path, int name) {
         errno = EINVAL;
         return -1;
     }
+    if (name == _PC_NAME_MAX) {
+        struct statvfs filesystem;
+        if (statvfs(path, &filesystem) < 0) return -1;
+        return (long)filesystem.f_namemax;
+    }
     if (stat(path, &status) < 0) return -1;
     switch (name) {
-        case _PC_NAME_MAX:
-        {
-            struct statvfs filesystem;
-            if (statvfs(path, &filesystem) < 0) return -1;
-            return (long)filesystem.f_namemax;
-        }
         case _PC_PATH_MAX:
             return PATH_MAX;
         case _PC_PIPE_BUF:
@@ -2108,14 +2107,13 @@ static inline long fpathconf(int fd, int name) {
         errno = EINVAL;
         return -1;
     }
+    if (name == _PC_NAME_MAX) {
+        intptr_t maximum = syscall(
+            RIN_SYS_FILESYSTEM_NAME_MAX_GET_FD, (uintptr_t)fd);
+        return maximum < 0 ? -1 : (long)maximum;
+    }
     if (fstat(fd, &status) < 0) return -1;
     switch (name) {
-        case _PC_NAME_MAX:
-        {
-            intptr_t maximum = syscall(
-                RIN_SYS_FILESYSTEM_NAME_MAX_GET_FD, (uintptr_t)fd);
-            return maximum < 0 ? -1 : (long)maximum;
-        }
         case _PC_PATH_MAX:
             return PATH_MAX;
         case _PC_PIPE_BUF:
