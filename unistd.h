@@ -108,9 +108,6 @@
 #define _POSIX_SPAWN 200809L
 #endif
 #endif
-#ifndef _POSIX_TIMEOUTS
-#define _POSIX_TIMEOUTS 200809L
-#endif
 #ifndef _POSIX_REALTIME_SIGNALS
 #define _POSIX_REALTIME_SIGNALS 200809L
 #endif
@@ -1825,7 +1822,6 @@ static inline long sysconf(int name) {
 #if defined(__x86_64__) || defined(_M_X64)
         case _SC_SPAWN:
 #endif
-        case _SC_TIMEOUTS:
             return 200809L;
         case _SC_IOV_MAX:
             return IOV_MAX;
@@ -1892,6 +1888,7 @@ static inline long sysconf(int name) {
         case _SC_THREAD_ROBUST_PRIO_PROTECT:
         case _SC_THREAD_SAFE_FUNCTIONS:
         case _SC_THREAD_SPORADIC_SERVER:
+        case _SC_TIMEOUTS:
         case _SC_TYPED_MEMORY_OBJECTS:
         case _SC_V7_ILP32_OFF32:
         case _SC_V7_ILP32_OFFBIG:
