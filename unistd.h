@@ -16,6 +16,7 @@
 #include "sys/syscall.h"
 #include "fcntl.h"
 #include "sys/stat.h"
+#include "sys/statvfs.h"
 #include "sys/ioctl.h"
 #include "termios.h"
 #include "time.h"
@@ -2048,7 +2049,11 @@ static inline long pathconf(const char* path, int name) {
     if (stat(path, &status) < 0) return -1;
     switch (name) {
         case _PC_NAME_MAX:
-            return 255;
+        {
+            struct statvfs filesystem;
+            if (statvfs(path, &filesystem) < 0) return -1;
+            return (long)filesystem.f_namemax;
+        }
         case _PC_PATH_MAX:
             return PATH_MAX;
         case _PC_PIPE_BUF:
@@ -2106,7 +2111,11 @@ static inline long fpathconf(int fd, int name) {
     if (fstat(fd, &status) < 0) return -1;
     switch (name) {
         case _PC_NAME_MAX:
-            return 255;
+        {
+            intptr_t maximum = syscall(
+                RIN_SYS_FILESYSTEM_NAME_MAX_GET_FD, (uintptr_t)fd);
+            return maximum < 0 ? -1 : (long)maximum;
+        }
         case _PC_PATH_MAX:
             return PATH_MAX;
         case _PC_PIPE_BUF:
