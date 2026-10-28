@@ -622,22 +622,34 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
     void* alloc_base = NULL;
     uintptr_t alloc_size = 0;
     int alloc_kind = RIN_THREAD_ALLOC_NONE;
+    int caller_stack = attr && attr->stackaddr != NULL;
     uintptr_t requested_stack = THREAD_STACK_DEFAULT;
 
     if (!thread || !start_routine) return EINVAL;
 
-    if (attr && attr->stacksize > 0) {
+    if (caller_stack) {
+        /* A caller-provided stack is a bounded object: never enlarge its
+         * declared extent to the runtime's preferred allocation minimum. */
+        if (attr->stacksize < PTHREAD_STACK_MIN) return EINVAL;
+        requested_stack = (uintptr_t)attr->stacksize;
+        if (requested_stack >
+            UINTPTR_MAX - (uintptr_t)attr->stackaddr)
+            return EINVAL;
+    } else if (attr && attr->stacksize > 0) {
+        if (attr->stacksize < PTHREAD_STACK_MIN) return EINVAL;
         requested_stack = (uintptr_t)attr->stacksize;
     }
-    if (requested_stack < THREAD_STACK_MIN) {
-        requested_stack = THREAD_STACK_MIN;
+    if (!caller_stack) {
+        if (requested_stack < THREAD_STACK_MIN) {
+            requested_stack = THREAD_STACK_MIN;
+        }
+        if (requested_stack > (UINTPTR_MAX - (THREAD_PAGE_SIZE - 1UL))) {
+            return EINVAL;
+        }
+        requested_stack = rin_align_up_word(requested_stack, THREAD_PAGE_SIZE);
     }
-    if (requested_stack > (UINTPTR_MAX - (THREAD_PAGE_SIZE - 1UL))) {
-        return EINVAL;
-    }
-    requested_stack = rin_align_up_word(requested_stack, THREAD_PAGE_SIZE);
 
-    if (attr && attr->stackaddr != NULL) {
+    if (caller_stack) {
         stack_usable_base = attr->stackaddr;
         stack_usable_size = requested_stack;
 #if defined(__x86_64__) || defined(_M_X64)
