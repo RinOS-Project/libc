@@ -19,6 +19,7 @@
 #include "sys/ioctl.h"
 #include "termios.h"
 #include "time.h"
+#include "internal/pthread_atfork.h"
 #include "internal/pthread_cancel_point.h"
 #if !defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
 #include "rin_account_compat.h"
@@ -1181,12 +1182,21 @@ static inline pid_t fork(void) {
     int allocator_fork_prepared = 0;
     int fork_hooks_prepared = 0;
     int rinfs_fork_prepared = 0;
+    int atfork_handlers_prepared = 0;
+    __rin_pthread_atfork_snapshot atfork_snapshot = {0u};
 #endif
     intptr_t result;
 #if !defined(MIDL_PASS)
+    if (__rin_pthread_atfork_prepare != NULL) {
+        __rin_pthread_atfork_prepare(&atfork_snapshot);
+        atfork_handlers_prepared = 1;
+    }
     if (rinfs_fork_hooks_prepare != NULL &&
         rinfs_fork_hooks_complete != NULL) {
         if (rinfs_fork_hooks_prepare() != 0) {
+            if (atfork_handlers_prepared &&
+                __rin_pthread_atfork_parent != NULL)
+                __rin_pthread_atfork_parent(&atfork_snapshot);
             errno = EBUSY;
             return -1;
         }
@@ -1196,6 +1206,9 @@ static inline pid_t fork(void) {
         if (rinfs_fork_prepare() != 0) {
             int complete_result = __rin_fork_complete_local(
                 0, rinfs_fork_prepared, fork_hooks_prepared);
+            if (atfork_handlers_prepared &&
+                __rin_pthread_atfork_parent != NULL)
+                __rin_pthread_atfork_parent(&atfork_snapshot);
             errno = complete_result != 0 ? EIO : EBUSY;
             return -1;
         }
@@ -1209,15 +1222,23 @@ static inline pid_t fork(void) {
     result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_FORK));
     if (result < 0) {
 #if !defined(MIDL_PASS)
+        int fork_errno = errno;
         int complete_result = __rin_fork_complete_local(
             0, rinfs_fork_prepared, fork_hooks_prepared);
         if (allocator_fork_prepared &&
             rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
-        if (complete_result != 0) errno = EIO;
+        if (atfork_handlers_prepared &&
+            __rin_pthread_atfork_parent != NULL)
+            __rin_pthread_atfork_parent(&atfork_snapshot);
+        errno = complete_result != 0 ? EIO : fork_errno;
 #endif
         return -1;
     }
+#if !defined(MIDL_PASS)
+    if (result == 0 && __rin_pthread_atfork_child_reset != NULL)
+        __rin_pthread_atfork_child_reset();
+#endif
     if ((uintptr_t)result > (uintptr_t)INT_MAX) {
 #if !defined(MIDL_PASS)
         /* The kernel created a child; retain its cloned RinFS owner counts
@@ -1227,6 +1248,9 @@ static inline pid_t fork(void) {
         if (allocator_fork_prepared &&
             rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
+        if (atfork_handlers_prepared &&
+            __rin_pthread_atfork_parent != NULL)
+            __rin_pthread_atfork_parent(&atfork_snapshot);
         errno = complete_result != 0 ? EIO : EOVERFLOW;
 #else
         errno = EOVERFLOW;
@@ -1246,6 +1270,12 @@ static inline pid_t fork(void) {
         else if (allocator_fork_prepared &&
                  rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
+        if (atfork_handlers_prepared) {
+            if (result == 0 && __rin_pthread_atfork_child != NULL)
+                __rin_pthread_atfork_child(&atfork_snapshot);
+            else if (result != 0 && __rin_pthread_atfork_parent != NULL)
+                __rin_pthread_atfork_parent(&atfork_snapshot);
+        }
         /* fork cannot be rolled back after the kernel publishes the child.
          * Preserve the parent's PID result and surface local completion
          * failure in errno; the child exits before reaching user code. */
@@ -1505,13 +1535,12 @@ static inline int usleep(useconds_t usec) {
         return -1;
     }
     if (usec == 0) return 0;
-
     /* SYS_SLEEP has millisecond granularity; round up so it never returns
      * before the requested microsecond interval has elapsed. */
-    __rin_pthread_cancel_point_if_linked();
     uintptr_t ms = ((uintptr_t)usec + 999u) / 1000u;
     __rin_pthread_cancel_point_if_linked();
     result = _RIN_UNISTD_SLEEP(ms);
+    __rin_pthread_cancel_point_if_linked();
     if (result < 0) {
         if (__rin_syscall_posixize(result) != -1) errno = EIO;
         return -1;
@@ -2291,9 +2320,9 @@ static inline void sync(void) {
 static inline int fsync(int fd) {
     __rin_pthread_cancel_point_if_linked();
     int result = _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
+        SYS_FSYNC, (uintptr_t)(intptr_t)fd));
     __rin_pthread_cancel_point_if_linked();
     return result;
-        SYS_FSYNC, (uintptr_t)(intptr_t)fd));
 }
 
 static inline int fdatasync(int fd) {

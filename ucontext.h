@@ -12,6 +12,18 @@
 #include "stdarg.h"
 #include "sys/syscall.h"
 
+/* The return trampoline is referenced from inline assembly, so its finish
+ * helper must be retained when this header implements user context switches.
+ * Kernel translation units also include ucontext_t through signal.h, but do
+ * not all provide the userspace errno accessor. Keep the helper discardable
+ * there unless a kernel owner explicitly opts in. */
+#if defined(RIN_KERNEL) && \
+    !defined(RIN_UCONTEXT_CONTEXT_SWITCH_OWNER)
+#define RIN_UCONTEXT_FINISH_ATTRIBUTE __attribute__((noreturn, unused))
+#else
+#define RIN_UCONTEXT_FINISH_ATTRIBUTE __attribute__((noreturn, used))
+#endif
+
 #ifdef __cplusplus
 #define RIN_UCONTEXT_STATIC_ASSERT(condition, message) static_assert(condition, message)
 #else
@@ -442,7 +454,7 @@ setcontext(const ucontext_t* context) {
     __builtin_unreachable();
 }
 
-static __attribute__((noreturn, used)) void rin_ucontext_finish(void) {
+static RIN_UCONTEXT_FINISH_ATTRIBUTE void rin_ucontext_finish(void) {
     ucontext_t* link;
 
     __asm__ volatile("movq %%r12, %0" : "=r"(link));
@@ -737,7 +749,7 @@ setcontext(const ucontext_t* context) {
 /* ESI is callee-saved by the i386 ABI and carries uc_link for a prepared
  * context. A returning entry therefore reaches its link without a global
  * context table or cross-thread state. */
-static __attribute__((noreturn, noinline, used)) void
+static __attribute__((noinline)) RIN_UCONTEXT_FINISH_ATTRIBUTE void
 rin_ucontext_i386_finish(void) {
     ucontext_t* link;
 
@@ -893,5 +905,6 @@ static inline int swapcontext(ucontext_t* old_context,
 #undef RIN_UCONTEXT_STATIC_ASSERT
 #undef RIN_UCONTEXT_RETURNS_TWICE
 #undef RIN_UCONTEXT_NOINLINE
+#undef RIN_UCONTEXT_FINISH_ATTRIBUTE
 
 #endif /* _UCONTEXT_H */

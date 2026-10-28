@@ -1290,6 +1290,8 @@ static inline int pthread_sigqueue(pthread_t thread, int sig,
 
 /* Product-owned deferred cancellation.  The implementation keeps the
  * cancellation record in libc rather than inheriting a host pthread ABI. */
+int pthread_atfork(void (*prepare)(void), void (*parent)(void),
+                   void (*child)(void));
 int pthread_setcancelstate(int state, int* oldstate);
 int pthread_setcanceltype(int type, int* oldtype);
 int pthread_cancel(pthread_t thread);
