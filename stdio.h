@@ -131,6 +131,8 @@ int remove(const char* pathname);
 int rename(const char* oldpath, const char* newpath);
 FILE* tmpfile(void);
 char* tmpnam(char* s);
+FILE* popen(const char* command, const char* type);
+int pclose(FILE* stream);
 FILE* fmemopen(void* buffer, size_t size, const char* mode);
 FILE* open_memstream(char** buffer, size_t* size);
 
