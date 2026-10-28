@@ -45,9 +45,6 @@
 #ifndef _POSIX_PRIORITY_SCHEDULING
 #define _POSIX_PRIORITY_SCHEDULING 200809L
 #endif
-#ifndef _POSIX_TIMERS
-#define _POSIX_TIMERS 200809L
-#endif
 #ifndef _POSIX_MESSAGE_PASSING
 #define _POSIX_MESSAGE_PASSING 200809L
 #endif
@@ -1811,8 +1808,6 @@ static inline long sysconf(int name) {
             return 1;
         case _SC_PRIORITY_SCHEDULING:
             return _POSIX_PRIORITY_SCHEDULING;
-        case _SC_TIMERS:
-            return _POSIX_TIMERS;
         case _SC_MESSAGE_PASSING:
             return _POSIX_MESSAGE_PASSING;
         case _SC_MQ_OPEN_MAX:
@@ -1894,6 +1889,7 @@ static inline long sysconf(int name) {
         case _SC_PRIORITIZED_IO:
         case _SC_REGEXP:
         case _SC_SEMAPHORES:
+        case _SC_TIMERS:
         case _SC_SHARED_MEMORY_OBJECTS:
         case _SC_BC_BASE_MAX:
         case _SC_BC_DIM_MAX:
