@@ -1605,25 +1605,82 @@ static inline int setgid(gid_t gid) {
  * スリープ関連
  * ═══════════════════════════════════════════════════════════════*/
 
-static inline unsigned int sleep(unsigned int seconds) {
-    unsigned long long remaining_ms = (unsigned long long)seconds * 1000ULL;
+static inline int __rin_unistd_monotonic_ns(uint64_t* output) {
+    if (!output) return -1;
+#if defined(__x86_64__)
+    {
+        intptr_t result = __rin_syscall_posixize(_RIN_TIME_NS64());
+        if (result < 0) {
+            if (result != -1) errno = EIO;
+            return -1;
+        }
+        *output = (uint64_t)result;
+    }
+#else
+    *output = 0u;
+    {
+        intptr_t result = __rin_syscall_posixize(_RIN_TIME_NS32(output));
+        if (result < 0) {
+            if (result != -1) errno = EIO;
+            return -1;
+        }
+        if (result != 0) {
+            errno = EIO;
+            return -1;
+        }
+    }
+#endif
+    return 0;
+}
 
-    while (remaining_ms != 0) {
+static inline unsigned int sleep(unsigned int seconds) {
+    uint64_t remaining_ns = (uint64_t)seconds * UINT64_C(1000000000);
+
+    while (remaining_ns != 0u) {
+        uint64_t chunk_ms64;
+        uint64_t chunk_ns;
+        uint64_t started_ns = 0u;
+        uint64_t finished_ns = 0u;
+        uint64_t elapsed_ns;
+        uint32_t chunk_ms;
+        int measurement_errno = errno;
+        int have_started =
+            __rin_unistd_monotonic_ns(&started_ns) == 0;
+        intptr_t result;
+
+        errno = measurement_errno;
         __rin_pthread_cancel_point_if_linked();
-        /* SYS_SLEEP is a uint32_t millisecond ABI on both x86 targets. */
-        unsigned long chunk = remaining_ms > 0xffffffffULL
-            ? 0xffffffffUL : (unsigned long)remaining_ms;
-        intptr_t result = _RIN_UNISTD_SLEEP(chunk);
+        /* SYS_SLEEP accepts uint32 milliseconds on both x86 targets. */
+        chunk_ms64 = remaining_ns / UINT64_C(1000000);
+        if ((remaining_ns % UINT64_C(1000000)) != 0u) ++chunk_ms64;
+        chunk_ms = chunk_ms64 > UINT32_MAX
+            ? UINT32_MAX : (uint32_t)chunk_ms64;
+        chunk_ns = (uint64_t)chunk_ms * UINT64_C(1000000);
+        result = _RIN_UNISTD_SLEEP((unsigned long)chunk_ms);
         __rin_pthread_cancel_point_if_linked();
         if (result != 0) {
+            int sleep_errno;
             if (result < 0) {
-                if (__rin_syscall_posixize(result) != -1) errno = EIO;
+                if (__rin_syscall_posixize(result) == -1)
+                    sleep_errno = errno;
+                else
+                    sleep_errno = EIO;
             } else {
-                errno = EIO;
+                sleep_errno = EIO;
             }
-            return (unsigned int)((remaining_ms + 999ULL) / 1000ULL);
+            if (have_started &&
+                __rin_unistd_monotonic_ns(&finished_ns) == 0 &&
+                finished_ns >= started_ns) {
+                elapsed_ns = finished_ns - started_ns;
+                remaining_ns = elapsed_ns >= remaining_ns
+                    ? 0u : remaining_ns - elapsed_ns;
+            }
+            errno = sleep_errno;
+            return (unsigned int)(remaining_ns / UINT64_C(1000000000) +
+                ((remaining_ns % UINT64_C(1000000000)) != 0u ? 1u : 0u));
         }
-        remaining_ms -= (unsigned long long)chunk;
+        remaining_ns = chunk_ns >= remaining_ns
+            ? 0u : remaining_ns - chunk_ns;
     }
     return 0;
 }
