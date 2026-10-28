@@ -943,10 +943,9 @@ static inline int _rin_glob_run_body(
         if (brace_handled) return brace_result;
     }
     pattern_length = _rin_glob_strlen(pattern);
-    if (pattern_length == 0u)
-        return _rin_glob_no_match(pglob, flags);
     if (pattern_length >= _RIN_GLOB_MAX_PATTERN) return GLOB_NOSPACE;
-    trailing_slash = pattern[pattern_length - 1u] == '/';
+    trailing_slash = pattern_length != 0u &&
+                     pattern[pattern_length - 1u] == '/';
     prefix[0] = '\0';
     if (pattern[0] == '/') {
         prefix[0] = '/';
