@@ -33,7 +33,7 @@ static inline int rin_syscall_batch(RinSyscallBatchV1* request)
                        (uintptr_t)(void*)request);
     result = __rin_syscall_posixize(result);
     if (result < 0) {
-        errno = result >= -4095 ? (int)-result : EIO;
+        if (result != -1) errno = EIO;
         return -1;
     }
     if (result != 0) {
