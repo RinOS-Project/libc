@@ -259,7 +259,9 @@ static int rin_aio_prepare(struct aiocb* control, int operation,
         (void)close(held_fd);
         return error;
     }
-    if ((operation == RIN_AIO_OP_READ && (flags & O_ACCMODE) == O_WRONLY) ||
+    if ((operation == RIN_AIO_OP_FSYNC &&
+         (flags & O_ACCMODE) == O_RDONLY) ||
+        (operation == RIN_AIO_OP_READ && (flags & O_ACCMODE) == O_WRONLY) ||
         (operation == RIN_AIO_OP_WRITE &&
          (flags & O_ACCMODE) == O_RDONLY)) {
         (void)close(held_fd);
