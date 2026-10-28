@@ -15,6 +15,7 @@
 #define RIN_AIO_CAPACITY AIO_MAX
 #define RIN_AIO_WORKERS 4u
 #define RIN_AIO_WORKER_STACK (1024u * 1024u)
+#define RIN_AIO_CALLBACK_CAPACITY RIN_AIO_CAPACITY
 
 enum RinAioState {
     RIN_AIO_FREE = 0,
@@ -36,6 +37,7 @@ typedef struct RinAioNotification {
     void (*function)(union sigval);
     pthread_attr_t attributes;
     int has_attributes;
+    int callback_reserved;
 } RinAioNotification;
 
 typedef struct RinAioGroup {
@@ -62,6 +64,13 @@ typedef struct RinAioCallback {
     union sigval value;
 } RinAioCallback;
 
+typedef struct RinAioCallbackJob {
+    void (*function)(union sigval);
+    union sigval value;
+    pthread_attr_t attributes;
+    int has_attributes;
+} RinAioCallbackJob;
+
 static pthread_mutex_t g_rin_aio_mutex = PTHREAD_MUTEX_INITIALIZER;
 /* aio_suspend() accepts a relative timeout. Pair its monotonic deadline with
  * a condition variable configured for the same clock. */
@@ -72,8 +81,102 @@ static RinAioRequest g_rin_aio_requests[RIN_AIO_CAPACITY];
 static uint32_t g_rin_aio_worker_count;
 static uint32_t g_rin_aio_idle_worker_count;
 static uint64_t g_rin_aio_next_sequence = 1u;
+/* A dedicated dispatcher keeps callback work out of the I/O worker pool.
+ * Reservations bound queued plus running callback work before an AIO request
+ * is accepted, so completion never has to run a callback inline or drop it. */
+static pthread_mutex_t g_rin_aio_callback_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_rin_aio_callback_changed = {
+    0u, 0, CLOCK_MONOTONIC, PTHREAD_PROCESS_PRIVATE
+};
+static RinAioCallbackJob
+    g_rin_aio_callback_jobs[RIN_AIO_CALLBACK_CAPACITY];
+static uint32_t g_rin_aio_callback_head;
+static uint32_t g_rin_aio_callback_count;
+static uint32_t g_rin_aio_callback_reservations;
+static uint32_t g_rin_aio_callback_dispatcher_started;
 
 static void* rin_aio_worker(void* unused);
+static void* rin_aio_callback_dispatcher(void* unused);
+static int rin_aio_callback_start_dispatcher_locked(void);
+static int rin_aio_callback_reserve(void);
+static void rin_aio_callback_release_reservation(void);
+
+static int rin_aio_callback_start_dispatcher_locked(void)
+{
+    pthread_attr_t attributes;
+    pthread_t thread;
+    int attributes_initialized = 0;
+    int result = pthread_attr_init(&attributes);
+    if (result == 0) {
+        attributes_initialized = 1;
+        result = pthread_attr_setdetachstate(
+            &attributes, PTHREAD_CREATE_DETACHED);
+    }
+    if (result == 0)
+        result = pthread_create(&thread, &attributes,
+                                rin_aio_callback_dispatcher, NULL);
+    if (attributes_initialized)
+        (void)pthread_attr_destroy(&attributes);
+    if (result == 0) g_rin_aio_callback_dispatcher_started = 1u;
+    return result == 0 ? 0 : EAGAIN;
+}
+
+static int rin_aio_callback_reserve(void)
+{
+    int result = 0;
+    (void)pthread_mutex_lock(&g_rin_aio_callback_mutex);
+    if (g_rin_aio_callback_dispatcher_started == 0u) {
+        result = rin_aio_callback_start_dispatcher_locked();
+        if (result != 0) {
+            (void)pthread_mutex_unlock(&g_rin_aio_callback_mutex);
+            return EAGAIN;
+        }
+    }
+    if (g_rin_aio_callback_reservations >=
+        RIN_AIO_CALLBACK_CAPACITY) {
+        result = EAGAIN;
+    } else {
+        ++g_rin_aio_callback_reservations;
+    }
+    (void)pthread_mutex_unlock(&g_rin_aio_callback_mutex);
+    return result;
+}
+
+static void rin_aio_callback_release_reservation(void)
+{
+    (void)pthread_mutex_lock(&g_rin_aio_callback_mutex);
+    if (g_rin_aio_callback_reservations != 0u)
+        --g_rin_aio_callback_reservations;
+    if (g_rin_aio_callback_dispatcher_started == 0u &&
+        g_rin_aio_callback_count != 0u)
+        (void)rin_aio_callback_start_dispatcher_locked();
+    (void)pthread_cond_broadcast(&g_rin_aio_callback_changed);
+    (void)pthread_mutex_unlock(&g_rin_aio_callback_mutex);
+}
+
+static void rin_aio_callback_release_cleanup(void* unused)
+{
+    (void)unused;
+    rin_aio_callback_release_reservation();
+}
+
+static void rin_aio_callback_dispatcher_recover(void* unused)
+{
+    (void)unused;
+    (void)pthread_mutex_lock(&g_rin_aio_callback_mutex);
+    g_rin_aio_callback_dispatcher_started = 0u;
+    if (g_rin_aio_callback_count != 0u)
+        (void)rin_aio_callback_start_dispatcher_locked();
+    (void)pthread_cond_broadcast(&g_rin_aio_callback_changed);
+    (void)pthread_mutex_unlock(&g_rin_aio_callback_mutex);
+}
+
+static void rin_aio_notification_release(
+    const RinAioNotification* notification)
+{
+    if (notification && notification->callback_reserved)
+        rin_aio_callback_release_reservation();
+}
 
 static int rin_aio_notification_snapshot(const struct sigevent* source,
                                          RinAioNotification* output)
@@ -116,9 +219,18 @@ static int rin_aio_notification_snapshot(const struct sigevent* source,
                 output->attributes.stacksize < PTHREAD_STACK_MIN)
                 return EINVAL;
             output->has_attributes = 1;
-            /* 通知スレッドの寿命はAIO実装が管理する。 */
-            output->attributes.detachstate = PTHREAD_CREATE_DETACHED;
+        } else {
+            if (pthread_attr_init(&output->attributes) != 0)
+                return EAGAIN;
+            output->has_attributes = 1;
         }
+        /* POSIX owns callback thread lifetime; never leave a joinable thread
+         * whose identifier is not returned to the caller. */
+        if (pthread_attr_setdetachstate(
+                &output->attributes, PTHREAD_CREATE_DETACHED) != 0)
+            return EAGAIN;
+        if (rin_aio_callback_reserve() != 0) return EAGAIN;
+        output->callback_reserved = 1;
         return 0;
     }
     return EINVAL;
@@ -130,8 +242,55 @@ static void* rin_aio_callback_start(void* argument)
     void (*function)(union sigval) = callback->function;
     union sigval value = callback->value;
     free(callback);
+    pthread_cleanup_push(rin_aio_callback_release_cleanup, NULL);
     function(value);
+    pthread_cleanup_pop(1);
     return NULL;
+}
+
+static void* rin_aio_callback_dispatcher(void* unused)
+{
+    (void)unused;
+    for (;;) {
+        RinAioCallbackJob job;
+        (void)pthread_mutex_lock(&g_rin_aio_callback_mutex);
+        while (g_rin_aio_callback_count == 0u)
+            (void)pthread_cond_wait(&g_rin_aio_callback_changed,
+                                    &g_rin_aio_callback_mutex);
+        job = g_rin_aio_callback_jobs[g_rin_aio_callback_head];
+        memset(&g_rin_aio_callback_jobs[g_rin_aio_callback_head], 0,
+               sizeof(g_rin_aio_callback_jobs[0]));
+        g_rin_aio_callback_head =
+            (g_rin_aio_callback_head + 1u) % RIN_AIO_CALLBACK_CAPACITY;
+        --g_rin_aio_callback_count;
+        (void)pthread_cond_broadcast(&g_rin_aio_callback_changed);
+        (void)pthread_mutex_unlock(&g_rin_aio_callback_mutex);
+
+        {
+            RinAioCallback* callback =
+                (RinAioCallback*)malloc(sizeof(*callback));
+            pthread_t thread;
+            int result = EAGAIN;
+            if (callback) {
+                callback->function = job.function;
+                callback->value = job.value;
+                result = pthread_create(
+                    &thread, job.has_attributes ? &job.attributes : NULL,
+                    rin_aio_callback_start, callback);
+                if (result == 0) continue;
+                free(callback);
+            }
+        }
+
+        /* Resource exhaustion falls back to this dedicated dispatcher, never
+         * an I/O worker. A callback that waits for AIO therefore leaves the
+         * independent I/O worker pool available to make progress. */
+        pthread_cleanup_push(rin_aio_callback_dispatcher_recover, NULL);
+        pthread_cleanup_push(rin_aio_callback_release_cleanup, NULL);
+        job.function(job.value);
+        pthread_cleanup_pop(1);
+        pthread_cleanup_pop(0);
+    }
 }
 
 static void rin_aio_notify(const RinAioNotification* notification)
@@ -142,28 +301,24 @@ static void rin_aio_notify(const RinAioNotification* notification)
         return;
     }
     if (notification->kind == SIGEV_THREAD && notification->function) {
-        RinAioCallback* callback =
-            (RinAioCallback*)malloc(sizeof(*callback));
-        pthread_t thread;
-        pthread_attr_t attributes;
-        const pthread_attr_t* attributes_ptr = NULL;
-        int result;
-        if (!callback) {
-            notification->function(notification->value);
-            return;
-        }
-        callback->function = notification->function;
-        callback->value = notification->value;
-        if (notification->has_attributes) {
-            attributes = notification->attributes;
-            attributes_ptr = &attributes;
-        }
-        result = pthread_create(&thread, attributes_ptr,
-                                rin_aio_callback_start, callback);
-        if (result != 0) {
-            free(callback);
-            notification->function(notification->value);
-        }
+        uint32_t tail;
+        if (!notification->callback_reserved) return;
+        (void)pthread_mutex_lock(&g_rin_aio_callback_mutex);
+        while (g_rin_aio_callback_count >= RIN_AIO_CALLBACK_CAPACITY)
+            (void)pthread_cond_wait(&g_rin_aio_callback_changed,
+                                    &g_rin_aio_callback_mutex);
+        tail = (g_rin_aio_callback_head + g_rin_aio_callback_count) %
+               RIN_AIO_CALLBACK_CAPACITY;
+        g_rin_aio_callback_jobs[tail].function = notification->function;
+        g_rin_aio_callback_jobs[tail].value = notification->value;
+        g_rin_aio_callback_jobs[tail].has_attributes =
+            notification->has_attributes;
+        if (notification->has_attributes)
+            g_rin_aio_callback_jobs[tail].attributes =
+                notification->attributes;
+        ++g_rin_aio_callback_count;
+        (void)pthread_cond_signal(&g_rin_aio_callback_changed);
+        (void)pthread_mutex_unlock(&g_rin_aio_callback_mutex);
     }
 }
 
@@ -260,11 +415,16 @@ static int rin_aio_prepare(struct aiocb* control, int operation,
     /* 先に複製し、別スレッドが元FDを閉じて再利用しても、送信時に選ばれた
      * open file descriptionを要求完了まで保持する。 */
     held_fd = fcntl(control->aio_fildes, F_DUPFD_CLOEXEC, 0);
-    if (held_fd < 0) return errno;
+    if (held_fd < 0) {
+        error = errno;
+        rin_aio_notification_release(notification_out);
+        return error;
+    }
     flags = fcntl(held_fd, F_GETFL);
     if (flags < 0) {
         error = errno;
         (void)close(held_fd);
+        rin_aio_notification_release(notification_out);
         return error;
     }
     if ((operation == RIN_AIO_OP_FSYNC &&
@@ -273,6 +433,7 @@ static int rin_aio_prepare(struct aiocb* control, int operation,
         (operation == RIN_AIO_OP_WRITE &&
          (flags & O_ACCMODE) == O_RDONLY)) {
         (void)close(held_fd);
+        rin_aio_notification_release(notification_out);
         return EBADF;
     }
     *held_fd_out = held_fd;
@@ -320,6 +481,7 @@ static int rin_aio_submit_prepared(struct aiocb* control, int operation,
     (void)pthread_mutex_unlock(&g_rin_aio_mutex);
     if (error != 0) {
         (void)close(held_fd);
+        rin_aio_notification_release(notification);
         errno = error;
         return -1;
     }
@@ -693,11 +855,15 @@ int aio_suspend(const struct aiocb* const requests[], int count,
 }
 
 static void rin_aio_release_prepared(struct aiocb* const requests[],
-                                     const int held_fds[], int count)
+                                     const int held_fds[],
+                                     const RinAioNotification notifications[],
+                                     int count)
 {
     int index;
-    for (index = 0; index < count; ++index)
+    for (index = 0; index < count; ++index) {
         if (held_fds[index] >= 0) (void)close(held_fds[index]);
+        rin_aio_notification_release(&notifications[index]);
+    }
     (void)requests;
 }
 
@@ -732,6 +898,7 @@ int lio_listio(int mode, struct aiocb* const requests[], int count,
         if (list_notification.kind != SIGEV_NONE) {
             group = (RinAioGroup*)malloc(sizeof(*group));
             if (!group) {
+                rin_aio_notification_release(&list_notification);
                 errno = EAGAIN;
                 return -1;
             }
@@ -814,7 +981,10 @@ int lio_listio(int mode, struct aiocb* const requests[], int count,
     }
 
     if (error != 0) {
-        rin_aio_release_prepared(controls, held_fds, active_count);
+        rin_aio_release_prepared(controls, held_fds, request_notifications,
+                                 active_count);
+        if (group)
+            rin_aio_notification_release(&group->notification);
         free(group);
         errno = error;
         return -1;
