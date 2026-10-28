@@ -1321,11 +1321,19 @@ _RIN_STDIO_API ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
         *n = capacity;
     }
 
+    flockfile(stream);
     for (;;) {
-        int c = fgetc(stream);
+        int c = _rin_fgetc_unlocked(stream);
         if (c == EOF) {
-            if (length == 0u)
+            if (stream->error) {
+                (*lineptr)[length] = '\0';
+                funlockfile(stream);
                 return (ssize_t)-1;
+            }
+            if (length == 0u) {
+                funlockfile(stream);
+                return (ssize_t)-1;
+            }
             break;
         }
         if (length + 1u >= capacity) {
@@ -1334,11 +1342,13 @@ _RIN_STDIO_API ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
                 : (size_t)-1;
             if (next_capacity <= capacity || next_capacity < length + 2u) {
                 errno = ENOMEM;
+                funlockfile(stream);
                 return (ssize_t)-1;
             }
             replacement = (char*)realloc(*lineptr, next_capacity);
             if (!replacement) {
                 errno = ENOMEM;
+                funlockfile(stream);
                 return (ssize_t)-1;
             }
             *lineptr = replacement;
@@ -1349,6 +1359,7 @@ _RIN_STDIO_API ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
             break;
     }
     (*lineptr)[length] = '\0';
+    funlockfile(stream);
     return (ssize_t)length;
 }
 
@@ -1378,11 +1389,19 @@ _RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* 
         *n = capacity;
     }
 
+    flockfile(stream);
     for (;;) {
-        int c = fgetc(stream);
+        int c = _rin_fgetc_unlocked(stream);
         if (c == EOF) {
-            if (length == 0u)
+            if (stream->error) {
+                (*lineptr)[length] = '\0';
+                funlockfile(stream);
                 return (ssize_t)-1;
+            }
+            if (length == 0u) {
+                funlockfile(stream);
+                return (ssize_t)-1;
+            }
             break;
         }
         if (length + 1u >= capacity) {
@@ -1391,11 +1410,13 @@ _RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* 
                 : (size_t)-1;
             if (next_capacity <= capacity || next_capacity < length + 2u) {
                 errno = ENOMEM;
+                funlockfile(stream);
                 return (ssize_t)-1;
             }
             replacement = (char*)realloc(*lineptr, next_capacity);
             if (!replacement) {
                 errno = ENOMEM;
+                funlockfile(stream);
                 return (ssize_t)-1;
             }
             *lineptr = replacement;
@@ -1406,6 +1427,7 @@ _RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* 
             break;
     }
     (*lineptr)[length] = '\0';
+    funlockfile(stream);
     return (ssize_t)length;
 }
 
