@@ -1478,6 +1478,8 @@ static inline const char* gai_strerror(int errcode) {
         case EAI_FAMILY: return "Address family not supported";
         case EAI_MEMORY: return "Memory allocation failure";
         case EAI_NONAME: return "Name does not resolve";
+        case EAI_NODATA: return "No address data available";
+        case EAI_OVERFLOW: return "Argument buffer overflow";
         case EAI_SERVICE: return "Service not supported";
         case EAI_SOCKTYPE: return "Socket type not supported";
         case EAI_SYSTEM: return "System error";
