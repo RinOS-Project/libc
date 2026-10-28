@@ -619,7 +619,7 @@ static inline int faccessat(int dirfd, const char* pathname, int mode, int flags
     }
     _fcntl_path_at_init(&call, RIN_PATH_AT_ACCESS);
     call.dirfd = dirfd;
-    call.flags = (uint32_t)(flags & ~AT_EMPTY_PATH);
+    call.flags = (uint32_t)flags;
     call.mode = (uint32_t)mode;
     call.path1 = (uint64_t)(uintptr_t)pathname;
     return _fcntl_path_at_zero(&call);
