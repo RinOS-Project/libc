@@ -651,6 +651,9 @@ static inline char* dlerror(void) {
     /* まずカーネルエラーをチェック */
     const char* kernel_err = _dynlink_error_copy_v1();
     if (kernel_err && kernel_err[0]) {
+        /* The kernel detail supersedes the generic local error queued by the
+         * same failed dlopen/dlclose/dlsym operation. */
+        _dlerror_flag = 0;
         /* カーネルエラーをローカルバッファにコピー */
         int i = 0;
         while (kernel_err[i] && i < 255) {
