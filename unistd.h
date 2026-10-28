@@ -463,6 +463,10 @@ static inline int _rin_unistd_status(intptr_t result) {
  * ═══════════════════════════════════════════════════════════════*/
 
 static inline ssize_t read(int fd, void* buf, size_t count) {
+    if (count > (size_t)SSIZE_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
     __rin_pthread_cancel_point_if_linked();
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL3(
         SYS_READ, (uintptr_t)(intptr_t)fd, (uintptr_t)buf, (uintptr_t)count));
@@ -480,6 +484,10 @@ static inline ssize_t read(int fd, void* buf, size_t count) {
 }
 
 static inline ssize_t write(int fd, const void* buf, size_t count) {
+    if (count > (size_t)SSIZE_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
     __rin_pthread_cancel_point_if_linked();
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL3(
         SYS_WRITE, (uintptr_t)(intptr_t)fd, (uintptr_t)buf, (uintptr_t)count));
