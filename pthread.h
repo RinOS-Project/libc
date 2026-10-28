@@ -495,7 +495,7 @@ static inline int pthread_getname_np(pthread_t thread, char* name, size_t len) {
     int result_error;
 
     if (!name) return EINVAL;
-    if (len < RIN_THREAD_NAME_CAPACITY) return ERANGE;
+    if (len == 0u) return ERANGE;
     if (thread == 0u) return ESRCH;
     for (size_t index = 0u; index < sizeof(request); ++index)
         ((unsigned char*)&request)[index] = 0u;
@@ -523,7 +523,8 @@ static inline int pthread_getname_np(pthread_t thread, char* name, size_t len) {
          index < RIN_THREAD_NAME_CAPACITY; ++index) {
         if (request.name[index] != '\0') return EIO;
     }
-    for (size_t index = 0u; index < RIN_THREAD_NAME_CAPACITY; ++index)
+    if (len <= terminator) return ERANGE;
+    for (size_t index = 0u; index <= terminator; ++index)
         name[index] = request.name[index];
     return 0;
 #endif

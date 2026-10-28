@@ -11,6 +11,7 @@
 #include "../stdint.h"
 #include "../errno.h"
 #include "../sys/syscall.h"
+#include "../linux/seccomp.h"
 #include <rin/thread/name_abi.h>
 
 #ifndef _RIN_PRCTL_NAME_SYSCALL1
@@ -111,11 +112,6 @@ extern "C" {
 /* Unalign control */
 #define PR_UNALIGN_NOPRINT  1
 #define PR_UNALIGN_SIGBUS   2
-
-/* Seccomp modes */
-#define SECCOMP_MODE_DISABLED   0
-#define SECCOMP_MODE_STRICT     1
-#define SECCOMP_MODE_FILTER     2
 
 /* MCE kill modes */
 #define PR_MCE_KILL_CLEAR   0
@@ -254,28 +250,29 @@ static inline int _rin_prctl_get_name(uintptr_t argument) {
 
 static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
                               uintptr_t arg4, uintptr_t arg5) {
-    (void)arg3; (void)arg4; (void)arg5;
-
-    /* Do not emulate process-security state in a per-translation-unit header.
-     * Only architecture facts that this implementation can report truthfully
-     * are accepted until a kernel prctl contract exists. */
+    intptr_t result;
     if (option == PR_SET_NAME) return _rin_prctl_set_name(arg2);
     if (option == PR_GET_NAME) return _rin_prctl_get_name(arg2);
-    /* Seccomp mode is process state, not an architecture fact.  Until a
-     * kernel-owned process security snapshot is available, do not report a
-     * synthetic disabled mode to callers. */
-    if (option == PR_GET_SECCOMP) {
-        errno = ENOSYS;
-        return -1;
+    if (option == PR_SET_NO_NEW_PRIVS || option == PR_GET_NO_NEW_PRIVS ||
+        option == PR_SET_SECCOMP || option == PR_GET_SECCOMP ||
+        option == PR_SET_TSC || option == PR_GET_TSC) {
+        result = _syscall5(SYS_PRCTL, (uintptr_t)option, arg2, arg3,
+                           arg4, arg5);
+        if (result < 0) {
+            uintptr_t error = (uintptr_t)0 - (uintptr_t)result;
+            errno = error != 0u && error <= (uintptr_t)4095u
+                        ? (int)error : EIO;
+            return -1;
+        }
+        if (result > 2147483647) {
+            errno = EIO;
+            return -1;
+        }
+        return (int)result;
     }
     if (option == PR_GET_ENDIAN) {
         if (!arg2) { errno = EINVAL; return -1; }
         *(int*)(uintptr_t)arg2 = PR_ENDIAN_LITTLE;
-        return 0;
-    }
-    if (option == PR_GET_TSC) {
-        if (!arg2) { errno = EINVAL; return -1; }
-        *(int*)(uintptr_t)arg2 = PR_TSC_ENABLE;
         return 0;
     }
     errno = ENOSYS;
@@ -283,12 +280,14 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
 }
 
 /* ═══════════════════════════════════════════════════════════════
- * prctl() wrapper - only the supported GET options consume an int pointer.
- * Keep that value as a target pointer-width word across the varargs boundary.
+ * Keep pointer and scalar prctl operands at the target pointer width.
  * ═══════════════════════════════════════════════════════════════*/
 
 static inline int prctl(int option, ...) {
     uintptr_t arg2 = 0;
+    uintptr_t arg3 = 0;
+    uintptr_t arg4 = 0;
+    uintptr_t arg5 = 0;
     if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
         option == PR_SET_NAME || option == PR_GET_NAME) {
         __builtin_va_list args;
@@ -298,8 +297,22 @@ static inline int prctl(int option, ...) {
         else
             arg2 = __builtin_va_arg(args, uintptr_t);
         __builtin_va_end(args);
+    } else if (option == PR_SET_TSC) {
+        __builtin_va_list args;
+        __builtin_va_start(args, option);
+        arg2 = __builtin_va_arg(args, uintptr_t);
+        __builtin_va_end(args);
+    } else if (option == PR_SET_NO_NEW_PRIVS ||
+               option == PR_SET_SECCOMP) {
+        __builtin_va_list args;
+        __builtin_va_start(args, option);
+        arg2 = __builtin_va_arg(args, uintptr_t);
+        arg3 = __builtin_va_arg(args, uintptr_t);
+        arg4 = __builtin_va_arg(args, uintptr_t);
+        arg5 = __builtin_va_arg(args, uintptr_t);
+        __builtin_va_end(args);
     }
-    return _prctl_impl(option, arg2, 0, 0, 0);
+    return _prctl_impl(option, arg2, arg3, arg4, arg5);
 }
 
 #ifdef __cplusplus

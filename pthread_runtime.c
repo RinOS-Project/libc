@@ -302,11 +302,6 @@ typedef struct {
     int detached;
 } rin_thread_stack_rec_t;
 
-typedef struct {
-    pthread_t tid;
-    char name[16];
-} rin_thread_name_rec_t;
-
 enum {
     RIN_THREAD_ALLOC_NONE = 0,
     RIN_THREAD_ALLOC_MALLOC = 1,
@@ -316,8 +311,6 @@ enum {
 #define RIN_THREAD_STACK_REC_MAX 256
 static rin_thread_stack_rec_t g_thread_stack_recs[RIN_THREAD_STACK_REC_MAX];
 static volatile unsigned int g_thread_stack_lock = 0;
-#define RIN_THREAD_NAME_REC_MAX (RIN_THREAD_STACK_REC_MAX + 1u)
-static rin_thread_name_rec_t g_thread_name_recs[RIN_THREAD_NAME_REC_MAX];
 
 /* pthread_tls.c で定義 */
 extern void __pthread_run_destructors(void);
@@ -367,34 +360,6 @@ static rin_thread_stack_rec_t* rin_thread_stack_find_locked(pthread_t tid) {
     return NULL;
 }
 
-static rin_thread_name_rec_t* rin_thread_name_find_locked(pthread_t tid) {
-    for (unsigned int i = 0; i < RIN_THREAD_NAME_REC_MAX; i++) {
-        if (g_thread_name_recs[i].tid == tid) {
-            return &g_thread_name_recs[i];
-        }
-    }
-    return NULL;
-}
-
-static rin_thread_name_rec_t* rin_thread_name_find_free_locked(void) {
-    for (unsigned int i = 0; i < RIN_THREAD_NAME_REC_MAX; i++) {
-        if (g_thread_name_recs[i].tid == 0) {
-            return &g_thread_name_recs[i];
-        }
-    }
-    return NULL;
-}
-
-static void rin_thread_name_clear_locked(pthread_t tid) {
-    rin_thread_name_rec_t* record = rin_thread_name_find_locked(tid);
-    if (record) {
-        for (unsigned int i = 0; i < sizeof(record->name); i++) {
-            record->name[i] = '\0';
-        }
-        record->tid = 0;
-    }
-}
-
 static int rin_thread_name_copy(char destination[16], const char* source) {
     unsigned int index;
 
@@ -408,15 +373,6 @@ static int rin_thread_name_copy(char destination[16], const char* source) {
         destination[index] = ch;
     }
     return ERANGE;
-}
-
-static size_t rin_thread_name_length(const char name[16]) {
-    size_t length;
-
-    for (length = 0; length < 16u; ++length) {
-        if (name[length] == '\0') return length;
-    }
-    return 16u;
 }
 
 static void rin_thread_stack_register(pthread_t tid, void* alloc_base,
@@ -464,7 +420,6 @@ static int rin_thread_stack_take(pthread_t tid, void** alloc_base,
         if (alloc_size) *alloc_size = rec->alloc_size;
         if (alloc_kind) *alloc_kind = rec->alloc_kind;
         if (detached) *detached = rec->detached;
-        rin_thread_name_clear_locked(tid);
         rec->tid = 0;
         rec->alloc_base = NULL;
         rec->alloc_size = 0;
@@ -478,72 +433,65 @@ static int rin_thread_stack_take(pthread_t tid, void** alloc_base,
 }
 
 int pthread_setname_np(pthread_t thread, const char* name) {
-    char candidate[16];
-    rin_thread_name_rec_t* record;
-    pthread_t current_thread = (pthread_t)_RIN_PTHREAD_RUNTIME_SELF();
-    int result;
+    char candidate[16] = {0};
+    RinThreadNameCallV1 request;
+    intptr_t result;
+    int validation;
 
     if (thread == 0) return ESRCH;
-    result = rin_thread_name_copy(candidate, name);
-    if (result != 0) return result;
-
-    rin_thread_stack_lock_acquire();
-    if (thread != current_thread && !rin_thread_stack_find_locked(thread)) {
-        rin_thread_stack_lock_release();
-        return ESRCH;
-    }
-    record = rin_thread_name_find_locked(thread);
-    if (!record) {
-        record = rin_thread_name_find_free_locked();
-        if (!record) {
-            rin_thread_stack_lock_release();
-            return EAGAIN;
-        }
-        record->tid = thread;
-    }
-    for (unsigned int index = 0; index < sizeof(record->name); ++index) {
-        record->name[index] = candidate[index];
-        if (candidate[index] == '\0') break;
-    }
-    rin_thread_stack_lock_release();
-    return 0;
+    validation = rin_thread_name_copy(candidate, name);
+    if (validation != 0) return validation;
+    for (size_t index = 0u; index < sizeof(request); ++index)
+        ((unsigned char*)&request)[index] = 0u;
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_THREAD_NAME_CALL_VERSION;
+    request.operation = RIN_THREAD_NAME_OPERATION_SET;
+    request.thread_id = (uint64_t)thread;
+    for (size_t index = 0u; index < sizeof(candidate); ++index)
+        request.name[index] = candidate[index];
+    result = _RIN_PTHREAD_NAME_SYSCALL1(SYS_THREAD_NAME_CALL, &request);
+    return _rin_pthread_error_from_result(result);
 }
 
 int pthread_getname_np(pthread_t thread, char* name, size_t length) {
-    rin_thread_name_rec_t* record;
-    pthread_t current_thread = (pthread_t)_RIN_PTHREAD_RUNTIME_SELF();
-    size_t required_length = 1u;
+    RinThreadNameCallV1 request;
+    intptr_t result;
+    size_t terminator = RIN_THREAD_NAME_CAPACITY;
 
     if (!name) return EINVAL;
     if (length == 0u) return ERANGE;
     if (thread == 0) return ESRCH;
-
-    rin_thread_stack_lock_acquire();
-    record = rin_thread_name_find_locked(thread);
-    if (!record && thread != current_thread && !rin_thread_stack_find_locked(thread)) {
-        rin_thread_stack_lock_release();
-        return ESRCH;
+    for (size_t index = 0u; index < sizeof(request); ++index)
+        ((unsigned char*)&request)[index] = 0u;
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_THREAD_NAME_CALL_VERSION;
+    request.operation = RIN_THREAD_NAME_OPERATION_GET;
+    request.thread_id = (uint64_t)thread;
+    result = _RIN_PTHREAD_NAME_SYSCALL1(SYS_THREAD_NAME_CALL, &request);
+    {
+        int error = _rin_pthread_error_from_result(result);
+        if (error != 0) return error;
     }
-    if (record) {
-        size_t name_length = rin_thread_name_length(record->name);
-        if (name_length == sizeof(record->name)) {
-            rin_thread_stack_lock_release();
-            return EIO;
+    if (request.struct_size != sizeof(request) ||
+        request.version != RIN_THREAD_NAME_CALL_VERSION ||
+        request.operation != RIN_THREAD_NAME_OPERATION_GET ||
+        request.thread_id != (uint64_t)thread || request.reserved[0] != 0u ||
+        request.reserved[1] != 0u)
+        return EIO;
+    for (size_t index = 0u; index < RIN_THREAD_NAME_CAPACITY; ++index) {
+        if (request.name[index] == '\0') {
+            terminator = index;
+            break;
         }
-        required_length += name_length;
     }
-    if (length < required_length) {
-        rin_thread_stack_lock_release();
-        return ERANGE;
+    if (terminator == RIN_THREAD_NAME_CAPACITY) return EIO;
+    for (size_t index = terminator + 1u;
+         index < RIN_THREAD_NAME_CAPACITY; ++index) {
+        if (request.name[index] != '\0') return EIO;
     }
-    if (record) {
-        for (size_t index = 0; index < required_length; ++index) {
-            name[index] = record->name[index];
-        }
-    } else {
-        name[0] = '\0';
-    }
-    rin_thread_stack_lock_release();
+    if (length <= terminator) return ERANGE;
+    for (size_t index = 0u; index <= terminator; ++index)
+        name[index] = request.name[index];
     return 0;
 }
 
