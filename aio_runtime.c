@@ -520,7 +520,7 @@ int aio_cancel(int fd, struct aiocb* request)
             if (current->notification.kind != SIGEV_NONE &&
                 notification_count < RIN_AIO_CAPACITY * 2u)
                 notifications[notification_count++] = current->notification;
-            if (completed.kind != SIGEV_NONE &&
+            if (completed_group && completed.kind != SIGEV_NONE &&
                 notification_count < RIN_AIO_CAPACITY * 2u)
                 notifications[notification_count++] = completed;
             saw_canceled = 1;
