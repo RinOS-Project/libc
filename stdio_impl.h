@@ -3469,8 +3469,9 @@ _RIN_STDIO_API FILE* tmpfile(void) {
     }
     stream = fdopen(fd, "w+");
     if (!stream) {
+        int fdopen_error = errno;
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)fd);
-        errno = EMFILE;
+        errno = fdopen_error;
         return NULL;
     }
     return stream;
