@@ -43,7 +43,7 @@ typedef off64_t         off_t;      /* large-file redirect */
 typedef long           off_t;      /* ファイルオフセット */
 #endif
 typedef unsigned long  ino_t;      /* iノード番号 */
-typedef unsigned long  ino64_t;    /* 64ビットiノード */
+typedef uint64_t       ino64_t;    /* 64ビットiノード */
 typedef unsigned int   dev_t;      /* デバイス番号 */
 typedef unsigned int   nlink_t;    /* リンクカウント */
 typedef unsigned int   mode_t;     /* ファイルモード */
@@ -103,7 +103,7 @@ typedef unsigned int nlink_t;
 typedef long blksize_t;
 typedef long blkcnt_t;
 typedef long long blkcnt64_t;
-typedef unsigned long ino64_t;
+typedef uint64_t ino64_t;
 typedef long suseconds_t;
 typedef int key_t;
 #define RIN_SYS_TYPES_UNSIGNED_ID 1
