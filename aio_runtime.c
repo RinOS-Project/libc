@@ -11,7 +11,7 @@
 #include "string.h"
 #include "unistd.h"
 
-#define RIN_AIO_CAPACITY 64u
+#define RIN_AIO_CAPACITY AIO_MAX
 #define RIN_AIO_WORKERS 4u
 #define RIN_AIO_WORKER_STACK (1024u * 1024u)
 

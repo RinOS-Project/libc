@@ -5,6 +5,7 @@
 #define _AIO_H
 
 #include "stddef.h"
+#include "limits.h"
 #include "sys/types.h"
 #include "signal.h"
 #include "time.h"
@@ -23,8 +24,6 @@ extern "C" {
 
 #define LIO_WAIT           0
 #define LIO_NOWAIT         1
-
-#define AIO_LISTIO_MAX     64
 
 struct aiocb {
     int aio_fildes;

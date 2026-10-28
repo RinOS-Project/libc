@@ -1725,11 +1725,11 @@ static inline long sysconf(int name) {
         case _SC_ASYNCHRONOUS_IO:
             return 1;
         case _SC_AIO_LISTIO_MAX:
-            return 64;
+            return AIO_LISTIO_MAX;
         case _SC_AIO_MAX:
-            return 64;
+            return AIO_MAX;
         case _SC_AIO_PRIO_DELTA_MAX:
-            return 0;
+            return AIO_PRIO_DELTA_MAX;
         case _SC_SEM_NSEMS_MAX:
             return SEM_NSEMS_MAX;
         case _SC_SEM_VALUE_MAX:

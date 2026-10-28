@@ -125,11 +125,26 @@
 #ifndef _POSIX_SEM_NSEMS_MAX
 #define _POSIX_SEM_NSEMS_MAX 256
 #endif
+#ifndef _POSIX_AIO_MAX
+#define _POSIX_AIO_MAX 1
+#endif
+#ifndef _POSIX_AIO_LISTIO_MAX
+#define _POSIX_AIO_LISTIO_MAX 2
+#endif
 #ifndef SEM_VALUE_MAX
 #define SEM_VALUE_MAX 0x7fffffffU
 #endif
 #ifndef SEM_NSEMS_MAX
 #define SEM_NSEMS_MAX 256
+#endif
+#ifndef AIO_MAX
+#define AIO_MAX 64
+#endif
+#ifndef AIO_LISTIO_MAX
+#define AIO_LISTIO_MAX 64
+#endif
+#ifndef AIO_PRIO_DELTA_MAX
+#define AIO_PRIO_DELTA_MAX 0
 #endif
 #ifndef LOGIN_NAME_MAX
 #define LOGIN_NAME_MAX 32
