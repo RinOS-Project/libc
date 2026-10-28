@@ -1653,7 +1653,7 @@ static inline long sysconf(int name) {
         case _SC_STREAM_MAX:
             return STREAM_MAX;
         case _SC_LINE_MAX:
-            return 2048;
+            return LINE_MAX;
         case _SC_HOST_NAME_MAX:
             return HOST_NAME_MAX;
         case _SC_LOGIN_NAME_MAX:

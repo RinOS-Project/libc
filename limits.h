@@ -96,6 +96,40 @@
 #ifndef NAME_MAX
 #define NAME_MAX    255
 #endif
+#ifndef LINE_MAX
+#define LINE_MAX    2048
+#endif
+
+#ifndef _POSIX_ARG_MAX
+#define _POSIX_ARG_MAX 4096
+#endif
+#ifndef _POSIX_CHILD_MAX
+#define _POSIX_CHILD_MAX 25
+#endif
+#ifndef _POSIX_LINK_MAX
+#define _POSIX_LINK_MAX 8
+#endif
+#ifndef _POSIX_NAME_MAX
+#define _POSIX_NAME_MAX 14
+#endif
+#ifndef _POSIX_NGROUPS_MAX
+#define _POSIX_NGROUPS_MAX 8
+#endif
+#ifndef _POSIX_OPEN_MAX
+#define _POSIX_OPEN_MAX 20
+#endif
+#ifndef _POSIX_PATH_MAX
+#define _POSIX_PATH_MAX 256
+#endif
+#ifndef _POSIX_SSIZE_MAX
+#define _POSIX_SSIZE_MAX 32767
+#endif
+#ifndef _POSIX_SYMLINK_MAX
+#define _POSIX_SYMLINK_MAX 255
+#endif
+#ifndef _POSIX2_LINE_MAX
+#define _POSIX2_LINE_MAX 2048
+#endif
 
 /* Public limits backed by current kernel/libc owners. */
 #ifndef ARG_MAX
@@ -160,6 +194,9 @@
 #endif
 #ifndef _POSIX_RE_DUP_MAX
 #define _POSIX_RE_DUP_MAX 255
+#endif
+#ifndef _POSIX2_RE_DUP_MAX
+#define _POSIX2_RE_DUP_MAX 255
 #endif
 #ifndef RE_DUP_MAX
 #define RE_DUP_MAX 4096
