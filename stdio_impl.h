@@ -2980,9 +2980,19 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
             case 'E':
             case 'g':
             case 'G': {
-                long double val = is_longdouble
+#if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
+                typedef long double rin_stdio_format_fp_t;
+                rin_stdio_format_fp_t val = is_longdouble
                     ? va_arg(ap, long double)
-                    : (long double)va_arg(ap, double);
+                    : (rin_stdio_format_fp_t)va_arg(ap, double);
+#else
+                typedef double rin_stdio_format_fp_t;
+                if (is_longdouble) {
+                    errno = EINVAL;
+                    goto format_error;
+                }
+                rin_stdio_format_fp_t val = va_arg(ap, double);
+#endif
                 int prec = (precision >= 0) ? precision : 6;
                 char stack_ftmp[4096];
                 size_t fcapacity = prec > 4000
@@ -3009,12 +3019,12 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                     /* Check for infinity: val > large or val < -large */
                     int is_inf = 0;
                     if (val > 1e18) {
-                        long double t = val;
+                        rin_stdio_format_fp_t t = val;
                         /* Keep doubling threshold - if val keeps being larger, it's inf */
                         for (int k = 0; k < 30; k++) t *= 0.5;
                         if (t > 1e18) is_inf = 1;
                     } else if (val < -1e18) {
-                        long double t = val;
+                        rin_stdio_format_fp_t t = val;
                         for (int k = 0; k < 30; k++) t *= 0.5;
                         if (t < -1e18) is_inf = 1;
                     }
@@ -3033,7 +3043,7 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                         const int general = (*fmt == 'g' || *fmt == 'G');
                         int scientific_exponent = 0;
                         if (scientific || general) {
-                            long double normalized = val;
+                            rin_stdio_format_fp_t normalized = val;
                             if (normalized != 0.0) {
                                 while (normalized >= 10.0 &&
                                        scientific_exponent < 20000) {
@@ -3055,10 +3065,11 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
 
                         /* Separate integer and fractional parts */
                         unsigned long long ipart = (unsigned long long)val;
-                        long double frac = val - (long double)ipart;
+                        rin_stdio_format_fp_t frac =
+                            val - (rin_stdio_format_fp_t)ipart;
 
                         /* Round the fractional part */
-                        long double round_add = 0.5;
+                        rin_stdio_format_fp_t round_add = 0.5;
                         for (int k = 0; k < prec && round_add != 0.0; k++)
                             round_add /= 10.0;
                         frac += round_add;
@@ -3089,7 +3100,7 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                                 int digit = (int)frac;
                                 if (digit > 9) digit = 9;
                                 ftmp[fi++] = '0' + digit;
-                                frac -= (long double)digit;
+                                frac -= (rin_stdio_format_fp_t)digit;
                             }
                         }
                         if (scientific && (size_t)fi + 1u < fcapacity) {

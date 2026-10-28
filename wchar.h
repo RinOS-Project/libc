@@ -432,18 +432,19 @@ static inline float wcstof(const wchar_t* nptr, wchar_t** endptr) {
     return rin_float_parse_binary32_value(parsed.bits);
 }
 
+#if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
 static inline long double wcstold(const wchar_t* nptr, wchar_t** endptr) {
     rin_wc_float_input input = rin_wc_float_prepare(nptr);
     const wchar_t* original = nptr;
     if (!nptr) {
         if (endptr) *endptr = (wchar_t*)0;
         errno = EINVAL;
-        return 0.0L;
+        return 0.0;
     }
     if (input.too_long) {
         if (endptr) *endptr = (wchar_t*)(input.start + input.length);
         errno = ERANGE;
-        return 0.0L;
+        return 0.0;
     }
 #if defined(RIN_FP_HAS_BINARY80)
     {
@@ -485,6 +486,7 @@ static inline long double wcstold(const wchar_t* nptr, wchar_t** endptr) {
     }
 #endif
 }
+#endif
 
 /* Wide integer conversion uses the same bounded, overflow-safe contract as
  * the narrow libc parser.  The previous implementation accumulated directly

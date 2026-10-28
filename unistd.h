@@ -2112,8 +2112,8 @@ static inline long fpathconf(int fd, int name) {
         return -1;
     }
     if (name == _PC_NAME_MAX) {
-        intptr_t maximum = syscall(
-            RIN_SYS_FILESYSTEM_NAME_MAX_GET_FD, (uintptr_t)fd);
+        intptr_t maximum = __rin_syscall_posixize(_syscall1(
+            (uintptr_t)RIN_SYS_FILESYSTEM_NAME_MAX_GET_FD, (uintptr_t)fd));
         return maximum < 0 ? -1 : (long)maximum;
     }
     if (fstat(fd, &status) < 0) return -1;
