@@ -212,7 +212,6 @@ typedef struct __ucontext ucontext_t;
 #define RIN_UCONTEXT_FLAG_READY        0x00000001UL
 #define RIN_UCONTEXT_FLAG_MADE         0x00000002UL
 #define RIN_UCONTEXT_FLAG_RESUMED      0x00000004UL
-#define RIN_UCONTEXT_MAX_ARGS          16
 #define RIN_UCONTEXT_SIG_SETMASK       2u
 
 #ifndef _RIN_UCONTEXT_SIGMASK_SYSCALL4
@@ -478,7 +477,11 @@ rin_ucontext_return_trampoline(void) {
 
 static inline void makecontext(ucontext_t* context, void (*function)(void),
                                int argc, ...) {
-    uintptr_t arguments[RIN_UCONTEXT_MAX_ARGS] = {0u};
+#if defined(_WIN64)
+    uintptr_t arguments[4] = {0u};
+#else
+    uintptr_t arguments[6] = {0u};
+#endif
     uintptr_t base;
     uintptr_t top;
     uintptr_t entry_stack;
@@ -494,10 +497,6 @@ static inline void makecontext(ucontext_t* context, void (*function)(void),
     }
     if (!rin_ucontext_amd64_ready(context) || argc < 0) {
         errno = EINVAL;
-        return;
-    }
-    if (argc > RIN_UCONTEXT_MAX_ARGS) {
-        errno = ENOSYS;
         return;
     }
     base = (uintptr_t)context->uc_stack.ss_sp;
@@ -526,6 +525,11 @@ static inline void makecontext(ucontext_t* context, void (*function)(void),
     stack_words = 1u + stack_argument_count +
                   (stack_argument_count & 1u);
  #endif
+    if (stack_words >
+        (SIZE_MAX - sizeof(uintptr_t)) / sizeof(uintptr_t)) {
+        errno = EINVAL;
+        return;
+    }
     stack_bytes = stack_words * sizeof(uintptr_t);
     if (top < base || top - base < stack_bytes + sizeof(uintptr_t) ||
         !rin_ucontext_amd64_canonical(top - stack_bytes) ||
@@ -534,11 +538,6 @@ static inline void makecontext(ucontext_t* context, void (*function)(void),
         errno = EINVAL;
         return;
     }
-
-    va_start(ap, argc);
-    for (index = 0; index < argc; ++index)
-        arguments[index] = va_arg(ap, uintptr_t);
-    va_end(ap);
 
     /* setcontext places RIP at RSP - 8 and RETs to it.  The resulting
      * function-entry RSP holds the return trampoline; seventh and later
@@ -557,19 +556,20 @@ static inline void makecontext(ucontext_t* context, void (*function)(void),
     entry_stack = top - stack_bytes;
  #endif
     *(uintptr_t*)entry_stack = (uintptr_t)rin_ucontext_return_trampoline;
+    va_start(ap, argc);
+    for (index = 0; index < argc; ++index) {
+        const uintptr_t argument = va_arg(ap, uintptr_t);
  #if defined(_WIN64)
-    for (index = 4; index < argc; ++index) {
-        *(uintptr_t*)(entry_stack + 5u * sizeof(uintptr_t) +
-                      (size_t)(index - 4) * sizeof(uintptr_t)) =
-            arguments[index];
-    }
+        if (index < 4) arguments[index] = argument;
+        else *(uintptr_t*)(entry_stack + 5u * sizeof(uintptr_t) +
+                           (size_t)(index - 4) * sizeof(uintptr_t)) = argument;
  #else
-    for (index = 6; index < argc; ++index) {
-        *(uintptr_t*)(entry_stack + sizeof(uintptr_t) +
-                      (size_t)(index - 6) * sizeof(uintptr_t)) =
-            arguments[index];
-    }
+        if (index < 6) arguments[index] = argument;
+        else *(uintptr_t*)(entry_stack + sizeof(uintptr_t) +
+                           (size_t)(index - 6) * sizeof(uintptr_t)) = argument;
  #endif
+    }
+    va_end(ap);
     for (index = 0; index < NGREG; ++index)
         context->uc_mcontext.gregs[index] = 0;
     context->uc_mcontext.gregs[REG_RIP] = (greg_t)(uintptr_t)function;
@@ -772,7 +772,6 @@ rin_ucontext_i386_return_trampoline(void) {
 
 static inline void makecontext(ucontext_t* context, void (*function)(void),
                                int argc, ...) {
-    uintptr_t arguments[RIN_UCONTEXT_MAX_ARGS] = {0u};
     uintptr_t base;
     uintptr_t top;
     uintptr_t candidate;
@@ -790,10 +789,6 @@ static inline void makecontext(ucontext_t* context, void (*function)(void),
         errno = EINVAL;
         return;
     }
-    if (argc > RIN_UCONTEXT_MAX_ARGS) {
-        errno = ENOSYS;
-        return;
-    }
     base = (uintptr_t)context->uc_stack.ss_sp;
     if (base == 0u || context->uc_stack.ss_size < 16u ||
         context->uc_stack.ss_size > UINTPTR_MAX - base) {
@@ -802,6 +797,11 @@ static inline void makecontext(ucontext_t* context, void (*function)(void),
     }
     top = (base + context->uc_stack.ss_size) & ~(uintptr_t)0x0fu;
     stack_words = 1u + (size_t)argc;
+    if (stack_words >
+        (SIZE_MAX - sizeof(uintptr_t)) / sizeof(uintptr_t)) {
+        errno = EINVAL;
+        return;
+    }
     stack_bytes = stack_words * sizeof(uintptr_t);
     if (top < base || top - base < stack_bytes + sizeof(uintptr_t)) {
         errno = EINVAL;
@@ -832,10 +832,13 @@ static inline void makecontext(ucontext_t* context, void (*function)(void),
 
     *(uintptr_t*)entry_stack =
         (uintptr_t)rin_ucontext_i386_return_trampoline;
+    va_start(ap, argc);
     for (index = 0; index < argc; ++index) {
         *(uintptr_t*)(entry_stack + sizeof(uintptr_t) +
-                      (size_t)index * sizeof(uintptr_t)) = arguments[index];
+                      (size_t)index * sizeof(uintptr_t)) =
+            va_arg(ap, uintptr_t);
     }
+    va_end(ap);
     for (index = 0; index < NGREG; ++index)
         context->uc_mcontext.gregs[index] = 0;
     context->uc_mcontext.gregs[REG_EIP] = (greg_t)(uintptr_t)function;
