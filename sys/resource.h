@@ -268,10 +268,7 @@ struct rusage {
  * リソース制限関数
  * ═══════════════════════════════════════════════════════════════*/
 
-/* getrlimit - リソース制限を取得
- *
- * The current process FD table has one published, enforced capacity.  Do not
- * manufacture values for resource classes whose kernel owners do not exist. */
+/* getrlimit - リソース制限を取得 */
 static inline int getrlimit(int resource, struct rlimit* rlim) {
 #if !RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
     int hook_result;
@@ -290,19 +287,10 @@ static inline int getrlimit(int resource, struct rlimit* rlim) {
 #else
     hook_result = __rin_resource_limit_get_hook(resource, rlim);
     if (hook_result <= 0) return hook_result;
+    /* No owner is linked, so do not synthesize limits or touch caller memory. */
+    errno = ENOSYS;
+    return -1;
 #endif
-    if (resource == RLIMIT_MEMLOCK) {
-        rlim->rlim_cur = RIN_RLIMIT_MEMLOCK_DEFAULT;
-        rlim->rlim_max = RIN_RLIMIT_MEMLOCK_DEFAULT;
-        return 0;
-    }
-    if (resource != RLIMIT_NOFILE) {
-        errno = ENOSYS;
-        return -1;
-    }
-    rlim->rlim_cur = (rlim_t)OPEN_MAX;
-    rlim->rlim_max = (rlim_t)OPEN_MAX;
-    return 0;
 }
 
 /* setrlimit - リソース制限を設定 */
@@ -322,21 +310,8 @@ static inline int setrlimit(int resource, const struct rlimit* rlim) {
     return __rin_resource_limit_wire_call(
         RIN_RESOURCE_LIMIT_CALL_SET, 0u, 0u, 0u, resource, rlim, NULL);
 #else
-    if (rlim->rlim_cur > rlim->rlim_max) {
-        errno = EINVAL;
-        return -1;
-    }
     hook_result = __rin_resource_limit_set_hook(resource, rlim);
     if (hook_result <= 0) return hook_result;
-    /* The process FD table has a fixed, enforced capacity.  Accept an exact
-     * no-op publication of that limit so compatibility callers can use the
-     * usual getrlimit/adjust/setrlimit sequence without claiming that a
-     * different bound was installed. */
-    if (resource == RLIMIT_NOFILE &&
-        rlim->rlim_cur == (rlim_t)OPEN_MAX &&
-        rlim->rlim_max == (rlim_t)OPEN_MAX) {
-        return 0;
-    }
     errno = ENOSYS;
     return -1;
 #endif
