@@ -60,25 +60,6 @@ int shm_unlink(const char* name) {
     return unlinkat(AT_FDCWD, path, 0);
 }
 
-static unsigned int rin_memfd_sequence;
-
-static void rin_memfd_format_name(
-    unsigned int process_id, unsigned int sequence,
-    char name[sizeof("/.memfd-") + 17u]) {
-    static const char prefix[] = "/.memfd-";
-    static const char hex[] = "0123456789abcdef";
-    size_t prefix_length = sizeof(prefix) - 1u;
-    for (size_t index = 0u; index < prefix_length; ++index)
-        name[index] = prefix[index];
-    for (size_t index = 0u; index < 8u; ++index) {
-        unsigned int shift = (unsigned int)((7u - index) * 4u);
-        name[prefix_length + index] = hex[(process_id >> shift) & 0x0fu];
-        name[prefix_length + 9u + index] = hex[(sequence >> shift) & 0x0fu];
-    }
-    name[prefix_length + 8u] = '-';
-    name[prefix_length + 17u] = '\0';
-}
-
 int memfd_create(const char* name, unsigned int flags) {
     if (name == 0) {
         errno = EFAULT;
@@ -88,28 +69,9 @@ int memfd_create(const char* name, unsigned int flags) {
         errno = EINVAL;
         return -1;
     }
-    for (unsigned int attempt = 0u; attempt < 32u; ++attempt) {
-        char shm_name[sizeof("/.memfd-") + 17u];
-        unsigned int process_id = (unsigned int)getpid();
-        unsigned int sequence = __atomic_add_fetch(
-            &rin_memfd_sequence, 1u, __ATOMIC_RELAXED);
-        int open_flags = O_CREAT | O_EXCL | O_RDWR;
-        int fd;
-        rin_memfd_format_name(process_id, sequence, shm_name);
-        if ((flags & MFD_CLOEXEC) != 0u) open_flags |= O_CLOEXEC;
-        fd = shm_open(shm_name, open_flags, 0600);
-        if (fd < 0) {
-            if (errno == EEXIST) continue;
-            return -1;
-        }
-        if (shm_unlink(shm_name) == 0) return fd;
-        {
-            int saved_errno = errno;
-            (void)close(fd);
-            errno = saved_errno;
-        }
-        return -1;
-    }
-    errno = EAGAIN;
-    return -1;
+    (void)name;
+    return openat(AT_FDCWD, "/dev/shm",
+                  O_TMPFILE | O_RDWR |
+                      ((flags & MFD_CLOEXEC) != 0u ? O_CLOEXEC : 0),
+                  0600);
 }
