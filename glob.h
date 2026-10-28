@@ -367,6 +367,14 @@ static inline int _rin_glob_entry_is_directory(const char* path,
     return 0;
 }
 
+static inline int _rin_glob_report_error(_RinGlobContext* context,
+                                         const char* path, int error)
+{
+    if (context->errfunc && context->errfunc(path, error) != 0)
+        return GLOB_ABORTED;
+    return (context->flags & GLOB_ERR) ? GLOB_ABORTED : 0;
+}
+
 static inline int _rin_glob_split_component(const char* pattern,
                                             size_t* cursor, const char** start,
                                             size_t* length)
@@ -412,8 +420,12 @@ static inline int _rin_glob_expand(_RinGlobContext* context,
         return GLOB_ABORTED;
     if (index == component_count) {
         struct stat status;
-        if (prefix[0] == '\0' || _RIN_GLOB_STAT(prefix, &status) != 0)
-            return 0;
+        if (prefix[0] == '\0') return 0;
+        if (_RIN_GLOB_STAT(prefix, &status) != 0) {
+            int saved_errno = errno;
+            if (saved_errno == ENOENT || saved_errno == ENOTDIR) return 0;
+            return _rin_glob_report_error(context, prefix, saved_errno);
+        }
         if ((context->flags & GLOB_ONLYDIR) && !S_ISDIR(status.st_mode))
             return 0;
         return _rin_glob_add_marked(context->matches, prefix, context->flags,
@@ -450,17 +462,22 @@ static inline int _rin_glob_expand(_RinGlobContext* context,
                                                              context->flags);
         if (!directory_stream) {
             int saved_errno = errno;
-            if (context->errfunc &&
-                context->errfunc(directory, saved_errno) != 0)
-                result = GLOB_ABORTED;
-            else
-                result = (context->flags & GLOB_ERR) ? GLOB_ABORTED : 0;
+            result = _rin_glob_report_error(context, directory, saved_errno);
             free(child);
             return result;
         }
         result = 0;
-        while ((entry = _RIN_GLOB_READDIR(directory_stream)) != NULL) {
+        for (;;) {
             int is_directory = 0;
+            errno = 0;
+            entry = _RIN_GLOB_READDIR(directory_stream);
+            if (!entry) {
+                int saved_errno = errno;
+                if (saved_errno != 0)
+                    result = _rin_glob_report_error(context, directory,
+                                                    saved_errno);
+                break;
+            }
             if (entry->d_name[0] == '\0' ||
                 (entry->d_name[0] == '.' &&
                  (entry->d_name[1] == '\0' ||
@@ -476,8 +493,10 @@ static inline int _rin_glob_expand(_RinGlobContext* context,
                 result = _rin_glob_entry_is_directory(child, entry,
                                                       &is_directory);
                 if (result != 0) {
-                    if (context->flags & GLOB_ERR) break;
-                    result = 0;
+                    int saved_errno = errno;
+                    result = _rin_glob_report_error(context, child,
+                                                    saved_errno);
+                    if (result != 0) break;
                     continue;
                 }
                 if (!is_directory) continue;
@@ -486,9 +505,10 @@ static inline int _rin_glob_expand(_RinGlobContext* context,
                                       index + 1u, child);
             if (result != 0) break;
         }
-        if (_RIN_GLOB_CLOSEDIR(directory_stream) != 0 && result == 0 &&
-            (context->flags & GLOB_ERR))
-            result = GLOB_ABORTED;
+        if (_RIN_GLOB_CLOSEDIR(directory_stream) != 0 && result == 0) {
+            int saved_errno = errno;
+            result = _rin_glob_report_error(context, directory, saved_errno);
+        }
         free(child);
         return result;
     }
