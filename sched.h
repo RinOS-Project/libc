@@ -460,7 +460,6 @@ static inline int sched_get_priority_max(int policy) {
     switch (policy) {
         case SCHED_FIFO:
         case SCHED_RR:
-        case SCHED_DEADLINE:
             return 99;
         case SCHED_OTHER:
         case SCHED_BATCH:
@@ -477,7 +476,6 @@ static inline int sched_get_priority_min(int policy) {
     switch (policy) {
         case SCHED_FIFO:
         case SCHED_RR:
-        case SCHED_DEADLINE:
             return 1;
         case SCHED_OTHER:
         case SCHED_BATCH:
