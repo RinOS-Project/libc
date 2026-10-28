@@ -1015,6 +1015,12 @@ static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
 #endif
 }
 
+static inline int timespec_getres(struct timespec* ts, int base) {
+    if (base != TIME_UTC) return 0;
+    if (ts && clock_getres(CLOCK_REALTIME, ts) != 0) return 0;
+    return TIME_UTC;
+}
+
 static inline int _rin_time_timespec_to_ns(const struct timespec* input,
                                            uint64_t* output) {
     uint64_t seconds;
