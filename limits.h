@@ -122,8 +122,14 @@
 #ifndef _POSIX_SEM_VALUE_MAX
 #define _POSIX_SEM_VALUE_MAX 32767
 #endif
+#ifndef _POSIX_SEM_NSEMS_MAX
+#define _POSIX_SEM_NSEMS_MAX 256
+#endif
 #ifndef SEM_VALUE_MAX
 #define SEM_VALUE_MAX 0x7fffffffU
+#endif
+#ifndef SEM_NSEMS_MAX
+#define SEM_NSEMS_MAX 256
 #endif
 #ifndef LOGIN_NAME_MAX
 #define LOGIN_NAME_MAX 32
