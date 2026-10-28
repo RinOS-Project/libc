@@ -825,11 +825,6 @@ static inline void makecontext(ucontext_t* context, void (*function)(void),
         return;
     }
 
-    va_start(ap, argc);
-    for (index = 0; index < argc; ++index)
-        arguments[index] = va_arg(ap, uintptr_t);
-    va_end(ap);
-
     *(uintptr_t*)entry_stack =
         (uintptr_t)rin_ucontext_i386_return_trampoline;
     va_start(ap, argc);
