@@ -317,7 +317,8 @@ static inline void* mremap(void* old_addr, size_t old_size, size_t new_size,
     return __rin_mman_pointer_result(ret);
 }
 
-/* shm_open/shm_unlink は別途実装 */
+int shm_open(const char* name, int oflag, mode_t mode);
+int shm_unlink(const char* name);
 
 #ifdef __cplusplus
 }

@@ -1890,7 +1890,6 @@ static inline long sysconf(int name) {
         case _SC_REGEXP:
         case _SC_SEMAPHORES:
         case _SC_TIMERS:
-        case _SC_SHARED_MEMORY_OBJECTS:
         case _SC_BC_BASE_MAX:
         case _SC_BC_DIM_MAX:
         case _SC_BC_SCALE_MAX:
