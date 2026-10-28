@@ -12,6 +12,7 @@
 #include "limits.h"
 #include "fcntl_flags.h"
 #include "stdlib.h"
+#include "string.h"
 #include "sys/stat.h"
 #include "sys/syscall.h"
 
@@ -204,6 +205,169 @@ static inline struct dirent* readdir(DIR* dirp) {
     }
 
     return &dirp->entry;
+}
+
+static inline void _rin_scandir_free_entries(struct dirent** entries,
+                                              size_t count) {
+    while (count != 0u) free(entries[--count]);
+    free(entries);
+}
+
+static inline int _rin_scandir_sort(struct dirent** entries, size_t count,
+                                    int (*compar)(const struct dirent**,
+                                                  const struct dirent**)) {
+    struct dirent** workspace;
+    struct dirent** source;
+    struct dirent** destination;
+    size_t bytes;
+    size_t width;
+
+    if (count < 2u) return 0;
+    if (count > SIZE_MAX / sizeof(*entries)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    bytes = count * sizeof(*entries);
+    workspace = (struct dirent**)malloc(bytes);
+    if (!workspace) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    source = entries;
+    destination = workspace;
+    for (width = 1u; width < count;) {
+        size_t start;
+        for (start = 0u; start < count;) {
+            size_t middle = count - start < width ? count : start + width;
+            size_t end = count - middle < width ? count : middle + width;
+            size_t left = start;
+            size_t right = middle;
+            size_t output = start;
+            while (left < middle && right < end) {
+                const struct dirent* left_entry = source[left];
+                const struct dirent* right_entry = source[right];
+                if (compar(&left_entry, &right_entry) <= 0)
+                    destination[output++] = source[left++];
+                else
+                    destination[output++] = source[right++];
+            }
+            while (left < middle) destination[output++] = source[left++];
+            while (right < end) destination[output++] = source[right++];
+            start = end;
+        }
+        {
+            struct dirent** swap = source;
+            source = destination;
+            destination = swap;
+        }
+        if (width > count / 2u) width = count;
+        else width *= 2u;
+    }
+    if (source != entries) memcpy(entries, source, bytes);
+    free(workspace);
+    return 0;
+}
+
+static inline int scandir(
+    const char* directory, struct dirent*** namelist,
+    int (*selector)(const struct dirent*),
+    int (*compar)(const struct dirent**, const struct dirent**)) {
+    DIR* stream;
+    struct dirent** entries = NULL;
+    size_t count = 0u;
+    size_t capacity = 0u;
+    int saved_error = 0;
+
+    if (!namelist) {
+        errno = EINVAL;
+        return -1;
+    }
+    *namelist = NULL;
+    stream = opendir(directory);
+    if (!stream) return -1;
+
+    for (;;) {
+        struct dirent* entry;
+        struct dirent* copy;
+        size_t name_length;
+        errno = 0;
+        entry = readdir(stream);
+        if (!entry) {
+            if (errno != 0) saved_error = errno;
+            break;
+        }
+        if (selector && !selector(entry)) continue;
+        for (name_length = 0u; name_length < sizeof(entry->d_name);
+             ++name_length) {
+            if (entry->d_name[name_length] == '\0') break;
+        }
+        if (name_length == sizeof(entry->d_name)) {
+            saved_error = EIO;
+            break;
+        }
+        if (count == (size_t)INT_MAX) {
+            saved_error = EOVERFLOW;
+            break;
+        }
+        copy = (struct dirent*)malloc(sizeof(*copy));
+        if (!copy) {
+            saved_error = ENOMEM;
+            break;
+        }
+        memcpy(copy, entry, sizeof(*copy));
+        if (count == capacity) {
+            size_t next_capacity = capacity == 0u ? 16u : capacity * 2u;
+            struct dirent** grown;
+            if (next_capacity <= capacity ||
+                next_capacity > SIZE_MAX / sizeof(*entries)) {
+                free(copy);
+                saved_error = EOVERFLOW;
+                break;
+            }
+            grown = (struct dirent**)realloc(
+                entries, next_capacity * sizeof(*entries));
+            if (!grown) {
+                free(copy);
+                saved_error = ENOMEM;
+                break;
+            }
+            entries = grown;
+            capacity = next_capacity;
+        }
+        entries[count++] = copy;
+    }
+
+    if (closedir(stream) < 0 && saved_error == 0) saved_error = errno;
+    if (saved_error != 0) {
+        _rin_scandir_free_entries(entries, count);
+        errno = saved_error;
+        return -1;
+    }
+    if (count == 0u) {
+        entries = (struct dirent**)malloc(sizeof(*entries));
+        if (!entries) {
+            errno = ENOMEM;
+            return -1;
+        }
+    }
+    if (compar && _rin_scandir_sort(entries, count, compar) < 0) {
+        saved_error = errno;
+        _rin_scandir_free_entries(entries, count);
+        errno = saved_error;
+        return -1;
+    }
+    *namelist = entries;
+    return (int)count;
+}
+
+static inline int alphasort(const struct dirent** left,
+                            const struct dirent** right) {
+    if (!left || !right || !*left || !*right) {
+        errno = EINVAL;
+        return 0;
+    }
+    return strcoll((*left)->d_name, (*right)->d_name);
 }
 
 static inline void rewinddir(DIR* dirp) {
