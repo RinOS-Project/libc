@@ -1507,9 +1507,9 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     uint16_t port;
     const char* service_protocol;
     int formatted;
+    int host_requested;
+    int service_requested;
     if (!sa) return EAI_FAMILY;
-    if ((host && hostlen == 0u) || (serv && servlen == 0u))
-        return EAI_OVERFLOW;
     if (sa->sa_family == AF_INET) {
         if (salen < (socklen_t)sizeof(struct sockaddr_in)) return EAI_FAMILY;
         sin = (const struct sockaddr_in*)sa;
@@ -1525,6 +1525,9 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     if (((uint32_t)flags & ~RIN_RESOLVED_NAMEINFO_SUPPORTED_FLAGS) != 0u) {
         return EAI_BADFLAGS;
     }
+    host_requested = host != NULL && hostlen != 0u;
+    service_requested = serv != NULL && servlen != 0u;
+    if (!host_requested && !service_requested) return EAI_NONAME;
 
     memset(numeric_host, 0, sizeof(numeric_host));
     memset(numeric_service, 0, sizeof(numeric_service));
@@ -1564,15 +1567,20 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     numeric_host_length = strlen(numeric_host);
     numeric_service_length = (size_t)formatted;
 
+    if (!host_requested) {
+        if (service_text_length + 1u > (size_t)servlen)
+            return EAI_OVERFLOW;
+        memcpy(serv, service_text, service_text_length + 1u);
+        return 0;
+    }
+
     if ((flags & NI_NUMERICHOST) != 0) {
-        if ((host &&
-             numeric_host_length + 1u > (size_t)hostlen) ||
-            (serv &&
+        if (numeric_host_length + 1u > (size_t)hostlen ||
+            (service_requested &&
              service_text_length + 1u > (size_t)servlen))
             return EAI_OVERFLOW;
-        if (host && hostlen > 0u)
-            memcpy(host, numeric_host, numeric_host_length + 1u);
-        if (serv && servlen > 0u)
+        memcpy(host, numeric_host, numeric_host_length + 1u);
+        if (service_requested)
             memcpy(serv, service_text, service_text_length + 1u);
         return 0;
     }
@@ -1604,7 +1612,8 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     }
     if (header.status != 0 && header.status != EAI_NONAME)
         return header.status < 0 ? header.status : EAI_FAIL;
-    if (header.status == EAI_NONAME && (flags & NI_NAMEREQD) != 0) {
+    if (header.status == EAI_NONAME && host_requested &&
+        (flags & NI_NAMEREQD) != 0) {
         return header.status;
     }
     if (header.payload_len < sizeof(resp)) {
@@ -1632,17 +1641,16 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
             return EAI_FAIL;
         }
     }
-    if ((host &&
-         (size_t)resp.host_len + 1u > (size_t)hostlen) ||
-        (serv &&
+    if ((size_t)resp.host_len + 1u > (size_t)hostlen ||
+        (service_requested &&
          service_text_length + 1u > (size_t)servlen)) {
         return EAI_OVERFLOW;
     }
-    if (host && hostlen > 0) {
+    if (host_requested) {
         memcpy(host, outbuf + sizeof(resp), resp.host_len);
         host[resp.host_len] = '\0';
     }
-    if (serv && servlen > 0) {
+    if (service_requested) {
         memcpy(serv, service_text, service_text_length + 1u);
     }
     return 0;
