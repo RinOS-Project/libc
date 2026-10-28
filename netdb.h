@@ -1497,10 +1497,15 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
                               int flags) {
     const struct sockaddr_in* sin;
     const struct sockaddr_in6* sin6;
+    const _NetdbServiceRecord* service_record;
     char numeric_host[RIN_IPV6_TEXT_MAX];
     char numeric_service[NI_MAXSERV];
+    char service_text[NI_MAXSERV];
     size_t numeric_host_length;
     size_t numeric_service_length;
+    size_t service_text_length;
+    uint16_t port;
+    const char* service_protocol;
     int formatted;
     if (!sa) return EAI_FAMILY;
     if ((host && hostlen == 0u) || (serv && servlen == 0u))
@@ -1543,6 +1548,19 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
         (unsigned)ntohs(sin6 ? sin6->sin6_port : sin->sin_port));
     if (formatted <= 0 || (size_t)formatted >= sizeof(numeric_service))
         return EAI_FAIL;
+    port = ntohs(sin6 ? sin6->sin6_port : sin->sin_port);
+    service_text_length = (size_t)formatted;
+    memcpy(service_text, numeric_service, service_text_length + 1u);
+    if ((flags & NI_NUMERICSERV) == 0) {
+        service_protocol = (flags & NI_DGRAM) != 0 ? "udp" : "tcp";
+        service_record = _netdb_find_service_by_port(port, service_protocol);
+        if (service_record) {
+            service_text_length = strlen(service_record->name);
+            if (service_text_length >= sizeof(service_text)) return EAI_FAIL;
+            memcpy(service_text, service_record->name,
+                   service_text_length + 1u);
+        }
+    }
     numeric_host_length = strlen(numeric_host);
     numeric_service_length = (size_t)formatted;
 
@@ -1550,12 +1568,12 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
         if ((host &&
              numeric_host_length + 1u > (size_t)hostlen) ||
             (serv &&
-             numeric_service_length + 1u > (size_t)servlen))
+             service_text_length + 1u > (size_t)servlen))
             return EAI_OVERFLOW;
         if (host && hostlen > 0u)
             memcpy(host, numeric_host, numeric_host_length + 1u);
         if (serv && servlen > 0u)
-            memcpy(serv, numeric_service, numeric_service_length + 1u);
+            memcpy(serv, service_text, service_text_length + 1u);
         return 0;
     }
 
@@ -1617,7 +1635,7 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     if ((host &&
          (size_t)resp.host_len + 1u > (size_t)hostlen) ||
         (serv &&
-         (size_t)resp.serv_len + 1u > (size_t)servlen)) {
+         service_text_length + 1u > (size_t)servlen)) {
         return EAI_OVERFLOW;
     }
     if (host && hostlen > 0) {
@@ -1625,9 +1643,7 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
         host[resp.host_len] = '\0';
     }
     if (serv && servlen > 0) {
-        size_t serv_off = sizeof(resp) + (size_t)resp.host_len;
-        memcpy(serv, outbuf + serv_off, resp.serv_len);
-        serv[resp.serv_len] = '\0';
+        memcpy(serv, service_text, service_text_length + 1u);
     }
     return 0;
 }
