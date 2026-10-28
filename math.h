@@ -995,7 +995,7 @@ static inline double atan2(double y, double x) {
         return x < 0 ? __builtin_copysign(M_PI, y)
                      : __builtin_copysign(0.0, y);
     if (y == 0.0) {
-        if (x < 0.0) return __builtin_copysign(M_PI, y);
+        if (__builtin_signbit(x)) return __builtin_copysign(M_PI, y);
         return y;
     }
     if (x == 0.0) return __builtin_copysign(M_PI / 2.0, y);
