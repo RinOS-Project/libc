@@ -67,6 +67,18 @@ static RinPthreadCancelRecord* rin_pthread_cancel_slot_locked(
     return free_slot;
 }
 
+static void rin_pthread_cancel_initialize_record(
+    RinPthreadCancelRecord* record, pthread_t thread) {
+    record->thread = thread;
+    record->pending = 0;
+    record->state = PTHREAD_CANCEL_ENABLE;
+    record->type = PTHREAD_CANCEL_DEFERRED;
+    record->active = 1;
+    record->detached = 0;
+    record->exit_value = NULL;
+    record->cleanup_top = NULL;
+}
+
 int rin_pthread_cancel_register(pthread_t thread) {
     RinPthreadCancelRecord* record;
     if (thread == 0u) return EINVAL;
@@ -76,16 +88,25 @@ int rin_pthread_cancel_register(pthread_t thread) {
         rin_pthread_cancel_unlock();
         return EAGAIN;
     }
-    if (record->thread != thread || !record->active) {
-        record->thread = thread;
-        record->pending = 0;
-        record->state = PTHREAD_CANCEL_ENABLE;
-        record->type = PTHREAD_CANCEL_DEFERRED;
-        record->active = 1;
-        record->detached = 0;
-        record->exit_value = NULL;
-        record->cleanup_top = NULL;
+    if (record->thread != thread || !record->active)
+        rin_pthread_cancel_initialize_record(record, thread);
+    rin_pthread_cancel_unlock();
+    return 0;
+}
+
+int rin_pthread_cancel_register_created(pthread_t thread) {
+    RinPthreadCancelRecord* record;
+    if (thread == 0u) return EINVAL;
+    rin_pthread_cancel_lock();
+    record = rin_pthread_cancel_slot_locked(thread);
+    if (!record) {
+        rin_pthread_cancel_unlock();
+        return EAGAIN;
     }
+    /* The child may have registered and exited before clone returned here.
+     * Preserve that exit record instead of reviving a dead TID. */
+    if (record->thread != thread)
+        rin_pthread_cancel_initialize_record(record, thread);
     rin_pthread_cancel_unlock();
     return 0;
 }

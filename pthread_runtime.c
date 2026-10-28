@@ -826,7 +826,7 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
         }
 
         *thread = (pthread_t)ret;
-        (void)rin_pthread_cancel_register(*thread);
+        (void)rin_pthread_cancel_register_created(*thread);
         if (alloc_kind != RIN_THREAD_ALLOC_NONE) {
             rin_thread_stack_register(*thread, alloc_base, alloc_size,
                                       alloc_kind, 0);
