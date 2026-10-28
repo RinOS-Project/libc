@@ -371,14 +371,6 @@ static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_p
         errno = EINVAL;
         return -1;
     }
-    /* パラメータから優先度を調整 */
-    if (param->sched_priority > 0) {
-        if (param->sched_priority >= 50) {
-            priority = _SCHED_PRIO_REALTIME;
-        } else if (param->sched_priority >= 25) {
-            priority = _SCHED_PRIO_HIGH;
-        }
-    }
     rin_sched_task_set_priority(task, priority);
     return 0;
 #else
@@ -434,8 +426,12 @@ static inline int sched_getparam(pid_t pid, struct sched_param* param) {
     }
     if (!task) { errno = ESRCH; return -1; }
     int priority = rin_sched_task_get_priority(task);
+    int policy = _rinos_priority_to_policy(priority);
     /* RinOS優先度(0-4)をPOSIX優先度(0-99)にマッピング */
-    param->sched_priority = priority * 25;
+    param->sched_priority =
+        (policy == SCHED_FIFO || policy == SCHED_RR)
+            ? (priority >= _SCHED_PRIO_REALTIME ? 99 : priority * 25)
+            : 0;
     return 0;
 #else
     (void)pid;
@@ -468,9 +464,9 @@ static inline int sched_setparam(pid_t pid, const struct sched_param* param) {
         errno = EINVAL;
         return -1;
     }
-    /* POSIX優先度(0-99)をRinOS優先度(0-4)にマッピング */
-    int priority = param->sched_priority / 25;
-    if (priority > _SCHED_PRIO_REALTIME) priority = _SCHED_PRIO_REALTIME;
+    /* The current policy determines its scheduler class.  Realtime numeric
+     * ordering is retained in the task parameters once that ABI is available. */
+    int priority = _policy_to_rinos_priority(policy);
     rin_sched_task_set_priority(task, priority);
     return 0;
 #else
