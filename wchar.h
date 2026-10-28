@@ -545,6 +545,11 @@ static inline rin_wc_integer_result rin_wc_integer_parse(
                 rin_wc_integer_digit(cursor[2]) < 16) {
                 base = 16;
                 cursor += 2;
+            } else if ((cursor[1] == L'b' || cursor[1] == L'B') &&
+                       (rin_wc_integer_digit(cursor[2]) == 0 ||
+                        rin_wc_integer_digit(cursor[2]) == 1)) {
+                base = 2;
+                cursor += 2;
             } else {
                 base = 8;
             }
@@ -555,6 +560,11 @@ static inline rin_wc_integer_result rin_wc_integer_parse(
                (cursor[1] == L'x' || cursor[1] == L'X') &&
                rin_wc_integer_digit(cursor[2]) >= 0 &&
                rin_wc_integer_digit(cursor[2]) < 16) {
+        cursor += 2;
+    } else if (base == 2 && cursor[0] == L'0' &&
+               (cursor[1] == L'b' || cursor[1] == L'B') &&
+               (rin_wc_integer_digit(cursor[2]) == 0 ||
+                rin_wc_integer_digit(cursor[2]) == 1)) {
         cursor += 2;
     }
     while ((digit = rin_wc_integer_digit(*cursor)) >= 0 && digit < base) {
