@@ -247,6 +247,11 @@ static inline int madvise(void* addr, size_t length, int advice) {
 }
 
 static inline int posix_madvise(void* addr, size_t length, int advice) {
+    /* POSIX advice may influence performance but must not change memory
+     * contents. Linux MADV_DONTNEED is destructive, so treat the POSIX
+     * DONTNEED hint as NORMAL while retaining kernel range validation. */
+    if (advice == POSIX_MADV_DONTNEED)
+        advice = MADV_NORMAL;
     if (madvise(addr, length, advice) == 0)
         return 0;
     return errno;
