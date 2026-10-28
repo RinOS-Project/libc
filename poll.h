@@ -291,6 +291,7 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
         __rin_select_clear_sets(readfds, writefds, exceptfds);
         return ret;
     }
+    int ready_count = 0;
 
     for (int i = 0; i < npfds; ++i) {
         if ((pfds[i].revents & POLLNVAL) != 0) {
@@ -307,21 +308,24 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
         if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
             if (readfds) {
                 FD_SET(pfds[i].fd, readfds);
+                ++ready_count;
             }
         }
         if (pfds[i].revents & POLLOUT) {
             if (writefds) {
                 FD_SET(pfds[i].fd, writefds);
+                ++ready_count;
             }
         }
         if (pfds[i].revents & (POLLPRI | POLLNVAL)) {
             if (exceptfds) {
                 FD_SET(pfds[i].fd, exceptfds);
+                ++ready_count;
             }
         }
     }
 
-    return ret;
+    return ready_count;
 }
 
 /* pselect - シグナルマスク付きselect */
@@ -355,6 +359,7 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
             __rin_select_clear_sets(readfds, writefds, exceptfds);
             return ret;
         }
+        int ready_count = 0;
         for (int i = 0; i < npfds; ++i) {
             if ((pfds[i].revents & POLLNVAL) != 0) {
                 __rin_select_clear_sets(readfds, writefds, exceptfds);
@@ -365,16 +370,25 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
         __rin_select_clear_sets(readfds, writefds, exceptfds);
         for (int i = 0; i < npfds; ++i) {
             if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
-                if (readfds) FD_SET(pfds[i].fd, readfds);
+                if (readfds) {
+                    FD_SET(pfds[i].fd, readfds);
+                    ++ready_count;
+                }
             }
             if (pfds[i].revents & POLLOUT) {
-                if (writefds) FD_SET(pfds[i].fd, writefds);
+                if (writefds) {
+                    FD_SET(pfds[i].fd, writefds);
+                    ++ready_count;
+                }
             }
             if (pfds[i].revents & POLLPRI) {
-                if (exceptfds) FD_SET(pfds[i].fd, exceptfds);
+                if (exceptfds) {
+                    FD_SET(pfds[i].fd, exceptfds);
+                    ++ready_count;
+                }
             }
         }
-        return ret;
+        return ready_count;
     }
 
     struct timeval tv;
