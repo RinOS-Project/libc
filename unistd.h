@@ -38,6 +38,21 @@
 #ifndef _POSIX_SAVED_IDS
 #define _POSIX_SAVED_IDS 1
 #endif
+#ifndef _POSIX_JOB_CONTROL
+#define _POSIX_JOB_CONTROL 1
+#endif
+#ifndef _POSIX_PRIORITY_SCHEDULING
+#define _POSIX_PRIORITY_SCHEDULING 200809L
+#endif
+#ifndef _POSIX_TIMERS
+#define _POSIX_TIMERS 200809L
+#endif
+#ifndef _POSIX_SEMAPHORES
+#define _POSIX_SEMAPHORES 200809L
+#endif
+#ifndef _POSIX_MEMLOCK
+#define _POSIX_MEMLOCK 200809L
+#endif
 
 /* Asynchronous I/O is implemented by the libc AIO runtime. */
 #ifndef _POSIX_ASYNCHRONOUS_IO
