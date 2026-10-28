@@ -69,6 +69,12 @@ static inline rin_integer_parse_result rin_integer_parse(
                     base = 16;
                     cursor += 2;
                 }
+            } else if (cursor[1] == 'b' || cursor[1] == 'B') {
+                int prefix_digit = rin_integer_parse_digit(cursor[2]);
+                if (prefix_digit == 0 || prefix_digit == 1) {
+                    base = 2;
+                    cursor += 2;
+                }
             }
         } else {
             base = 10;
@@ -77,6 +83,11 @@ static inline rin_integer_parse_result rin_integer_parse(
                (cursor[1] == 'x' || cursor[1] == 'X')) {
         int prefix_digit = rin_integer_parse_digit(cursor[2]);
         if (prefix_digit >= 0 && prefix_digit < 16)
+            cursor += 2;
+    } else if (base == 2 && cursor[0] == '0' &&
+               (cursor[1] == 'b' || cursor[1] == 'B')) {
+        int prefix_digit = rin_integer_parse_digit(cursor[2]);
+        if (prefix_digit == 0 || prefix_digit == 1)
             cursor += 2;
     }
 
