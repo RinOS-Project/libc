@@ -51,9 +51,6 @@
 #ifndef _POSIX_MESSAGE_PASSING
 #define _POSIX_MESSAGE_PASSING 200809L
 #endif
-#ifndef _POSIX_SEMAPHORES
-#define _POSIX_SEMAPHORES 200809L
-#endif
 #ifndef _POSIX_MEMLOCK
 #define _POSIX_MEMLOCK 200809L
 #endif
@@ -1768,8 +1765,6 @@ static inline long sysconf(int name) {
             return MQ_OPEN_MAX;
         case _SC_MQ_PRIO_MAX:
             return MQ_PRIO_MAX;
-        case _SC_SEMAPHORES:
-            return _POSIX_SEMAPHORES;
         case _SC_MEMLOCK:
             return _POSIX_MEMLOCK;
         case _SC_ASYNCHRONOUS_IO:
@@ -1845,6 +1840,7 @@ static inline long sysconf(int name) {
                           sizeof(((__rin_account_info_v1*)0)->shell));
 #endif
         case _SC_PRIORITIZED_IO:
+        case _SC_SEMAPHORES:
         case _SC_SHARED_MEMORY_OBJECTS:
         case _SC_BC_BASE_MAX:
         case _SC_BC_DIM_MAX:
