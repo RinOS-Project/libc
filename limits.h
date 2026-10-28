@@ -73,6 +73,9 @@
 #ifndef ULLONG_MAX
 #define ULLONG_MAX  18446744073709551615ULL
 #endif
+#ifndef BITINT_MAXWIDTH
+#define BITINT_MAXWIDTH 64
+#endif
 
 /* size_t is pointer-width on every supported ABI, including LLP64 hosts. */
 #ifndef SIZE_MAX
@@ -166,7 +169,7 @@
 #define TZNAME_MAX  31
 #endif
 #ifndef HOST_NAME_MAX
-#define HOST_NAME_MAX 64
+#define HOST_NAME_MAX 255
 #endif
 #ifndef _POSIX_HOST_NAME_MAX
 #define _POSIX_HOST_NAME_MAX 255
