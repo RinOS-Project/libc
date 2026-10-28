@@ -1277,8 +1277,11 @@ static inline double ldexp(double x, int exp) {
      * changes the result when the input exponent compensates for the value
      * (for example, a subnormal input scaled by a large positive exponent). */
     while (exp > 1023) {
+        double previous = x;
         x *= 0x1p1023;
-        if (__builtin_isinf(x)) return x;
+        /* Directed rounding may saturate at the largest finite value rather
+         * than infinity; another positive chunk cannot change that result. */
+        if (__builtin_isinf(x) || x == previous) return x;
         exp -= 1023;
     }
     while (exp < -1022) {
