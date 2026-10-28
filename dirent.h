@@ -103,7 +103,7 @@ static inline DIR* opendir(const char* name) {
     /* ディレクトリをオープン */
     fd = _rin_dir_result(_RIN_DIRENT_SYSCALL3(
         SYS_OPEN, (uintptr_t)name,
-        (uintptr_t)(O_RDONLY | O_DIRECTORY), 0));
+        (uintptr_t)(O_RDONLY | O_DIRECTORY | O_CLOEXEC), 0));
     if (fd < 0) return NULL;
     if (fd > (intptr_t)INT_MAX) {
         (void)_RIN_DIRENT_SYSCALL1(SYS_CLOSE, (uintptr_t)fd);
