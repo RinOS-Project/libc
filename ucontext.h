@@ -265,8 +265,8 @@ RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_mcontext.fpregs) == 224u,
                "ucontext AMD64 FP pointer offset changed");
 
 static inline int rin_ucontext_amd64_canonical(uintptr_t value) {
-    uint64_t upper = (uint64_t)value >> 48;
-    return upper == 0u || upper == 0xffffu;
+    uint64_t upper = (uint64_t)value >> 47;
+    return upper == 0u || upper == UINT64_C(0x1ffff);
 }
 
 static inline int rin_ucontext_amd64_ready(const ucontext_t* context) {
