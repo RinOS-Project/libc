@@ -118,6 +118,7 @@ extern int rin_net_get_primary_info(RinNetPrimaryInfo* out);
 #define EAI_FAMILY     -6   /* 未サポートのアドレスファミリ */
 #define EAI_MEMORY     -10  /* メモリ不足 */
 #define EAI_NONAME     -2   /* 名前解決失敗 */
+#define EAI_NODATA     -5   /* 名前は存在するが要求データがない */
 #define EAI_SERVICE    -8   /* 未サポートのサービス */
 #define EAI_SOCKTYPE   -7   /* 未サポートのソケットタイプ */
 #define EAI_SYSTEM     -11  /* システムエラー */
@@ -167,6 +168,7 @@ static inline int _netdb_h_errno_from_gai(int gai_error) {
     switch (gai_error) {
         case EAI_AGAIN: return TRY_AGAIN;
         case EAI_NONAME: return HOST_NOT_FOUND;
+        case EAI_NODATA: return NO_DATA;
         default: return NO_RECOVERY;
     }
 }
@@ -755,7 +757,8 @@ static inline struct hostent* gethostbyaddr(const void* addr, socklen_t len, int
                                 (socklen_t)sizeof(host), NULL, 0,
                                 NI_NAMEREQD);
     if (lookup_result != 0) {
-        h_errno = lookup_result == EAI_NONAME
+        h_errno = lookup_result == EAI_NONAME ||
+                  lookup_result == EAI_NODATA
             ? NO_DATA : _netdb_h_errno_from_gai(lookup_result);
         return NULL;
     }
