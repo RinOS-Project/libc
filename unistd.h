@@ -1811,7 +1811,6 @@ static inline long sysconf(int name) {
         case _SC_GETGR_R_SIZE_MAX:
         case _SC_GETPW_R_SIZE_MAX:
         case _SC_IPV6:
-        case _SC_READER_WRITER_LOCKS:
         case _SC_SHELL:
         case _SC_SPIN_LOCKS:
         case _SC_SPORADIC_SERVER:
