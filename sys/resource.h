@@ -184,6 +184,11 @@ static inline int __rin_resource_limit_wire_call(
         errno = EFAULT;
         return -1;
     }
+    if (new_limit != NULL &&
+        (flags & RIN_RESOURCE_LIMIT_CALL_FLAG_SET) == 0u) {
+        errno = EINVAL;
+        return -1;
+    }
     request.struct_size = RIN_RESOURCE_LIMIT_CALL_SIZE;
     request.version = RIN_RESOURCE_LIMIT_ABI_VERSION;
     request.operation = operation;
@@ -191,18 +196,14 @@ static inline int __rin_resource_limit_wire_call(
     request.resource = wire_resource;
     request.target_process_id = target_process_id;
     request.target_instance_cookie = target_instance_cookie;
-    if (new_limit) {
-        request.new_current = new_limit->rlim_cur == (rlim_t)RLIM_INFINITY
-            ? UINT64_MAX : (uint64_t)new_limit->rlim_cur;
-        request.new_maximum = new_limit->rlim_max == (rlim_t)RLIM_INFINITY
-            ? UINT64_MAX : (uint64_t)new_limit->rlim_max;
-    }
+    request.new_limit_address = (uint64_t)(uintptr_t)new_limit;
+    request.old_limit_address = (uint64_t)(uintptr_t)old_limit;
     raw_result = _RIN_RESOURCE_LIMIT_SYSCALL2(
         SYS_RESOURCE_LIMIT_CALL, &request, &response);
     raw_result = __rin_syscall_posixize(raw_result);
     if (raw_result == -1) return -1;
     if (raw_result != 0 || response.struct_size != RIN_RESOURCE_LIMIT_CALL_SIZE ||
-        response.version != RIN_RESOURCE_LIMIT_ABI_VERSION ||
+        response.version != request.version ||
         response.operation != operation || response.status != 0 ||
         response.resource != wire_resource ||
         response.target_process_id != target_process_id ||
@@ -212,16 +213,9 @@ static inline int __rin_resource_limit_wire_call(
         (response.current > (uint64_t)(rlim_t)~(rlim_t)0 &&
          response.current != UINT64_MAX) ||
         (response.maximum > (uint64_t)(rlim_t)~(rlim_t)0 &&
-         response.maximum != UINT64_MAX) ||
-        (operation == RIN_RESOURCE_LIMIT_CALL_SET &&
-         (response.current != request.new_current ||
-          response.maximum != request.new_maximum))) {
+         response.maximum != UINT64_MAX)) {
         errno = EIO;
         return -1;
-    }
-    if (old_limit) {
-        old_limit->rlim_cur = (rlim_t)response.current;
-        old_limit->rlim_max = (rlim_t)response.maximum;
     }
     return 0;
 }
@@ -279,7 +273,9 @@ struct rusage {
  * The current process FD table has one published, enforced capacity.  Do not
  * manufacture values for resource classes whose kernel owners do not exist. */
 static inline int getrlimit(int resource, struct rlimit* rlim) {
+#if !RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
     int hook_result;
+#endif
     if (resource < 0 || resource >= RLIMIT_NLIMITS) {
         errno = EINVAL;
         return -1;
@@ -288,11 +284,11 @@ static inline int getrlimit(int resource, struct rlimit* rlim) {
         errno = EFAULT;
         return -1;
     }
-    hook_result = __rin_resource_limit_get_hook(resource, rlim);
-    if (hook_result <= 0) return hook_result;
 #if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
-    hook_result = __rin_resource_limit_wire_call(
+    return __rin_resource_limit_wire_call(
         RIN_RESOURCE_LIMIT_CALL_GET, 0u, 0u, 0u, resource, NULL, rlim);
+#else
+    hook_result = __rin_resource_limit_get_hook(resource, rlim);
     if (hook_result <= 0) return hook_result;
 #endif
     if (resource == RLIMIT_MEMLOCK) {
@@ -311,7 +307,9 @@ static inline int getrlimit(int resource, struct rlimit* rlim) {
 
 /* setrlimit - リソース制限を設定 */
 static inline int setrlimit(int resource, const struct rlimit* rlim) {
+#if !RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
     int hook_result;
+#endif
     if (resource < 0 || resource >= RLIMIT_NLIMITS) {
         errno = EINVAL;
         return -1;
@@ -320,17 +318,16 @@ static inline int setrlimit(int resource, const struct rlimit* rlim) {
         errno = EFAULT;
         return -1;
     }
+#if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
+    return __rin_resource_limit_wire_call(
+        RIN_RESOURCE_LIMIT_CALL_SET, 0u, 0u, 0u, resource, rlim, NULL);
+#else
     if (rlim->rlim_cur > rlim->rlim_max) {
         errno = EINVAL;
         return -1;
     }
     hook_result = __rin_resource_limit_set_hook(resource, rlim);
     if (hook_result <= 0) return hook_result;
-#if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
-    hook_result = __rin_resource_limit_wire_call(
-        RIN_RESOURCE_LIMIT_CALL_SET, 0u, 0u, 0u, resource, rlim, NULL);
-    if (hook_result <= 0) return hook_result;
-#endif
     /* The process FD table has a fixed, enforced capacity.  Accept an exact
      * no-op publication of that limit so compatibility callers can use the
      * usual getrlimit/adjust/setrlimit sequence without claiming that a
@@ -342,6 +339,7 @@ static inline int setrlimit(int resource, const struct rlimit* rlim) {
     }
     errno = ENOSYS;
     return -1;
+#endif
 }
 
 /* prlimit - プロセスのリソース制限を取得/設定 */
@@ -353,28 +351,23 @@ static inline int prlimit(pid_t pid, int resource,
         errno = EINVAL;
         return -1;
     }
+#if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
+    return __rin_resource_limit_wire_call(
+        RIN_RESOURCE_LIMIT_CALL_PRLIMIT,
+        new_limit ? RIN_RESOURCE_LIMIT_CALL_FLAG_SET : 0u,
+        pid == 0 ? 0u : (uint32_t)pid, 0u, resource,
+        new_limit, old_limit);
+#else
 #if defined(__GNUC__) || defined(__clang__)
     if (rin_resource_limit_prlimit != NULL)
         return rin_resource_limit_prlimit(pid, resource, new_limit, old_limit);
-#endif
-#if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
-    if (new_limit != NULL || old_limit != NULL) {
-        if (new_limit && new_limit->rlim_cur > new_limit->rlim_max) {
-            errno = EINVAL;
-            return -1;
-        }
-        return __rin_resource_limit_wire_call(
-            RIN_RESOURCE_LIMIT_CALL_PRLIMIT,
-            new_limit ? RIN_RESOURCE_LIMIT_CALL_FLAG_SET : 0u,
-            pid == 0 ? 0u : (uint32_t)pid, 0u, resource,
-            new_limit, old_limit);
-    }
 #endif
     if (pid != 0 || new_limit) {
         errno = ENOSYS;
         return -1;
     }
     return getrlimit(resource, old_limit);
+#endif
 }
 
 /* ═══════════════════════════════════════════════════════════════
