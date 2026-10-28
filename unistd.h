@@ -82,6 +82,9 @@
 #ifndef _POSIX_THREADS
 #define _POSIX_THREADS 200809L
 #endif
+#ifndef _POSIX_THREAD_ATTR_STACKSIZE
+#define _POSIX_THREAD_ATTR_STACKSIZE 200809L
+#endif
 #ifndef _POSIX_BARRIERS
 #define _POSIX_BARRIERS 200809L
 #endif
@@ -1787,6 +1790,8 @@ static inline long sysconf(int name) {
             return PTHREAD_KEYS_MAX;
         case _SC_THREAD_STACK_MIN:
             return PTHREAD_STACK_MIN;
+        case _SC_THREAD_ATTR_STACKSIZE:
+            return _POSIX_THREAD_ATTR_STACKSIZE;
         case _SC_REGEXP:
             return 1;
         case _SC_THREADS:
@@ -1852,7 +1857,6 @@ static inline long sysconf(int name) {
         case _SC_SPORADIC_SERVER:
         case _SC_SS_REPL_MAX:
         case _SC_THREAD_ATTR_STACKADDR:
-        case _SC_THREAD_ATTR_STACKSIZE:
         case _SC_THREAD_CPUTIME:
         case _SC_THREAD_PRIO_INHERIT:
         case _SC_THREAD_PRIO_PROTECT:
