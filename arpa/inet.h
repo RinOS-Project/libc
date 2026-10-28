@@ -33,80 +33,67 @@ extern "C" {
  * アドレス変換関数
  * ═══════════════════════════════════════════════════════════════*/
 
+static inline int _inet_parse_legacy_ipv4(const char* text,
+                                           in_addr_t* address_out) {
+    unsigned int part[4] = {0u, 0u, 0u, 0u};
+    unsigned int count = 0u;
+    const char* cursor = text;
+    unsigned int address;
+
+    if (!text || !address_out) return 0;
+    for (;;) {
+        unsigned int value = 0u;
+        if (count >= 4u || *cursor < '0' || *cursor > '9') return 0;
+        do {
+            unsigned int digit = (unsigned int)(*cursor - '0');
+            if (value > (0xffffffffu - digit) / 10u) return 0;
+            value = value * 10u + digit;
+            ++cursor;
+        } while (*cursor >= '0' && *cursor <= '9');
+        part[count++] = value;
+        if (*cursor == '\0') break;
+        if (*cursor++ != '.') return 0;
+    }
+
+    switch (count) {
+    case 1u:
+        address = part[0];
+        break;
+    case 2u:
+        if (part[0] > 0xffu || part[1] > 0xffffffu) return 0;
+        address = (part[0] << 24) | part[1];
+        break;
+    case 3u:
+        if (part[0] > 0xffu || part[1] > 0xffu || part[2] > 0xffffu)
+            return 0;
+        address = (part[0] << 24) | (part[1] << 16) | part[2];
+        break;
+    case 4u:
+        if (part[0] > 0xffu || part[1] > 0xffu ||
+            part[2] > 0xffu || part[3] > 0xffu)
+            return 0;
+        address = (part[0] << 24) | (part[1] << 16) |
+                  (part[2] << 8) | part[3];
+        break;
+    default:
+        return 0;
+    }
+
+    *address_out = htonl(address);
+    return 1;
+}
+
 /* inet_addr - ドット形式文字列をネットワークバイトオーダーに変換 */
 static inline in_addr_t inet_addr(const char* cp) {
-    if (!cp) return INADDR_NONE;
-
-    unsigned int a, b, c, d;
-
-    a = b = c = d = 0;
-
-    /* 最初のオクテット */
-    while (*cp >= '0' && *cp <= '9') {
-        a = a * 10 + (*cp - '0');
-        cp++;
-    }
-    if (*cp == '\0') {
-        /* 単一の数値 */
-        return htonl(a);
-    }
-    if (*cp++ != '.') return INADDR_NONE;
-
-    /* 2番目のオクテット */
-    while (*cp >= '0' && *cp <= '9') {
-        b = b * 10 + (*cp - '0');
-        cp++;
-    }
-    if (*cp == '\0') {
-        /* a.b形式 */
-        return htonl((a << 24) | (b & 0xffffff));
-    }
-    if (*cp++ != '.') return INADDR_NONE;
-
-    /* 3番目のオクテット */
-    while (*cp >= '0' && *cp <= '9') {
-        c = c * 10 + (*cp - '0');
-        cp++;
-    }
-    if (*cp == '\0') {
-        /* a.b.c形式 */
-        return htonl((a << 24) | (b << 16) | (c & 0xffff));
-    }
-    if (*cp++ != '.') return INADDR_NONE;
-
-    /* 4番目のオクテット */
-    while (*cp >= '0' && *cp <= '9') {
-        d = d * 10 + (*cp - '0');
-        cp++;
-    }
-    if (*cp != '\0') return INADDR_NONE;
-
-    /* 範囲チェック */
-    if (a > 255 || b > 255 || c > 255 || d > 255) {
-        return INADDR_NONE;
-    }
-
-    return htonl((a << 24) | (b << 16) | (c << 8) | d);
+    in_addr_t address;
+    return _inet_parse_legacy_ipv4(cp, &address) ? address : INADDR_NONE;
 }
 
 /* inet_aton - inet_addrと同様だが成功/失敗を返す */
-static inline int _inet_is_broadcast_text(const char* text) {
-    static const char broadcast[] = "255.255.255.255";
-    unsigned int index = 0;
-    if (!text) return 0;
-    while (broadcast[index] != '\0' && text[index] == broadcast[index]) {
-        index++;
-    }
-    return broadcast[index] == '\0' && text[index] == '\0';
-}
-
 static inline int inet_aton(const char* cp, struct in_addr* inp) {
-    if (!cp) return 0;
-    in_addr_t addr = inet_addr(cp);
-    if (addr == INADDR_NONE && !_inet_is_broadcast_text(cp)) {
-        return 0;
-    }
-    if (inp) inp->s_addr = addr;
+    in_addr_t address;
+    if (!_inet_parse_legacy_ipv4(cp, &address)) return 0;
+    if (inp) inp->s_addr = address;
     return 1;
 }
 
