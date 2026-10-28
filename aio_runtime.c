@@ -490,8 +490,6 @@ int aio_cancel(int fd, struct aiocb* request)
                                   ? rin_aio_group_complete_locked(
                                         current->group, &completed)
                                   : NULL;
-            if (!current->group && current->notification.kind != SIGEV_NONE)
-                completed = current->notification;
             if (completed_group) free(completed_group);
             if (current->notification.kind != SIGEV_NONE &&
                 notification_count < RIN_AIO_CAPACITY * 2u)
