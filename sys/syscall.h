@@ -114,6 +114,10 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_sethostname     SYS_SETHOSTNAME
 #define SYS_setdomainname   SYS_SETDOMAINNAME
 #define SYS_dup3            SYS_DUP3
+#ifndef SYS_PTRACE
+#define SYS_PTRACE          149u
+#endif
+#define SYS_ptrace          SYS_PTRACE
 
 /* Signal-related RinPort syscalls. */
 #define SYS_rt_sigprocmask  SYS_RT_SIGPROCMASK
@@ -205,6 +209,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_clock_gettime  SYS_TIME        /* 60 — 簡易マッピング */
 #define __NR_getrandom      350             /* bounded kernel CSPRNG */
 #define __NR_set_tid_address 351            /* clear_child_tid handler */
+#define __NR_ptrace          SYS_PTRACE
 
 /* ═══════════════════════════════════════════════════════════════
  * システムコール呼び出しマクロ
