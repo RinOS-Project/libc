@@ -727,6 +727,7 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
     glob_t aggregate = {0};
     size_t part_start;
     int aggregate_has_result = 0;
+    int aggregate_result = 0;
     int alternative_flags;
     _RinGlobMatchList matches = {NULL, 0u, 0u};
     char* alternative;
@@ -743,8 +744,8 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
     *handled = 1;
 
     /* Alternatives are collected without caller offsets or fallback
-     * literals.  Those policies are applied once, after every branch has
-     * completed, so an error cannot expose a partial result. */
+     * literals. Those policies are applied once, after every branch or an
+     * aborting traversal has completed. */
     alternative_flags = flags & ~(GLOB_APPEND | GLOB_DOOFFS |
                                    GLOB_NOCHECK | GLOB_NOMAGIC);
     alternative = scratch->alternative;
@@ -806,6 +807,9 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
             errfunc, &aggregate, brace_depth + 1u);
         if (result == 0) {
             aggregate_has_result = 1;
+        } else if (result == GLOB_ABORTED) {
+            aggregate_result = result;
+            break;
         } else if (result != GLOB_NOMATCH) {
             globfree(&aggregate);
             return result;
@@ -816,6 +820,7 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
 
     if (aggregate.gl_pathc == 0u) {
         globfree(&aggregate);
+        if (aggregate_result != 0) return aggregate_result;
         if ((flags & GLOB_NOCHECK) != 0) {
             if (_rin_glob_match_list_add(&matches, pattern) != 0)
                 return GLOB_NOSPACE;
@@ -840,7 +845,7 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
     if (!(flags & GLOB_NOSORT)) _rin_glob_sort(&matches);
     found = _rin_glob_commit(pglob, flags, &matches);
     if (found != 0) _rin_glob_match_list_free(&matches);
-    return found;
+    return found != 0 ? found : aggregate_result;
 }
 
 /* Expand the current user's home directory without consulting an ambient
@@ -995,6 +1000,16 @@ static inline int _rin_glob_run_body(
         int result = _rin_glob_expand(&context, components, component_count,
                                       0u, prefix);
         if (result != 0) {
+            if (result == GLOB_ABORTED && matches.count != 0u) {
+                int publish_result;
+                if (!(flags & GLOB_NOSORT)) _rin_glob_sort(&matches);
+                publish_result = _rin_glob_commit(pglob, flags, &matches);
+                if (publish_result != 0) {
+                    _rin_glob_match_list_free(&matches);
+                    return publish_result;
+                }
+                return result;
+            }
             _rin_glob_match_list_free(&matches);
             return result;
         }
