@@ -36,6 +36,7 @@ typedef _Atomic _Bool              atomic_bool;
 typedef _Atomic char               atomic_char;
 typedef _Atomic signed char        atomic_schar;
 typedef _Atomic unsigned char      atomic_uchar;
+typedef _Atomic unsigned char      atomic_char8_t;
 typedef _Atomic short              atomic_short;
 typedef _Atomic unsigned short     atomic_ushort;
 typedef _Atomic int                atomic_int;
@@ -184,6 +185,7 @@ static inline void atomic_flag_clear_explicit(volatile atomic_flag* flag, memory
 
 #define ATOMIC_BOOL_LOCK_FREE       __GCC_ATOMIC_BOOL_LOCK_FREE
 #define ATOMIC_CHAR_LOCK_FREE       __GCC_ATOMIC_CHAR_LOCK_FREE
+#define ATOMIC_CHAR8_T_LOCK_FREE    __GCC_ATOMIC_CHAR_LOCK_FREE
 #define ATOMIC_CHAR16_T_LOCK_FREE   __GCC_ATOMIC_CHAR16_T_LOCK_FREE
 #define ATOMIC_CHAR32_T_LOCK_FREE   __GCC_ATOMIC_CHAR32_T_LOCK_FREE
 #define ATOMIC_WCHAR_T_LOCK_FREE    __GCC_ATOMIC_WCHAR_T_LOCK_FREE
