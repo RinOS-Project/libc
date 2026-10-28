@@ -256,7 +256,9 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
     if (option == PR_GET_ENDIAN || option == PR_SET_NO_NEW_PRIVS ||
         option == PR_GET_NO_NEW_PRIVS ||
         option == PR_SET_SECCOMP || option == PR_GET_SECCOMP ||
-        option == PR_SET_TSC || option == PR_GET_TSC) {
+        option == PR_SET_TSC || option == PR_GET_TSC ||
+        option == PR_SET_PDEATHSIG || option == PR_GET_PDEATHSIG ||
+        option == PR_SET_DUMPABLE || option == PR_GET_DUMPABLE) {
         result = _syscall5(SYS_PRCTL, (uintptr_t)option, arg2, arg3,
                            arg4, arg5);
         if (result < 0) {
@@ -285,10 +287,12 @@ static inline int prctl(int option, ...) {
     uintptr_t arg4 = 0;
     uintptr_t arg5 = 0;
     if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
+        option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE ||
         option == PR_SET_NAME || option == PR_GET_NAME) {
         __builtin_va_list args;
         __builtin_va_start(args, option);
-        if (option == PR_GET_ENDIAN || option == PR_GET_TSC)
+        if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
+            option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE)
             arg2 = (uintptr_t)__builtin_va_arg(args, int*);
         else
             arg2 = __builtin_va_arg(args, uintptr_t);
@@ -297,6 +301,12 @@ static inline int prctl(int option, ...) {
         __builtin_va_list args;
         __builtin_va_start(args, option);
         arg2 = __builtin_va_arg(args, uintptr_t);
+        __builtin_va_end(args);
+    } else if (option == PR_SET_PDEATHSIG ||
+               option == PR_SET_DUMPABLE) {
+        __builtin_va_list args;
+        __builtin_va_start(args, option);
+        arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
         __builtin_va_end(args);
     } else if (option == PR_SET_NO_NEW_PRIVS ||
                option == PR_SET_SECCOMP) {
