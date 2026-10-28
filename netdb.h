@@ -163,6 +163,14 @@ static inline int* _netdb_h_errno_location(void) {
 #define NO_DATA        4
 #define NO_ADDRESS     NO_DATA
 
+static inline int _netdb_h_errno_from_gai(int gai_error) {
+    switch (gai_error) {
+        case EAI_AGAIN: return TRY_AGAIN;
+        case EAI_NONAME: return HOST_NOT_FOUND;
+        default: return NO_RECOVERY;
+    }
+}
+
 #define NI_MAXHOST 1025
 #define NI_MAXSERV 32
 
@@ -772,7 +780,11 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
 
 /* gethostbyname - ホスト名からアドレスを取得 */
 static inline struct hostent* gethostbyname(const char* name) {
-    if (!name) return NULL;
+    int lookup_result;
+    if (!name) {
+        h_errno = NO_RECOVERY;
+        return NULL;
+    }
 
     _netdb_prepare_hostent_storage();
 
@@ -783,8 +795,11 @@ static inline struct hostent* gethostbyname(const char* name) {
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
     hints.ai_flags = AI_CANONNAME;
-    if (getaddrinfo(name, NULL, &hints, &ai) != 0 || !ai || !ai->ai_addr) {
+    lookup_result = getaddrinfo(name, NULL, &hints, &ai);
+    if (lookup_result != 0 || !ai || !ai->ai_addr) {
         if (ai) freeaddrinfo(ai);
+        h_errno = lookup_result != 0
+            ? _netdb_h_errno_from_gai(lookup_result) : NO_DATA;
         return NULL;
     }
 
@@ -800,12 +815,17 @@ static inline struct hostent* gethostbyname(const char* name) {
     _netdb_hostent.h_addrtype = AF_INET;
     _netdb_hostent.h_length = 4;
     _netdb_hostent.h_addr_list = _netdb_addr_list;
+    h_errno = 0;
     return &_netdb_hostent;
 }
 
 /* gethostbyaddr - アドレスからホスト名を取得 */
 static inline struct hostent* gethostbyaddr(const void* addr, socklen_t len, int type) {
-    if (type != AF_INET || !addr || len < (socklen_t)sizeof(struct in_addr)) return NULL;
+    int lookup_result;
+    if (type != AF_INET || !addr || len != (socklen_t)sizeof(struct in_addr)) {
+        h_errno = NO_RECOVERY;
+        return NULL;
+    }
 
     _netdb_prepare_hostent_storage();
 
@@ -816,12 +836,14 @@ static inline struct hostent* gethostbyaddr(const void* addr, socklen_t len, int
     memcpy(&sa.sin_addr, addr, sizeof(sa.sin_addr));
     _netdb_addr = sa.sin_addr;
 
-    if (getnameinfo((const struct sockaddr*)&sa, (socklen_t)sizeof(sa),
-                    host, (socklen_t)sizeof(host), NULL, 0, 0) != 0) {
-        if (getnameinfo((const struct sockaddr*)&sa, (socklen_t)sizeof(sa),
-                        host, (socklen_t)sizeof(host), NULL, 0, NI_NUMERICHOST) != 0) {
-            return NULL;
-        }
+    lookup_result = getnameinfo((const struct sockaddr*)&sa,
+                                (socklen_t)sizeof(sa), host,
+                                (socklen_t)sizeof(host), NULL, 0,
+                                NI_NAMEREQD);
+    if (lookup_result != 0) {
+        h_errno = lookup_result == EAI_NONAME
+            ? NO_DATA : _netdb_h_errno_from_gai(lookup_result);
+        return NULL;
     }
     strncpy(_netdb_hostname, host, sizeof(_netdb_hostname) - 1);
     _netdb_hostname[sizeof(_netdb_hostname) - 1] = '\0';
@@ -831,6 +853,7 @@ static inline struct hostent* gethostbyaddr(const void* addr, socklen_t len, int
     _netdb_hostent.h_addrtype = AF_INET;
     _netdb_hostent.h_length = 4;
     _netdb_hostent.h_addr_list = _netdb_addr_list;
+    h_errno = 0;
 
     return &_netdb_hostent;
 }
