@@ -73,10 +73,6 @@ static inline pid_t __rin_wait_pid_result(intptr_t result) {
     return (pid_t)result;
 }
 
-static inline void __rin_wait_clear_status(int* wstatus) {
-    if (wstatus) *wstatus = 0;
-}
-
 /* waitid's private syscall returns a positive visible PID for an event, but
  * POSIX waitid returns zero after the siginfo copy. */
 static inline int __rin_waitid_event_result(intptr_t result) {
@@ -143,12 +139,10 @@ typedef int idtype_t;
 static inline pid_t wait(int* wstatus) {
     pid_t result;
     __rin_pthread_cancel_point_if_linked();
-    __rin_wait_clear_status(wstatus);
     result = __rin_wait_pid_result(
         _RIN_WAIT_SYSCALL3(SYS_WAIT, (uintptr_t)(intptr_t)-1,
                            (uintptr_t)wstatus, 0u));
     __rin_pthread_cancel_point_if_linked();
-    if (result < 0) __rin_wait_clear_status(wstatus);
     return result;
 }
 #endif /* _RIN_WAIT_DEFINED */
@@ -166,13 +160,11 @@ static inline pid_t waitpid(pid_t pid, int* wstatus, int options) {
     }
     pid_t result;
     __rin_pthread_cancel_point_if_linked();
-    __rin_wait_clear_status(wstatus);
     result = __rin_wait_pid_result(
         _RIN_WAIT_SYSCALL3(SYS_WAIT, (uintptr_t)(intptr_t)pid,
                            (uintptr_t)wstatus,
                            (uintptr_t)(unsigned int)options));
     __rin_pthread_cancel_point_if_linked();
-    if (result < 0) __rin_wait_clear_status(wstatus);
     return result;
 }
 
@@ -305,14 +297,12 @@ static inline pid_t wait3(int* wstatus, int options, struct rusage* rusage) {
     if (rusage) {
         struct rusage temporary_rusage;
         __rin_wait_clear_rusage(&temporary_rusage);
-        __rin_wait_clear_status(wstatus);
         result = __rin_wait_pid_result(
             _RIN_WAIT_SYSCALL4(SYS_WAIT4, (uintptr_t)(intptr_t)-1,
                                (uintptr_t)wstatus, (uintptr_t)(unsigned int)options,
                                (uintptr_t)&temporary_rusage));
         __rin_pthread_cancel_point_if_linked();
         if (result < 0) {
-            __rin_wait_clear_status(wstatus);
             return result;
         }
         *rusage = temporary_rusage;
@@ -331,14 +321,12 @@ static inline pid_t wait4(pid_t pid, int* wstatus, int options, struct rusage* r
     if (rusage) {
         struct rusage temporary_rusage;
         __rin_wait_clear_rusage(&temporary_rusage);
-        __rin_wait_clear_status(wstatus);
         result = __rin_wait_pid_result(
             _RIN_WAIT_SYSCALL4(SYS_WAIT4, (uintptr_t)(intptr_t)pid,
                                (uintptr_t)wstatus, (uintptr_t)(unsigned int)options,
                                (uintptr_t)&temporary_rusage));
         __rin_pthread_cancel_point_if_linked();
         if (result < 0) {
-            __rin_wait_clear_status(wstatus);
             return result;
         }
         *rusage = temporary_rusage;
