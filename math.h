@@ -273,6 +273,7 @@ static inline int signbit(double x) {
     u.d = x;
     return (u.i >> 63) != 0;
 }
+#endif
 
 static inline double nextafter(double from, double to) {
     union {
@@ -323,7 +324,6 @@ static inline float nextafterf(float from, float to) {
         --u.i;
     return u.f;
 }
-#endif
 
 #ifdef __cplusplus
 extern "C" {
