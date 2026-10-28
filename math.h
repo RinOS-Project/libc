@@ -1282,8 +1282,12 @@ static inline double ldexp(double x, int exp) {
         exp -= 1023;
     }
     while (exp < -1022) {
+        double previous = x;
         x *= 0x1p-1022;
-        if (x == 0.0) return x;
+        /* Directed rounding can keep a tiny nonzero value at the same
+         * minimum subnormal on every scale-down step.  Further negative
+         * scaling cannot change that correctly rounded result. */
+        if (x == 0.0 || x == previous) return x;
         exp += 1022;
     }
     while (exp > 0) { x *= 2.0; exp--; }
