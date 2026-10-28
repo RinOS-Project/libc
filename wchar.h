@@ -746,15 +746,13 @@ static inline size_t wcsnrtombs(char* dest, const wchar_t** src, size_t nwc,
         ++cursor;
         --nwc;
     }
-    if (nwc != 0u && *cursor == L'\0') {
-        if (!dest || converted < len) {
-            if (dest) dest[converted] = '\0';
+    if (dest) {
+        if (nwc != 0u && *cursor == L'\0' && converted < len) {
+            dest[converted] = '\0';
             *src = (const wchar_t*)0;
         } else {
             *src = cursor;
         }
-    } else {
-        *src = cursor;
     }
     return converted;
 }
@@ -783,15 +781,13 @@ static inline size_t mbsnrtowcs(wchar_t* dest, const char** src, size_t nms,
         cursor += read;
         nms -= read;
     }
-    if (nms != 0u && *cursor == '\0') {
-        if (!dest || converted < len) {
-            if (dest) dest[converted] = L'\0';
+    if (dest) {
+        if (nms != 0u && *cursor == '\0' && converted < len) {
+            dest[converted] = L'\0';
             *src = (const char*)0;
         } else {
             *src = cursor;
         }
-    } else {
-        *src = cursor;
     }
     return converted;
 }
