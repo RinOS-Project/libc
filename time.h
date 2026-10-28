@@ -1101,7 +1101,7 @@ static inline int timer_create(clockid_t clock_id,
             return -1;
         }
         if (notify == SIGEV_SIGNAL) {
-            if (event->sigev_signo != 0) signo = event->sigev_signo;
+            signo = event->sigev_signo;
         } else if (notify == SIGEV_THREAD) {
             if (!event->sigev_notify_function ||
                 event->sigev_notify_attributes != (void*)0) {
