@@ -48,6 +48,8 @@ extern "C" {
 #define _RIN_GLOB_MAX_COMPONENTS  64u
 #define _RIN_GLOB_MAX_MATCHES     4096u
 #define _RIN_GLOB_MAX_PATH        4096u
+#define _RIN_GLOB_MAX_BRACE_RECURSION 8u
+#define _RIN_GLOB_MAX_BRACE_NESTING 64u
 
 /* ═══════════════════════════════════════════════════════════════
  * glob_t構造体
@@ -116,6 +118,25 @@ typedef struct _RinGlobComponent {
     int wildcard;
 } _RinGlobComponent;
 
+/* Recursive brace expansion owns one bounded scratch frame per active
+ * expansion. Keeping these buffers on the heap makes GLOB_BRACE safe on the
+ * minimum supported thread stack; recursion still has a fixed resource cap. */
+typedef struct _RinGlobScratch {
+    char prefix[_RIN_GLOB_MAX_PATH];
+    _RinGlobComponent components[_RIN_GLOB_MAX_COMPONENTS];
+    char component_copy[_RIN_GLOB_MAX_PATH];
+    char alternative[_RIN_GLOB_MAX_PATTERN];
+    char expanded[_RIN_GLOB_MAX_PATTERN];
+    size_t brace_opens[_RIN_GLOB_MAX_BRACE_NESTING];
+    size_t brace_commas[_RIN_GLOB_MAX_BRACE_NESTING];
+} _RinGlobScratch;
+
+typedef struct _RinGlobExpandScratch {
+    char raw_component[NAME_MAX + 1u];
+    char literal_component[NAME_MAX + 1u];
+    char child[_RIN_GLOB_MAX_PATH];
+} _RinGlobExpandScratch;
+
 /* Forward declaration used by the private brace collector.  The public
  * entrypoint recursively compiles each bounded alternative into a private
  * result before publishing anything to the caller's glob_t. */
@@ -123,6 +144,9 @@ static inline int glob(const char* pattern, int flags,
                        int (*errfunc)(const char*, int),
                        glob_t* pglob);
 static inline void globfree(glob_t* pglob);
+static inline int _rin_glob_run(const char* pattern, int flags,
+                                int (*errfunc)(const char*, int),
+                                glob_t* pglob, unsigned int brace_depth);
 
 static inline void _rin_glob_match_list_free(_RinGlobMatchList* list)
 {
@@ -401,15 +425,20 @@ static inline int _rin_glob_add_marked(_RinGlobMatchList* list,
                                        int is_directory)
 {
     size_t length = _rin_glob_strlen(path);
-    char marked[_RIN_GLOB_MAX_PATH];
     if ((flags & GLOB_MARK) && is_directory &&
         (length == 0u || path[length - 1u] != '/')) {
-        if (length + 2u > sizeof(marked)) return GLOB_NOSPACE;
+        char* marked;
+        int result;
+        if (length + 2u > _RIN_GLOB_MAX_PATH) return GLOB_NOSPACE;
+        marked = (char*)malloc(length + 2u);
+        if (!marked) return GLOB_NOSPACE;
         for (size_t index = 0; index < length; ++index)
             marked[index] = path[index];
         marked[length++] = '/';
         marked[length] = '\0';
-        return _rin_glob_match_list_add(list, marked);
+        result = _rin_glob_match_list_add(list, marked);
+        free(marked);
+        return result;
     }
     return _rin_glob_match_list_add(list, path);
 }
@@ -417,14 +446,23 @@ static inline int _rin_glob_add_marked(_RinGlobMatchList* list,
 static inline int _rin_glob_expand(_RinGlobContext* context,
                                    const _RinGlobComponent* components,
                                    size_t component_count, size_t index,
-                                   const char* prefix)
+                                   const char* prefix);
+
+static inline int _rin_glob_expand_body(
+    _RinGlobContext* context, const _RinGlobComponent* components,
+    size_t component_count, size_t index, const char* prefix,
+    _RinGlobExpandScratch* scratch)
 {
-    char raw_component[NAME_MAX + 1u];
-    char literal_component[NAME_MAX + 1u];
+    char* raw_component;
+    char* literal_component;
     char* child;
     int result;
-    if (!context || !components || !prefix || index > component_count)
+    if (!context || !components || !prefix || !scratch ||
+        index > component_count)
         return GLOB_ABORTED;
+    raw_component = scratch->raw_component;
+    literal_component = scratch->literal_component;
+    child = scratch->child;
     if (index == component_count) {
         struct stat status;
         if (prefix[0] == '\0') return 0;
@@ -439,9 +477,8 @@ static inline int _rin_glob_expand(_RinGlobContext* context,
         return _rin_glob_add_marked(context->matches, prefix, context->flags,
                                     S_ISDIR(status.st_mode));
     }
-    if (components[index].length >= sizeof(raw_component)) return GLOB_NOSPACE;
-    child = (char*)malloc(_RIN_GLOB_MAX_PATH);
-    if (!child) return GLOB_NOSPACE;
+    if (components[index].length >= sizeof(scratch->raw_component))
+        return GLOB_NOSPACE;
     for (size_t offset = 0; offset < components[index].length; ++offset)
         raw_component[offset] = components[index].text[offset];
     raw_component[components[index].length] = '\0';
@@ -449,17 +486,13 @@ static inline int _rin_glob_expand(_RinGlobContext* context,
         result = _rin_glob_component_copy(raw_component,
                                            components[index].length,
                                            context->flags, literal_component,
-                                           sizeof(literal_component));
-        if (result != 0) {
-            free(child);
-            return result;
-        }
+                                           sizeof(scratch->literal_component));
+        if (result != 0) return result;
         result = _rin_glob_path_join(prefix, literal_component, child,
                                      _RIN_GLOB_MAX_PATH);
         if (result == 0)
             result = _rin_glob_expand(context, components, component_count,
                                       index + 1u, child);
-        free(child);
         return result;
     }
     {
@@ -471,7 +504,6 @@ static inline int _rin_glob_expand(_RinGlobContext* context,
         if (!directory_stream) {
             int saved_errno = errno;
             result = _rin_glob_report_error(context, directory, saved_errno);
-            free(child);
             return result;
         }
         result = 0;
@@ -517,9 +549,23 @@ static inline int _rin_glob_expand(_RinGlobContext* context,
             int saved_errno = errno;
             result = _rin_glob_report_error(context, directory, saved_errno);
         }
-        free(child);
         return result;
     }
+}
+
+static inline int _rin_glob_expand(_RinGlobContext* context,
+                                   const _RinGlobComponent* components,
+                                   size_t component_count, size_t index,
+                                   const char* prefix)
+{
+    _RinGlobExpandScratch* scratch =
+        (_RinGlobExpandScratch*)malloc(sizeof(*scratch));
+    int result;
+    if (!scratch) return GLOB_NOSPACE;
+    result = _rin_glob_expand_body(
+        context, components, component_count, index, prefix, scratch);
+    free(scratch);
+    return result;
 }
 
 static inline int _rin_glob_string_compare(const char* left, const char* right)
@@ -611,16 +657,19 @@ static inline int _rin_glob_no_match(glob_t* pglob, int flags)
  * bounded policy used by this header. */
 static inline int _rin_glob_find_brace(const char* pattern,
                                        int flags, size_t* open,
-                                       size_t* close, size_t* comma)
+                                       size_t* close, size_t* comma,
+                                       _RinGlobScratch* scratch)
 {
     size_t index = 0u;
-    size_t opens[64];
-    size_t commas[64];
+    size_t* opens;
+    size_t* commas;
     size_t nested_open = 0u;
     size_t nested_close = 0u;
     size_t nested_comma = (size_t)-1;
     unsigned int depth = 0u;
-    if (!pattern || !open || !close || !comma) return -1;
+    if (!pattern || !open || !close || !comma || !scratch) return -1;
+    opens = scratch->brace_opens;
+    commas = scratch->brace_commas;
     while (pattern[index] != '\0') {
         if (pattern[index] == '\\' && !(flags & GLOB_NOESCAPE)) {
             if (pattern[index + 1u] == '\0') return -1;
@@ -628,7 +677,7 @@ static inline int _rin_glob_find_brace(const char* pattern,
             continue;
         }
         if (pattern[index] == '{') {
-            if (depth >= sizeof(opens) / sizeof(opens[0])) return -1;
+            if (depth >= _RIN_GLOB_MAX_BRACE_NESTING) return -1;
             opens[depth] = index;
             commas[depth] = (size_t)-1;
             ++depth;
@@ -667,7 +716,9 @@ static inline int _rin_glob_find_brace(const char* pattern,
 
 static inline int _rin_glob_brace_expand(const char* pattern, int flags,
                                          int (*errfunc)(const char*, int),
-                                         glob_t* pglob, int* handled)
+                                         glob_t* pglob, int* handled,
+                                         _RinGlobScratch* scratch,
+                                         unsigned int brace_depth)
 {
     size_t open;
     size_t close;
@@ -678,10 +729,12 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
     int aggregate_has_result = 0;
     int alternative_flags;
     _RinGlobMatchList matches = {NULL, 0u, 0u};
+    char* alternative;
 
-    if (!pattern || !pglob || !handled) return GLOB_ABORTED;
+    if (!pattern || !pglob || !handled || !scratch) return GLOB_ABORTED;
     *handled = 0;
-    found = _rin_glob_find_brace(pattern, flags, &open, &close, &comma);
+    found = _rin_glob_find_brace(
+        pattern, flags, &open, &close, &comma, scratch);
     if (found < 0) {
         *handled = 1;
         return GLOB_NOSYS;
@@ -694,6 +747,7 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
      * completed, so an error cannot expose a partial result. */
     alternative_flags = flags & ~(GLOB_APPEND | GLOB_DOOFFS |
                                    GLOB_NOCHECK | GLOB_NOMAGIC);
+    alternative = scratch->alternative;
     part_start = open + 1u;
     for (;;) {
         size_t part_end = part_start;
@@ -702,7 +756,6 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
         size_t part_length;
         size_t total_length;
         size_t cursor;
-        char alternative[_RIN_GLOB_MAX_PATTERN];
         int result;
         unsigned int depth = 0u;
 
@@ -746,10 +799,11 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
             alternative[cursor + index] = pattern[close + 1u + index];
         alternative[total_length] = '\0';
 
-        result = glob(alternative,
-                      aggregate_has_result ? alternative_flags | GLOB_APPEND
-                                           : alternative_flags,
-                      errfunc, &aggregate);
+        result = _rin_glob_run(
+            alternative,
+            aggregate_has_result ? alternative_flags | GLOB_APPEND
+                                 : alternative_flags,
+            errfunc, &aggregate, brace_depth + 1u);
         if (result == 0) {
             aggregate_has_result = 1;
         } else if (result != GLOB_NOMATCH) {
@@ -794,17 +848,19 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
  * would otherwise turn an untrusted name into an authority-bearing path. */
 static inline int _rin_glob_tilde_expand(const char* pattern, int flags,
                                          int (*errfunc)(const char*, int),
-                                         glob_t* pglob, int* handled)
+                                         glob_t* pglob, int* handled,
+                                         _RinGlobScratch* scratch,
+                                         unsigned int brace_depth)
 {
     const char* home;
     const char* suffix;
     size_t home_length;
     size_t suffix_length;
     size_t total_length;
-    char expanded[_RIN_GLOB_MAX_PATTERN];
+    char* expanded;
     size_t cursor;
 
-    if (!pattern || !pglob || !handled) return GLOB_ABORTED;
+    if (!pattern || !pglob || !handled || !scratch) return GLOB_ABORTED;
     *handled = 0;
     if (!(flags & GLOB_TILDE) || pattern[0] != '~') return 0;
     *handled = 1;
@@ -816,6 +872,7 @@ static inline int _rin_glob_tilde_expand(const char* pattern, int flags,
     if (!home || home_length == 0u || home[0] != '/')
         return GLOB_NOSYS;
     suffix = pattern + 1u;
+    expanded = scratch->expanded;
     suffix_length = _rin_glob_strlen(suffix);
     if (home_length > _RIN_GLOB_MAX_PATTERN - 1u ||
         suffix_length > _RIN_GLOB_MAX_PATTERN - 1u - home_length)
@@ -834,13 +891,15 @@ static inline int _rin_glob_tilde_expand(const char* pattern, int flags,
     for (size_t index = 0u; index < suffix_length; ++index)
         expanded[home_length + index] = suffix[index];
     expanded[total_length] = '\0';
-    return glob(expanded, flags & ~GLOB_TILDE, errfunc, pglob);
+    return _rin_glob_run(
+        expanded, flags & ~GLOB_TILDE, errfunc, pglob, brace_depth);
 }
 
 /* Expand pathname components with bounded directory traversal. */
-static inline int glob(const char* pattern, int flags,
-                       int (*errfunc)(const char*, int),
-                       glob_t* pglob) {
+static inline int _rin_glob_run_body(
+    const char* pattern, int flags, int (*errfunc)(const char*, int),
+    glob_t* pglob, _RinGlobScratch* scratch, unsigned int brace_depth)
+{
     const int known_flags = GLOB_ERR | GLOB_MARK | GLOB_NOSORT |
                             GLOB_DOOFFS | GLOB_NOCHECK | GLOB_APPEND |
                             GLOB_NOESCAPE | GLOB_PERIOD | GLOB_BRACE |
@@ -851,27 +910,31 @@ static inline int glob(const char* pattern, int flags,
     size_t old_pathc;
     int has_wildcard = 0;
     int trailing_slash;
-    char prefix[_RIN_GLOB_MAX_PATH];
-    _RinGlobComponent components[_RIN_GLOB_MAX_COMPONENTS];
+    char* prefix;
+    _RinGlobComponent* components;
     _RinGlobMatchList matches = { NULL, 0u, 0u };
     _RinGlobContext context;
 
-    if (!pglob || !pattern) {
+    if (!pglob || !pattern || !scratch) {
         errno = EINVAL;
         return GLOB_ABORTED;
     }
+    prefix = scratch->prefix;
+    components = scratch->components;
     if ((flags & ~known_flags) != 0)
         return GLOB_NOSYS;
     {
         int tilde_handled = 0;
         int tilde_result = _rin_glob_tilde_expand(
-            pattern, flags, errfunc, pglob, &tilde_handled);
+            pattern, flags, errfunc, pglob, &tilde_handled, scratch,
+            brace_depth);
         if (tilde_handled) return tilde_result;
     }
     if (flags & GLOB_BRACE) {
         int brace_handled = 0;
         int brace_result = _rin_glob_brace_expand(
-            pattern, flags, errfunc, pglob, &brace_handled);
+            pattern, flags, errfunc, pglob, &brace_handled, scratch,
+            brace_depth);
         if (brace_handled) return brace_result;
     }
     pattern_length = _rin_glob_strlen(pattern);
@@ -888,7 +951,7 @@ static inline int glob(const char* pattern, int flags,
     while (cursor < pattern_length) {
         size_t begin;
         size_t length;
-        char component_copy[_RIN_GLOB_MAX_PATH];
+        char* component_copy = scratch->component_copy;
         while (cursor < pattern_length && pattern[cursor] == '/') ++cursor;
         if (cursor == pattern_length) break;
         if (component_count >= _RIN_GLOB_MAX_COMPONENTS)
@@ -903,7 +966,7 @@ static inline int glob(const char* pattern, int flags,
                 ++cursor;
         }
         length = cursor - begin;
-        if (length == 0u || length >= sizeof(component_copy))
+        if (length == 0u || length >= _RIN_GLOB_MAX_PATH)
             return GLOB_NOSPACE;
         for (size_t index = 0; index < length; ++index)
             component_copy[index] = pattern[begin + index];
@@ -955,6 +1018,29 @@ static inline int glob(const char* pattern, int flags,
         if (result != 0) _rin_glob_match_list_free(&matches);
         return result;
     }
+}
+
+static inline int _rin_glob_run(const char* pattern, int flags,
+                                int (*errfunc)(const char*, int),
+                                glob_t* pglob, unsigned int brace_depth)
+{
+    _RinGlobScratch* scratch;
+    int result;
+    if (brace_depth > _RIN_GLOB_MAX_BRACE_RECURSION)
+        return GLOB_NOSPACE;
+    scratch = (_RinGlobScratch*)malloc(sizeof(*scratch));
+    if (!scratch) return GLOB_NOSPACE;
+    result = _rin_glob_run_body(
+        pattern, flags, errfunc, pglob, scratch, brace_depth);
+    free(scratch);
+    return result;
+}
+
+static inline int glob(const char* pattern, int flags,
+                       int (*errfunc)(const char*, int),
+                       glob_t* pglob)
+{
+    return _rin_glob_run(pattern, flags, errfunc, pglob, 0u);
 }
 
 /* globfree - glob結果を解放 */
