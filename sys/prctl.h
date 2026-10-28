@@ -253,7 +253,8 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
     intptr_t result;
     if (option == PR_SET_NAME) return _rin_prctl_set_name(arg2);
     if (option == PR_GET_NAME) return _rin_prctl_get_name(arg2);
-    if (option == PR_SET_NO_NEW_PRIVS || option == PR_GET_NO_NEW_PRIVS ||
+    if (option == PR_GET_ENDIAN || option == PR_SET_NO_NEW_PRIVS ||
+        option == PR_GET_NO_NEW_PRIVS ||
         option == PR_SET_SECCOMP || option == PR_GET_SECCOMP ||
         option == PR_SET_TSC || option == PR_GET_TSC) {
         result = _syscall5(SYS_PRCTL, (uintptr_t)option, arg2, arg3,
@@ -269,11 +270,6 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
             return -1;
         }
         return (int)result;
-    }
-    if (option == PR_GET_ENDIAN) {
-        if (!arg2) { errno = EINVAL; return -1; }
-        *(int*)(uintptr_t)arg2 = PR_ENDIAN_LITTLE;
-        return 0;
     }
     errno = ENOSYS;
     return -1;
