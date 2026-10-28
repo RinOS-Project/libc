@@ -617,13 +617,9 @@ static inline int faccessat(int dirfd, const char* pathname, int mode, int flags
         errno = ENOENT;
         return -1;
     }
-    if (pathname[0] != '\0' && (flags & AT_EMPTY_PATH) != 0) {
-        errno = EINVAL;
-        return -1;
-    }
     _fcntl_path_at_init(&call, RIN_PATH_AT_ACCESS);
     call.dirfd = dirfd;
-    call.flags = (uint32_t)flags;
+    call.flags = (uint32_t)(flags & ~AT_EMPTY_PATH);
     call.mode = (uint32_t)mode;
     call.path1 = (uint64_t)(uintptr_t)pathname;
     return _fcntl_path_at_zero(&call);
@@ -652,13 +648,9 @@ static inline int fchownat(int dirfd, const char* pathname, uid_t owner, gid_t g
         call.path1 = (uint64_t)(uintptr_t)pathname;
         return _fcntl_path_at_zero(&call);
     }
-    if ((flags & AT_EMPTY_PATH) != 0) {
-        errno = EINVAL;
-        return -1;
-    }
     _fcntl_path_at_init(&call, RIN_PATH_AT_CHOWN);
     call.dirfd = dirfd;
-    call.flags = (uint32_t)flags;
+    call.flags = (uint32_t)(flags & ~AT_EMPTY_PATH);
     call.owner = (uint32_t)owner;
     call.group = (uint32_t)group;
     call.path1 = (uint64_t)(uintptr_t)pathname;
