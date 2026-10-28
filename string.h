@@ -99,6 +99,24 @@ RIN_STRING_INLINE void* memccpy(void* destination, const void* source,
 #endif
 #endif
 
+/* C23 secure wipe: volatile stores remain observable even when the caller
+ * does not read the cleared bytes again. */
+#ifndef memset_explicit
+#ifdef RIN_STRING_IMPLEMENTATION
+void* memset_explicit(void* memory, int value, size_t size);
+#else
+RIN_STRING_INLINE void* memset_explicit(void* memory, int value, size_t size) {
+    volatile unsigned char* output = (volatile unsigned char*)memory;
+    const unsigned char byte = (unsigned char)value;
+    while (size != 0u) {
+        *output++ = byte;
+        --size;
+    }
+    return memory;
+}
+#endif
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * 文字列操作
  * rin.hでマクロ定義済みの場合はスキップ
