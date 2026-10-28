@@ -9,6 +9,7 @@
 #include "stddef.h"
 #include "stdint.h"
 #include "wchar.h"
+#include "stdio_width_specifier.h"
 
 #define RIN_SSCANF_MAX_INPUT 4096u
 
@@ -21,15 +22,19 @@ enum RinSscanfLength {
     RIN_SSCANF_LENGTH_CHAR = 5,
     RIN_SSCANF_LENGTH_INTMAX = 6,
     RIN_SSCANF_LENGTH_PTRDIFF = 7,
-    RIN_SSCANF_LENGTH_LONG_DOUBLE = 8
+    RIN_SSCANF_LENGTH_LONG_DOUBLE = 8,
+    RIN_SSCANF_LENGTH_WIDTH = 9,
+    RIN_SSCANF_LENGTH_FAST_WIDTH = 10
 };
 
 struct RinSscanfSpec {
     enum RinSscanfLength length;
     size_t width;
+    unsigned int width_bits;
     char conversion;
     int has_width;
     int suppress;
+    int width_fast;
     unsigned char scanset[32];
     int scanset_invert;
     const char* scanset_data;

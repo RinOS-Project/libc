@@ -17,6 +17,7 @@
 #include "stddef.h"
 #include "stdint.h"
 #include "stdarg.h"
+#include "stdio_width_specifier.h"
 #include "sys/types.h"
 #include "errno.h"
 #include "limits.h"
@@ -2708,6 +2709,7 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
         int pad = 0, zero = 0, left_align = 0;
         int plus = 0, space = 0, alternate = 0;
         int precision = -1;
+        int width_set = 0;
 
         /* フラグ処理 */
         for (;;) {
@@ -2721,11 +2723,13 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
 
         /* 幅 (dynamic: %*d も扱う) */
         if (*fmt == '*') {
+            width_set = 1;
             pad = va_arg(ap, int);
             if (pad == INT_MIN) { errno = EOVERFLOW; goto format_error; }
             if (pad < 0) { left_align = 1; pad = -pad; }
             fmt++;
         } else {
+            width_set = *fmt >= '0' && *fmt <= '9';
             while (*fmt >= '0' && *fmt <= '9') {
                 int digit = *fmt++ - '0';
                 if (pad > (INT_MAX - digit) / 10) {
@@ -2764,6 +2768,9 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
         int is_intmax = 0;
         int is_ptrdiff = 0;
         int is_size = 0;
+        int has_width_modifier = 0;
+        int width_fast = 0;
+        unsigned int width_bits = 0u;
         if (*fmt == 'L') {
             fmt++;
             is_longdouble = 1;
@@ -2788,6 +2795,22 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
         } else if (*fmt == 't') {
             fmt++;
             is_ptrdiff = 1;
+        } else if (*fmt == 'w') {
+            int parsed = rin_stdio_parse_width_spec(
+                &fmt, &width_bits, &width_fast);
+            if (parsed != 1) goto format_error;
+            has_width_modifier = 1;
+        }
+
+        if (has_width_modifier && *fmt != 'd' && *fmt != 'i' && *fmt != 'u' &&
+            *fmt != 'o' && *fmt != 'x' && *fmt != 'X' && *fmt != 'b' &&
+            *fmt != 'B' && *fmt != 'n') {
+            errno = EINVAL;
+            goto format_error;
+        }
+        if (*fmt == 'w') {
+            errno = EINVAL;
+            goto format_error;
         }
 
         switch (*fmt) {
@@ -2807,7 +2830,23 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                 uintmax_t magnitude;
                 if (is_signed) {
                     intmax_t value;
-                    if (is_char)
+                    if (has_width_modifier && width_bits == 8u)
+                        value = width_fast
+                            ? (int_fast8_t)RIN_STDIO_VA_ARG_PROMOTED(ap, int_fast8_t)
+                            : (int8_t)RIN_STDIO_VA_ARG_PROMOTED(ap, int8_t);
+                    else if (has_width_modifier && width_bits == 16u)
+                        value = width_fast
+                            ? (int_fast16_t)RIN_STDIO_VA_ARG_PROMOTED(ap, int_fast16_t)
+                            : (int16_t)RIN_STDIO_VA_ARG_PROMOTED(ap, int16_t);
+                    else if (has_width_modifier && width_bits == 32u)
+                        value = width_fast
+                            ? (int_fast32_t)RIN_STDIO_VA_ARG_PROMOTED(ap, int_fast32_t)
+                            : (int32_t)RIN_STDIO_VA_ARG_PROMOTED(ap, int32_t);
+                    else if (has_width_modifier && width_bits == 64u)
+                        value = width_fast
+                            ? (int_fast64_t)RIN_STDIO_VA_ARG_PROMOTED(ap, int_fast64_t)
+                            : (int64_t)RIN_STDIO_VA_ARG_PROMOTED(ap, int64_t);
+                    else if (is_char)
                         value = (signed char)va_arg(ap, int);
                     else if (is_short)
                         value = (short)va_arg(ap, int);
@@ -2826,7 +2865,23 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                         ? (uintmax_t)(-(value + 1)) + 1u
                         : (uintmax_t)value;
                 } else {
-                    if (is_char)
+                    if (has_width_modifier && width_bits == 8u)
+                        magnitude = width_fast
+                            ? (uint_fast8_t)RIN_STDIO_VA_ARG_PROMOTED(ap, uint_fast8_t)
+                            : (uint8_t)RIN_STDIO_VA_ARG_PROMOTED(ap, uint8_t);
+                    else if (has_width_modifier && width_bits == 16u)
+                        magnitude = width_fast
+                            ? (uint_fast16_t)RIN_STDIO_VA_ARG_PROMOTED(ap, uint_fast16_t)
+                            : (uint16_t)RIN_STDIO_VA_ARG_PROMOTED(ap, uint16_t);
+                    else if (has_width_modifier && width_bits == 32u)
+                        magnitude = width_fast
+                            ? (uint_fast32_t)RIN_STDIO_VA_ARG_PROMOTED(ap, uint_fast32_t)
+                            : (uint32_t)RIN_STDIO_VA_ARG_PROMOTED(ap, uint32_t);
+                    else if (has_width_modifier && width_bits == 64u)
+                        magnitude = width_fast
+                            ? (uint_fast64_t)RIN_STDIO_VA_ARG_PROMOTED(ap, uint_fast64_t)
+                            : (uint64_t)RIN_STDIO_VA_ARG_PROMOTED(ap, uint64_t);
+                    else if (is_char)
                         magnitude = (unsigned char)va_arg(ap, int);
                     else if (is_short)
                         magnitude = (unsigned short)va_arg(ap, int);
@@ -2846,6 +2901,67 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                         *fmt == 'X' || *fmt == 'B', pad, left_align, zero,
                         plus, space, alternate, precision) != 0)
                     goto format_error;
+                break;
+            }
+            case 'n': {
+                if (width_set || precision >= 0 || zero || left_align ||
+                    plus || space || alternate || is_longdouble) {
+                    errno = EINVAL;
+                    goto format_error;
+                }
+#define RIN_STDIO_STORE_N(type, maximum) do { \
+                    type* output; \
+                    if ((uint64_t)sink.length > (uint64_t)(maximum)) { \
+                        errno = ERANGE; \
+                        goto format_error; \
+                    } \
+                    output = va_arg(ap, type*); \
+                    if (!output) { errno = EFAULT; goto format_error; } \
+                    *output = (type)sink.length; \
+                } while (0)
+                if (has_width_modifier) {
+                    unsigned int type_bits = rin_stdio_width_type_bits(
+                        width_bits, width_fast);
+                    if (type_bits == 0u || type_bits > 64u) {
+                        errno = ENOSYS;
+                        goto format_error;
+                    }
+                    uint64_t maximum = type_bits == 64u
+                        ? (uint64_t)INT64_MAX
+                        : (UINT64_C(1) << (type_bits - 1u)) - 1u;
+                    if (width_fast) {
+                        switch (width_bits) {
+                            case 8u: RIN_STDIO_STORE_N(int_fast8_t, maximum); break;
+                            case 16u: RIN_STDIO_STORE_N(int_fast16_t, maximum); break;
+                            case 32u: RIN_STDIO_STORE_N(int_fast32_t, maximum); break;
+                            case 64u: RIN_STDIO_STORE_N(int_fast64_t, maximum); break;
+                            default: errno = EINVAL; goto format_error;
+                        }
+                    } else {
+                        switch (width_bits) {
+                            case 8u: RIN_STDIO_STORE_N(int8_t, maximum); break;
+                            case 16u: RIN_STDIO_STORE_N(int16_t, maximum); break;
+                            case 32u: RIN_STDIO_STORE_N(int32_t, maximum); break;
+                            case 64u: RIN_STDIO_STORE_N(int64_t, maximum); break;
+                            default: errno = EINVAL; goto format_error;
+                        }
+                    }
+                } else if (is_char) {
+                    RIN_STDIO_STORE_N(signed char, SCHAR_MAX);
+                } else if (is_short) {
+                    RIN_STDIO_STORE_N(short, SHRT_MAX);
+                } else if (is_longlong) {
+                    RIN_STDIO_STORE_N(long long, LLONG_MAX);
+                } else if (is_long) {
+                    RIN_STDIO_STORE_N(long, LONG_MAX);
+                } else if (is_size || is_ptrdiff) {
+                    RIN_STDIO_STORE_N(ptrdiff_t, PTRDIFF_MAX);
+                } else if (is_intmax) {
+                    RIN_STDIO_STORE_N(intmax_t, INTMAX_MAX);
+                } else {
+                    RIN_STDIO_STORE_N(int, INT_MAX);
+                }
+#undef RIN_STDIO_STORE_N
                 break;
             }
             case 'p': {
@@ -3105,7 +3221,8 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                 _RIN_STDIO_FORMAT_PUT('%');
                 break;
             default:
-                break;
+                errno = EINVAL;
+                goto format_error;
         }
         fmt++;
     }
