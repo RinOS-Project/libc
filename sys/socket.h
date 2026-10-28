@@ -413,17 +413,63 @@ static inline int __rin_socket_message_length(const struct msghdr* message,
 
 #define SCM_RIGHTS 0x01
 
-#define _RIN_CMSG_ALIGN(len) (((len) + sizeof(size_t) - 1) & ~(sizeof(size_t) - 1))
+static inline size_t __rin_cmsg_align_size(size_t length) {
+    const size_t mask = sizeof(size_t) - 1u;
+    if (length > SIZE_MAX - mask) return SIZE_MAX;
+    return (length + mask) & ~mask;
+}
+
+static inline size_t __rin_cmsg_space_size(size_t payload_length) {
+    const size_t header_length =
+        __rin_cmsg_align_size(sizeof(struct cmsghdr));
+    const size_t aligned_payload = __rin_cmsg_align_size(payload_length);
+    if (aligned_payload > SIZE_MAX - header_length) return SIZE_MAX;
+    return header_length + aligned_payload;
+}
+
+static inline size_t __rin_cmsg_len_size(size_t payload_length) {
+    const size_t header_length =
+        __rin_cmsg_align_size(sizeof(struct cmsghdr));
+    if (payload_length > SIZE_MAX - header_length) return SIZE_MAX;
+    return header_length + payload_length;
+}
+
+static inline struct cmsghdr* __rin_cmsg_nxthdr(
+    const struct msghdr* message, const struct cmsghdr* current) {
+    const uintptr_t base = message ? (uintptr_t)message->msg_control : 0u;
+    const uintptr_t cursor = (uintptr_t)current;
+    const size_t total = message ? message->msg_controllen : 0u;
+    size_t offset;
+    size_t remaining;
+    size_t step;
+    size_t current_length;
+
+    if (!message || !current || !message->msg_control || base > UINTPTR_MAX - total ||
+        cursor < base || cursor - base > total)
+        return (struct cmsghdr*)0;
+    offset = (size_t)(cursor - base);
+    remaining = total - offset;
+    if (remaining < sizeof(struct cmsghdr)) return (struct cmsghdr*)0;
+    current_length = current->cmsg_len;
+    if (current_length < sizeof(struct cmsghdr) || current_length > remaining)
+        return (struct cmsghdr*)0;
+    step = __rin_cmsg_align_size(current_length);
+    if (step == SIZE_MAX || step > remaining) return (struct cmsghdr*)0;
+    offset += step;
+    if (total - offset < sizeof(struct cmsghdr)) return (struct cmsghdr*)0;
+    return (struct cmsghdr*)((unsigned char*)message->msg_control + offset);
+}
+
+#define _RIN_CMSG_ALIGN(len) __rin_cmsg_align_size((size_t)(len))
 #define CMSG_ALIGN(len) _RIN_CMSG_ALIGN(len)
-#define CMSG_SPACE(len) (_RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) + _RIN_CMSG_ALIGN(len))
-#define CMSG_LEN(len) (_RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) + (len))
+#define CMSG_SPACE(len) __rin_cmsg_space_size((size_t)(len))
+#define CMSG_LEN(len) __rin_cmsg_len_size((size_t)(len))
 #define CMSG_DATA(cmsg) ((unsigned char*)(cmsg) + _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)))
 #define CMSG_FIRSTHDR(msg) \
-    (((msg) && (msg)->msg_controllen >= sizeof(struct cmsghdr)) ? (struct cmsghdr*)((msg)->msg_control) : (struct cmsghdr*)0)
-#define CMSG_NXTHDR(msg, cmsg) \
-    ((((unsigned char*)(cmsg) + _RIN_CMSG_ALIGN((cmsg)->cmsg_len) + _RIN_CMSG_ALIGN(sizeof(struct cmsghdr))) > ((unsigned char*)(msg)->msg_control + (msg)->msg_controllen)) \
-        ? (struct cmsghdr*)0 \
-        : (struct cmsghdr*)((unsigned char*)(cmsg) + _RIN_CMSG_ALIGN((cmsg)->cmsg_len)))
+    (((msg) && (msg)->msg_control && \
+      (msg)->msg_controllen >= sizeof(struct cmsghdr)) \
+         ? (struct cmsghdr*)((msg)->msg_control) : (struct cmsghdr*)0)
+#define CMSG_NXTHDR(msg, cmsg) __rin_cmsg_nxthdr((msg), (cmsg))
 
 /* ═══════════════════════════════════════════════════════════════
  * ソケット関数
