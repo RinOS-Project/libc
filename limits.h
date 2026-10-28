@@ -124,6 +124,12 @@
 #ifndef _POSIX_SSIZE_MAX
 #define _POSIX_SSIZE_MAX 32767
 #endif
+#ifndef _XOPEN_IOV_MAX
+#define _XOPEN_IOV_MAX 16
+#endif
+#ifndef IOV_MAX
+#define IOV_MAX 64
+#endif
 #ifndef _POSIX_SYMLINK_MAX
 #define _POSIX_SYMLINK_MAX 255
 #endif

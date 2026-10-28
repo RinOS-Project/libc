@@ -1776,6 +1776,8 @@ static inline long sysconf(int name) {
         case _SC_SPAWN:
         case _SC_TIMEOUTS:
             return 1;
+        case _SC_IOV_MAX:
+            return IOV_MAX;
         case _SC_REALTIME_SIGNALS:
         case _SC_PRIORITIZED_IO:
         case _SC_SHARED_MEMORY_OBJECTS:
@@ -1807,7 +1809,6 @@ static inline long sysconf(int name) {
         case _SC_CPUTIME:
         case _SC_GETGR_R_SIZE_MAX:
         case _SC_GETPW_R_SIZE_MAX:
-        case _SC_IOV_MAX:
         case _SC_IPV6:
         case _SC_READER_WRITER_LOCKS:
         case _SC_SHELL:
