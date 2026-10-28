@@ -305,24 +305,26 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     __rin_select_clear_sets(readfds, writefds, exceptfds);
 
     for (int i = 0; i < npfds; i++) {
+        int fd_ready = 0;
         if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
             if (readfds) {
                 FD_SET(pfds[i].fd, readfds);
-                ++ready_count;
+                fd_ready = 1;
             }
         }
         if (pfds[i].revents & (POLLOUT | POLLERR)) {
             if (writefds) {
                 FD_SET(pfds[i].fd, writefds);
-                ++ready_count;
+                fd_ready = 1;
             }
         }
         if (pfds[i].revents & (POLLPRI | POLLNVAL)) {
             if (exceptfds) {
                 FD_SET(pfds[i].fd, exceptfds);
-                ++ready_count;
+                fd_ready = 1;
             }
         }
+        if (fd_ready) ++ready_count;
     }
 
     return ready_count;
@@ -369,24 +371,26 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
         }
         __rin_select_clear_sets(readfds, writefds, exceptfds);
         for (int i = 0; i < npfds; ++i) {
+            int fd_ready = 0;
             if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
                 if (readfds) {
                     FD_SET(pfds[i].fd, readfds);
-                    ++ready_count;
+                    fd_ready = 1;
                 }
             }
             if (pfds[i].revents & (POLLOUT | POLLERR)) {
                 if (writefds) {
                     FD_SET(pfds[i].fd, writefds);
-                    ++ready_count;
+                    fd_ready = 1;
                 }
             }
             if (pfds[i].revents & POLLPRI) {
                 if (exceptfds) {
                     FD_SET(pfds[i].fd, exceptfds);
-                    ++ready_count;
+                    fd_ready = 1;
                 }
             }
+            if (fd_ready) ++ready_count;
         }
         return ready_count;
     }
