@@ -109,9 +109,6 @@
 #ifndef _POSIX_REALTIME_SIGNALS
 #define _POSIX_REALTIME_SIGNALS 200809L
 #endif
-#ifndef _POSIX_REGEXP
-#define _POSIX_REGEXP 1
-#endif
 
 /* Preserve caller-provided syscall hooks before installing defaults.  A
  * hosted unit that supplies a hook is intentionally asking for the Rin
@@ -1865,8 +1862,6 @@ static inline long sysconf(int name) {
         case _SC_THREAD_PROCESS_SHARED:
             return 200809L;
 #endif
-        case _SC_REGEXP:
-            return 1;
         case _SC_THREADS:
         case _SC_REALTIME_SIGNALS:
         case _SC_BARRIERS:
@@ -1897,6 +1892,7 @@ static inline long sysconf(int name) {
                           sizeof(((__rin_account_info_v1*)0)->shell));
 #endif
         case _SC_PRIORITIZED_IO:
+        case _SC_REGEXP:
         case _SC_SEMAPHORES:
         case _SC_SHARED_MEMORY_OBJECTS:
         case _SC_BC_BASE_MAX:
@@ -1968,6 +1964,7 @@ static inline long sysconf(int name) {
         case _SC_SYNCHRONIZED_IO:
         case _SC_FSYNC:
         case _SC_MAPPED_FILES:
+        case _SC_SHARED_MEMORY_OBJECTS:
         case _SC_MEMLOCK_RANGE:
         case _SC_MEMORY_PROTECTION:
             return 200809L;
