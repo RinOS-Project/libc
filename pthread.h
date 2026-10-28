@@ -1200,11 +1200,16 @@ static inline int pthread_once(pthread_once_t* once_control, void (*init_routine
         init_routine();
         __atomic_store_n(once_control, 2, __ATOMIC_RELEASE);
         /* Wake all waiters */
-        syscall(SYS_futex, once_control, FUTEX_WAKE_PRIVATE, 0x7fffffff, NULL, NULL, 0);
+        long ret = syscall(SYS_futex, once_control, FUTEX_WAKE_PRIVATE,
+                           0x7fffffff, NULL, NULL, 0);
+        if (ret < 0) return errno != 0 ? errno : EIO;
     } else {
         /* Another thread is running init_routine, block until done */
         while (__atomic_load_n(once_control, __ATOMIC_ACQUIRE) == 1) {
-            syscall(SYS_futex, once_control, FUTEX_WAIT_PRIVATE, 1, NULL, NULL, 0);
+            long ret = syscall(SYS_futex, once_control, FUTEX_WAIT_PRIVATE,
+                               1, NULL, NULL, 0);
+            if (ret < 0 && errno != EAGAIN && errno != EINTR)
+                return errno != 0 ? errno : EIO;
         }
     }
     return 0;
