@@ -1780,6 +1780,23 @@ static inline long sysconf(int name) {
             return 1;
         case _SC_IOV_MAX:
             return IOV_MAX;
+#if !defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
+        case _SC_GETGR_R_SIZE_MAX: {
+            const size_t string_bytes =
+                sizeof(((__rin_account_info_v1*)0)->name) + sizeof("x");
+            const size_t pointer_size = sizeof(char*);
+            const size_t members_offset =
+                ((string_bytes + pointer_size - 1u) / pointer_size) *
+                pointer_size;
+            return (long)(members_offset + 2u * pointer_size);
+        }
+        case _SC_GETPW_R_SIZE_MAX:
+            return (long)(sizeof(((__rin_account_info_v1*)0)->name) +
+                          sizeof("x") +
+                          sizeof(((__rin_account_info_v1*)0)->display_name) +
+                          sizeof(((__rin_account_info_v1*)0)->home_dir) +
+                          sizeof(((__rin_account_info_v1*)0)->shell));
+#endif
         case _SC_REALTIME_SIGNALS:
         case _SC_PRIORITIZED_IO:
         case _SC_SHARED_MEMORY_OBJECTS:
@@ -1808,8 +1825,10 @@ static inline long sysconf(int name) {
         case _SC_2_UPE:
         case _SC_ADVISORY_INFO:
         case _SC_CPUTIME:
+#if defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
         case _SC_GETGR_R_SIZE_MAX:
         case _SC_GETPW_R_SIZE_MAX:
+#endif
         case _SC_IPV6:
         case _SC_SHELL:
         case _SC_SPIN_LOCKS:
