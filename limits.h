@@ -137,6 +137,18 @@
 #ifndef _POSIX_MQ_PRIO_MAX
 #define _POSIX_MQ_PRIO_MAX 32
 #endif
+#ifndef _POSIX_LOGIN_NAME_MAX
+#define _POSIX_LOGIN_NAME_MAX 9
+#endif
+#ifndef _POSIX_STREAM_MAX
+#define _POSIX_STREAM_MAX 8
+#endif
+#ifndef _POSIX_TTY_NAME_MAX
+#define _POSIX_TTY_NAME_MAX 9
+#endif
+#ifndef _POSIX_TZNAME_MAX
+#define _POSIX_TZNAME_MAX 6
+#endif
 #ifndef _POSIX_DELAYTIMER_MAX
 #define _POSIX_DELAYTIMER_MAX 32
 #endif
@@ -166,6 +178,12 @@
 #endif
 #ifndef MQ_PRIO_MAX
 #define MQ_PRIO_MAX 32
+#endif
+#ifndef STREAM_MAX
+#define STREAM_MAX 16
+#endif
+#ifndef TTY_NAME_MAX
+#define TTY_NAME_MAX 16
 #endif
 #ifndef DELAYTIMER_MAX
 #define DELAYTIMER_MAX 0x7fffffff

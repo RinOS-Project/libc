@@ -11,6 +11,7 @@
 #include "stdint.h"
 #include "stdarg.h"
 #include "sys/types.h"
+#include "limits.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,7 +30,7 @@ extern "C" {
 #define _IONBF 2
 
 #define FILENAME_MAX 256
-#define FOPEN_MAX 16
+#define FOPEN_MAX STREAM_MAX
 #define TMP_MAX 238328
 #define L_tmpnam 20
 
@@ -86,11 +87,15 @@ int ftrylockfile(FILE* stream);
 void funlockfile(FILE* stream);
 
 int putchar(int c);
+int putchar_unlocked(int c);
 int puts(const char* s);
 int fputc(int c, FILE* stream);
+int putc_unlocked(int c, FILE* stream);
 int fputs(const char* s, FILE* stream);
 int fgetc(FILE* stream);
+int getc_unlocked(FILE* stream);
 int getchar(void);
+int getchar_unlocked(void);
 int getc(FILE* stream);
 int putc(int c, FILE* stream);
 char* fgets(char* s, int size, FILE* stream);

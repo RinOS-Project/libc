@@ -1630,7 +1630,7 @@ static inline long sysconf(int name) {
         case _SC_OPEN_MAX:
             return OPEN_MAX;
         case _SC_STREAM_MAX:
-            return 16;
+            return STREAM_MAX;
         case _SC_LINE_MAX:
             return 2048;
         case _SC_HOST_NAME_MAX:
@@ -1644,7 +1644,7 @@ static inline long sysconf(int name) {
         case _SC_TTY_NAME_MAX:
             /* TTY paths /dev/tty0..2 and PTY paths /dev/pts/0..31
              * fit in ttyname()'s 16-byte TLS buffer. */
-            return 16;
+            return TTY_NAME_MAX;
         case _SC_VERSION:
             return 200809L;
         case _SC_NPROCESSORS_CONF:

@@ -80,7 +80,7 @@ extern "C" {
 
 /* ファイル名/パス最大長 */
 #define FILENAME_MAX 256
-#define FOPEN_MAX    16
+#define FOPEN_MAX    STREAM_MAX
 #define TMP_MAX      238328
 #define L_tmpnam     20
 
@@ -1100,10 +1100,25 @@ static inline int _rin_stdio_write_all(FILE* stream, const char* data,
     return result;
 }
 
+static inline int _rin_fputc_unlocked(int c, FILE* stream) {
+    char ch = (char)c;
+    if (!stream) {
+        errno = EINVAL;
+        return EOF;
+    }
+    if (!_rin_stdio_claim_byte_orientation(stream)) return EOF;
+    return _rin_stdio_write_all_buffered(stream, &ch, 1u) == 0
+        ? (unsigned char)c : EOF;
+}
+
 _RIN_STDIO_API int putchar(int c) {
     char ch = (char)c;
     return _rin_stdio_write_all(stdout, &ch, 1) == 0
         ? (unsigned char)c : EOF;
+}
+
+_RIN_STDIO_API int putchar_unlocked(int c) {
+    return _rin_fputc_unlocked(c, stdout);
 }
 
 #ifndef puts
@@ -1131,6 +1146,10 @@ _RIN_STDIO_API int fputc(int c, FILE* stream) {
     char ch = (char)c;
     return _rin_stdio_write_all(stream, &ch, 1) == 0
         ? (unsigned char)c : EOF;
+}
+
+_RIN_STDIO_API int putc_unlocked(int c, FILE* stream) {
+    return _rin_fputc_unlocked(c, stream);
 }
 
 _RIN_STDIO_API int fputs(const char* s, FILE* stream) {
@@ -1252,6 +1271,10 @@ static inline int _rin_fgetc_unlocked(FILE* stream) {
     return (int)c;
 }
 
+_RIN_STDIO_API int getchar_unlocked(void) {
+    return _rin_fgetc_unlocked(stdin);
+}
+
 _RIN_STDIO_API int fgetc(FILE* stream) {
     int result;
     if (!stream) {
@@ -1262,6 +1285,10 @@ _RIN_STDIO_API int fgetc(FILE* stream) {
     result = _rin_fgetc_unlocked(stream);
     funlockfile(stream);
     return result;
+}
+
+_RIN_STDIO_API int getc_unlocked(FILE* stream) {
+    return _rin_fgetc_unlocked(stream);
 }
 
 /* getc/putc - fgetc/fputc と同等 */
