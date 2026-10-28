@@ -9,6 +9,7 @@
 
 #include "stddef.h"
 #include "stdint.h"
+#include "limits.h"
 #include "errno.h"
 #include "internal/pthread_cancel_point.h"
 #include "sys/types.h"
@@ -96,10 +97,6 @@ static inline int rin_sem_futex_operation(const sem_t* sem, int operation) {
 }
 
 #define SEM_FAILED ((sem_t*)0)
-
-#ifndef SEM_VALUE_MAX
-#define SEM_VALUE_MAX 0x7fffffffU
-#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * セマフォ操作

@@ -1730,13 +1730,14 @@ static inline long sysconf(int name) {
             return 64;
         case _SC_AIO_PRIO_DELTA_MAX:
             return 0;
+        case _SC_SEM_VALUE_MAX:
+            return (long)SEM_VALUE_MAX;
         case _SC_REALTIME_SIGNALS:
         case _SC_PRIORITIZED_IO:
         case _SC_SHARED_MEMORY_OBJECTS:
         case _SC_DELAYTIMER_MAX:
         case _SC_RTSIG_MAX:
         case _SC_SEM_NSEMS_MAX:
-        case _SC_SEM_VALUE_MAX:
         case _SC_SIGQUEUE_MAX:
         case _SC_TIMER_MAX:
         case _SC_BC_BASE_MAX:

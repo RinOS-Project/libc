@@ -119,6 +119,12 @@
 #ifndef _POSIX_HOST_NAME_MAX
 #define _POSIX_HOST_NAME_MAX HOST_NAME_MAX
 #endif
+#ifndef _POSIX_SEM_VALUE_MAX
+#define _POSIX_SEM_VALUE_MAX 32767
+#endif
+#ifndef SEM_VALUE_MAX
+#define SEM_VALUE_MAX 0x7fffffffU
+#endif
 #ifndef LOGIN_NAME_MAX
 #define LOGIN_NAME_MAX 32
 #endif
