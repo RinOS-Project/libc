@@ -363,8 +363,9 @@ static inline int sem_getvalue(sem_t* sem, int* sval) {
 /*
  * 名前付きセマフォはkernelのshared-memory objectが所有し、プロセス間で
  * 同じsem_t stateを共有する。sem_open()のvarargsはO_CREATのときmode_tと
- * 初期値をこの順で受け取る。mode_tのpermissionはcurrent-session namespace
- * 内では適用されない。
+ * 初期値をこの順で受け取り、新規作成時はmode_tとprocess umaskで権限を
+ * 決める。既存名を開くときはkernelがowner/group/otherのread/write権限を
+ * 検査する。
  */
 sem_t* sem_open(const char* name, int oflag, ...);
 int sem_close(sem_t* sem);
