@@ -103,8 +103,10 @@
 #ifndef _POSIX_READER_WRITER_LOCKS
 #define _POSIX_READER_WRITER_LOCKS 200809L
 #endif
+#if defined(__x86_64__) || defined(_M_X64)
 #ifndef _POSIX_SPAWN
 #define _POSIX_SPAWN 200809L
+#endif
 #endif
 #ifndef _POSIX_TIMEOUTS
 #define _POSIX_TIMEOUTS 200809L
@@ -1820,7 +1822,9 @@ static inline long sysconf(int name) {
         case _SC_CLOCK_SELECTION:
         case _SC_MONOTONIC_CLOCK:
         case _SC_READER_WRITER_LOCKS:
+#if defined(__x86_64__) || defined(_M_X64)
         case _SC_SPAWN:
+#endif
         case _SC_TIMEOUTS:
             return 200809L;
         case _SC_IOV_MAX:
@@ -1882,6 +1886,7 @@ static inline long sysconf(int name) {
         case _SC_THREAD_PRIORITY_SCHEDULING:
 #if !defined(__x86_64__) && !defined(_M_X64)
         case _SC_THREAD_PROCESS_SHARED:
+        case _SC_SPAWN:
 #endif
         case _SC_THREAD_ROBUST_PRIO_INHERIT:
         case _SC_THREAD_ROBUST_PRIO_PROTECT:
