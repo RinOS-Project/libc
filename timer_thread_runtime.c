@@ -29,6 +29,8 @@ static volatile sig_atomic_t g_entries_lock;
 static volatile sig_atomic_t g_handler_installed;
 static volatile sig_atomic_t g_dispatcher_started;
 static volatile sig_atomic_t g_signal_pending;
+static volatile sig_atomic_t g_timer_poll_pending;
+static volatile uint32_t g_dispatcher_event_generation;
 
 #if defined(RIN_TIMER_THREAD_POLL)
 #define RIN_TIMER_THREAD_POLL_EXTERNAL 1
@@ -44,21 +46,29 @@ static volatile sig_atomic_t g_signal_pending;
 #define RIN_TIMER_THREAD_INSTALL_HANDLER(action) \
     sigaction(RIN_TIMER_THREAD_SIGNAL, (action), (struct sigaction*)0)
 #endif
-#if defined(RIN_TIMER_THREAD_SLEEP)
-#define RIN_TIMER_THREAD_SLEEP_EXTERNAL 1
-#endif
-#ifndef RIN_TIMER_THREAD_SLEEP
-#define RIN_TIMER_THREAD_SLEEP(request) nanosleep((request), (struct timespec*)0)
-#endif
-
 #ifdef RIN_TIMER_THREAD_POLL_EXTERNAL
 extern intptr_t RIN_TIMER_THREAD_POLL(timer_t timer_id);
 #endif
 #ifdef RIN_TIMER_THREAD_INSTALL_EXTERNAL
 extern int RIN_TIMER_THREAD_INSTALL_HANDLER(const struct sigaction* action);
 #endif
-#ifdef RIN_TIMER_THREAD_SLEEP_EXTERNAL
-extern int RIN_TIMER_THREAD_SLEEP(const struct timespec* request);
+#ifdef RIN_TIMER_THREAD_RUNTIME_TESTING
+extern intptr_t rin_timer_thread_runtime_test_futex_wait(
+    volatile uint32_t* address, uint32_t expected);
+extern intptr_t rin_timer_thread_runtime_test_futex_wake(
+    volatile uint32_t* address, unsigned int count);
+#define RIN_TIMER_THREAD_FUTEX_WAIT(address, expected) \
+    rin_timer_thread_runtime_test_futex_wait((address), (expected))
+#define RIN_TIMER_THREAD_FUTEX_WAKE(address, count) \
+    rin_timer_thread_runtime_test_futex_wake((address), (count))
+#else
+#define RIN_TIMER_THREAD_FUTEX_WAIT(address, expected) \
+    _RIN_TIME_FUTEX_WAIT((address), FUTEX_WAIT_PRIVATE, (expected), \
+                         (const struct timespec*)0, FUTEX_BITSET_MATCH_ANY)
+#define RIN_TIMER_THREAD_FUTEX_WAKE(address, count) \
+    _syscall6((uintptr_t)SYS_futex, (uintptr_t)(address), \
+              (uintptr_t)FUTEX_WAKE_PRIVATE, (uintptr_t)(count), \
+              0u, 0u, 0u)
 #endif
 
 typedef struct RinTimerThreadSnapshot {
@@ -68,6 +78,8 @@ typedef struct RinTimerThreadSnapshot {
     union sigval value;
     unsigned int generation;
 } RinTimerThreadSnapshot;
+
+static void rin_timer_thread_publish_wake(void);
 
 static void rin_timer_thread_lock(void) {
     while (__sync_lock_test_and_set(&g_entries_lock, 1) != 0) {
@@ -89,17 +101,32 @@ static void* rin_timer_thread_job(void* argument) {
         job->slot = 0u;
         job->generation = 0u;
         __atomic_store_n(&job->active, 0, __ATOMIC_RELEASE);
+        rin_timer_thread_publish_wake();
     }
     return (void*)0;
 }
 
 static void rin_timer_thread_signal(int signum) {
     (void)signum;
-    /* POSIX signal handlers may only perform async-signal-safe work.  The
-     * dispatcher performs timer polling and pthread operations later in
-     * ordinary thread context.  A volatile sig_atomic_t assignment is the
-     * portable wake-up primitive for the handler/dispatcher hand-off. */
-    g_signal_pending = 1;
+    /* Timer signals may be delivered to any process thread.  The futex wake
+     * also releases the dispatcher when another thread ran this handler. */
+    __atomic_store_n(&g_signal_pending, 1, __ATOMIC_RELEASE);
+    rin_timer_thread_publish_wake();
+}
+
+static void rin_timer_thread_publish_wake(void) {
+    __atomic_fetch_add(&g_dispatcher_event_generation, 1u, __ATOMIC_RELEASE);
+    (void)RIN_TIMER_THREAD_FUTEX_WAKE(&g_dispatcher_event_generation, 1u);
+}
+
+static void rin_timer_thread_wait_for_signal(uint32_t observed) {
+    if (__atomic_load_n(&g_signal_pending, __ATOMIC_ACQUIRE) != 0)
+        return;
+    if (__atomic_load_n(&g_dispatcher_event_generation, __ATOMIC_ACQUIRE) !=
+        observed)
+        return;
+    (void)RIN_TIMER_THREAD_FUTEX_WAIT(&g_dispatcher_event_generation,
+                                      observed);
 }
 
 static int rin_timer_thread_snapshot_current(
@@ -187,6 +214,15 @@ static unsigned int rin_timer_thread_dispatch_once(void) {
     RinTimerThreadSnapshot snapshots[RIN_TIMER_THREAD_SLOTS];
     unsigned int snapshot_count = 0u;
     unsigned int dispatched = 0u;
+    int poll_pending;
+
+    poll_pending =
+        __atomic_exchange_n(&g_signal_pending, 0, __ATOMIC_ACQ_REL) != 0;
+    if (__atomic_exchange_n(&g_timer_poll_pending, 0,
+                            __ATOMIC_ACQ_REL) != 0)
+        poll_pending = 1;
+    dispatched += rin_timer_thread_launch_pending_jobs();
+    if (!poll_pending) return dispatched;
 
     rin_timer_thread_lock();
     for (unsigned int i = 0u; i < RIN_TIMER_THREAD_SLOTS; ++i) {
@@ -215,7 +251,10 @@ static unsigned int rin_timer_thread_dispatch_once(void) {
              * expiration.  If every worker slot is occupied, leave the
              * kernel notification pending for the next dispatcher pass. */
             job = rin_timer_thread_job_reserve();
-            if (!job) break;
+            if (!job) {
+                __atomic_store_n(&g_timer_poll_pending, 1, __ATOMIC_RELEASE);
+                break;
+            }
             pending = RIN_TIMER_THREAD_POLL(snapshot->timer_id);
             if (pending <= 0 ||
                 !rin_timer_thread_snapshot_current(snapshot)) {
@@ -241,17 +280,10 @@ static unsigned int rin_timer_thread_dispatch_once(void) {
 static void* rin_timer_thread_dispatcher(void* argument) {
     (void)argument;
     for (;;) {
+        uint32_t observed = __atomic_load_n(&g_dispatcher_event_generation,
+                                             __ATOMIC_ACQUIRE);
         (void)rin_timer_thread_dispatch_once();
-        if (g_signal_pending != 0) {
-            g_signal_pending = 0;
-            continue;
-        }
-        {
-            struct timespec delay;
-            delay.tv_sec = 0;
-            delay.tv_nsec = 1000000L;
-            (void)RIN_TIMER_THREAD_SLEEP(&delay);
-        }
+        rin_timer_thread_wait_for_signal(observed);
     }
     return (void*)0;
 }
@@ -304,6 +336,7 @@ int rin_timer_thread_register(timer_t timer_id,
         if (g_entries[i].generation == 0u) g_entries[i].generation = 1u;
         __atomic_store_n(&g_entries[i].active, 1, __ATOMIC_RELEASE);
         rin_timer_thread_unlock();
+        rin_timer_thread_publish_wake();
         return 0;
     }
     rin_timer_thread_unlock();
@@ -319,6 +352,7 @@ void rin_timer_thread_unregister(timer_t timer_id) {
             g_entries[i].function = (void (*)(union sigval))0;
             g_entries[i].value.sival_ptr = (void*)0;
             rin_timer_thread_unlock();
+            rin_timer_thread_publish_wake();
             return;
         }
     }
@@ -332,5 +366,12 @@ void rin_timer_thread_runtime_test_signal(void) {
 
 unsigned int rin_timer_thread_runtime_test_dispatch_once(void) {
     return rin_timer_thread_dispatch_once();
+}
+
+int rin_timer_thread_runtime_test_wait_for_signal(void) {
+    uint32_t observed = __atomic_load_n(&g_dispatcher_event_generation,
+                                         __ATOMIC_ACQUIRE);
+    rin_timer_thread_wait_for_signal(observed);
+    return 0;
 }
 #endif
