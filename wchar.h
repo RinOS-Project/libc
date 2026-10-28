@@ -626,6 +626,7 @@ static inline unsigned long wcstoul(const wchar_t* nptr, wchar_t** endptr, int b
         (unsigned long long)ULONG_MAX);
     if (endptr) *endptr = (wchar_t*)parsed.end;
     if (!parsed.any) return 0UL;
+    if (parsed.overflow) return ULONG_MAX;
     return parsed.negative ? (unsigned long)(0UL - (unsigned long)parsed.magnitude)
                            : (unsigned long)parsed.magnitude;
 }
@@ -636,6 +637,7 @@ static inline unsigned long long wcstoull(const wchar_t* nptr, wchar_t** endptr,
         nptr, base, ULLONG_MAX, ULLONG_MAX);
     if (endptr) *endptr = (wchar_t*)parsed.end;
     if (!parsed.any) return 0ULL;
+    if (parsed.overflow) return ULLONG_MAX;
     return parsed.negative ? 0ULL - parsed.magnitude : parsed.magnitude;
 }
 
