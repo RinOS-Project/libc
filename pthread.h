@@ -901,8 +901,7 @@ static inline int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex
 static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
                                           const struct timespec* abstime) {
     if (!cond || !mutex || !abstime) return EINVAL;
-    if (abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
-        abstime->tv_nsec >= 1000000000L ||
+    if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L ||
         (cond->clock_id != CLOCK_REALTIME &&
          cond->clock_id != CLOCK_MONOTONIC))
         return EINVAL;
@@ -916,6 +915,10 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* 
     }
 
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
+        if (abstime->tv_sec < 0) {
+            result = ETIMEDOUT;
+            break;
+        }
         int operation = FUTEX_WAIT_BITSET |
             (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
              FUTEX_PRIVATE_FLAG) |
