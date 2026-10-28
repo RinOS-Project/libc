@@ -1112,6 +1112,15 @@ static inline int timer_create(clockid_t clock_id,
     request.signo = (int32_t)signo;
     request.reserved0 = 0;
     request.value = 0u;
+    if (event) {
+        const unsigned char* source =
+            (const unsigned char*)&event->sigev_value;
+        unsigned char* destination = (unsigned char*)&request.value;
+        for (size_t index = 0u;
+             index < sizeof(event->sigev_value) &&
+             index < sizeof(request.value); ++index)
+            destination[index] = source[index];
+    }
 #if defined(RIN_TIME_TARGET_FUNCTIONS)
     result = _rin_time_result(_RIN_TIME_TIMER_CREATE(&request));
     if (result < 0) return -1;
