@@ -1716,7 +1716,7 @@ static inline long sysconf(int name) {
             /* カーネルのSYS_SYSINFOから実メモリ量を取得 */
             struct { unsigned long long uptime; unsigned long long total_ram;
                      unsigned long long free_ram; unsigned int procs; } si;
-            uintptr_t pages;
+            uint64_t pages;
             if (_rin_unistd_status(_RIN_UNISTD_SYSCALL1(
                     SYS_SYSINFO, (uintptr_t)&si)) < 0)
                 return -1;
@@ -1727,8 +1727,8 @@ static inline long sysconf(int name) {
                 errno = EIO;
                 return -1;
             }
-            pages = (uintptr_t)(si.total_ram / 4096u);
-            if (pages > (uintptr_t)LONG_MAX) {
+            pages = (uint64_t)(si.total_ram / UINT64_C(4096));
+            if (pages > (uint64_t)LONG_MAX) {
                 errno = EOVERFLOW;
                 return -1;
             }
@@ -1737,7 +1737,7 @@ static inline long sysconf(int name) {
         case _SC_AVPHYS_PAGES: {
             struct { unsigned long long uptime; unsigned long long total_ram;
                      unsigned long long free_ram; unsigned int procs; } si;
-            uintptr_t pages;
+            uint64_t pages;
             if (_rin_unistd_status(_RIN_UNISTD_SYSCALL1(
                     SYS_SYSINFO, (uintptr_t)&si)) < 0)
                 return -1;
@@ -1745,8 +1745,8 @@ static inline long sysconf(int name) {
                 errno = EIO;
                 return -1;
             }
-            pages = (uintptr_t)(si.free_ram / 4096u);
-            if (pages > (uintptr_t)LONG_MAX) {
+            pages = (uint64_t)(si.free_ram / UINT64_C(4096));
+            if (pages > (uint64_t)LONG_MAX) {
                 errno = EOVERFLOW;
                 return -1;
             }
