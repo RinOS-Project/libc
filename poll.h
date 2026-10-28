@@ -61,11 +61,10 @@ typedef uint64_t sigset_t;
 #define POLLREMOVE  0x1000  /* 削除要求 */
 #define POLLRDHUP   0x2000  /* ピア切断 */
 
-/* A poll request is copied/validated by the kernel before it can block.  Keep
- * a finite userspace bound as well so a malformed nfds value cannot turn into
- * an unbounded scan or an overflowing byte count in a hosted shim. */
+/* Keep the libc bound aligned with the kernel PPOLL ABI's 1024-entry limit so
+ * oversized requests fail before entering the syscall. */
 #ifndef RIN_POLL_MAX_FDS
-#define RIN_POLL_MAX_FDS 65536u
+#define RIN_POLL_MAX_FDS 1024u
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
