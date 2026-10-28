@@ -209,9 +209,10 @@ static inline int _netdb_parse_ipv4(const char* name, struct in_addr* out) {
     for (const char* p = name; ; p++) {
         char c = *p;
         if (c >= '0' && c <= '9') {
+            unsigned int digit = (unsigned int)(c - '0');
             has_digit = 1;
-            value = value * 10U + (unsigned int)(c - '0');
-            if (value > 255U) return -1;
+            if (value > (255U - digit) / 10U) return -1;
+            value = value * 10U + digit;
             continue;
         }
         if (c == '.' || c == '\0') {
