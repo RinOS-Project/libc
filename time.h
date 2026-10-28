@@ -11,6 +11,7 @@
 #include "stdint.h"
 #include "signal.h"
 #include "limits.h"
+#include "internal/time_type.h"
 #include "sys/syscall.h"
 #include "internal/pthread_cancel_point.h"
 #include "linux/futex.h"
@@ -74,6 +75,9 @@ typedef void* RinStrptimeLocale;
 #ifndef SYS_CLOCK_SETTIME
 #define SYS_CLOCK_SETTIME RIN_SYS_CLOCK_SETTIME
 #endif
+#ifndef SYS_CLOCK_GETTIME64
+#define SYS_CLOCK_GETTIME64 RIN_SYS_CLOCK_GETTIME64
+#endif
 
 #ifndef _RIN_TIME_SYSCALL1
 #define _RIN_TIME_SYSCALL1(number, argument1) \
@@ -93,10 +97,8 @@ typedef void* RinStrptimeLocale;
 
 #ifndef _RIN_TIME_FUTEX_WAIT
 #define _RIN_TIME_FUTEX_WAIT(address, operation, expected, timeout, bitset) \
-    __rin_syscall_posixize( \
-        _syscall6((uintptr_t)SYS_futex, (uintptr_t)(address), \
-                  (uintptr_t)(operation), (uintptr_t)(expected), \
-                  (uintptr_t)(timeout), 0u, (uintptr_t)(bitset)))
+    _rin_time_futex_wait_call((address), (operation), (expected), \
+                              (timeout), (bitset))
 #endif
 
 #ifndef _RIN_TIME_GETTIMEOFDAY
@@ -173,6 +175,12 @@ typedef void* RinStrptimeLocale;
                        (uintptr_t)(request))
 #endif
 
+#ifndef _RIN_TIME_CLOCK_GETTIME64
+#define _RIN_TIME_CLOCK_GETTIME64(clock_id, request) \
+    _RIN_TIME_SYSCALL2(SYS_CLOCK_GETTIME64, (uintptr_t)(clock_id), \
+                       (uintptr_t)(request))
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -182,7 +190,7 @@ extern "C" {
  * ═══════════════════════════════════════════════════════════════*/
 
 #ifndef _TIME_T_DEFINED
-typedef long time_t;
+typedef rin_time_t time_t;
 #define _TIME_T_DEFINED
 #endif
 #ifndef _CLOCK_T_DEFINED
@@ -334,15 +342,69 @@ static inline int _rin_time_status(intptr_t result) {
 }
 
 static inline int _rin_time_gettimeofday(struct timeval* output) {
+#if defined(RIN_TIME_ABI64) && \
+    defined(RIN_FREESTANDING) && !defined(RIN_KERNEL)
+    RinClockGettimeV1 request = { 0u, 0u, 0u, 0, 0, 0, 0 };
+    intptr_t result;
+    if (!output) {
+        errno = EFAULT;
+        return -1;
+    }
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_CLOCK_GETTIME_ABI_VERSION;
+    request.clock_id = 0;
+    result = _rin_time_result(_RIN_TIME_CLOCK_GETTIME64(0, &request));
+    if (result < 0) return -1;
+    if (result != 0 || request.struct_size != sizeof(request) ||
+        request.version != RIN_CLOCK_GETTIME_ABI_VERSION ||
+        request.clock_id != 0 || request.reserved0 != 0 ||
+        request.tv_nsec < 0 || request.tv_nsec >= 1000000000) {
+        errno = EIO;
+        return -1;
+    }
+    if (request.tv_sec > RIN_TIME_T_MAX ||
+        request.tv_sec < RIN_TIME_T_MIN) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    output->tv_sec = (time_t)request.tv_sec;
+    output->tv_usec = (long)(request.tv_nsec / 1000);
+    return 0;
+#else
     return _rin_time_status(_RIN_TIME_GETTIMEOFDAY(output));
+#endif
 }
 
-/* `time_t` is Rin's signed long ABI.  Do the bound check before modifying
- * the caller's timespec so LLP64 builds cannot silently truncate seconds. */
+static inline intptr_t _rin_time_futex_wait_call(
+    const volatile void* address, int operation, int expected,
+    const struct timespec* timeout, uint32_t bitset) {
+#if defined(__i386__) && defined(RIN_TIME_ABI64)
+    struct RinFutexTimespec64 {
+        int64_t tv_sec;
+        int64_t tv_nsec;
+    } wire_timeout;
+    const void* timeout_pointer = (const void*)0;
+    if (timeout) {
+        wire_timeout.tv_sec = (int64_t)timeout->tv_sec;
+        wire_timeout.tv_nsec = (int64_t)timeout->tv_nsec;
+        timeout_pointer = &wire_timeout;
+    }
+    return __rin_syscall_posixize(_syscall6(
+        (uintptr_t)SYS_futex, (uintptr_t)address, (uintptr_t)operation,
+        (uintptr_t)expected, (uintptr_t)timeout_pointer, 0u,
+        (uintptr_t)bitset));
+#else
+    return __rin_syscall_posixize(_syscall6(
+        (uintptr_t)SYS_futex, (uintptr_t)address, (uintptr_t)operation,
+        (uintptr_t)expected, (uintptr_t)timeout, 0u, (uintptr_t)bitset));
+#endif
+}
+
+/* Convert legacy nanosecond counters without narrowing a time64 timespec. */
 static inline int _rin_time_ns_to_timespec(uint64_t nanoseconds,
                                            struct timespec* output) {
     uint64_t seconds = nanoseconds / UINT64_C(1000000000);
-    if (seconds > (uint64_t)LONG_MAX) {
+    if (seconds > (uint64_t)RIN_TIME_T_MAX) {
         errno = EOVERFLOW;
         return -1;
     }
@@ -352,13 +414,13 @@ static inline int _rin_time_ns_to_timespec(uint64_t nanoseconds,
 }
 
 /* クロックID */
-#define CLOCK_REALTIME           0
+#define CLOCK_REALTIME           RIN_CLOCK_ID_REALTIME
 #ifndef TIME_UTC
 #define TIME_UTC                  1
 #endif
-#define CLOCK_MONOTONIC          1
-#define CLOCK_PROCESS_CPUTIME_ID 2
-#define CLOCK_THREAD_CPUTIME_ID  3
+#define CLOCK_MONOTONIC          RIN_CLOCK_ID_MONOTONIC
+#define CLOCK_PROCESS_CPUTIME_ID RIN_CLOCK_ID_PROCESS_CPUTIME
+#define CLOCK_THREAD_CPUTIME_ID  RIN_CLOCK_ID_THREAD_CPUTIME
 #define CLOCK_REALTIME_COARSE    CLOCK_REALTIME
 #define CLOCK_MONOTONIC_COARSE   CLOCK_MONOTONIC
 
@@ -928,9 +990,33 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
         case CLOCK_REALTIME:
         {
 #if defined(RIN_FREESTANDING)
-            /* The product kernel owns a nanosecond realtime source.  Keep
-             * CLOCK_REALTIME independent from the legacy microsecond
-             * gettimeofday ABI so callers can preserve sub-microsecond data. */
+#if defined(RIN_TIME_ABI64)
+            RinClockGettimeV1 request = { 0u, 0u, 0u, 0, 0, 0, 0 };
+            intptr_t result;
+            request.struct_size = (uint32_t)sizeof(request);
+            request.version = RIN_CLOCK_GETTIME_ABI_VERSION;
+            request.clock_id = (int32_t)clk_id;
+            result = _rin_time_result(
+                _RIN_TIME_CLOCK_GETTIME64(clk_id, &request));
+            if (result < 0) return -1;
+            if (result != 0 || request.struct_size != sizeof(request) ||
+                request.version != RIN_CLOCK_GETTIME_ABI_VERSION ||
+                request.clock_id != (int32_t)clk_id ||
+                request.reserved0 != 0 || request.tv_nsec < 0 ||
+                request.tv_nsec >= 1000000000) {
+                errno = EIO;
+                return -1;
+            }
+            if (request.tv_sec > RIN_TIME_T_MAX ||
+                request.tv_sec < RIN_TIME_T_MIN) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            tp->tv_sec = (time_t)request.tv_sec;
+            tp->tv_nsec = (long)request.tv_nsec;
+            return 0;
+#else
+            /* The legacy ABI remains available to 32-bit time consumers. */
             uint64_t ns;
 #if defined(__x86_64__)
             intptr_t result =
@@ -943,6 +1029,7 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
                 return -1;
 #endif
             return _rin_time_ns_to_timespec(ns, tp);
+#endif
 #else
             struct timeval tv;
             int ret = gettimeofday(&tv, NULL);
@@ -1042,9 +1129,7 @@ static inline int _rin_time_timespec_to_ns(const struct timespec* input,
 static inline int clock_settime(clockid_t clk_id,
                                 const struct timespec* tp) {
     RinClockSettimeV1 request = { 0u, 0u, 0u, 0, 0, 0, 0 };
-    uint64_t unix_ns;
     intptr_t result;
-    int conversion;
     if (!tp) {
         errno = EFAULT;
         return -1;
@@ -1053,14 +1138,12 @@ static inline int clock_settime(clockid_t clk_id,
         errno = EINVAL;
         return -1;
     }
-    conversion = _rin_time_timespec_to_ns(tp, &unix_ns);
-    if (conversion != 0) {
-        errno = conversion;
+    if (tp->tv_nsec < 0 || tp->tv_nsec >= 1000000000L) {
+        errno = EINVAL;
         return -1;
     }
-    if (unix_ns == 0u) {
-        /* The product realtime owner reserves zero for an unavailable RTC. */
-        errno = EINVAL;
+    if ((time_t)(int64_t)tp->tv_sec != tp->tv_sec) {
+        errno = EOVERFLOW;
         return -1;
     }
     request.struct_size = (uint32_t)sizeof(request);
@@ -1068,7 +1151,6 @@ static inline int clock_settime(clockid_t clk_id,
     request.clock_id = (int32_t)clk_id;
     request.tv_sec = (int64_t)tp->tv_sec;
     request.tv_nsec = (int64_t)tp->tv_nsec;
-    (void)unix_ns;
     result = _rin_time_result(_RIN_TIME_CLOCK_SETTIME(&request));
     if (result < 0) return -1;
     if (result != 0) {
@@ -1345,14 +1427,14 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
         errno = EIO;
         return -1;
     }
-    if (req->tv_sec > LONG_MAX - now.tv_sec) {
+    if (req->tv_sec > RIN_TIME_T_MAX - now.tv_sec) {
         errno = EOVERFLOW;
         return -1;
     }
     deadline.tv_sec = now.tv_sec + req->tv_sec;
     deadline.tv_nsec = now.tv_nsec + req->tv_nsec;
     if (deadline.tv_nsec >= 1000000000L) {
-        if (deadline.tv_sec == LONG_MAX) {
+        if (deadline.tv_sec == RIN_TIME_T_MAX) {
             errno = EOVERFLOW;
             return -1;
         }
@@ -1445,8 +1527,8 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
     __rin_pthread_cancel_point_if_linked();
     if (!request) return EFAULT;
     if ((flags & ~TIMER_ABSTIME) != 0) return EINVAL;
-    if (request->tv_sec < 0 || request->tv_nsec < 0 ||
-        request->tv_nsec >= 1000000000L)
+    if (((flags & TIMER_ABSTIME) == 0 && request->tv_sec < 0) ||
+        request->tv_nsec < 0 || request->tv_nsec >= 1000000000L)
         return EINVAL;
     if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
         return EINVAL;
@@ -1475,8 +1557,8 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
             errno = entry_errno;
             return saved_errno != 0 ? saved_errno : EIO;
         }
-        if (now.tv_sec < 0 || now.tv_nsec < 0 ||
-            now.tv_nsec >= 1000000000L) {
+        if (now.tv_nsec < 0 || now.tv_nsec >= 1000000000L ||
+            (clock_id == CLOCK_MONOTONIC && now.tv_sec < 0)) {
             errno = entry_errno;
             return EIO;
         }
@@ -1486,6 +1568,43 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
             errno = entry_errno;
             return 0;
         }
+
+#if defined(RIN_TIME_ABI64)
+        /* The absolute futex wire format uses unsigned nanoseconds. While
+         * realtime is before the epoch, preserve the signed deadline by
+         * waiting for its checked relative interval on the monotonic clock. */
+        if (clock_id == CLOCK_REALTIME && now.tv_sec < 0) {
+            struct timespec relative;
+            if (now.tv_sec < 0 && request->tv_sec >= 0 &&
+                (int64_t)request->tv_sec > INT64_MAX +
+                    (int64_t)now.tv_sec) {
+                errno = entry_errno;
+                return EOVERFLOW;
+            }
+            int64_t seconds = (int64_t)request->tv_sec -
+                              (int64_t)now.tv_sec;
+            int64_t nanoseconds = (int64_t)request->tv_nsec -
+                                  (int64_t)now.tv_nsec;
+            if (nanoseconds < 0) {
+                if (seconds <= 0) {
+                    errno = entry_errno;
+                    return EOVERFLOW;
+                }
+                --seconds;
+                nanoseconds += INT64_C(1000000000);
+            }
+            relative.tv_sec = (time_t)seconds;
+            relative.tv_nsec = (long)nanoseconds;
+            result = nanosleep(&relative, remain);
+            if (result == 0) {
+                errno = entry_errno;
+                return 0;
+            }
+            saved_errno = errno;
+            errno = entry_errno;
+            return saved_errno != 0 ? saved_errno : EIO;
+        }
+#endif
 
         for (;;) {
             intptr_t wait_result;

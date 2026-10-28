@@ -9,6 +9,7 @@
 
 #include "../stddef.h"
 #include "../stdint.h"
+#include "../internal/time_type.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -60,7 +61,7 @@ typedef long           ssize_t;    /* 符号付きサイズ */
 
 /* 時間関連 */
 #ifndef _TIME_T_DEFINED
-typedef long           time_t;     /* 時刻 */
+typedef rin_time_t     time_t;     /* 時刻 */
 #define _TIME_T_DEFINED
 #endif
 #ifndef _CLOCK_T_DEFINED
