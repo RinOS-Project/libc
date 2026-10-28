@@ -235,7 +235,9 @@ static int rin_aio_prepare(struct aiocb* control, int operation,
     int held_fd;
     int error;
     if (!control || !held_fd_out || !notification_out) return EINVAL;
-    if (control->aio_fildes < 0 || control->aio_reqprio != 0 ||
+    if (control->aio_fildes < 0 ||
+        ((operation == RIN_AIO_OP_READ || operation == RIN_AIO_OP_WRITE) &&
+         control->aio_reqprio != 0) ||
         ((operation == RIN_AIO_OP_READ || operation == RIN_AIO_OP_WRITE) &&
          control->aio_nbytes > (size_t)SSIZE_MAX))
         return EINVAL;
