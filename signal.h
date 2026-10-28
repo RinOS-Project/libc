@@ -141,9 +141,6 @@ struct timespec;
  * ═══════════════════════════════════════════════════════════════*/
 
 #define SI_MAX_SIZE 128
-#ifndef SYS_SECCOMP
-#define SYS_SECCOMP 1
-#endif
 
 #ifndef _SIGVAL_DEFINED
 #define _SIGVAL_DEFINED
@@ -197,11 +194,6 @@ union __rin_siginfo_fields {
         union sigval _sigval;
     } _rt;
     struct {
-        uint64_t _call_addr;
-        int32_t _syscall;
-        uint32_t _arch;
-    } _sigsys;
-    struct {
         long _band;
         int _fd;
     } _sigpoll;
@@ -228,9 +220,6 @@ typedef union siginfo {
 #define si_uid       __fields._sifields._kill._uid
 #define si_addr      __fields._sifields._sigfault._addr
 #define si_addr_lsb  __fields._sifields._sigfault._addr_lsb
-#define si_call_addr __fields._sifields._sigsys._call_addr
-#define si_syscall   __fields._sifields._sigsys._syscall
-#define si_arch      __fields._sifields._sigsys._arch
 #define si_status    __fields._sifields._sigchld._status
 #define si_utime     __fields._sifields._sigchld._utime
 #define si_stime     __fields._sifields._sigchld._stime

@@ -2564,94 +2564,6 @@ static inline int _rin_stdio_format_append(_RinStdioFormatSink* sink,
     return 0;
 }
 
-static inline int _rin_stdio_format_integer(
-        _RinStdioFormatSink* sink, uintmax_t magnitude, int is_signed,
-        int negative, unsigned int base, int uppercase, int width,
-        int left_align, int zero, int plus, int space, int alternate,
-        int precision) {
-    const char* alphabet = uppercase
-        ? "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        : "0123456789abcdefghijklmnopqrstuvwxyz";
-    char reversed[sizeof(uintmax_t) * CHAR_BIT];
-    size_t digit_count = 0u;
-    size_t precision_zeroes = 0u;
-    size_t prefix_length = 0u;
-    size_t content_length;
-    size_t field_padding;
-    int zero_width_pad = zero && !left_align && precision < 0;
-    int suppress_zero = magnitude == 0u && precision == 0;
-    char sign = '\0';
-    char prefix[2];
-
-    if (base < 2u || base > 36u) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (is_signed && !suppress_zero) {
-        if (negative) sign = '-';
-        else if (plus) sign = '+';
-        else if (space) sign = ' ';
-    }
-    if (magnitude == 0u && precision == 0) {
-        digit_count = 0u;
-    } else {
-        do {
-            reversed[digit_count++] = alphabet[magnitude % base];
-            magnitude /= base;
-        } while (magnitude != 0u);
-    }
-
-    if (alternate && base == 8u) {
-        if (digit_count == 0u) {
-            precision = 1;
-        } else if (reversed[digit_count - 1u] != '0' &&
-                   (precision < 0 || (size_t)precision <= digit_count)) {
-            precision = (int)digit_count + 1;
-        }
-    } else if (alternate && digit_count != 0u &&
-               (base == 16u || base == 2u)) {
-        prefix[0] = '0';
-        prefix[1] = base == 2u
-            ? (uppercase ? 'B' : 'b')
-            : (uppercase ? 'X' : 'x');
-        prefix_length = 2u;
-    }
-
-    if (precision >= 0 && (size_t)precision > digit_count)
-        precision_zeroes = (size_t)precision - digit_count;
-    if (digit_count > (size_t)-1 - precision_zeroes - prefix_length -
-                          (sign != '\0' ? 1u : 0u)) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    content_length = digit_count + precision_zeroes + prefix_length +
-                     (sign != '\0' ? 1u : 0u);
-    field_padding = (width > 0 && (size_t)width > content_length)
-        ? (size_t)width - content_length : 0u;
-
-    if (!left_align && !zero_width_pad &&
-        _rin_stdio_format_repeat(sink, ' ', field_padding) != 0)
-        return -1;
-    if (sign != '\0' && _rin_stdio_format_emit(sink, sign) != 0)
-        return -1;
-    if (prefix_length != 0u &&
-        _rin_stdio_format_append(sink, prefix, prefix_length) != 0)
-        return -1;
-    if (zero_width_pad &&
-        _rin_stdio_format_repeat(sink, '0', field_padding) != 0)
-        return -1;
-    if (_rin_stdio_format_repeat(sink, '0', precision_zeroes) != 0)
-        return -1;
-    while (digit_count != 0u) {
-        if (_rin_stdio_format_emit(sink, reversed[--digit_count]) != 0)
-            return -1;
-    }
-    if (left_align &&
-        _rin_stdio_format_repeat(sink, ' ', field_padding) != 0)
-        return -1;
-    return 0;
-}
-
 _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap) {
     _RinStdioFormatSink sink = {buf, size, 0u};
     char* format_allocation = (char*)0;
@@ -2680,7 +2592,7 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
 
         /* フラグとパディング */
         int pad = 0, zero = 0, left_align = 0;
-        int plus = 0, space = 0, alternate = 0;
+        int plus = 0, alternate = 0;
         int precision = -1;
 
         /* フラグ処理 */
@@ -2688,7 +2600,6 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
             if (*fmt == '-') { left_align = 1; fmt++; continue; }
             if (*fmt == '0') { zero = 1; fmt++; continue; }
             if (*fmt == '+') { plus = 1; fmt++; continue; }
-            if (*fmt == ' ') { space = 1; fmt++; continue; }
             if (*fmt == '#') { alternate = 1; fmt++; continue; }
             break;
         }
@@ -2733,11 +2644,6 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
         int is_long = 0;
         int is_longlong = 0;
         int is_longdouble = 0;
-        int is_short = 0;
-        int is_char = 0;
-        int is_intmax = 0;
-        int is_ptrdiff = 0;
-        int is_size = 0;
         if (*fmt == 'L') {
             fmt++;
             is_longdouble = 1;
@@ -2747,79 +2653,92 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
             if (*fmt == 'l') { fmt++; is_longlong = 1; }
         } else if (*fmt == 'h') {
             fmt++;
-            if (*fmt == 'h') {
-                fmt++;
-                is_char = 1;
-            } else {
-                is_short = 1;
-            }
+            if (*fmt == 'h') fmt++;
         } else if (*fmt == 'z') {
             fmt++;
-            is_size = 1;
-        } else if (*fmt == 'j') {
-            fmt++;
-            is_intmax = 1;
-        } else if (*fmt == 't') {
-            fmt++;
-            is_ptrdiff = 1;
+            is_long = 1;
         }
 
         switch (*fmt) {
             case 'd':
-            case 'i':
-            case 'u':
-            case 'o':
-            case 'x':
-            case 'X':
-            case 'b':
-            case 'B': {
-                int is_signed = *fmt == 'd' || *fmt == 'i';
-                int negative = 0;
-                unsigned int base = *fmt == 'o' ? 8u :
-                    (*fmt == 'x' || *fmt == 'X') ? 16u :
-                    (*fmt == 'b' || *fmt == 'B') ? 2u : 10u;
-                uintmax_t magnitude;
-                if (is_signed) {
-                    intmax_t value;
-                    if (is_char)
-                        value = (signed char)va_arg(ap, int);
-                    else if (is_short)
-                        value = (short)va_arg(ap, int);
-                    else if (is_longlong)
-                        value = va_arg(ap, long long);
-                    else if (is_long)
-                        value = va_arg(ap, long);
-                    else if (is_size || is_ptrdiff)
-                        value = va_arg(ap, ptrdiff_t);
-                    else if (is_intmax)
-                        value = va_arg(ap, intmax_t);
-                    else
-                        value = va_arg(ap, int);
-                    negative = value < 0;
-                    magnitude = negative
-                        ? (uintmax_t)(-(value + 1)) + 1u
-                        : (uintmax_t)value;
+            case 'i': {
+                long long signed_value;
+                unsigned long long n;
+                int negative;
+                if (is_longlong) signed_value = va_arg(ap, long long);
+                else if (is_long) signed_value = va_arg(ap, long);
+                else signed_value = va_arg(ap, int);
+                negative = signed_value < 0;
+                n = negative
+                    ? (unsigned long long)(-(signed_value + 1)) + 1u
+                    : (unsigned long long)signed_value;
+                char tmp[24]; int i = 0;
+                do { tmp[i++] = '0' + n % 10; n /= 10; } while (n);
+                int digits = i;
+                int sign_width = negative || plus;
+                if (!left_align && zero) {
+                    if (sign_width)
+                        _RIN_STDIO_FORMAT_PUT(negative ? '-' : '+');
+                    _RIN_STDIO_FORMAT_REPEAT('0',
+                        pad > digits + sign_width ?
+                            (size_t)(pad - digits - sign_width) : 0u);
                 } else {
-                    if (is_char)
-                        magnitude = (unsigned char)va_arg(ap, int);
-                    else if (is_short)
-                        magnitude = (unsigned short)va_arg(ap, int);
-                    else if (is_longlong)
-                        magnitude = va_arg(ap, unsigned long long);
-                    else if (is_long)
-                        magnitude = va_arg(ap, unsigned long);
-                    else if (is_size || is_ptrdiff)
-                        magnitude = va_arg(ap, size_t);
-                    else if (is_intmax)
-                        magnitude = va_arg(ap, uintmax_t);
-                    else
-                        magnitude = va_arg(ap, unsigned int);
+                    if (negative || plus)
+                        _RIN_STDIO_FORMAT_PUT(negative ? '-' : '+');
+                    if (!left_align) {
+                        _RIN_STDIO_FORMAT_REPEAT(' ',
+                            pad > digits + sign_width ?
+                                (size_t)(pad - digits - sign_width) : 0u);
+                    }
                 }
-                if (_rin_stdio_format_integer(
-                        &sink, magnitude, is_signed, negative, base,
-                        *fmt == 'X' || *fmt == 'B', pad, left_align, zero,
-                        plus, space, alternate, precision) != 0)
-                    goto format_error;
+                while (i--) _RIN_STDIO_FORMAT_PUT(tmp[i]);
+                if (left_align) {
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        pad > digits + sign_width ?
+                            (size_t)(pad - digits - sign_width) : 0u);
+                }
+                break;
+            }
+            case 'u': {
+                unsigned long long n;
+                if (is_longlong) n = va_arg(ap, unsigned long long);
+                else if (is_long) n = va_arg(ap, unsigned long);
+                else n = va_arg(ap, unsigned int);
+
+                char tmp[24]; int i = 0;
+                do { tmp[i++] = '0' + n % 10; n /= 10; } while (n);
+                int digits = i;
+                if (!left_align) {
+                    _RIN_STDIO_FORMAT_REPEAT(zero ? '0' : ' ',
+                        pad > digits ? (size_t)(pad - digits) : 0u);
+                }
+                while (i--) _RIN_STDIO_FORMAT_PUT(tmp[i]);
+                if (left_align) {
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        pad > digits ? (size_t)(pad - digits) : 0u);
+                }
+                break;
+            }
+            case 'x':
+            case 'X': {
+                unsigned long long n;
+                if (is_longlong) n = va_arg(ap, unsigned long long);
+                else if (is_long) n = va_arg(ap, unsigned long);
+                else n = va_arg(ap, unsigned int);
+
+                const char* hex = (*fmt == 'x') ? "0123456789abcdef" : "0123456789ABCDEF";
+                char tmp[24]; int i = 0;
+                do { tmp[i++] = hex[n & 0xF]; n >>= 4; } while (n);
+                int digits = i;
+                if (!left_align) {
+                    _RIN_STDIO_FORMAT_REPEAT(zero ? '0' : ' ',
+                        pad > digits ? (size_t)(pad - digits) : 0u);
+                }
+                while (i--) _RIN_STDIO_FORMAT_PUT(tmp[i]);
+                if (left_align) {
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        pad > digits ? (size_t)(pad - digits) : 0u);
+                }
                 break;
             }
             case 'p': {
@@ -3009,12 +2928,6 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                     ftmp[0] = '+';
                     ++fi;
                 }
-                if (space && !plus && (fi == 0 || ftmp[0] != '-') &&
-                    (size_t)fi + 1u < fcapacity) {
-                    for (int k = fi; k > 0; --k) ftmp[k] = ftmp[k - 1];
-                    ftmp[0] = ' ';
-                    ++fi;
-                }
                 if (alternate && prec == 0 &&
                     (size_t)fi + 1u < fcapacity) {
                     int point = 0;
@@ -3029,7 +2942,7 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                     }
                 }
                 if (!left_align && zero && fi > 0 &&
-                    (ftmp[0] == '-' || ftmp[0] == '+' || ftmp[0] == ' ')) {
+                    (ftmp[0] == '-' || ftmp[0] == '+')) {
                     _RIN_STDIO_FORMAT_PUT(ftmp[0]);
                     _RIN_STDIO_FORMAT_REPEAT('0',
                         pad > fi ? (size_t)(pad - fi) : 0u);

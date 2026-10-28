@@ -86,7 +86,8 @@
 #ifndef _POSIX_THREAD_ATTR_STACKSIZE
 #define _POSIX_THREAD_ATTR_STACKSIZE 200809L
 #endif
-#if defined(__x86_64__) || defined(_M_X64)
+#if (defined(__x86_64__) || defined(_M_X64)) && \
+    (!defined(RIN_FREESTANDING) || defined(RIN_USERSPACE))
 #ifndef _POSIX_THREAD_PROCESS_SHARED
 #define _POSIX_THREAD_PROCESS_SHARED 200809L
 #endif
@@ -1807,7 +1808,8 @@ static inline long sysconf(int name) {
             return PTHREAD_STACK_MIN;
         case _SC_THREAD_ATTR_STACKSIZE:
             return _POSIX_THREAD_ATTR_STACKSIZE;
-#if defined(__x86_64__) || defined(_M_X64)
+#if (defined(__x86_64__) || defined(_M_X64)) && \
+    (!defined(RIN_FREESTANDING) || defined(RIN_USERSPACE))
         case _SC_THREAD_PROCESS_SHARED:
             return 200809L;
 #endif
@@ -1880,8 +1882,11 @@ static inline long sysconf(int name) {
         case _SC_THREAD_PRIO_INHERIT:
         case _SC_THREAD_PRIO_PROTECT:
         case _SC_THREAD_PRIORITY_SCHEDULING:
-#if !defined(__x86_64__) && !defined(_M_X64)
+#if (!defined(__x86_64__) && !defined(_M_X64)) || \
+    (defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE))
         case _SC_THREAD_PROCESS_SHARED:
+#endif
+#if !defined(__x86_64__) && !defined(_M_X64)
         case _SC_SPAWN:
 #endif
         case _SC_THREAD_ROBUST_PRIO_INHERIT:

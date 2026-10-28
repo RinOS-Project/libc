@@ -123,8 +123,7 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
     spec->width = width;
     spec->has_width = have_width;
     if (spec->conversion == 'd' || spec->conversion == 'i' ||
-        spec->conversion == 'b' || spec->conversion == 'u' ||
-        spec->conversion == 'o' ||
+        spec->conversion == 'u' || spec->conversion == 'o' ||
         spec->conversion == 'x' || spec->conversion == 'X') {
         if (spec->length == RIN_SSCANF_LENGTH_LONG_DOUBLE) {
             errno = ENOSYS;
@@ -307,8 +306,7 @@ static int rin_sscanf_parse_integer(
         negative = input[current] == '-';
         ++current;
     }
-    base = spec->conversion == 'b' ? 2u :
-           spec->conversion == 'o' ? 8u :
+    base = spec->conversion == 'o' ? 8u :
            (spec->conversion == 'x' || spec->conversion == 'X' ||
             spec->conversion == 'p') ? 16u :
            (spec->conversion == 'i' ? 0u : 10u);
@@ -319,16 +317,6 @@ static int rin_sscanf_parse_integer(
         if (rin_sscanf_digit((unsigned char)input[current + 2u],
                              &prefix_digit) && prefix_digit < 16u) {
             base = 16u;
-            current += 2u;
-        }
-    }
-    if ((base == 0u || base == 2u) && current + 2u < end &&
-        input[current] == '0' &&
-        (input[current + 1u] == 'b' || input[current + 1u] == 'B')) {
-        unsigned int prefix_digit;
-        if (rin_sscanf_digit((unsigned char)input[current + 2u],
-                             &prefix_digit) && prefix_digit < 2u) {
-            base = 2u;
             current += 2u;
         }
     }
@@ -896,8 +884,7 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
                 continue;
             }
             if (spec.conversion == 'd' || spec.conversion == 'i' ||
-                spec.conversion == 'b' || spec.conversion == 'u' ||
-                spec.conversion == 'o' ||
+                spec.conversion == 'u' || spec.conversion == 'o' ||
                 spec.conversion == 'x' || spec.conversion == 'X' ||
                 spec.conversion == 'p') {
                 uint64_t magnitude;
@@ -1242,32 +1229,6 @@ static int rin_fscanf_stream_try_hex_prefix(
     return rin_fscanf_stream_unread(input, prefix);
 }
 
-static int rin_fscanf_stream_try_binary_prefix(
-        struct RinFscanfStreamInput* input, size_t used, size_t limit,
-        unsigned char* value, int* prefixed_out) {
-    unsigned char prefix;
-    unsigned char suffix;
-    unsigned int digit;
-    int status;
-    *prefixed_out = 0;
-    if (*value != '0' || limit - used < 3u) return 0;
-    status = rin_fscanf_stream_read(input, &prefix);
-    if (status < 0) return -1;
-    if (status == 0) return 0;
-    if (prefix != 'b' && prefix != 'B')
-        return rin_fscanf_stream_unread(input, prefix);
-    status = rin_fscanf_stream_read(input, &suffix);
-    if (status > 0 && rin_sscanf_digit(suffix, &digit) && digit < 2u) {
-        *value = suffix;
-        *prefixed_out = 1;
-        return 0;
-    }
-    if (status < 0) return -1;
-    if (status > 0 && rin_fscanf_stream_unread(input, suffix) != 0)
-        return -1;
-    return rin_fscanf_stream_unread(input, prefix);
-}
-
 static int rin_fscanf_stream_parse_integer(
         struct RinFscanfStreamInput* input,
         const struct RinSscanfSpec* spec, uint64_t* magnitude_out,
@@ -1310,13 +1271,6 @@ static int rin_fscanf_stream_parse_integer(
         return -1;
     if (prefixed) {
         base = 16u;
-        used += 2u;
-    } else if ((base == 0u || base == 2u) &&
-               rin_fscanf_stream_try_binary_prefix(
-                   input, used, limit, &value, &prefixed) != 0) {
-        return -1;
-    } else if (prefixed) {
-        base = 2u;
         used += 2u;
     } else if (base == 0u) {
         base = value == '0' ? 8u : 10u;
@@ -1834,8 +1788,7 @@ static int rin_fscanf_validate_format(const char* format) {
             spec.conversion == 's' || spec.conversion == '[' ||
             spec.conversion == 'n' ||
             spec.conversion == 'd' || spec.conversion == 'i' ||
-            spec.conversion == 'b' || spec.conversion == 'u' ||
-            spec.conversion == 'o' ||
+            spec.conversion == 'u' || spec.conversion == 'o' ||
             spec.conversion == 'x' || spec.conversion == 'X' ||
             spec.conversion == 'p')
             continue;
@@ -1958,8 +1911,7 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
                 continue;
             }
             if (spec.conversion == 'd' || spec.conversion == 'i' ||
-                spec.conversion == 'b' || spec.conversion == 'u' ||
-                spec.conversion == 'o' ||
+                spec.conversion == 'u' || spec.conversion == 'o' ||
                 spec.conversion == 'x' || spec.conversion == 'X' ||
                 spec.conversion == 'p') {
                 uint64_t magnitude = 0u;
@@ -1967,7 +1919,6 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
                 int input_failure = 0;
                 int parsed = rin_fscanf_stream_parse_integer(
                     &input, &spec, &magnitude, &negative, &input_failure,
-                    spec.conversion == 'b' ? 2u :
                     spec.conversion == 'o' ? 8u :
                     (spec.conversion == 'x' || spec.conversion == 'X' ||
                      spec.conversion == 'p') ?
