@@ -23,6 +23,27 @@ static double cx_acosh_nonnegative(double value) {
     return acosh(value);
 }
 
+static void cx_ellipse(double x, double y, double* scale,
+                       double* alpha_scaled) {
+    double magnitude = fmax(fabs(x), fabs(y));
+    double reciprocal;
+    double scaled_x, scaled_y;
+    double radius_plus, radius_minus;
+    *scale = magnitude > 1.0 ? magnitude : 1.0;
+    reciprocal = 1.0 / *scale;
+    scaled_x = x / *scale;
+    scaled_y = y / *scale;
+    radius_plus = hypot(scaled_x + reciprocal, scaled_y);
+    radius_minus = hypot(scaled_x - reciprocal, scaled_y);
+    *alpha_scaled = 0.5 * radius_plus + 0.5 * radius_minus;
+}
+
+static double cx_acosh_scaled(double scale, double alpha_scaled) {
+    if (scale > 1.0e150 / alpha_scaled)
+        return log(scale) + log(alpha_scaled) + M_LN2;
+    return cx_acosh_nonnegative(scale * alpha_scaled);
+}
+
 static double complex cx_mul(double complex lhs, double complex rhs) {
     double a = cx_real(lhs), b = cx_imag(lhs);
     double c = cx_real(rhs), d = cx_imag(rhs);
@@ -480,6 +501,7 @@ double complex ctanh(double complex value) {
         if (y == 0.0) return cx_make(NAN, y);
         return cx_make(NAN, NAN);
     }
+    if (y == 0.0) return cx_make(tanh(x), y);
     if (fabs(x) > 20.0) {
         double scaled = exp(-2.0 * fabs(x));
         double denominator = 1.0 + scaled * scaled +
@@ -494,6 +516,7 @@ double complex ctanh(double complex value) {
 
 double complex casin(double complex value) {
     double x = cx_real(value), y = cx_imag(value);
+    double scale, alpha_scaled;
     if (isinf(x) || isinf(y)) {
         if (isinf(x) && isinf(y))
             return cx_make(copysign(M_PI_4, x), copysign(INFINITY, y));
@@ -507,11 +530,12 @@ double complex casin(double complex value) {
     if (isnan(x) && y == 0.0) return cx_make(NAN, y);
     if (x == 0.0 && isnan(y)) return cx_make(x, NAN);
     if (isnan(x) || isnan(y)) return cx_make(NAN, NAN);
-    double r1 = hypot(x + 1.0, y), r2 = hypot(x - 1.0, y);
-    double alpha = 0.5 * r1 + 0.5 * r2;
-    double beta = alpha == 0.0 ? x : x / alpha;
+    cx_ellipse(x, y, &scale, &alpha_scaled);
+    double beta = (x / scale) / alpha_scaled;
+    if (beta > 1.0) beta = 1.0;
+    if (beta < -1.0) beta = -1.0;
     double real = asin(beta);
-    double imaginary = copysign(cx_acosh_nonnegative(alpha), y);
+    double imaginary = copysign(cx_acosh_scaled(scale, alpha_scaled), y);
     return cx_make(real, imaginary);
 }
 
@@ -543,6 +567,7 @@ double complex catan(double complex value) {
     double absolute_x = fabs(x), absolute_y = fabs(y);
     double scale = absolute_x >= absolute_y ? absolute_x : absolute_y;
     double real, ratio, imaginary;
+    if (isnan(x) && isinf(y)) return cx_make(NAN, y);
     if (isinf(x) || isinf(y))
         return cx_make(copysign(M_PI_2, x), copysign(0.0, y));
     if (isnan(x) || isnan(y)) return cx_make(NAN, NAN);
@@ -585,7 +610,6 @@ double complex casinh(double complex value) {
     if (isinf(y))
         return cx_make(INFINITY, copysign(M_PI_2, y));
     if (isnan(x) && y == 0.0) return cx_make(NAN, y);
-    if (x == 0.0 && isnan(y)) return cx_make(x, NAN);
     if (isnan(x) || isnan(y)) return cx_make(NAN, NAN);
     double complex rotated = cx_make(-cx_imag(value), cx_real(value));
     double complex result = casin(rotated);
@@ -606,11 +630,10 @@ double complex cacosh(double complex value) {
         return cx_make(INFINITY, copysign(M_PI, y));
     }
     if (isnan(x) || isnan(y)) return cx_make(NAN, NAN);
-    double r1 = hypot(x + 1.0, y), r2 = hypot(x - 1.0, y);
-    double alpha = 0.5 * r1 + 0.5 * r2;
-    double beta = 0.5 * r1 - 0.5 * r2;
-    double real = cx_acosh_nonnegative(alpha);
-    double ratio = beta / alpha;
+    double scale, alpha_scaled;
+    cx_ellipse(x, y, &scale, &alpha_scaled);
+    double real = cx_acosh_scaled(scale, alpha_scaled);
+    double ratio = (x / scale) / alpha_scaled;
     if (ratio > 1.0) ratio = 1.0;
     if (ratio < -1.0) ratio = -1.0;
     return cx_make(real, copysign(acos(ratio), y));
@@ -623,7 +646,6 @@ double complex catanh(double complex value) {
     if (isinf(x) || isinf(y)) {
         return cx_make(copysign(0.0, x), copysign(M_PI_2, y));
     }
-    if (isnan(x) && isinf(y)) return cx_make(0.0, copysign(M_PI_2, y));
     if (x == 0.0 && isnan(y)) return cx_make(x, NAN);
     if (isnan(x) || isnan(y)) return cx_make(NAN, NAN);
     if ((x == 1.0 || x == -1.0) && y == 0.0)
