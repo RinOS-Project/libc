@@ -143,7 +143,8 @@ typedef struct rin_thread_stack_info_v1 {
 
 /* Thread-related syscalls */
 #define SYS_gettid          SYS_GETTID
-#define SYS_set_tid_address 351
+#define SYS_getrandom       SYS_GETRANDOM
+#define SYS_set_tid_address SYS_SET_TID_ADDRESS
 #if defined(RIN_HOST_LINUX_FUTEX_TEST)
 #define SYS_sched_yield     RIN_HOST_LINUX_SYS_SCHED_YIELD
 #define SYS_futex           RIN_HOST_LINUX_SYS_FUTEX
@@ -212,8 +213,8 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_tgkill         SYS_TGKILL      /* 501 */
 #define __NR_exit_group     SYS_EXIT        /* 0 — RinOSはexit_groupなし */
 #define __NR_clock_gettime  SYS_TIME        /* 60 — 簡易マッピング */
-#define __NR_getrandom      350             /* bounded kernel CSPRNG */
-#define __NR_set_tid_address 351            /* clear_child_tid handler */
+#define __NR_getrandom      SYS_GETRANDOM   /* bounded kernel CSPRNG */
+#define __NR_set_tid_address SYS_SET_TID_ADDRESS /* clear_child_tid handler */
 #define __NR_ptrace          SYS_PTRACE
 
 /* ═══════════════════════════════════════════════════════════════

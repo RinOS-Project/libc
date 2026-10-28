@@ -351,7 +351,7 @@
 #undef __NR_tgkill
 #define __NR_tgkill         SYS_TGKILL
 #undef __NR_set_tid_address
-#define __NR_set_tid_address 351
+#define __NR_set_tid_address SYS_SET_TID_ADDRESS
 
 /* syscall function is defined in sys/syscall.h */
 
