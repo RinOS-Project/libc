@@ -1045,6 +1045,51 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
     }
 }
 
+/* The current futex ABI represents absolute deadlines as unsigned
+ * nanoseconds. For an epoch-relative absolute wait while CLOCK_REALTIME is
+ * before 1970, convert the future interval to a monotonic relative timeout. */
+static inline int _rin_time_realtime_deadline_relative(
+    const struct timespec* deadline, struct timespec* relative,
+    int* use_relative)
+{
+#if defined(RIN_TIME_ABI64)
+    struct timespec now;
+    int64_t seconds;
+    int64_t nanoseconds;
+    if (!deadline || !relative || !use_relative) return EFAULT;
+    *use_relative = 0;
+    if (deadline->tv_nsec < 0 || deadline->tv_nsec >= 1000000000L)
+        return EINVAL;
+    if (clock_gettime(CLOCK_REALTIME, &now) != 0)
+        return errno != 0 ? errno : EIO;
+    if (now.tv_sec > deadline->tv_sec ||
+        (now.tv_sec == deadline->tv_sec &&
+         now.tv_nsec >= deadline->tv_nsec))
+        return ETIMEDOUT;
+    if (now.tv_sec >= 0) return 0;
+    if (deadline->tv_sec >= 0 &&
+        (int64_t)deadline->tv_sec > INT64_MAX + (int64_t)now.tv_sec)
+        return EOVERFLOW;
+    seconds = (int64_t)deadline->tv_sec - (int64_t)now.tv_sec;
+    nanoseconds = (int64_t)deadline->tv_nsec - (int64_t)now.tv_nsec;
+    if (nanoseconds < 0) {
+        if (seconds <= 0) return EOVERFLOW;
+        --seconds;
+        nanoseconds += INT64_C(1000000000);
+    }
+    relative->tv_sec = (time_t)seconds;
+    relative->tv_nsec = (long)nanoseconds;
+    *use_relative = 1;
+    return 0;
+#else
+    (void)deadline;
+    (void)relative;
+    if (!use_relative) return EFAULT;
+    *use_relative = 0;
+    return 0;
+#endif
+}
+
 static inline int timespec_get(struct timespec* ts, int base) {
     if (base != TIME_UTC) return 0;
     if (clock_gettime(CLOCK_REALTIME, ts) != 0) return 0;

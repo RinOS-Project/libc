@@ -228,8 +228,12 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
             continue;
         }
 
-        if (abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
-            abstime->tv_nsec >= 1000000000L) {
+        int invalid_deadline = abstime->tv_nsec < 0 ||
+            abstime->tv_nsec >= 1000000000L;
+#if !defined(RIN_TIME_ABI64)
+        invalid_deadline = invalid_deadline || abstime->tv_sec < 0;
+#endif
+        if (invalid_deadline) {
             errno = EINVAL;
             return -1;
         }
@@ -249,11 +253,35 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
             continue;
         }
 
+        struct timespec relative_timeout;
+        const struct timespec* timeout = abstime;
+        int operation = rin_sem_futex_operation(
+            sem, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME);
+        int use_relative_timeout = 0;
+#if defined(RIN_TIME_ABI64)
+        {
+            int deadline_error = _rin_time_realtime_deadline_relative(
+                abstime, &relative_timeout, &use_relative_timeout);
+            if (deadline_error == ETIMEDOUT) {
+                rin_sem_waiter_remove(sem);
+                if (sem_trywait(sem) == 0) return 0;
+                errno = ETIMEDOUT;
+                return -1;
+            }
+            if (deadline_error != 0) {
+                rin_sem_waiter_remove(sem);
+                errno = deadline_error;
+                return -1;
+            }
+            if (use_relative_timeout) {
+                operation = rin_sem_futex_operation(sem, FUTEX_WAIT);
+                timeout = &relative_timeout;
+            }
+        }
+#endif
         long ret = _RIN_SEMAPHORE_FUTEX_BITSET(
-            &sem->value,
-            rin_sem_futex_operation(
-                sem, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME),
-            0, abstime, FUTEX_BITSET_MATCH_ANY);
+            &sem->value, operation, 0, timeout,
+            FUTEX_BITSET_MATCH_ANY);
         rin_sem_waiter_remove(sem);
         __rin_pthread_cancel_point_if_linked();
 
