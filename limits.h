@@ -240,6 +240,9 @@
 #ifndef _POSIX_THREAD_THREADS_MAX
 #define _POSIX_THREAD_THREADS_MAX 64
 #endif
+#ifndef PTHREAD_STACK_MIN
+#define PTHREAD_STACK_MIN 16384
+#endif
 #ifndef SEM_VALUE_MAX
 #define SEM_VALUE_MAX 0x7fffffffU
 #endif
