@@ -101,7 +101,7 @@ static inline void __rin_x87_update_excepts(unsigned int clear_mask,
     __rin_x87_setenv(&environment);
 }
 
-#ifdef __x86_64__
+#if defined(__i386__) || defined(__x86_64__)
 static inline unsigned int __rin_mxcsr_get(void) {
     unsigned int mxcsr;
     __asm__ volatile ("stmxcsr %0" : "=m"(mxcsr) : : "memory");
@@ -125,7 +125,7 @@ static inline int feclearexcept(int excepts) {
 
 #if defined(__i386__) || defined(__x86_64__)
     __rin_x87_update_excepts(requested, 0u);
-#ifdef __x86_64__
+#if defined(__i386__) || defined(__x86_64__)
     unsigned int mxcsr = __rin_mxcsr_get();
     mxcsr &= ~requested;
     __rin_mxcsr_set(mxcsr);
@@ -141,7 +141,7 @@ static inline int fetestexcept(int excepts) {
 #if defined(__i386__) || defined(__x86_64__)
     unsigned short status;
     __asm__ volatile ("fnstsw %0" : "=m"(status));
-#ifdef __x86_64__
+#if defined(__i386__) || defined(__x86_64__)
     unsigned int mxcsr = __rin_mxcsr_get();
     status |= (unsigned short)mxcsr;
 #endif
@@ -159,7 +159,7 @@ static inline int feraiseexcept(int excepts) {
 
 #if defined(__i386__) || defined(__x86_64__)
     __rin_x87_update_excepts(0u, requested);
-#ifdef __x86_64__
+#if defined(__i386__) || defined(__x86_64__)
     __rin_mxcsr_set(__rin_mxcsr_get() | requested);
 #endif
     return 0;
@@ -209,7 +209,7 @@ static inline int fesetround(int round) {
     __asm__ volatile ("fnstcw %0" : "=m"(control));
     control = (control & ~0x0C00) | (round & 0x0C00);
     __asm__ volatile ("fldcw %0" : : "m"(control));
-#ifdef __x86_64__
+#if defined(__i386__) || defined(__x86_64__)
     unsigned int mxcsr;
     __asm__ volatile ("stmxcsr %0" : "=m"(mxcsr));
     mxcsr = (mxcsr & ~(3u << 13)) | (((unsigned int)round >> 10) << 13);
@@ -236,7 +236,7 @@ static inline int fegetenv(fenv_t* envp) {
     envp->__control = x87_environment.control;
     envp->__status = x87_environment.status;
     envp->__tag = x87_environment.tag;
-#ifdef __x86_64__
+#if defined(__i386__) || defined(__x86_64__)
     envp->__others[0] = __rin_mxcsr_get();
 #endif
     __rin_x87_setenv(&x87_environment);
@@ -257,7 +257,7 @@ static inline int fesetenv(const fenv_t* envp) {
     x87_environment.status = (unsigned short)envp->__status;
     x87_environment.tag = (unsigned short)envp->__tag;
     __rin_x87_setenv(&x87_environment);
-#ifdef __x86_64__
+#if defined(__i386__) || defined(__x86_64__)
     __rin_mxcsr_set(envp->__others[0]);
 #endif
 #else
@@ -277,7 +277,7 @@ static inline int feholdexcept(fenv_t* envp) {
     x87_environment.control |= FE_ALL_EXCEPT;
     x87_environment.status &= (unsigned short)~FE_ALL_EXCEPT;
     __rin_x87_setenv(&x87_environment);
-#ifdef __x86_64__
+#if defined(__i386__) || defined(__x86_64__)
     unsigned int mxcsr = __rin_mxcsr_get();
     mxcsr |= (0x3Fu << 7);
     mxcsr &= ~0x3Fu;
