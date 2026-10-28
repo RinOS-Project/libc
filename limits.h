@@ -117,7 +117,7 @@
 #define HOST_NAME_MAX 64
 #endif
 #ifndef _POSIX_HOST_NAME_MAX
-#define _POSIX_HOST_NAME_MAX HOST_NAME_MAX
+#define _POSIX_HOST_NAME_MAX 255
 #endif
 #ifndef _POSIX_SEM_VALUE_MAX
 #define _POSIX_SEM_VALUE_MAX 32767
@@ -136,6 +136,12 @@
 #endif
 #ifndef _POSIX_MQ_PRIO_MAX
 #define _POSIX_MQ_PRIO_MAX 32
+#endif
+#ifndef _POSIX_DELAYTIMER_MAX
+#define _POSIX_DELAYTIMER_MAX 32
+#endif
+#ifndef _POSIX_TIMER_MAX
+#define _POSIX_TIMER_MAX 32
 #endif
 #ifndef _POSIX_PIPE_BUF
 #define _POSIX_PIPE_BUF 512
@@ -160,6 +166,12 @@
 #endif
 #ifndef MQ_PRIO_MAX
 #define MQ_PRIO_MAX 32
+#endif
+#ifndef DELAYTIMER_MAX
+#define DELAYTIMER_MAX 0x7fffffff
+#endif
+#ifndef TIMER_MAX
+#define TIMER_MAX 32
 #endif
 #ifndef PIPE_BUF
 #define PIPE_BUF 4096

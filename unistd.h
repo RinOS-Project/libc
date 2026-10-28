@@ -1734,13 +1734,15 @@ static inline long sysconf(int name) {
             return SEM_NSEMS_MAX;
         case _SC_SEM_VALUE_MAX:
             return (long)SEM_VALUE_MAX;
+        case _SC_DELAYTIMER_MAX:
+            return DELAYTIMER_MAX;
+        case _SC_TIMER_MAX:
+            return TIMER_MAX;
         case _SC_REALTIME_SIGNALS:
         case _SC_PRIORITIZED_IO:
         case _SC_SHARED_MEMORY_OBJECTS:
-        case _SC_DELAYTIMER_MAX:
         case _SC_RTSIG_MAX:
         case _SC_SIGQUEUE_MAX:
-        case _SC_TIMER_MAX:
         case _SC_BC_BASE_MAX:
         case _SC_BC_DIM_MAX:
         case _SC_BC_SCALE_MAX:
