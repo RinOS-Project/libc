@@ -19,6 +19,7 @@
 #include "sys/ioctl.h"
 #include "termios.h"
 #include "time.h"
+#include "sys/resource.h"
 #if !defined(RINSDK_SPLIT_BUILD)
 #include "internal/pthread_atfork.h"
 #endif
@@ -1843,7 +1844,6 @@ static inline long sysconf(int name) {
 #endif
         case _SC_PRIORITIZED_IO:
         case _SC_SHARED_MEMORY_OBJECTS:
-        case _SC_SIGQUEUE_MAX:
         case _SC_BC_BASE_MAX:
         case _SC_BC_DIM_MAX:
         case _SC_BC_SCALE_MAX:
@@ -1911,6 +1911,15 @@ static inline long sysconf(int name) {
         case _SC_MEMLOCK_RANGE:
         case _SC_MEMORY_PROTECTION:
             return 200809L;
+        case _SC_SIGQUEUE_MAX: {
+            struct rlimit signal_limit;
+            const rlim_t queue_capacity = (rlim_t)64u;
+            if (getrlimit(RLIMIT_SIGPENDING, &signal_limit) < 0)
+                return -1;
+            if (signal_limit.rlim_cur > queue_capacity)
+                return (long)queue_capacity;
+            return (long)signal_limit.rlim_cur;
+        }
         default:
             errno = EINVAL;
             return -1;
