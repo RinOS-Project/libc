@@ -19,7 +19,9 @@
 #include "sys/ioctl.h"
 #include "termios.h"
 #include "time.h"
+#if !defined(RINSDK_SPLIT_BUILD)
 #include "internal/pthread_atfork.h"
+#endif
 #include "internal/pthread_cancel_point.h"
 #if !defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
 #include "rin_account_compat.h"
@@ -1182,21 +1184,27 @@ static inline pid_t fork(void) {
     int allocator_fork_prepared = 0;
     int fork_hooks_prepared = 0;
     int rinfs_fork_prepared = 0;
+#if !defined(RINSDK_SPLIT_BUILD)
     int atfork_handlers_prepared = 0;
     __rin_pthread_atfork_snapshot atfork_snapshot = {0u};
 #endif
+#endif
     intptr_t result;
 #if !defined(MIDL_PASS)
+#if !defined(RINSDK_SPLIT_BUILD)
     if (__rin_pthread_atfork_prepare != NULL) {
         __rin_pthread_atfork_prepare(&atfork_snapshot);
         atfork_handlers_prepared = 1;
     }
+#endif
     if (rinfs_fork_hooks_prepare != NULL &&
         rinfs_fork_hooks_complete != NULL) {
         if (rinfs_fork_hooks_prepare() != 0) {
+#if !defined(RINSDK_SPLIT_BUILD)
             if (atfork_handlers_prepared &&
                 __rin_pthread_atfork_parent != NULL)
                 __rin_pthread_atfork_parent(&atfork_snapshot);
+#endif
             errno = EBUSY;
             return -1;
         }
@@ -1206,9 +1214,11 @@ static inline pid_t fork(void) {
         if (rinfs_fork_prepare() != 0) {
             int complete_result = __rin_fork_complete_local(
                 0, rinfs_fork_prepared, fork_hooks_prepared);
+#if !defined(RINSDK_SPLIT_BUILD)
             if (atfork_handlers_prepared &&
                 __rin_pthread_atfork_parent != NULL)
                 __rin_pthread_atfork_parent(&atfork_snapshot);
+#endif
             errno = complete_result != 0 ? EIO : EBUSY;
             return -1;
         }
@@ -1228,16 +1238,20 @@ static inline pid_t fork(void) {
         if (allocator_fork_prepared &&
             rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
+#if !defined(RINSDK_SPLIT_BUILD)
         if (atfork_handlers_prepared &&
             __rin_pthread_atfork_parent != NULL)
             __rin_pthread_atfork_parent(&atfork_snapshot);
+#endif
         errno = complete_result != 0 ? EIO : fork_errno;
 #endif
         return -1;
     }
 #if !defined(MIDL_PASS)
+#if !defined(RINSDK_SPLIT_BUILD)
     if (result == 0 && __rin_pthread_atfork_child_reset != NULL)
         __rin_pthread_atfork_child_reset();
+#endif
 #endif
     if ((uintptr_t)result > (uintptr_t)INT_MAX) {
 #if !defined(MIDL_PASS)
@@ -1248,9 +1262,11 @@ static inline pid_t fork(void) {
         if (allocator_fork_prepared &&
             rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
+#if !defined(RINSDK_SPLIT_BUILD)
         if (atfork_handlers_prepared &&
             __rin_pthread_atfork_parent != NULL)
             __rin_pthread_atfork_parent(&atfork_snapshot);
+#endif
         errno = complete_result != 0 ? EIO : EOVERFLOW;
 #else
         errno = EOVERFLOW;
@@ -1270,12 +1286,14 @@ static inline pid_t fork(void) {
         else if (allocator_fork_prepared &&
                  rin_user_allocator_after_fork_parent != NULL)
             rin_user_allocator_after_fork_parent();
+#if !defined(RINSDK_SPLIT_BUILD)
         if (atfork_handlers_prepared) {
             if (result == 0 && __rin_pthread_atfork_child != NULL)
                 __rin_pthread_atfork_child(&atfork_snapshot);
             else if (result != 0 && __rin_pthread_atfork_parent != NULL)
                 __rin_pthread_atfork_parent(&atfork_snapshot);
         }
+#endif
         /* fork cannot be rolled back after the kernel publishes the child.
          * Preserve the parent's PID result and surface local completion
          * failure in errno; the child exits before reaching user code. */

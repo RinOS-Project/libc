@@ -215,20 +215,14 @@ typedef struct __ucontext ucontext_t;
 #define RIN_UCONTEXT_MAX_ARGS          16
 #define RIN_UCONTEXT_SIG_SETMASK       2u
 
-#ifndef _RIN_UCONTEXT_SIGMASK_SYSCALL4
-#define _RIN_UCONTEXT_SIGMASK_SYSCALL4(number, argument1, argument2, \
-                                       argument3, argument4) \
-    _syscall4((uintptr_t)(number), (uintptr_t)(argument1), \
-              (uintptr_t)(argument2), (uintptr_t)(argument3), \
-              (uintptr_t)(argument4))
-#endif
-
 /* signal.hとの循環includeを避け、スレッド単位のmask syscallを直接使う。 */
 static inline int rin_ucontext_sigmask(const sigset_t* new_mask,
                                       sigset_t* old_mask) {
-    intptr_t result = _RIN_UCONTEXT_SIGMASK_SYSCALL4(
-        SYS_rt_sigprocmask, RIN_UCONTEXT_SIG_SETMASK, new_mask, old_mask,
-        sizeof(sigset_t));
+    intptr_t result = _syscall4((uintptr_t)SYS_rt_sigprocmask,
+                                (uintptr_t)RIN_UCONTEXT_SIG_SETMASK,
+                                (uintptr_t)new_mask,
+                                (uintptr_t)old_mask,
+                                (uintptr_t)sizeof(sigset_t));
     if (result < 0) {
         uintptr_t magnitude = (uintptr_t)0 - (uintptr_t)result;
         errno = magnitude != 0u && magnitude <= 4095u ?
