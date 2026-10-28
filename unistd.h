@@ -1788,6 +1788,8 @@ static inline long sysconf(int name) {
             return PTHREAD_DESTRUCTOR_ITERATIONS;
         case _SC_THREAD_KEYS_MAX:
             return PTHREAD_KEYS_MAX;
+        case _SC_THREAD_THREADS_MAX:
+            return _POSIX_THREAD_THREADS_MAX;
         case _SC_THREAD_STACK_MIN:
             return PTHREAD_STACK_MIN;
         case _SC_THREAD_ATTR_STACKSIZE:
@@ -1866,7 +1868,6 @@ static inline long sysconf(int name) {
         case _SC_THREAD_ROBUST_PRIO_PROTECT:
         case _SC_THREAD_SAFE_FUNCTIONS:
         case _SC_THREAD_SPORADIC_SERVER:
-        case _SC_THREAD_THREADS_MAX:
         case _SC_TYPED_MEMORY_OBJECTS:
         case _SC_V7_ILP32_OFF32:
         case _SC_V7_ILP32_OFFBIG:
