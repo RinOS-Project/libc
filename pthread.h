@@ -856,61 +856,58 @@ static inline int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex
      * -EAGAIN immediately -- no missed wakeup possible. */
     unsigned int gen = __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE);
     __atomic_fetch_add(&cond->waiting, 1, __ATOMIC_SEQ_CST);
-    pthread_mutex_unlock(mutex);
+    int result = pthread_mutex_unlock(mutex);
+    if (result != 0) {
+        __atomic_fetch_sub(&cond->waiting, 1, __ATOMIC_SEQ_CST);
+        return result;
+    }
 
     /* Block in kernel until generation changes.
      * FUTEX_WAIT atomically checks *(&cond->generation) == gen.
      * Returns 0 on wake, -EAGAIN if value changed, -EINTR if interrupted.
      * Loop handles spurious wakeups. */
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-        syscall(SYS_futex, &cond->generation,
-                FUTEX_WAIT | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
-                              FUTEX_PRIVATE_FLAG),
-                (int)gen, NULL, NULL, 0);
+        long ret = syscall(
+            SYS_futex, &cond->generation,
+            FUTEX_WAIT | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
+                          FUTEX_PRIVATE_FLAG),
+            (int)gen, NULL, NULL, 0);
+        if (ret < 0 && errno != EAGAIN && errno != EINTR) {
+            result = errno != 0 ? errno : EIO;
+            break;
+        }
     }
 
     __atomic_fetch_sub(&cond->waiting, 1, __ATOMIC_SEQ_CST);
-    pthread_mutex_lock(mutex);
-    return 0;
+    int mutex_result = pthread_mutex_lock(mutex);
+    return mutex_result != 0 ? mutex_result : result;
 }
 
 static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
                                           const struct timespec* abstime) {
     if (!cond || !mutex || !abstime) return EINVAL;
-    if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L ||
+    if (abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
+        abstime->tv_nsec >= 1000000000L ||
         (cond->clock_id != CLOCK_REALTIME &&
          cond->clock_id != CLOCK_MONOTONIC))
         return EINVAL;
 
     unsigned int gen = __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE);
     __atomic_fetch_add(&cond->waiting, 1, __ATOMIC_SEQ_CST);
-    pthread_mutex_unlock(mutex);
+    int result = pthread_mutex_unlock(mutex);
+    if (result != 0) {
+        __atomic_fetch_sub(&cond->waiting, 1, __ATOMIC_SEQ_CST);
+        return result;
+    }
 
-    int result = 0;
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-        /* Compute relative timeout from absolute deadline */
-        struct timespec now;
-        if (clock_gettime(cond->clock_id, &now) != 0) {
-            result = errno != 0 ? errno : EIO;
-            break;
-        }
-
-        long long timeout_ns = (long long)(abstime->tv_sec - now.tv_sec) * 1000000000LL
-                              + (long long)(abstime->tv_nsec - now.tv_nsec);
-        if (timeout_ns <= 0) {
-            result = ETIMEDOUT;
-            break;
-        }
-
-        struct timespec ts;
-        ts.tv_sec = (time_t)(timeout_ns / 1000000000LL);
-        ts.tv_nsec = (long)(timeout_ns % 1000000000LL);
-
+        int operation = FUTEX_WAIT_BITSET |
+            (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
+             FUTEX_PRIVATE_FLAG) |
+            (cond->clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
         long ret = syscall(
             SYS_futex, &cond->generation,
-            FUTEX_WAIT | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
-                          FUTEX_PRIVATE_FLAG),
-            (int)gen, &ts, NULL, 0);
+            operation, (int)gen, abstime, NULL, FUTEX_BITSET_MATCH_ANY);
         if (ret < 0) {
             int err = errno;
             if (err == ETIMEDOUT) {
@@ -920,34 +917,42 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* 
                     result = ETIMEDOUT;
                 break;
             }
-            /* EAGAIN/EINTR: re-check generation in loop */
+            if (err == EAGAIN || err == EINTR) continue;
+            result = err != 0 ? err : EIO;
+            break;
         }
     }
 
     __atomic_fetch_sub(&cond->waiting, 1, __ATOMIC_SEQ_CST);
-    pthread_mutex_lock(mutex);
-    return result;
+    int mutex_result = pthread_mutex_lock(mutex);
+    return mutex_result != 0 ? mutex_result : result;
 }
 
 static inline int pthread_cond_signal(pthread_cond_t* cond) {
     if (!cond) return EINVAL;
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
-    if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0)
-        syscall(SYS_futex, &cond->generation,
-                FUTEX_WAKE | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
-                              FUTEX_PRIVATE_FLAG),
-                1, NULL, NULL, 0);
+    if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0) {
+        long ret = syscall(
+            SYS_futex, &cond->generation,
+            FUTEX_WAKE | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
+                          FUTEX_PRIVATE_FLAG),
+            1, NULL, NULL, 0);
+        if (ret < 0) return errno != 0 ? errno : EIO;
+    }
     return 0;
 }
 
 static inline int pthread_cond_broadcast(pthread_cond_t* cond) {
     if (!cond) return EINVAL;
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
-    if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0)
-        syscall(SYS_futex, &cond->generation,
-                FUTEX_WAKE | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
-                              FUTEX_PRIVATE_FLAG),
-                0x7fffffff, NULL, NULL, 0);
+    if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0) {
+        long ret = syscall(
+            SYS_futex, &cond->generation,
+            FUTEX_WAKE | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
+                          FUTEX_PRIVATE_FLAG),
+            0x7fffffff, NULL, NULL, 0);
+        if (ret < 0) return errno != 0 ? errno : EIO;
+    }
     return 0;
 }
 #else
