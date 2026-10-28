@@ -33,6 +33,11 @@
 #include <rin/process/namespace_abi.h>
 #include <rin/process/image_path_abi.h>
 #include <rin/process/image_range_abi.h>
+#include <rin/process/exec_limits_abi.h>
+
+#if ARG_MAX != RIN_EXEC_ARGUMENT_ENV_BYTES_MAX
+#error "ARG_MAX must match the public exec argument/environment byte limit"
+#endif
 #include <rin/process/memory_abi.h>
 
 /* The kernel preserves saved UID/GID values per process. */
@@ -2548,10 +2553,10 @@ static inline int dup3(int oldfd, int newfd, int flags) {
 
 /* exec frontend.  These bounds match the kernel's pointer-free snapshot. */
 #if defined(RIN_UNISTD_TARGET_PROCESS_FRONTEND)
-#define __RIN_EXEC_ARGUMENT_COUNT_MAX 64u
-#define __RIN_EXEC_PATH_MAX 512u
-#define __RIN_EXEC_ENVIRONMENT_COUNT_MAX 128u
-#define __RIN_EXEC_ENVIRONMENT_STRING_MAX 4096u
+#define __RIN_EXEC_ARGUMENT_COUNT_MAX RIN_EXEC_ARGUMENT_COUNT_MAX
+#define __RIN_EXEC_PATH_MAX RIN_EXEC_ARGUMENT_PATH_MAX
+#define __RIN_EXEC_ENVIRONMENT_COUNT_MAX RIN_EXEC_ENVIRONMENT_COUNT_MAX
+#define __RIN_EXEC_ENVIRONMENT_STRING_MAX RIN_EXEC_ARGUMENT_STRING_MAX
 
 static inline int __rin_exec_collect_arguments(
     const char* first, va_list* arguments,
@@ -2586,11 +2591,15 @@ static inline const char* __rin_exec_search_path(
     if (error) *error = 0;
     if (!environment) return NULL;
     for (entry_index = 0u;
-         entry_index < __RIN_EXEC_ENVIRONMENT_COUNT_MAX;
+         entry_index <= __RIN_EXEC_ENVIRONMENT_COUNT_MAX;
          ++entry_index) {
         const char* entry = environment[entry_index];
         size_t length;
         if (!entry) return NULL;
+        if (entry_index == __RIN_EXEC_ENVIRONMENT_COUNT_MAX) {
+            if (error) *error = E2BIG;
+            return NULL;
+        }
         if (!__rin_exec_text_length(
                 entry, __RIN_EXEC_ENVIRONMENT_STRING_MAX, &length)) {
             if (error) *error = E2BIG;
