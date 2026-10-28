@@ -53,6 +53,21 @@
 #ifndef _POSIX_MEMLOCK
 #define _POSIX_MEMLOCK 200809L
 #endif
+#ifndef _POSIX_MEMLOCK_RANGE
+#define _POSIX_MEMLOCK_RANGE 200809L
+#endif
+#ifndef _POSIX_MEMORY_PROTECTION
+#define _POSIX_MEMORY_PROTECTION 200809L
+#endif
+#ifndef _POSIX_MAPPED_FILES
+#define _POSIX_MAPPED_FILES 200809L
+#endif
+#ifndef _POSIX_FSYNC
+#define _POSIX_FSYNC 200809L
+#endif
+#ifndef _POSIX_SYNCHRONIZED_IO
+#define _POSIX_SYNCHRONIZED_IO 200809L
+#endif
 
 /* Asynchronous I/O is implemented by the libc AIO runtime. */
 #ifndef _POSIX_ASYNCHRONOUS_IO
