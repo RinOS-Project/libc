@@ -32,7 +32,7 @@ struct iovec {
 static inline ssize_t __rin_uio_result(intptr_t result) {
     result = __rin_syscall_posixize(result);
     if (result < 0) {
-        errno = result >= -4095 ? (int)-result : EIO;
+        if (result != -1) errno = EIO;
         return (ssize_t)-1;
     }
     if ((uintptr_t)result > (uintptr_t)SSIZE_MAX) {
