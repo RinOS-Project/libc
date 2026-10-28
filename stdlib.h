@@ -181,6 +181,7 @@ void* calloc(size_t nmemb, size_t size);
 void* realloc(void* ptr, size_t size);
 #endif
 void* reallocarray(void* ptr, size_t nmemb, size_t size);
+size_t memalignment(const void* ptr);
 #ifndef free
 void free(void* ptr);
 #endif

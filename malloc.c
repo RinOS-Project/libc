@@ -19,6 +19,11 @@ extern void  rin_free(void* ptr);
 extern void* rin_realloc(void* ptr, size_t size);
 extern size_t rin_malloc_usable_size(void* ptr);
 
+size_t memalignment(const void* ptr) {
+    uintptr_t address = (uintptr_t)ptr;
+    return (size_t)(address & (~address + (uintptr_t)1u));
+}
+
 void* malloc(size_t size) {
     if (size == 0) return 0;
     return rin_malloc(size);
