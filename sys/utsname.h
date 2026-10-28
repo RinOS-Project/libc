@@ -19,18 +19,18 @@ extern "C" {
  * utsname構造体
  * ═══════════════════════════════════════════════════════════════*/
 
-#define _UTSNAME_LENGTH RIN_UTSNAME_ABI_V1_FIELD_SIZE
+#define _UTSNAME_LENGTH RIN_UTSNAME_ABI_V2_FIELD_SIZE
 
 struct utsname {
-    RIN_UTSNAME_ABI_V1_FIELDS;
+    RIN_UTSNAME_ABI_V2_FIELDS;
 };
 
 #ifdef __cplusplus
-static_assert(sizeof(struct utsname) == sizeof(RinUtsnameAbiV1),
-              "SYS_UNAME ABI layout mismatch");
+static_assert(sizeof(struct utsname) == sizeof(RinUtsnameAbiV2),
+              "SYS_UNAME_V2 ABI layout mismatch");
 #else
-_Static_assert(sizeof(struct utsname) == sizeof(RinUtsnameAbiV1),
-               "SYS_UNAME ABI layout mismatch");
+_Static_assert(sizeof(struct utsname) == sizeof(RinUtsnameAbiV2),
+               "SYS_UNAME_V2 ABI layout mismatch");
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -66,8 +66,9 @@ static inline int uname(struct utsname* buf) {
         return -1;
     }
 
-    /* SYS_UNAMEシステムコールを呼び出す */
-    return __rin_uname_status_result(_RIN_UTSNAME_SYSCALL1(SYS_UNAME, buf));
+    /* SYS_UNAME_V2 keeps the legacy V1 result layout intact. */
+    return __rin_uname_status_result(
+        _RIN_UTSNAME_SYSCALL1(SYS_UNAME_V2, buf));
 }
 
 #ifdef __cplusplus

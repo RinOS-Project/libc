@@ -2194,18 +2194,18 @@ static inline size_t confstr(int name, char* buf, size_t len) {
 
 /* gethostname - ホスト名取得 */
 static inline int gethostname(char* name, size_t len) {
-    RinUtsnameAbiV1 identity;
+    RinUtsnameAbiV2 identity;
     size_t size = 0;
     if (!name || len == 0) {
         errno = EINVAL;
         return -1;
     }
     if (_rin_unistd_status(_RIN_UNISTD_SYSCALL1(
-            SYS_UNAME, (uintptr_t)&identity)) < 0)
+            SYS_UNAME_V2, (uintptr_t)&identity)) < 0)
         return -1;
-    while (size < RIN_UTSNAME_ABI_V1_FIELD_SIZE && identity.nodename[size])
+    while (size < RIN_UTSNAME_ABI_V2_FIELD_SIZE && identity.nodename[size])
         ++size;
-    if (size == RIN_UTSNAME_ABI_V1_FIELD_SIZE) {
+    if (size == RIN_UTSNAME_ABI_V2_FIELD_SIZE) {
         errno = EIO;
         return -1;
     }
@@ -2219,7 +2219,7 @@ static inline int gethostname(char* name, size_t len) {
 }
 
 static inline int sethostname(const char* name, size_t len) {
-    if (len > (size_t)(RIN_UTSNAME_ABI_V1_FIELD_SIZE - 1u) ||
+    if (len > (size_t)(RIN_UTSNAME_ABI_V2_FIELD_SIZE - 1u) ||
         (len != 0u && name == NULL)) {
         errno = len != 0u && name == NULL ? EFAULT : EINVAL;
         return -1;
@@ -2230,7 +2230,7 @@ static inline int sethostname(const char* name, size_t len) {
 
 /* setdomainname - update the authenticated kernel UTS domain identity. */
 static inline int setdomainname(const char* name, size_t len) {
-    if (len > (size_t)(RIN_UTSNAME_ABI_V1_FIELD_SIZE - 1u) ||
+    if (len > (size_t)(RIN_UTSNAME_ABI_V2_FIELD_SIZE - 1u) ||
         (len != 0u && name == NULL)) {
         errno = len != 0u && name == NULL ? EFAULT : EINVAL;
         return -1;
@@ -2241,18 +2241,18 @@ static inline int setdomainname(const char* name, size_t len) {
 
 /* getdomainname - ドメイン名取得 */
 static inline int getdomainname(char* name, size_t len) {
-    RinUtsnameAbiV1 identity;
+    RinUtsnameAbiV2 identity;
     size_t size = 0;
     if (!name || len == 0) {
         errno = EINVAL;
         return -1;
     }
     if (_rin_unistd_status(_RIN_UNISTD_SYSCALL1(
-            SYS_UNAME, (uintptr_t)&identity)) < 0)
+            SYS_UNAME_V2, (uintptr_t)&identity)) < 0)
         return -1;
-    while (size < RIN_UTSNAME_ABI_V1_FIELD_SIZE && identity.domainname[size])
+    while (size < RIN_UTSNAME_ABI_V2_FIELD_SIZE && identity.domainname[size])
         ++size;
-    if (size == RIN_UTSNAME_ABI_V1_FIELD_SIZE) {
+    if (size == RIN_UTSNAME_ABI_V2_FIELD_SIZE) {
         errno = EIO;
         return -1;
     }

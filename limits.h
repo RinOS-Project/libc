@@ -166,7 +166,7 @@
 #define TZNAME_MAX  31
 #endif
 #ifndef HOST_NAME_MAX
-#define HOST_NAME_MAX 64
+#define HOST_NAME_MAX 255
 #endif
 #ifndef _POSIX_HOST_NAME_MAX
 #define _POSIX_HOST_NAME_MAX 255
