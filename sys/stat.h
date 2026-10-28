@@ -261,12 +261,11 @@ static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf,
          * both flag combinations through the same fstat syscall. */
         return fstat(dirfd, statbuf);
     }
-    if ((flags & AT_EMPTY_PATH) != 0) {
-        errno = EINVAL;
-        return -1;
-    }
     __rin_stat_path_at_init(&call, RIN_PATH_AT_STAT);
-    call.flags = (uint32_t)flags;
+    /* AT_EMPTY_PATH only changes lookup when pathname is empty. Keep an
+     * ordinary nonempty lookup valid and avoid passing the no-op bit to the
+     * kernel path-at contract, which reserves it for empty-path operations. */
+    call.flags = (uint32_t)(flags & ~AT_EMPTY_PATH);
     call.dirfd = dirfd;
     call.path1 = (uint64_t)(uintptr_t)pathname;
     call.buffer = (uint64_t)(uintptr_t)statbuf;
@@ -307,13 +306,8 @@ static inline int fstatat64(int dirfd, const char* pathname,
         }
         return fstat64(dirfd, statbuf);
     }
-    if ((flags & AT_EMPTY_PATH) != 0) {
-        errno = EINVAL;
-        return -1;
-    }
-
     __rin_stat_path_at_init(&call, RIN_PATH_AT_STAT);
-    call.flags = (uint32_t)flags;
+    call.flags = (uint32_t)(flags & ~AT_EMPTY_PATH);
     call.dirfd = dirfd;
     call.path1 = (uint64_t)(uintptr_t)pathname;
     call.buffer = (uint64_t)(uintptr_t)statbuf;
