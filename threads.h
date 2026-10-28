@@ -88,7 +88,8 @@ static inline int thrd_equal(thrd_t left, thrd_t right)
 static inline int thrd_sleep(const struct timespec* duration,
                              struct timespec* remaining)
 {
-    return nanosleep(duration, remaining) == 0 ? 0 : -1;
+    if (nanosleep(duration, remaining) == 0) return 0;
+    return errno == EINTR ? -2 : -1;
 }
 
 static inline void thrd_yield(void)
