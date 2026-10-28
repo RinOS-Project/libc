@@ -293,6 +293,14 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
         return ret;
     }
 
+    for (int i = 0; i < npfds; ++i) {
+        if ((pfds[i].revents & POLLNVAL) != 0) {
+            __rin_select_clear_sets(readfds, writefds, exceptfds);
+            errno = EBADF;
+            return -1;
+        }
+    }
+
     /* fd_setをクリアして結果を設定 */
     __rin_select_clear_sets(readfds, writefds, exceptfds);
 
@@ -348,6 +356,13 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
             __rin_select_clear_sets(readfds, writefds, exceptfds);
             return ret;
         }
+        for (int i = 0; i < npfds; ++i) {
+            if ((pfds[i].revents & POLLNVAL) != 0) {
+                __rin_select_clear_sets(readfds, writefds, exceptfds);
+                errno = EBADF;
+                return -1;
+            }
+        }
         __rin_select_clear_sets(readfds, writefds, exceptfds);
         for (int i = 0; i < npfds; ++i) {
             if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
@@ -356,7 +371,7 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
             if (pfds[i].revents & POLLOUT) {
                 if (writefds) FD_SET(pfds[i].fd, writefds);
             }
-            if (pfds[i].revents & (POLLPRI | POLLNVAL)) {
+            if (pfds[i].revents & POLLPRI) {
                 if (exceptfds) FD_SET(pfds[i].fd, exceptfds);
             }
         }
