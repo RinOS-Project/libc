@@ -3431,6 +3431,10 @@ _RIN_STDIO_API void perror(const char* s) {
 _RIN_STDIO_API int remove(const char* pathname) {
     intptr_t result = _rin_stdio_syscall_result(
         _RIN_STDIO_SYSCALL1(SYS_UNLINK, (uintptr_t)pathname));
+    if (result < 0 && errno == EISDIR) {
+        result = _rin_stdio_syscall_result(
+            _RIN_STDIO_SYSCALL1(SYS_RMDIR, (uintptr_t)pathname));
+    }
     if (result < 0) return -1;
     if (result != 0) {
         errno = EOVERFLOW;
