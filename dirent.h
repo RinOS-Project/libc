@@ -52,6 +52,7 @@ typedef struct {
     struct dirent entry;            /* 現在のエントリ */
     int eof;                        /* 終端フラグ */
     unsigned int magic;             /* 有効なストリームか */
+    volatile uint32_t lock;         /* 同じストリームの操作を直列化 */
 } DIR;
 
 #define _RIN_DIR_MAGIC 0x52444952u
@@ -89,6 +90,54 @@ static inline int _rin_dir_valid(const DIR* dirp) {
     return dirp && dirp->magic == _RIN_DIR_MAGIC && dirp->fd >= 0;
 }
 
+static inline void _rin_dir_lock(DIR* dirp) {
+    while (__atomic_exchange_n(&dirp->lock, 1u, __ATOMIC_ACQUIRE) != 0u) {
+        while (__atomic_load_n(&dirp->lock, __ATOMIC_RELAXED) != 0u) {
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || \
+    defined(_M_X64)
+            __asm__ volatile("pause" ::: "memory");
+#endif
+        }
+    }
+}
+
+static inline void _rin_dir_unlock(DIR* dirp) {
+    __atomic_store_n(&dirp->lock, 0u, __ATOMIC_RELEASE);
+}
+
+static inline int _rin_dir_read_entry_locked(DIR* dirp,
+                                             struct dirent* output) {
+    intptr_t result;
+    if (dirp->eof) return 0;
+
+    result = _RIN_DIRENT_SYSCALL3(
+        SYS_READDIR, (uintptr_t)dirp->fd,
+        (uintptr_t)&dirp->entry, (uintptr_t)sizeof(struct dirent));
+    if (result == 0) {
+        dirp->eof = 1;
+        return 0;
+    }
+    result = _rin_dir_result(result);
+    if (result < 0) return -1;
+    /* SYS_READDIR has a one-token success contract; other positives are malformed. */
+    if (result != 1) {
+        errno = EIO;
+        return -1;
+    }
+
+    memcpy(output, &dirp->entry, sizeof(*output));
+    return 1;
+}
+
+static inline struct dirent* _rin_readdir_thread_buffer(void) {
+#if defined(__cplusplus)
+    static thread_local struct dirent entry;
+#else
+    static _Thread_local struct dirent entry;
+#endif
+    return &entry;
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * 関数
  * ═══════════════════════════════════════════════════════════════*/
@@ -122,6 +171,7 @@ static inline DIR* opendir(const char* name) {
     dir->fd = (int)fd;
     dir->eof = 0;
     dir->magic = _RIN_DIR_MAGIC;
+    dir->lock = 0u;
     return dir;
 }
 
@@ -157,6 +207,7 @@ static inline DIR* fdopendir(int fd) {
     dir->fd = fd;
     dir->eof = 0;
     dir->magic = _RIN_DIR_MAGIC;
+    dir->lock = 0u;
     return dir;
 }
 
@@ -182,29 +233,45 @@ static inline int closedir(DIR* dirp) {
 }
 
 static inline struct dirent* readdir(DIR* dirp) {
-    intptr_t result;
+    struct dirent* output;
+    int result;
     if (!_rin_dir_valid(dirp)) {
         errno = EBADF;
         return NULL;
     }
-    if (dirp->eof) return NULL;
+    output = _rin_readdir_thread_buffer();
+    _rin_dir_lock(dirp);
+    result = _rin_dir_read_entry_locked(dirp, output);
+    _rin_dir_unlock(dirp);
+    return result > 0 ? output : NULL;
+}
 
-    result = _RIN_DIRENT_SYSCALL3(
-        SYS_READDIR, (uintptr_t)dirp->fd,
-        (uintptr_t)&dirp->entry, (uintptr_t)sizeof(struct dirent));
-    if (result == 0) {
-        dirp->eof = 1;
-        return NULL;
+/* Caller-owned output keeps concurrent readers of one DIR from racing over
+ * the library's internal dirent storage.  The return value is an errno code,
+ * and end-of-directory is reported as success with *result == NULL. */
+static inline int readdir_r(DIR* dirp, struct dirent* entry,
+                            struct dirent** result) {
+    int saved_errno = errno;
+    int read_result;
+    int error;
+    if (result) *result = NULL;
+    if (!entry || !result) {
+        errno = saved_errno;
+        return EINVAL;
     }
-    result = _rin_dir_result(result);
-    if (result < 0) return NULL;
-    /* SYS_READDIR has a one-token success contract; other positives are malformed. */
-    if (result != 1) {
-        errno = EIO;
-        return NULL;
+    if (!_rin_dir_valid(dirp)) {
+        errno = saved_errno;
+        return EBADF;
     }
 
-    return &dirp->entry;
+    _rin_dir_lock(dirp);
+    read_result = _rin_dir_read_entry_locked(dirp, entry);
+    error = read_result < 0 ? (errno ? errno : EIO) : 0;
+    _rin_dir_unlock(dirp);
+    errno = saved_errno;
+    if (error != 0) return error;
+    if (read_result > 0) *result = entry;
+    return 0;
 }
 
 static inline void _rin_scandir_free_entries(struct dirent** entries,
@@ -376,18 +443,23 @@ static inline void rewinddir(DIR* dirp) {
         errno = EBADF;
         return;
     }
+    _rin_dir_lock(dirp);
     result = _RIN_DIRENT_SYSCALL3(
         SYS_SEEK, (uintptr_t)dirp->fd, 0, 0); /* SEEK_SET */
     if (_rin_dir_result(result) >= 0) dirp->eof = 0;
+    _rin_dir_unlock(dirp);
 }
 
 static inline long telldir(DIR* dirp) {
+    intptr_t result;
     if (!_rin_dir_valid(dirp)) {
         errno = EBADF;
         return -1;
     }
-    intptr_t result = _rin_dir_result(_RIN_DIRENT_SYSCALL3(
+    _rin_dir_lock(dirp);
+    result = _rin_dir_result(_RIN_DIRENT_SYSCALL3(
         SYS_SEEK, (uintptr_t)dirp->fd, 0, 1)); /* SEEK_CUR */
+    _rin_dir_unlock(dirp);
     if (result < 0) return -1;
     if (result > (intptr_t)LONG_MAX) {
         errno = EOVERFLOW;
@@ -402,9 +474,11 @@ static inline void seekdir(DIR* dirp, long loc) {
         errno = EBADF;
         return;
     }
+    _rin_dir_lock(dirp);
     result = _RIN_DIRENT_SYSCALL3(
         SYS_SEEK, (uintptr_t)dirp->fd, (uintptr_t)(intptr_t)loc, 0);
     if (_rin_dir_result(result) >= 0) dirp->eof = 0;
+    _rin_dir_unlock(dirp);
 }
 
 static inline int dirfd(DIR* dirp) {

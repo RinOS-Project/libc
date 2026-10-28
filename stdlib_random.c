@@ -2,6 +2,8 @@
 /* Process-wide C rand/srand owner.  This deterministic generator is not
  * suitable for keys, nonces, tokens, or any other cryptographic purpose. */
 
+#include "errno.h"
+
 #define RIN_LIBC_RAND_MAX 0x7fffffffU
 
 #ifdef __cplusplus
@@ -32,6 +34,18 @@ int rand(void)
 void srand(unsigned int seed)
 {
     __atomic_store_n(&rin_libc_rand_state, seed, __ATOMIC_RELAXED);
+}
+
+int rand_r(unsigned int* seed)
+{
+    unsigned int next;
+    if (!seed) {
+        errno = EINVAL;
+        return 0;
+    }
+    next = rin_libc_rand_next(*seed);
+    *seed = next;
+    return (int)(next & RIN_LIBC_RAND_MAX);
 }
 
 /* POSIX random(3) uses the same non-cryptographic process-wide generator

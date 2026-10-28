@@ -3034,15 +3034,15 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                         int scientific_exponent = 0;
                         if (scientific || general) {
                             long double normalized = val;
-                            if (normalized != 0.0L) {
-                                while (normalized >= 10.0L &&
+                            if (normalized != 0.0) {
+                                while (normalized >= 10.0 &&
                                        scientific_exponent < 20000) {
-                                    normalized *= 0.1L;
+                                    normalized /= 10.0;
                                     ++scientific_exponent;
                                 }
-                                while (normalized < 1.0L &&
+                                while (normalized < 1.0 &&
                                        scientific_exponent > -20000) {
-                                    normalized *= 10.0L;
+                                    normalized *= 10.0;
                                     --scientific_exponent;
                                 }
                             }
@@ -3058,9 +3058,9 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                         long double frac = val - (long double)ipart;
 
                         /* Round the fractional part */
-                        long double round_add = 0.5L;
-                        for (int k = 0; k < prec && round_add != 0.0L; k++)
-                            round_add *= 0.1L;
+                        long double round_add = 0.5;
+                        for (int k = 0; k < prec && round_add != 0.0; k++)
+                            round_add /= 10.0;
                         frac += round_add;
                         if (frac >= 1.0) { ipart++; frac -= 1.0; }
 
@@ -3463,7 +3463,11 @@ _RIN_STDIO_API FILE* tmpfile(void) {
 
 /* tmpnam - 一時ファイル名を生成 */
 _RIN_STDIO_API char* tmpnam(char* s) {
-    static char fallback[L_tmpnam];
+#if defined(__cplusplus)
+    static thread_local char fallback[L_tmpnam];
+#else
+    static _Thread_local char fallback[L_tmpnam];
+#endif
     char generated[] = "/tmp/rinXXXXXX";
     char* destination = s != NULL ? s : fallback;
     size_t length = 0u;

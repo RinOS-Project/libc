@@ -83,6 +83,9 @@
 #ifndef _POSIX_THREADS
 #define _POSIX_THREADS 200809L
 #endif
+#ifndef _POSIX_THREAD_SAFE_FUNCTIONS
+#define _POSIX_THREAD_SAFE_FUNCTIONS 200809L
+#endif
 #ifndef _POSIX_THREAD_ATTR_STACKSIZE
 #define _POSIX_THREAD_ATTR_STACKSIZE 200809L
 #endif
@@ -1860,6 +1863,8 @@ static inline long sysconf(int name) {
         case _SC_THREAD_PROCESS_SHARED:
             return 200809L;
 #endif
+        case _SC_THREAD_SAFE_FUNCTIONS:
+            return _POSIX_THREAD_SAFE_FUNCTIONS;
         case _SC_THREADS:
         case _SC_REALTIME_SIGNALS:
         case _SC_BARRIERS:
@@ -1938,7 +1943,6 @@ static inline long sysconf(int name) {
 #endif
         case _SC_THREAD_ROBUST_PRIO_INHERIT:
         case _SC_THREAD_ROBUST_PRIO_PROTECT:
-        case _SC_THREAD_SAFE_FUNCTIONS:
         case _SC_THREAD_SPORADIC_SERVER:
         case _SC_TIMEOUTS:
         case _SC_TYPED_MEMORY_OBJECTS:

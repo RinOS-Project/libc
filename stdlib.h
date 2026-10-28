@@ -839,6 +839,7 @@ static inline lldiv_t lldiv(long long numer, long long denom) {
 #if !defined(__cplusplus) || !defined(RINCXX_CSTDLIB_H)
 int rand(void);
 void srand(unsigned int seed);
+int rand_r(unsigned int* seed);
 long random(void);
 void srandom(unsigned int seed);
 #endif
