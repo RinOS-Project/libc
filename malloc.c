@@ -27,6 +27,17 @@ void free(void* ptr) {
     rin_free(ptr);  /* rin_free は NULL チェック済み */
 }
 
+void free_sized(void* ptr, size_t size) {
+    (void)size;
+    free(ptr);
+}
+
+void free_aligned_sized(void* ptr, size_t alignment, size_t size) {
+    (void)alignment;
+    (void)size;
+    free(ptr);
+}
+
 void* calloc(size_t nmemb, size_t size) {
     if (nmemb == 0 || size == 0) return 0;
     if (nmemb > ((size_t)-1) / size) return 0;  /* オーバーフロー防止 */

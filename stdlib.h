@@ -183,6 +183,8 @@ void* realloc(void* ptr, size_t size);
 #ifndef free
 void free(void* ptr);
 #endif
+void free_sized(void* ptr, size_t size);
+void free_aligned_sized(void* ptr, size_t alignment, size_t size);
 #ifndef malloc_usable_size
 size_t malloc_usable_size(void* ptr);
 #endif
