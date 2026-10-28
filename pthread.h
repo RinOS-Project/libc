@@ -877,6 +877,10 @@ static inline int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex
 static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
                                           const struct timespec* abstime) {
     if (!cond || !mutex || !abstime) return EINVAL;
+    if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L ||
+        (cond->clock_id != CLOCK_REALTIME &&
+         cond->clock_id != CLOCK_MONOTONIC))
+        return EINVAL;
 
     unsigned int gen = __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE);
     __atomic_fetch_add(&cond->waiting, 1, __ATOMIC_SEQ_CST);
@@ -886,7 +890,10 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* 
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
         /* Compute relative timeout from absolute deadline */
         struct timespec now;
-        clock_gettime(cond->clock_id, &now);
+        if (clock_gettime(cond->clock_id, &now) != 0) {
+            result = errno != 0 ? errno : EIO;
+            break;
+        }
 
         long long timeout_ns = (long long)(abstime->tv_sec - now.tv_sec) * 1000000000LL
                               + (long long)(abstime->tv_nsec - now.tv_nsec);
