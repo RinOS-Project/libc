@@ -3353,6 +3353,9 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                  * FE_INVALID merely because printf is rendering infinity. */
                 if (__builtin_isnan(val)) {
                     special_value = 1;
+                    if (__builtin_signbit(val) &&
+                        (size_t)fi + 1u < fcapacity)
+                        ftmp[fi++] = '-';
                     const char* ns = "nan";
                     if (*fmt == 'F' || *fmt == 'E' || *fmt == 'G' ||
                         *fmt == 'A') ns = "NAN";
