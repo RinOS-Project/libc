@@ -87,6 +87,8 @@ extern "C" {
 #define LOG_MASK(pri)  (1 << (pri))
 #define LOG_UPTO(pri)  ((1 << ((pri) + 1)) - 1)
 
+#define RIN_SYSLOG_IDENT_MAX 255u
+
 /* ═══════════════════════════════════════════════════════════════
  * 内部状態
  * ═══════════════════════════════════════════════════════════════*/
@@ -100,6 +102,10 @@ extern int _syslog_mask;
 void _rin_syslog_lock(void);
 void _rin_syslog_unlock(void);
 void _rin_syslog_set_ident_locked(const char* ident);
+int _rin_syslog_transport_send(unsigned int facility,
+                               unsigned int severity,
+                               const char* ident,
+                               const char* message, size_t length);
 
 #ifndef _RIN_SYSLOG_SYSCALL0
 #define _RIN_SYSLOG_SYSCALL0(number) _syscall0((uintptr_t)(number))
@@ -177,39 +183,49 @@ static inline void vsyslog(int priority, const char* format, va_list ap) {
     int effective_priority = priority;
     int saved_errno = errno;
     char message[1024];
+    char ident[RIN_SYSLOG_IDENT_MAX + 1u];
+    int option;
+    int facility;
     size_t used = 0;
+    size_t body_offset = 0u;
 
     _rin_syslog_lock();
-    /* Configuration and message emission share one lock so a concurrent
-     * openlog()/closelog()/setlogmask() cannot mix fields or invalidate the
-     * copied ident while this message is formatted. */
     if (!(LOG_MASK(pri) & _syslog_mask)) {
         _rin_syslog_unlock();
         errno = saved_errno;
         return;
     }
+    option = _syslog_option;
+    facility = _syslog_facility;
+    size_t ident_length = 0u;
+    while (ident_length < RIN_SYSLOG_IDENT_MAX && _syslog_ident != NULL &&
+           _syslog_ident[ident_length] != '\0') {
+        ident[ident_length] = _syslog_ident[ident_length];
+        ++ident_length;
+    }
+    ident[ident_length] = '\0';
+    _rin_syslog_unlock();
 
     static const char* level_names[] = {
         "EMERG", "ALERT", "CRIT", "ERR",
         "WARNING", "NOTICE", "INFO", "DEBUG"
     };
     if ((effective_priority & LOG_FACMASK) == 0)
-        effective_priority |= _syslog_facility;
+        effective_priority |= facility;
 
     int prefix = snprintf(message, sizeof(message), "<%d>[%s]%s%s",
                           effective_priority & (LOG_FACMASK | LOG_PRIMASK),
                           level_names[pri],
-                          _syslog_ident ? " " : "",
-                          _syslog_ident ? _syslog_ident : "");
+                          ident[0] != '\0' ? " " : "",
+                          ident);
     if (prefix < 0) {
-        _rin_syslog_unlock();
         errno = saved_errno;
         return;
     }
     used = (size_t)prefix;
     if (used >= sizeof(message)) used = sizeof(message) - 1;
 
-    if ((_syslog_option & LOG_PID) != 0 && used < sizeof(message) - 1) {
+    if ((option & LOG_PID) != 0 && used < sizeof(message) - 1) {
         int pid;
         if (_rin_syslog_pid_value(_RIN_SYSLOG_SYSCALL0(SYS_GETPID), &pid) == 0) {
             int count = snprintf(message + used, sizeof(message) - used,
@@ -224,6 +240,7 @@ static inline void vsyslog(int priority, const char* format, va_list ap) {
     if (used < sizeof(message) - 1) message[used++] = ':';
     if (used < sizeof(message) - 1) message[used++] = ' ';
 
+    body_offset = used;
     if (used < sizeof(message) - 1) {
         int count = vsnprintf(message + used, sizeof(message) - used,
                               format ? format : "(null)", ap);
@@ -238,8 +255,18 @@ static inline void vsyslog(int priority, const char* format, va_list ap) {
         else message[sizeof(message) - 2] = '\n';
     }
     message[used] = '\0';
-    _syslog_write_stderr(message, used);
-    _rin_syslog_unlock();
+    if (_rin_syslog_transport_send((unsigned int)LOG_FAC(effective_priority),
+                                   (unsigned int)pri, ident,
+                                   message + body_offset,
+                                   used - body_offset) != 0) {
+        /* LOG_CONS selects the console fallback when the system log service
+         * is unavailable. LOG_PERROR is an additional stderr copy and also
+         * provides a fallback if the transport fails. */
+        if ((option & (LOG_CONS | LOG_PERROR)) != 0)
+            _syslog_write_stderr(message, used);
+    } else if ((option & LOG_PERROR) != 0) {
+        _syslog_write_stderr(message, used);
+    }
     errno = saved_errno;
 }
 
