@@ -49,10 +49,8 @@ extern "C" {
 #define RLIM_SAVED_MAX  RLIM_INFINITY
 #define RLIM_SAVED_CUR  RLIM_INFINITY
 
-/* The kernel's bounded mlock owner currently exposes a read-only default
- * through getrlimit.  Keep this value in the public libc contract so callers
- * can size an MCL_CURRENT request without guessing; setrlimit remains
- * unsupported until a per-process resource-limit owner is wired in. */
+/* Default MEMLOCK allowance used by the kernel resource-limit owner. Product
+ * getrlimit/setrlimit calls use the fixed-width syscall ABI below. */
 #define RIN_RLIMIT_MEMLOCK_DEFAULT ((rlim_t)(64UL * 1024UL * 1024UL))
 
 /* A freestanding libc can use the kernel's fixed-width resource-limit ABI
@@ -308,7 +306,8 @@ static inline int setrlimit(int resource, const struct rlimit* rlim) {
     }
 #if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
     return __rin_resource_limit_wire_call(
-        RIN_RESOURCE_LIMIT_CALL_SET, 0u, 0u, 0u, resource, rlim, NULL);
+        RIN_RESOURCE_LIMIT_CALL_SET, RIN_RESOURCE_LIMIT_CALL_FLAG_SET,
+        0u, 0u, resource, rlim, NULL);
 #else
     hook_result = __rin_resource_limit_set_hook(resource, rlim);
     if (hook_result <= 0) return hook_result;
