@@ -307,11 +307,16 @@ static inline int _netdb_resolved_connect(void) {
     strncpy(addr.sun_path, RIN_LIBC_RESOLVED_SOCKET_PATH,
             sizeof(addr.sun_path) - 1);
     if (connect(fd, (const struct sockaddr*)&addr, (socklen_t)sizeof(addr)) < 0) {
+        int saved_errno = errno;
         close(fd);
+        errno = saved_errno;
         return -1;
     }
     return fd;
 }
+
+#define RIN_NETDB_TRANSACT_SYSTEM_ERROR (-1)
+#define RIN_NETDB_TRANSACT_PROTOCOL_ERROR (-2)
 
 static inline int _netdb_resolved_transact(uint32_t command,
                                            const void* payload,
@@ -331,21 +336,39 @@ static inline int _netdb_resolved_transact(uint32_t command,
 
     if (_netdb_resolved_send_all(fd, &header, sizeof(header)) != 0 ||
         (payload_len > 0 && _netdb_resolved_send_all(fd, payload, payload_len) != 0)) {
+        int saved_errno = errno;
         close(fd);
-        return -1;
+        errno = saved_errno;
+        return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
     }
 
-    if (_netdb_resolved_recv_all(fd, &header, sizeof(header)) != 0 ||
-        !rin_resolved_response_header_valid(
-            &header, command, out_payload_cap)) {
+    if (_netdb_resolved_recv_all(fd, &header, sizeof(header)) != 0) {
+        int saved_errno = errno;
         close(fd);
-        return -1;
+        errno = saved_errno;
+        return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
+    }
+    if (!rin_resolved_response_header_valid(
+            &header, command, out_payload_cap)) {
+        int saved_errno = errno;
+        close(fd);
+        errno = saved_errno;
+        return RIN_NETDB_TRANSACT_PROTOCOL_ERROR;
     }
 
     if (header.payload_len > 0) {
-        if (!out_payload || _netdb_resolved_recv_all(fd, out_payload, header.payload_len) != 0) {
+        if (!out_payload) {
+            int saved_errno = errno;
             close(fd);
-            return -1;
+            errno = saved_errno;
+            return RIN_NETDB_TRANSACT_PROTOCOL_ERROR;
+        }
+        if (_netdb_resolved_recv_all(
+                fd, out_payload, header.payload_len) != 0) {
+            int saved_errno = errno;
+            close(fd);
+            errno = saved_errno;
+            return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
         }
     }
 
@@ -654,7 +677,9 @@ static inline int _netdb_resolved_lookup_one(
         RIN_RESOLVED_CMD_GETADDRINFO_V1, payload, (uint32_t)payload_len,
         &header, outbuf, (uint32_t)sizeof(outbuf));
     RIN_NETDB_RELEASE(payload);
-    if (rc != 0) return EAI_FAIL;
+    if (rc != 0) {
+        return rc == RIN_NETDB_TRANSACT_SYSTEM_ERROR ? EAI_SYSTEM : EAI_FAIL;
+    }
     if (!rin_resolved_getaddrinfo_status_valid(header.status) ||
         (header.status != 0 && header.payload_len != 0u)) {
         return EAI_FAIL;
@@ -758,7 +783,9 @@ static inline int _netdb_resolved_lookup_dual(
         RIN_RESOLVED_CMD_GETADDRINFO_DUAL_V3, payload, (uint32_t)payload_len,
         &header, outbuf, (uint32_t)sizeof(outbuf));
     RIN_NETDB_RELEASE(payload);
-    if (rc != 0) return EAI_FAIL;
+    if (rc != 0) {
+        return rc == RIN_NETDB_TRANSACT_SYSTEM_ERROR ? EAI_SYSTEM : EAI_FAIL;
+    }
     if (!rin_resolved_getaddrinfo_status_valid(header.status) ||
         (header.status != 0 && header.payload_len != 0u)) {
         return EAI_FAIL;
@@ -1461,11 +1488,15 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     memcpy(req.addr, lookup_address, lookup_address_length);
     req.port = sin6 ? sin6->sin6_port : sin->sin_port;
 
-    if (RIN_NETDB_RESOLVED_TRANSACT(
+    {
+        int transact_status = RIN_NETDB_RESOLVED_TRANSACT(
             RIN_RESOLVED_CMD_GETNAMEINFO_V1, &req,
             (uint32_t)sizeof(req), &header, outbuf,
-            (uint32_t)sizeof(outbuf)) != 0) {
-        return EAI_FAIL;
+            (uint32_t)sizeof(outbuf));
+        if (transact_status != 0) {
+            return transact_status == RIN_NETDB_TRANSACT_SYSTEM_ERROR
+                ? EAI_SYSTEM : EAI_FAIL;
+        }
     }
     if (header.status != 0 && header.status != EAI_NONAME)
         return header.status < 0 ? header.status : EAI_FAIL;
