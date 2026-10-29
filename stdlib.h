@@ -1039,9 +1039,16 @@ static inline int _rin_temp_random_suffix(char suffix[6]) {
     return 0;
 }
 
-/* mkstemp - create a unique temporary file */
-static inline int mkstemp(char* tmpl) {
+/* Create a unique temporary file, passing descriptor flags to the same
+ * open operation that creates it so CLOEXEC cannot race with exec. */
+static inline int _rin_mkostemps_internal(char* tmpl, int suffixlen,
+                                         int flags) {
     if (!tmpl) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (suffixlen < 0 || (flags & ~(O_APPEND | O_CLOEXEC)) != 0) {
         errno = EINVAL;
         return -1;
     }
@@ -1051,13 +1058,13 @@ static inline int mkstemp(char* tmpl) {
     char* p = tmpl;
     while (*p) { len++; p++; }
 
-    if (len < 6) {
+    if ((size_t)suffixlen > len || len - (size_t)suffixlen < 6) {
         errno = EINVAL;
         return -1;
     }
 
-    /* Check for XXXXXX suffix */
-    char* suffix = tmpl + len - 6;
+    /* Check for XXXXXX immediately before the caller-specified suffix. */
+    char* suffix = tmpl + len - (size_t)suffixlen - 6;
     for (int i = 0; i < 6; i++) {
         if (suffix[i] != 'X') {
             errno = EINVAL;
@@ -1071,7 +1078,8 @@ static inline int mkstemp(char* tmpl) {
 
         result = _RIN_STDLIB_SYSCALL3(
             SYS_OPEN, (uintptr_t)tmpl,
-            (uintptr_t)(O_RDWR | O_CREAT | O_EXCL), (uintptr_t)0600u);
+            (uintptr_t)(O_RDWR | O_CREAT | O_EXCL | flags),
+            (uintptr_t)0600u);
         if (result >= 0) {
             if ((uintptr_t)result > (uintptr_t)INT_MAX) {
                 (void)_RIN_STDLIB_SYSCALL1(SYS_CLOSE, (uintptr_t)result);
@@ -1090,54 +1098,23 @@ static inline int mkstemp(char* tmpl) {
     return -1;  /* Failed to create unique file */
 }
 
+/* mkstemp - create a unique temporary file */
+static inline int mkstemp(char* tmpl) {
+    return _rin_mkostemps_internal(tmpl, 0, 0);
+}
+
 /* mkstemps - mkstemp with suffix length */
 static inline int mkstemps(char* tmpl, int suffixlen) {
-    if (!tmpl || suffixlen < 0) {
-        errno = EINVAL;
-        return -1;
-    }
+    return _rin_mkostemps_internal(tmpl, suffixlen, 0);
+}
 
-    size_t len = 0;
-    char* p = tmpl;
-    while (*p) { len++; p++; }
+/* GNU-compatible variants atomically apply O_APPEND/O_CLOEXEC on creation. */
+static inline int mkostemp(char* tmpl, int flags) {
+    return _rin_mkostemps_internal(tmpl, 0, flags);
+}
 
-    if ((size_t)suffixlen > len || len - (size_t)suffixlen < 6) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    /* Point to XXXXXX before the suffix */
-    char* pattern = tmpl + len - 6 - suffixlen;
-    for (int i = 0; i < 6; i++) {
-        if (pattern[i] != 'X') {
-            errno = EINVAL;
-            return -1;
-        }
-    }
-
-    for (int attempt = 0; attempt < 100; attempt++) {
-        intptr_t result;
-        if (_rin_temp_random_suffix(pattern) != 0) return -1;
-
-        result = _RIN_STDLIB_SYSCALL3(
-            SYS_OPEN, (uintptr_t)tmpl,
-            (uintptr_t)(O_RDWR | O_CREAT | O_EXCL), (uintptr_t)0600u);
-        if (result >= 0) {
-            if ((uintptr_t)result > (uintptr_t)INT_MAX) {
-                (void)_RIN_STDLIB_SYSCALL1(SYS_CLOSE, (uintptr_t)result);
-                errno = EOVERFLOW;
-                return -1;
-            }
-            return (int)result;
-        }
-        if (result != -EEXIST) {
-            errno = (result >= -4095) ? (int)-result : EIO;
-            return -1;
-        }
-    }
-
-    errno = EEXIST;
-    return -1;
+static inline int mkostemps(char* tmpl, int suffixlen, int flags) {
+    return _rin_mkostemps_internal(tmpl, suffixlen, flags);
 }
 
 /* mkdtemp - create a unique temporary directory */

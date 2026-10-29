@@ -1763,6 +1763,61 @@ static inline int isatty(int fd) {
     return 1;
 }
 
+/* XSI lockf interface over the process-owned fcntl record-lock ABI. */
+#ifndef F_ULOCK
+#define F_ULOCK 0
+#endif
+#ifndef F_LOCK
+#define F_LOCK 1
+#endif
+#ifndef F_TLOCK
+#define F_TLOCK 2
+#endif
+#ifndef F_TEST
+#define F_TEST 3
+#endif
+
+static inline int lockf(int fd, int function, off_t size) {
+    struct flock lock;
+    int command;
+
+    if (function != F_LOCK && function != F_TLOCK &&
+        function != F_ULOCK && function != F_TEST) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    lock.l_type = function == F_ULOCK ? F_UNLCK : F_WRLCK;
+    lock.l_whence = SEEK_CUR;
+    lock.l_start = 0;
+    lock.l_len = size;
+    lock.l_pid = 0;
+
+    if (size < 0) {
+        /* A signed minimum cannot be negated to form flock.l_len. */
+        if ((uint64_t)size ==
+            (UINT64_C(1) << (sizeof(off_t) * CHAR_BIT - 1u))) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        lock.l_start = size;
+        lock.l_len = (off_t)-size;
+    }
+
+    if (function == F_TEST) {
+        command = F_GETLK;
+        if (fcntl(fd, command, &lock) < 0) return -1;
+        if (lock.l_type != F_UNLCK) {
+            errno = EACCES;
+            return -1;
+        }
+        return 0;
+    }
+
+    command = function == F_LOCK ? F_SETLKW : F_SETLK;
+    return fcntl(fd, command, &lock);
+}
+
 static inline long sysconf(int name) {
     switch (name) {
         case _SC_ARG_MAX:
