@@ -398,7 +398,8 @@ static inline int sigfillset(sigset_t* set) {
         errno = EINVAL;
         return -1;
     }
-    *set = UINT64_MAX & ~(UINT64_C(1) << __RIN_SIGCANCEL);
+    *set = UINT64_MAX &
+           ~((UINT64_C(1) << 0u) | (UINT64_C(1) << __RIN_SIGCANCEL));
     return 0;
 }
 
