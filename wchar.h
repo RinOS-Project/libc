@@ -53,6 +53,57 @@ static inline size_t wcslen(const wchar_t* s) {
     return len;
 }
 
+/* Bounded wide-string APIs are available inline to freestanding consumers;
+ * the runtime owner exports the same functions for ABI-linked consumers. */
+#if defined(RIN_WCHAR_IMPLEMENTATION)
+size_t wcsnlen(const wchar_t* string, size_t maxlen);
+wchar_t* wcsdup(const wchar_t* string);
+size_t wcslcpy(wchar_t* destination, const wchar_t* source, size_t size);
+size_t wcslcat(wchar_t* destination, const wchar_t* source, size_t size);
+#else
+static inline size_t wcsnlen(const wchar_t* string, size_t maxlen) {
+    size_t length = 0u;
+    while (length < maxlen && string[length] != L'\0') ++length;
+    return length;
+}
+
+wchar_t* wcsdup(const wchar_t* string);
+
+static inline size_t wcslcpy(wchar_t* destination, const wchar_t* source,
+                             size_t size) {
+    size_t source_length = 0u;
+    size_t copied = 0u;
+    while (source[source_length] != L'\0') ++source_length;
+    if (size != 0u) {
+        while (copied < size - 1u && source[copied] != L'\0') {
+            destination[copied] = source[copied];
+            ++copied;
+        }
+        destination[copied] = L'\0';
+    }
+    return source_length;
+}
+
+static inline size_t wcslcat(wchar_t* destination, const wchar_t* source,
+                             size_t size) {
+    size_t destination_length = 0u;
+    size_t source_length = 0u;
+    size_t copied = 0u;
+    while (destination_length < size &&
+           destination[destination_length] != L'\0')
+        ++destination_length;
+    while (source[source_length] != L'\0') ++source_length;
+    if (destination_length == size) return size + source_length;
+    while (copied < size - destination_length - 1u &&
+           source[copied] != L'\0') {
+        destination[destination_length + copied] = source[copied];
+        ++copied;
+    }
+    destination[destination_length + copied] = L'\0';
+    return destination_length + source_length;
+}
+#endif
+
 static inline wchar_t* wcscpy(wchar_t* dest, const wchar_t* src) {
     wchar_t* d = dest;
     while ((*d++ = *src++));
@@ -729,12 +780,22 @@ static inline size_t mbsrtowcs(wchar_t* dest, const char** src, size_t len, mbst
 }
 
 static inline size_t wcsrtombs(char* dest, const wchar_t** src, size_t len, mbstate_t* ps) {
+    const uint32_t* source32;
+    size_t result;
+    if (!src) {
+        errno = EINVAL;
+        return (size_t)-1;
+    }
+    source32 = (const uint32_t*)*src;
 #if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
-    return rin_locale_current_wcsrtombs32(
-        dest, (const uint32_t**)src, len, (struct rin_unicode_mbstate*)ps);
+    result = rin_locale_current_wcsrtombs32(
+        dest, &source32, len, (struct rin_unicode_mbstate*)ps);
 #else
-    return rin_unicode_wcsrtombs32(dest, (const uint32_t**)src, len, (rin_unicode_mbstate_t*)ps);
+    result = rin_unicode_wcsrtombs32(
+        dest, &source32, len, (rin_unicode_mbstate_t*)ps);
 #endif
+    if (dest) *src = (const wchar_t*)source32;
+    return result;
 }
 
 static inline size_t wcsnrtombs(char* dest, const wchar_t** src, size_t nwc,
