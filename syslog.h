@@ -97,6 +97,9 @@ extern const char* _syslog_ident;
 extern int _syslog_option;
 extern int _syslog_facility;
 extern int _syslog_mask;
+void _rin_syslog_lock(void);
+void _rin_syslog_unlock(void);
+void _rin_syslog_set_ident_locked(const char* ident);
 
 #ifndef _RIN_SYSLOG_SYSCALL0
 #define _RIN_SYSLOG_SYSCALL0(number) _syscall0((uintptr_t)(number))
@@ -113,24 +116,30 @@ extern int _syslog_mask;
 
 /* openlog - syslog接続を開く */
 static inline void openlog(const char* ident, int option, int facility) {
-    _syslog_ident = ident;
+    _rin_syslog_lock();
+    _rin_syslog_set_ident_locked(ident);
     _syslog_option = option;
     _syslog_facility = facility;
+    _rin_syslog_unlock();
 }
 
 /* closelog - syslog接続を閉じる */
 static inline void closelog(void) {
-    _syslog_ident = NULL;
+    _rin_syslog_lock();
+    _rin_syslog_set_ident_locked(NULL);
     _syslog_option = 0;
     _syslog_facility = LOG_USER;
+    _rin_syslog_unlock();
 }
 
 /* setlogmask - ログマスクを設定 */
 static inline int setlogmask(int mask) {
+    _rin_syslog_lock();
     int old = _syslog_mask;
     if (mask != 0) {
         _syslog_mask = mask;
     }
+    _rin_syslog_unlock();
     return old;
 }
 
@@ -170,8 +179,13 @@ static inline void vsyslog(int priority, const char* format, va_list ap) {
     char message[1024];
     size_t used = 0;
 
-    /* マスクチェック */
+    _rin_syslog_lock();
+    /* Configuration and message emission share one lock so a concurrent
+     * openlog()/closelog()/setlogmask() cannot mix fields or invalidate the
+     * copied ident while this message is formatted. */
     if (!(LOG_MASK(pri) & _syslog_mask)) {
+        _rin_syslog_unlock();
+        errno = saved_errno;
         return;
     }
 
@@ -188,6 +202,7 @@ static inline void vsyslog(int priority, const char* format, va_list ap) {
                           _syslog_ident ? " " : "",
                           _syslog_ident ? _syslog_ident : "");
     if (prefix < 0) {
+        _rin_syslog_unlock();
         errno = saved_errno;
         return;
     }
@@ -224,6 +239,7 @@ static inline void vsyslog(int priority, const char* format, va_list ap) {
     }
     message[used] = '\0';
     _syslog_write_stderr(message, used);
+    _rin_syslog_unlock();
     errno = saved_errno;
 }
 
