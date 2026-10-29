@@ -171,14 +171,12 @@ static inline int _inet_pton_ipv4_strict(const char* src, struct in_addr* addr) 
     unsigned int part = 0u;
     unsigned int value = 0u;
     unsigned int digits = 0u;
-    int leading_zero = 0;
     const char* cursor;
     if (!src || !addr) return 0;
     for (cursor = src; ; ++cursor) {
         char character = *cursor;
         if (character >= '0' && character <= '9') {
-            if (digits >= 3u || (digits != 0u && leading_zero)) return 0;
-            if (digits == 0u) leading_zero = character == '0';
+            if (digits >= 3u) return 0;
             value = value * 10u + (unsigned int)(character - '0');
             if (value > 255u) return 0;
             ++digits;
@@ -191,7 +189,6 @@ static inline int _inet_pton_ipv4_strict(const char* src, struct in_addr* addr) 
         octets[part++] = value;
         value = 0u;
         digits = 0u;
-        leading_zero = 0;
         if (character == '\0') break;
     }
     if (part != 4u) return 0;
