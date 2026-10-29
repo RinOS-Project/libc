@@ -2068,6 +2068,7 @@ _RIN_STDIO_API size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* s
 
 static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
     intptr_t ret;
+    int64_t position = 0;
     size_t unread;
     int stream_index;
     if (!stream) {
@@ -2102,9 +2103,16 @@ static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
     } else
 #endif
     {
-        ret = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
-            SYS_SEEK, (uintptr_t)stream->fd,
-            (uintptr_t)(intptr_t)offset, (uintptr_t)whence));
+        uint64_t offset_bits = (uint64_t)(int64_t)offset;
+        ret = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
+            SYS_LSEEK64, (uintptr_t)stream->fd,
+            (uintptr_t)(uint32_t)offset_bits,
+            (uintptr_t)(uint32_t)(offset_bits >> 32),
+            (uintptr_t)whence, (uintptr_t)&position));
+        if (ret == 0 && position < 0) {
+            errno = EIO;
+            ret = -1;
+        }
     }
     if (ret < 0) {
         stream->error = 1;
@@ -2133,6 +2141,7 @@ _RIN_STDIO_API int fseek(FILE* stream, long offset, int whence) {
 static inline long _rin_ftell_unlocked(FILE* stream) {
     long position;
     intptr_t raw_position;
+    int64_t wide_position = 0;
     size_t unread;
     int stream_index;
     if (!stream) {
@@ -2153,10 +2162,19 @@ static inline long _rin_ftell_unlocked(FILE* stream) {
 #endif
     {
         raw_position = _rin_stdio_syscall_result(
-            _RIN_STDIO_SYSCALL3(SYS_SEEK, (uintptr_t)stream->fd,
-                                (uintptr_t)0u, (uintptr_t)SEEK_CUR));
-        if (_rin_stdio_long_from_result(raw_position, &position) != 0)
+            _RIN_STDIO_SYSCALL5(SYS_LSEEK64, (uintptr_t)stream->fd,
+                                0u, 0u, (uintptr_t)SEEK_CUR,
+                                (uintptr_t)&wide_position));
+        if (raw_position < 0) return -1;
+        if (raw_position != 0 || wide_position < 0) {
+            errno = EIO;
             return -1;
+        }
+        if ((uint64_t)wide_position > (uint64_t)LONG_MAX) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        position = (long)wide_position;
     }
     if (_rin_stdio_output_buffer_enabled(stream)) {
         if (stream->buf_pos > (size_t)__LONG_MAX__ ||
