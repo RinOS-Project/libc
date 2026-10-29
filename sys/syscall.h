@@ -160,13 +160,26 @@ typedef struct rin_thread_stack_info_v1 {
  * RinOS番号にマッピング — カーネルハンドラと一致させる
  * ═══════════════════════════════════════════════════════════════*/
 
-/* Map Linux __NR_* names to RinOS SYS_* numbers so ported runtime
- * syscall(__NR_xxx, ...) calls reach the correct kernel handler. */
+/* Map supported Linux __NR_* spellings to RinOS SYS_* numbers so
+ * syscall(__NR_xxx, ...) reaches the matching kernel handler. Linux numbers
+ * retained for source inspection use the separate LINUX_NR_* prefix. */
 #define __NR_exit           SYS_EXIT        /* 0 */
+#define __NR_fork           SYS_FORK
 #define __NR_read           SYS_READ        /* 22 */
 #define __NR_write          SYS_WRITE       /* 23 */
 #define __NR_open           SYS_OPEN        /* 20 */
 #define __NR_close          SYS_CLOSE       /* 21 */
+#define __NR_execve         SYS_EXEC
+#define __NR_getpid         SYS_GETPID
+#define __NR_getppid        SYS_GETPPID
+#define __NR_waitpid        SYS_WAIT4
+#define __NR_chdir          SYS_CHDIR
+#define __NR_unlink         SYS_UNLINK
+#define __NR_rename         SYS_RENAME
+#define __NR_mkdir          SYS_MKDIR
+#define __NR_rmdir          SYS_RMDIR
+#define __NR_dup2           SYS_DUP2
+#define __NR_pipe           SYS_PIPE
 #define __NR_brk            SYS_BRK         /* 53 */
 #define __NR_mmap2          SYS_MMAP        /* 50 */
 #define __NR_mmap           SYS_MMAP        /* 50 */
@@ -177,9 +190,9 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_mlockall       SYS_MLOCKALL    /* 66 */
 #define __NR_munlockall     SYS_MUNLOCKALL  /* 67 */
 #define __NR_mremap         SYS_MREMAP      /* 68 */
-#define __NR_rt_sigaction   174
-#define __NR_rt_sigprocmask 175
-#define __NR_rt_sigpending  176
+#define __NR_rt_sigaction   SYS_rt_sigaction
+#define __NR_rt_sigprocmask SYS_rt_sigprocmask
+#define __NR_rt_sigpending  SYS_rt_sigpending
 #define __NR_rt_sigtimedwait SYS_RT_SIGTIMEDWAIT
 #if defined(SYS_rt_sigqueueinfo)
 #define __NR_rt_sigqueueinfo SYS_rt_sigqueueinfo
@@ -187,7 +200,7 @@ typedef struct rin_thread_stack_info_v1 {
 #if defined(SYS_rt_tgsigqueueinfo)
 #define __NR_rt_tgsigqueueinfo SYS_rt_tgsigqueueinfo
 #endif
-#define __NR_rt_sigreturn   173
+#define __NR_rt_sigreturn   SYS_rt_sigreturn
 #define __NR_sigaltstack    SYS_sigaltstack
 #define __NR_rt_sigsuspend  SYS_rt_sigsuspend
 #define __NR_ppoll          SYS_ppoll
@@ -204,7 +217,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_futex          RIN_HOST_LINUX_SYS_FUTEX
 #define __NR_sched_yield    RIN_HOST_LINUX_SYS_SCHED_YIELD
 #else
-#define __NR_futex          240
+#define __NR_futex          SYS_futex
 #define __NR_sched_yield    SYS_SCHED_YIELD
 #endif
 #define __NR_clone          SYS_CLONE
@@ -212,7 +225,6 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_tkill          SYS_TKILL       /* 500 (RinOS独自, Linux 200はGUIと衝突) */
 #define __NR_tgkill         SYS_TGKILL      /* 501 */
 #define __NR_exit_group     SYS_EXIT        /* 0 — RinOSはexit_groupなし */
-#define __NR_clock_gettime  SYS_TIME        /* 60 — 簡易マッピング */
 #define __NR_getrandom      SYS_GETRANDOM   /* bounded kernel CSPRNG */
 #define __NR_set_tid_address SYS_SET_TID_ADDRESS /* clear_child_tid handler */
 #define __NR_ptrace          SYS_PTRACE

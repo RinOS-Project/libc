@@ -327,6 +327,7 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define MSG_OOB         0x01    /* 帯域外データ */
 #define MSG_PEEK        0x02    /* データを読むがキューから削除しない */
 #define MSG_DONTROUTE   0x04    /* ルーティング回避 */
+#define MSG_EOR         0x80    /* レコード境界の終端 */
 #define MSG_TRUNC       0x20    /* 切り詰めたdatagramの元の長さを返す */
 #define MSG_DONTWAIT    0x40    /* ノンブロッキング操作 */
 #define MSG_WAITALL     0x100   /* 全データを待つ */
