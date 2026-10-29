@@ -2443,10 +2443,10 @@ static inline int gethostname(char* name, size_t len) {
         errno = EIO;
         return -1;
     }
-    if (size + 1u > len) size = len;
-    else ++size;
-    for (size_t index = 0; index < size; ++index)
+    size_t copy_length = size < len ? size : len - 1u;
+    for (size_t index = 0; index < copy_length; ++index)
         name[index] = identity.nodename[index];
+    name[copy_length] = '\0';
     return 0;
 }
 
