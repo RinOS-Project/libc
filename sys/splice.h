@@ -26,7 +26,8 @@ static inline ssize_t _rin_splice_call(RinSpliceCallV1* request)
 {
     intptr_t result;
     request->struct_size = (uint32_t)sizeof(*request);
-    request->version = RIN_SPLICE_CALL_ABI_VERSION_V1;
+    if (request->version == 0u)
+        request->version = RIN_SPLICE_CALL_ABI_VERSION_V1;
     result = _rin_unistd_result(_RIN_UNISTD_SYSCALL1(
         RIN_SYS_SPLICE_CALL_V1, (uintptr_t)request));
     if (result < 0) return (ssize_t)-1;
@@ -42,54 +43,16 @@ static inline ssize_t splice(int fd_in, off_t* off_in, int fd_out,
                              unsigned int flags)
 {
     RinSpliceCallV1 request = {0};
-    off64_t input_offset = 0;
-    off64_t output_offset = 0;
-    ssize_t result;
     request.operation = RIN_SPLICE_OP_SPLICE;
+    request.version = RIN_SPLICE_CALL_ABI_VERSION_V2;
+    request.reserved[0] = (uint64_t)(sizeof(off_t) * 8u);
     request.fd_in = fd_in;
     request.fd_out = fd_out;
     request.flags = flags;
     request.length = (uint64_t)length;
-    if (off_in != NULL) {
-        if (*off_in < 0 ||
-            (sizeof(off_t) < sizeof(off64_t) &&
-             (uint64_t)length > (uint64_t)LONG_MAX -
-                                (uint64_t)*off_in)) {
-            errno = *off_in < 0 ? EINVAL : EOVERFLOW;
-            return (ssize_t)-1;
-        }
-        input_offset = (off64_t)*off_in;
-        request.offset_in_pointer = (uint64_t)(uintptr_t)&input_offset;
-    }
-    if (off_out != NULL) {
-        if (*off_out < 0 ||
-            (sizeof(off_t) < sizeof(off64_t) &&
-             (uint64_t)length > (uint64_t)LONG_MAX -
-                                (uint64_t)*off_out)) {
-            errno = *off_out < 0 ? EINVAL : EOVERFLOW;
-            return (ssize_t)-1;
-        }
-        output_offset = (off64_t)*off_out;
-        request.offset_out_pointer = (uint64_t)(uintptr_t)&output_offset;
-    }
-    result = _rin_splice_call(&request);
-    if (result >= 0) {
-        if (off_in != NULL) {
-            if (sizeof(off_t) < sizeof(off64_t) && input_offset > LONG_MAX) {
-                errno = EOVERFLOW;
-                return (ssize_t)-1;
-            }
-            *off_in = (off_t)input_offset;
-        }
-        if (off_out != NULL) {
-            if (sizeof(off_t) < sizeof(off64_t) && output_offset > LONG_MAX) {
-                errno = EOVERFLOW;
-                return (ssize_t)-1;
-            }
-            *off_out = (off_t)output_offset;
-        }
-    }
-    return result;
+    request.offset_in_pointer = (uint64_t)(uintptr_t)off_in;
+    request.offset_out_pointer = (uint64_t)(uintptr_t)off_out;
+    return _rin_splice_call(&request);
 }
 
 static inline ssize_t tee(int fd_in, int fd_out, size_t length,
@@ -126,54 +89,16 @@ static inline ssize_t copy_file_range(int fd_in, off_t* off_in,
                                       size_t length, unsigned int flags)
 {
     RinSpliceCallV1 request = {0};
-    off64_t input_offset = 0;
-    off64_t output_offset = 0;
-    ssize_t result;
     request.operation = RIN_SPLICE_OP_COPY_FILE_RANGE;
+    request.version = RIN_SPLICE_CALL_ABI_VERSION_V2;
+    request.reserved[0] = (uint64_t)(sizeof(off_t) * 8u);
     request.fd_in = fd_in;
     request.fd_out = fd_out;
     request.flags = flags;
     request.length = (uint64_t)length;
-    if (off_in != NULL) {
-        if (*off_in < 0 ||
-            (sizeof(off_t) < sizeof(off64_t) &&
-             (uint64_t)length > (uint64_t)LONG_MAX -
-                                (uint64_t)*off_in)) {
-            errno = *off_in < 0 ? EINVAL : EOVERFLOW;
-            return (ssize_t)-1;
-        }
-        input_offset = (off64_t)*off_in;
-        request.offset_in_pointer = (uint64_t)(uintptr_t)&input_offset;
-    }
-    if (off_out != NULL) {
-        if (*off_out < 0 ||
-            (sizeof(off_t) < sizeof(off64_t) &&
-             (uint64_t)length > (uint64_t)LONG_MAX -
-                                (uint64_t)*off_out)) {
-            errno = *off_out < 0 ? EINVAL : EOVERFLOW;
-            return (ssize_t)-1;
-        }
-        output_offset = (off64_t)*off_out;
-        request.offset_out_pointer = (uint64_t)(uintptr_t)&output_offset;
-    }
-    result = _rin_splice_call(&request);
-    if (result >= 0) {
-        if (off_in != NULL) {
-            if (sizeof(off_t) < sizeof(off64_t) && input_offset > LONG_MAX) {
-                errno = EOVERFLOW;
-                return (ssize_t)-1;
-            }
-            *off_in = (off_t)input_offset;
-        }
-        if (off_out != NULL) {
-            if (sizeof(off_t) < sizeof(off64_t) && output_offset > LONG_MAX) {
-                errno = EOVERFLOW;
-                return (ssize_t)-1;
-            }
-            *off_out = (off_t)output_offset;
-        }
-    }
-    return result;
+    request.offset_in_pointer = (uint64_t)(uintptr_t)off_in;
+    request.offset_out_pointer = (uint64_t)(uintptr_t)off_out;
+    return _rin_splice_call(&request);
 }
 #endif /* !MIDL_PASS */
 
