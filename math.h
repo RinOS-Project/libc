@@ -1766,24 +1766,361 @@ static inline float fdimf(float x, float y) {
     return x > y ? x - y : 0.0f;
 }
 
-/* fma - 融合積和演算 */
+/* fma - exact product plus sum with one format-specific rounding */
+#define __RIN_FMA_LIMBS 66u
+
+static inline void __rin_fma_big_add_word(
+    unsigned long long* value, unsigned int index,
+    unsigned long long word) {
+    while (word != 0ULL && index < __RIN_FMA_LIMBS) {
+        unsigned long long old = value[index];
+        value[index] = old + word;
+        word = value[index] < old;
+        ++index;
+    }
+}
+
+static inline void __rin_fma_big_add_shifted_word(
+    unsigned long long* value, unsigned int bit,
+    unsigned long long word) {
+    unsigned int index = bit >> 6;
+    unsigned int offset = bit & 63u;
+    if (word == 0ULL || index >= __RIN_FMA_LIMBS) return;
+    __rin_fma_big_add_word(value, index, word << offset);
+    if (offset != 0u && index + 1u < __RIN_FMA_LIMBS)
+        __rin_fma_big_add_word(value, index + 1u, word >> (64u - offset));
+}
+
+static inline void __rin_fma_big_add(
+    unsigned long long* result, const unsigned long long* left,
+    const unsigned long long* right) {
+    unsigned long long carry = 0ULL;
+    unsigned int i;
+    for (i = 0; i < __RIN_FMA_LIMBS; ++i) {
+        unsigned long long first = left[i] + right[i];
+        unsigned long long carry_first = first < left[i];
+        unsigned long long second = first + carry;
+        unsigned long long carry_second = second < first;
+        result[i] = second;
+        carry = carry_first | carry_second;
+    }
+}
+
+static inline void __rin_fma_big_subtract(
+    unsigned long long* result, const unsigned long long* left,
+    const unsigned long long* right) {
+    unsigned long long borrow = 0ULL;
+    unsigned int i;
+    for (i = 0; i < __RIN_FMA_LIMBS; ++i) {
+        unsigned long long subtrahend = right[i] + borrow;
+        unsigned long long wrapped = subtrahend < right[i];
+        unsigned long long minuend = left[i];
+        result[i] = minuend - subtrahend;
+        borrow = wrapped | (minuend < subtrahend);
+    }
+}
+
+static inline int __rin_fma_big_compare(
+    const unsigned long long* left, const unsigned long long* right) {
+    unsigned int i = __RIN_FMA_LIMBS;
+    while (i != 0u) {
+        --i;
+        if (left[i] > right[i]) return 1;
+        if (left[i] < right[i]) return -1;
+    }
+    return 0;
+}
+
+static inline int __rin_fma_big_high_bit(
+    const unsigned long long* value) {
+    unsigned int i = __RIN_FMA_LIMBS;
+    while (i != 0u) {
+        unsigned long long word;
+        int bit = 0;
+        --i;
+        word = value[i];
+        if (word == 0ULL) continue;
+        while ((word >>= 1) != 0ULL) ++bit;
+        return (int)(i * 64u) + bit;
+    }
+    return -1;
+}
+
+static inline unsigned long long __rin_fma_big_extract(
+    const unsigned long long* value, unsigned int bit) {
+    unsigned int index = bit >> 6;
+    unsigned int offset = bit & 63u;
+    unsigned long long result;
+    if (index >= __RIN_FMA_LIMBS) return 0ULL;
+    result = value[index] >> offset;
+    if (offset != 0u && index + 1u < __RIN_FMA_LIMBS)
+        result |= value[index + 1u] << (64u - offset);
+    return result;
+}
+
+static inline int __rin_fma_big_any_below(
+    const unsigned long long* value, unsigned int bit_count) {
+    unsigned int full_words = bit_count >> 6;
+    unsigned int remaining_bits = bit_count & 63u;
+    unsigned int i;
+    for (i = 0; i < full_words && i < __RIN_FMA_LIMBS; ++i)
+        if (value[i] != 0ULL) return 1;
+    if (remaining_bits != 0u && full_words < __RIN_FMA_LIMBS) {
+        unsigned long long mask = (1ULL << remaining_bits) - 1ULL;
+        if ((value[full_words] & mask) != 0ULL) return 1;
+    }
+    return 0;
+}
+
+static inline void __rin_fma_big_set_bit(
+    unsigned long long* value, unsigned int bit) {
+    if ((bit >> 6) < __RIN_FMA_LIMBS)
+        value[bit >> 6] |= 1ULL << (bit & 63u);
+}
+
+static inline void __rin_fma_multiply_53(
+    unsigned long long left, unsigned long long right,
+    unsigned long long* high, unsigned long long* low) {
+    unsigned long long left_low = left & 0xFFFFFFFFULL;
+    unsigned long long left_high = left >> 32;
+    unsigned long long right_low = right & 0xFFFFFFFFULL;
+    unsigned long long right_high = right >> 32;
+    unsigned long long low_product = left_low * right_low;
+    unsigned long long cross_a = left_low * right_high;
+    unsigned long long cross_b = left_high * right_low;
+    unsigned long long high_product = left_high * right_high;
+    unsigned long long middle = (low_product >> 32) +
+        (cross_a & 0xFFFFFFFFULL) + (cross_b & 0xFFFFFFFFULL);
+    *low = (middle << 32) | (low_product & 0xFFFFFFFFULL);
+    *high = high_product + (cross_a >> 32) + (cross_b >> 32) +
+            (middle >> 32);
+}
+
+static inline unsigned long long __rin_fma_finite_bits(
+    double x, double y, double z, unsigned int precision) {
+    union { double value; unsigned long long bits; } encoded_x, encoded_y,
+        encoded_z;
+    unsigned long long product[__RIN_FMA_LIMBS] = {0};
+    unsigned long long addend[__RIN_FMA_LIMBS] = {0};
+    unsigned long long magnitude[__RIN_FMA_LIMBS] = {0};
+    unsigned long long limit[__RIN_FMA_LIMBS] = {0};
+    unsigned long long product_mantissa, addend_mantissa;
+    unsigned long long product_high, product_low;
+    unsigned int exponent_x, exponent_y, exponent_z;
+    unsigned long long fraction_x, fraction_y, fraction_z;
+    int product_exponent, addend_exponent;
+    int sign_x, sign_y, sign_z, product_sign, result_sign;
+    int x_nan, y_nan, z_nan, x_inf, y_inf, z_inf, x_zero, y_zero;
+    int product_zero, addend_zero, invalid_product;
+    int high_bit, round_mode, inexact, increment;
+    int maximum_exponent, minimum_normal_exponent, minimum_subnormal_exponent;
+    int bias, exponent_field, overflow;
+    unsigned int fraction_bits, exponent_width, exponent_mask;
+    unsigned int sign_shift, round_shift;
+    unsigned long long quotient, sign_mask, encoded_result;
+    unsigned int i;
+
+    encoded_x.value = x;
+    encoded_y.value = y;
+    encoded_z.value = z;
+    exponent_x = (unsigned int)((encoded_x.bits >> 52) & 0x7FFu);
+    exponent_y = (unsigned int)((encoded_y.bits >> 52) & 0x7FFu);
+    exponent_z = (unsigned int)((encoded_z.bits >> 52) & 0x7FFu);
+    fraction_x = encoded_x.bits & 0xFFFFFFFFFFFFFULL;
+    fraction_y = encoded_y.bits & 0xFFFFFFFFFFFFFULL;
+    fraction_z = encoded_z.bits & 0xFFFFFFFFFFFFFULL;
+    sign_x = (int)(encoded_x.bits >> 63);
+    sign_y = (int)(encoded_y.bits >> 63);
+    sign_z = (int)(encoded_z.bits >> 63);
+    x_nan = exponent_x == 0x7FFu && fraction_x != 0ULL;
+    y_nan = exponent_y == 0x7FFu && fraction_y != 0ULL;
+    z_nan = exponent_z == 0x7FFu && fraction_z != 0ULL;
+    x_inf = exponent_x == 0x7FFu && fraction_x == 0ULL;
+    y_inf = exponent_y == 0x7FFu && fraction_y == 0ULL;
+    z_inf = exponent_z == 0x7FFu && fraction_z == 0ULL;
+    x_zero = exponent_x == 0u && fraction_x == 0ULL;
+    y_zero = exponent_y == 0u && fraction_y == 0ULL;
+    product_sign = sign_x ^ sign_y;
+    invalid_product = (x_zero && y_inf) || (y_zero && x_inf);
+
+    fraction_bits = precision - 1u;
+    exponent_width = precision == 53u ? 11u : 8u;
+    exponent_mask = (1u << exponent_width) - 1u;
+    sign_shift = precision == 53u ? 63u : 31u;
+    sign_mask = 1ULL << sign_shift;
+    encoded_result = (unsigned long long)exponent_mask << fraction_bits;
+
+    if (x_nan || y_nan || z_nan) {
+        int signaling =
+            (x_nan && (fraction_x & 0x8000000000000ULL) == 0ULL) ||
+            (y_nan && (fraction_y & 0x8000000000000ULL) == 0ULL) ||
+            (z_nan && (fraction_z & 0x8000000000000ULL) == 0ULL);
+        if (signaling || invalid_product) (void)feraiseexcept(FE_INVALID);
+        return encoded_result | (1ULL << (fraction_bits - 1u));
+    }
+    if (invalid_product) {
+        (void)feraiseexcept(FE_INVALID);
+        return encoded_result | (1ULL << (fraction_bits - 1u));
+    }
+    if (x_inf || y_inf) {
+        if (z_inf && product_sign != sign_z) {
+            (void)feraiseexcept(FE_INVALID);
+            return encoded_result | (1ULL << (fraction_bits - 1u));
+        }
+        return encoded_result | ((unsigned long long)product_sign << sign_shift);
+    }
+    if (z_inf)
+        return encoded_result | ((unsigned long long)sign_z << sign_shift);
+
+    product_mantissa = exponent_x == 0u ? fraction_x
+        : (1ULL << 52) | fraction_x;
+    product_mantissa = product_mantissa;
+    addend_mantissa = exponent_y == 0u ? fraction_y
+        : (1ULL << 52) | fraction_y;
+    {
+        unsigned long long x_mantissa = product_mantissa;
+        int x_exponent = exponent_x == 0u ? -1074 : (int)exponent_x - 1075;
+        int y_exponent = exponent_y == 0u ? -1074 : (int)exponent_y - 1075;
+        product_mantissa = addend_mantissa;
+        addend_mantissa = exponent_z == 0u ? fraction_z
+            : (1ULL << 52) | fraction_z;
+        product_exponent = x_exponent + y_exponent;
+        addend_exponent = exponent_z == 0u ? -1074 : (int)exponent_z - 1075;
+        __rin_fma_multiply_53(x_mantissa, product_mantissa,
+                              &product_high, &product_low);
+    }
+    product_zero = product_low == 0ULL && product_high == 0ULL;
+    addend_zero = addend_mantissa == 0ULL;
+    if (!product_zero) {
+        unsigned int shift = (unsigned int)(product_exponent + 2148);
+        __rin_fma_big_add_shifted_word(product, shift, product_low);
+        __rin_fma_big_add_shifted_word(product, shift + 64u, product_high);
+    }
+    if (!addend_zero) {
+        unsigned int shift = (unsigned int)(addend_exponent + 2148);
+        __rin_fma_big_add_shifted_word(addend, shift, addend_mantissa);
+    }
+
+    if (product_sign == sign_z) {
+        __rin_fma_big_add(magnitude, product, addend);
+        result_sign = product_sign;
+    } else {
+        int comparison = __rin_fma_big_compare(product, addend);
+        if (comparison > 0) {
+            __rin_fma_big_subtract(magnitude, product, addend);
+            result_sign = product_sign;
+        } else if (comparison < 0) {
+            __rin_fma_big_subtract(magnitude, addend, product);
+            result_sign = sign_z;
+        } else {
+            int both_zero = product_zero && addend_zero;
+            round_mode = fegetround();
+            if (round_mode < 0) round_mode = FE_TONEAREST;
+            result_sign = both_zero && product_sign == sign_z
+                ? product_sign : (round_mode == FE_DOWNWARD);
+            return (unsigned long long)result_sign << sign_shift;
+        }
+    }
+
+    maximum_exponent = precision == 53u ? 1023 : 127;
+    minimum_normal_exponent = precision == 53u ? -1022 : -126;
+    minimum_subnormal_exponent = precision == 53u ? -1074 : -149;
+    bias = precision == 53u ? 1023 : 127;
+    high_bit = __rin_fma_big_high_bit(magnitude);
+    if (high_bit < 0) {
+        round_mode = fegetround();
+        if (round_mode < 0) round_mode = FE_TONEAREST;
+        result_sign = product_zero && addend_zero && product_sign == sign_z
+            ? product_sign : (round_mode == FE_DOWNWARD);
+        return (unsigned long long)result_sign << sign_shift;
+    }
+
+    for (i = 0; i < __RIN_FMA_LIMBS; ++i) limit[i] = 0ULL;
+    {
+        unsigned int low = (unsigned int)(maximum_exponent -
+            (int)fraction_bits + 2148);
+        unsigned int high = (unsigned int)(maximum_exponent + 2148);
+        for (i = low; i <= high; ++i) __rin_fma_big_set_bit(limit, i);
+    }
+    {
+        int above_maximum = __rin_fma_big_compare(magnitude, limit) > 0;
+        for (i = 0; i < __RIN_FMA_LIMBS; ++i) limit[i] = 0ULL;
+        {
+            unsigned int low = (unsigned int)(maximum_exponent -
+                (int)precision + 2148);
+            unsigned int high = (unsigned int)(maximum_exponent + 2148);
+            for (i = low; i < high; ++i) __rin_fma_big_set_bit(limit, i);
+        }
+        round_mode = fegetround();
+        if (round_mode < 0) round_mode = FE_TONEAREST;
+        overflow = round_mode == FE_TONEAREST
+            ? __rin_fma_big_compare(magnitude, limit) >= 0
+            : above_maximum;
+    }
+    if (overflow) {
+        int outward = round_mode == FE_TONEAREST ||
+            (round_mode == FE_UPWARD && !result_sign) ||
+            (round_mode == FE_DOWNWARD && result_sign);
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return (outward ? encoded_result
+                        : encoded_result - 1ULL) |
+               ((unsigned long long)result_sign << sign_shift);
+    }
+
+    if (high_bit < minimum_normal_exponent + 2148)
+        round_shift = (unsigned int)(minimum_subnormal_exponent + 2148);
+    else
+        round_shift = (unsigned int)(high_bit - (int)fraction_bits);
+    quotient = __rin_fma_big_extract(magnitude, round_shift);
+    inexact = __rin_fma_big_any_below(magnitude, round_shift);
+    increment = 0;
+    if (inexact) {
+        if (round_mode == FE_TONEAREST) {
+            int guard = round_shift != 0u &&
+                ((magnitude[(round_shift - 1u) >> 6] >>
+                  ((round_shift - 1u) & 63u)) & 1ULL) != 0ULL;
+            int sticky = round_shift > 1u &&
+                __rin_fma_big_any_below(magnitude, round_shift - 1u);
+            increment = guard && (sticky || (quotient & 1ULL));
+        } else if (round_mode == FE_UPWARD) {
+            increment = !result_sign;
+        } else if (round_mode == FE_DOWNWARD) {
+            increment = result_sign;
+        }
+    }
+    quotient += (unsigned long long)increment;
+
+    if (inexact) {
+        int underflow = high_bit < minimum_normal_exponent + 2148 &&
+            quotient < (1ULL << fraction_bits);
+        (void)feraiseexcept(FE_INEXACT | (underflow ? FE_UNDERFLOW : 0));
+    }
+
+    if (high_bit < minimum_normal_exponent + 2148) {
+        return quotient | ((unsigned long long)result_sign << sign_shift);
+    }
+    exponent_field = high_bit - 2148 + bias;
+    if (quotient == (1ULL << precision)) {
+        quotient >>= 1;
+        ++exponent_field;
+    }
+    if (exponent_field >= (int)exponent_mask) {
+        int outward = round_mode == FE_TONEAREST ||
+            (round_mode == FE_UPWARD && !result_sign) ||
+            (round_mode == FE_DOWNWARD && result_sign);
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return (outward ? encoded_result : encoded_result - 1ULL) |
+               ((unsigned long long)result_sign << sign_shift);
+    }
+    return ((unsigned long long)exponent_field << fraction_bits) |
+        (quotient & ((1ULL << fraction_bits) - 1ULL)) |
+        ((unsigned long long)result_sign << sign_shift);
+}
+
 static inline double __rin_fma_finite(double x, double y, double z) {
-    /* Dekker product splitting recovers the rounded-away product tail for
-     * ordinary finite operands without requiring an external libm symbol. */
-    double product = x * y;
-    if (!__builtin_isfinite(product) || fabs(x) > 1e150 || fabs(y) > 1e150)
-        return product + z;
-    const double splitter = 134217729.0; /* 2^27 + 1 */
-    double cx = splitter * x;
-    double cy = splitter * y;
-    double hx = cx - (cx - x);
-    double hy = cy - (cy - y);
-    double tx = x - hx;
-    double ty = y - hy;
-    double product_error = ((hx * hy - product) + hx * ty + tx * hy) + tx * ty;
-    double sum = product + z;
-    double sum_error = (product - sum) + z;
-    return sum + (product_error + sum_error);
+    union { double value; unsigned long long bits; } result;
+    result.bits = __rin_fma_finite_bits(x, y, z, 53u);
+    return result.value;
 }
 
 static inline double fma(double x, double y, double z) {
@@ -1791,7 +2128,10 @@ static inline double fma(double x, double y, double z) {
 }
 
 static inline float fmaf(float x, float y, float z) {
-    return (float)__rin_fma_finite((double)x, (double)y, (double)z);
+    union { float value; unsigned int bits; } result;
+    result.bits = (unsigned int)__rin_fma_finite_bits(
+        (double)x, (double)y, (double)z, 24u);
+    return result.value;
 }
 
 /* exp2 - 2^x */
