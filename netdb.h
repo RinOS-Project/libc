@@ -232,17 +232,16 @@ static inline int _netdb_parse_ipv4(const char* name, struct in_addr* out) {
 }
 
 static inline int _netdb_is_localhost(const char* name) {
+    static const char localhost_name[] = "localhost";
     if (!name) return 0;
-    return ((name[0] == 'l' || name[0] == 'L') &&
-            (name[1] == 'o' || name[1] == 'O') &&
-            (name[2] == 'c' || name[2] == 'C') &&
-            (name[3] == 'a' || name[3] == 'A') &&
-            (name[4] == 'l' || name[4] == 'L') &&
-            (name[5] == 'h' || name[5] == 'H') &&
-            (name[6] == 'o' || name[6] == 'O') &&
-            (name[7] == 's' || name[7] == 'S') &&
-            (name[8] == 't' || name[8] == 'T') &&
-            name[9] == '\0');
+    for (size_t index = 0u; index < sizeof(localhost_name) - 1u; ++index) {
+        unsigned char value = (unsigned char)name[index];
+        if (value == '\0') return 0;
+        if (value >= (unsigned char)'A' && value <= (unsigned char)'Z')
+            value = (unsigned char)(value + ((unsigned char)'a' - (unsigned char)'A'));
+        if (value != (unsigned char)localhost_name[index]) return 0;
+    }
+    return name[sizeof(localhost_name) - 1u] == '\0';
 }
 
 static inline int _netdb_resolved_send_all(int fd, const void* buf, size_t len) {
