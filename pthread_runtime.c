@@ -1540,6 +1540,7 @@ static void rin_pthread_once_cancel_reset(void* argument) {
 int pthread_once(pthread_once_t* once_control, void (*init_routine)(void)) {
     if (!once_control || !init_routine) return EINVAL;
 
+retry_initialization:
     if (__sync_val_compare_and_swap(once_control, 0, 1) == 0) {
         pthread_cleanup_push(rin_pthread_once_cancel_reset, once_control);
         init_routine();
@@ -1558,6 +1559,11 @@ int pthread_once(pthread_once_t* once_control, void (*init_routine)(void)) {
             int wait_error = rin_pthread_futex_wait_error(wait_result, errno);
             if (wait_error != 0) return wait_error;
         }
+        /* Cancellation of the initializer resets the control word to zero.
+         * A waiter that observes that reset must compete to run the routine;
+         * treating zero as completed would let every waiter return early. */
+        if (__atomic_load_n(once_control, __ATOMIC_ACQUIRE) == 0)
+            goto retry_initialization;
     }
     return 0;
 }
