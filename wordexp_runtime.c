@@ -12,6 +12,10 @@
 #define WORDEXP_VALID_FLAGS \
     (WRDE_APPEND | WRDE_DOOFFS | WRDE_NOCMD | WRDE_REUSE | \
      WRDE_SHOWERR | WRDE_UNDEF)
+#define WORDEXP_MAX_INPUT_BYTES (64u * 1024u)
+#define WORDEXP_MAX_OUTPUT_BYTES (4u * 1024u * 1024u)
+#define WORDEXP_MAX_WORDS 65536u
+#define WORDEXP_MAX_VECTOR_BYTES (1024u * 1024u)
 
 static int wordexp_spawn_error(int error_number) {
     if (error_number == ENOMEM || error_number == EAGAIN ||
@@ -737,6 +741,12 @@ static int wordexp_shell_run(char* script, int capture, int show_errors,
                 (void)kill(child, SIGKILL);
                 break;
             }
+            if ((size_t)count >
+                (size_t)WORDEXP_MAX_OUTPUT_BYTES - output_length) {
+                result = WRDE_NOSPACE;
+                (void)kill(child, SIGKILL);
+                break;
+            }
             if ((size_t)count > (size_t)-1 - output_length) {
                 result = WRDE_NOSPACE;
                 (void)kill(child, SIGKILL);
@@ -745,10 +755,12 @@ static int wordexp_shell_run(char* script, int capture, int show_errors,
             if (output_length + (size_t)count > output_capacity) {
                 size_t next_capacity = output_capacity == 0u ? 512u :
                                       output_capacity;
+                size_t needed = output_length + (size_t)count;
                 char* next_output;
-                while (next_capacity < output_length + (size_t)count) {
-                    if (next_capacity > (size_t)-1 / 2u) {
-                        next_capacity = output_length + (size_t)count;
+                while (next_capacity < needed) {
+                    if (next_capacity >
+                        (size_t)WORDEXP_MAX_OUTPUT_BYTES / 2u) {
+                        next_capacity = WORDEXP_MAX_OUTPUT_BYTES;
                         break;
                     }
                     next_capacity *= 2u;
@@ -819,11 +831,11 @@ static int wordexp_decode_output(const char* output, size_t length,
     if (!output || output[length - 1u] != '\0') return WRDE_SYNTAX;
     for (index = 0u; index < length; ++index) {
         if (output[index] == '\0') {
-            if (count == (size_t)-1) return WRDE_NOSPACE;
+            if (count >= WORDEXP_MAX_WORDS) return WRDE_NOSPACE;
             ++count;
         }
     }
-    if (count > ((size_t)-1 / sizeof(char*)) - 1u)
+    if (count >= (size_t)WORDEXP_MAX_VECTOR_BYTES / sizeof(char*))
         return WRDE_NOSPACE;
     words = (char**)calloc(count + 1u, sizeof(char*));
     if (!words) return WRDE_NOSPACE;
@@ -903,7 +915,11 @@ int wordexp(const char* words, wordexp_t* word_vector, int flags) {
         offset = 0u;
     }
 
-    input_length = strlen(words);
+    input_length = 0u;
+    while (input_length <= WORDEXP_MAX_INPUT_BYTES &&
+           words[input_length] != '\0')
+        ++input_length;
+    if (input_length > WORDEXP_MAX_INPUT_BYTES) return WRDE_NOSPACE;
     if (input_length > (size_t)-1 - sizeof(prefix) - sizeof(suffix))
         return WRDE_NOSPACE;
     script_prefix = (flags & WRDE_UNDEF) != 0 ? undef_prefix : prefix;
@@ -956,7 +972,9 @@ int wordexp(const char* words, wordexp_t* word_vector, int flags) {
         return WRDE_NOSPACE;
     }
     vector_slots = offset + total_count + 1u;
-    if (vector_slots > (size_t)-1 / sizeof(char*)) {
+    if (vector_slots > (size_t)-1 / sizeof(char*) ||
+        vector_slots >
+            (size_t)WORDEXP_MAX_VECTOR_BYTES / sizeof(char*)) {
         wordexp_free_words(expanded_words, expanded_count);
         return WRDE_NOSPACE;
     }
