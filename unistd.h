@@ -1915,10 +1915,23 @@ static inline long sysconf(int name) {
             return TTY_NAME_MAX;
         case _SC_VERSION:
             return 200809L;
-        case _SC_NPROCESSORS_CONF:
-        case _SC_NPROCESSORS_ONLN: {
+        case _SC_NPROCESSORS_CONF: {
             intptr_t count = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(
                 SYS_GETCPU_COUNT));
+            if (count < 0) return -1;
+            if (count == 0) {
+                errno = EIO;
+                return -1;
+            }
+            if ((uintptr_t)count > (uintptr_t)LONG_MAX) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            return (long)count;
+        }
+        case _SC_NPROCESSORS_ONLN: {
+            intptr_t count = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(
+                SYS_GETCPU_ONLINE_COUNT));
             if (count < 0) return -1;
             if (count == 0) {
                 errno = EIO;
