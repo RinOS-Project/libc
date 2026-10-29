@@ -47,6 +47,12 @@ static inline int _fnm_chareq(unsigned char a, unsigned char b, int flags) {
     return a == b;
 }
 
+static inline int _fnm_budget_take(unsigned* budget) {
+    if (!budget || *budget == 0u) return 0;
+    --*budget;
+    return 1;
+}
+
 /* Read one bracket-expression atom without walking past its closing ']'. */
 static inline int _fnm_class_atom(const char** cursor, const char* end,
                                   int flags, unsigned char* value) {
@@ -61,7 +67,8 @@ static inline int _fnm_class_atom(const char** cursor, const char* end,
 /* Return 1/0 for a class match, or -1 for an unterminated class. */
 static inline int _fnm_class_match(const char* pattern, unsigned char input,
                                    int flags, const char** after,
-                                   int* explicit_period) {
+                                   int* explicit_period,
+                                   unsigned* budget) {
     const char* p = pattern + 1;
     const char* end = p;
     int invert = 0;
@@ -80,6 +87,7 @@ static inline int _fnm_class_match(const char* pattern, unsigned char input,
         saw = 1;
     }
     while (*end) {
+        if (!_fnm_budget_take(budget)) return -2;
         if (*end == ']' && saw) break;
         if (*end == '\\' && !(flags & FNM_NOESCAPE) && end[1]) ++end;
         ++end;
@@ -96,11 +104,13 @@ static inline int _fnm_class_match(const char* pattern, unsigned char input,
     while (p < end) {
         unsigned char lo = 0;
         unsigned char hi = 0;
+        if (!_fnm_budget_take(budget)) return -2;
         if (!_fnm_class_atom(&p, end, flags, &lo)) break;
         hi = lo;
         if (p < end && *p == '-' && p + 1 < end) {
             const char* candidate = p + 1;
             unsigned char range_end = 0;
+            if (!_fnm_budget_take(budget)) return -2;
             if (_fnm_class_atom(&candidate, end, flags, &range_end)) {
                 hi = range_end;
                 p = candidate;
@@ -124,101 +134,109 @@ static inline int _fnm_class_match(const char* pattern, unsigned char input,
 }
 
 static inline int _fnm_match_bounded(const char* pattern, const char* string,
-                                     int flags, unsigned depth,
-                                     int component_start, unsigned* budget) {
+                                     int flags, unsigned* budget) {
     const char* p = pattern;
     const char* s = string;
+    const char* star_pattern = NULL;
+    const char* star_retry = NULL;
+    int component_start = 1;
 
-    if (depth > RIN_FNM_MAX_INPUT || !budget || *budget == 0u) {
-        return FNM_NOSYS;
-    }
-    --*budget;
-    while (*p) {
-        unsigned char pc = (unsigned char)*p;
-        if (pc == '*') {
-            int result;
-            do { ++p; } while (*p == '*');
-            /* Try the empty span before consuming any input. */
-            result = _fnm_match_bounded(p, s, flags, depth + 1u,
-                                        component_start, budget);
-            if (result == 0) return 0;
-            if (result == FNM_NOSYS) return FNM_NOSYS;
-            while (*s) {
-                unsigned char c = (unsigned char)*s;
-                if ((flags & FNM_PATHNAME) && c == '/') break;
-                if ((flags & FNM_PERIOD) && component_start && c == '.') break;
-                component_start = ((flags & FNM_PATHNAME) && c == '/');
+    for (;;) {
+        const char* next_pattern = p;
+        unsigned char pattern_byte = (unsigned char)*p;
+        unsigned char string_byte = (unsigned char)*s;
+        int atom_matches = 0;
+
+        if (!_fnm_budget_take(budget)) return FNM_NOSYS;
+        if (pattern_byte == '*') {
+            do {
+                if (!_fnm_budget_take(budget)) return FNM_NOSYS;
+                ++p;
+            } while (*p == '*');
+            star_pattern = p;
+            star_retry = s;
+            continue;
+        }
+
+        if (pattern_byte == '\0') {
+            if (*s == '\0' ||
+                ((flags & FNM_LEADING_DIR) != 0 && *s == '/'))
+                return 0;
+        } else if (*s != '\0') {
+            if (pattern_byte == '?') {
+                atom_matches = !((flags & FNM_PATHNAME) && *s == '/') &&
+                    !((flags & FNM_PERIOD) && component_start && *s == '.');
+                next_pattern = p + 1;
+            } else if (pattern_byte == '[') {
+                int explicit_period = 0;
+                int class_result = _fnm_class_match(
+                    p, string_byte, flags, &next_pattern, &explicit_period,
+                    budget);
+                if (class_result == -2) return FNM_NOSYS;
+                if (class_result == -1) {
+                    /* An unmatched '[' is an ordinary literal. */
+                    atom_matches = _fnm_chareq(
+                        (unsigned char)'[', string_byte, flags);
+                    next_pattern = p + 1;
+                } else {
+                    atom_matches = class_result != 0 &&
+                        !((flags & FNM_PATHNAME) && *s == '/') &&
+                        !((flags & FNM_PERIOD) && component_start &&
+                          *s == '.' && !explicit_period);
+                }
+            } else {
+                unsigned char literal = pattern_byte;
+                if (literal == '\\' && !(flags & FNM_NOESCAPE) && p[1]) {
+                    if (!_fnm_budget_take(budget)) return FNM_NOSYS;
+                    ++next_pattern;
+                    literal = (unsigned char)*next_pattern;
+                }
+                atom_matches =
+                    !((flags & FNM_PERIOD) && component_start &&
+                      *s == '.' && literal != '.') &&
+                    !((flags & FNM_PATHNAME) && *s == '/' && literal != '/') &&
+                    _fnm_chareq(literal, string_byte, flags);
+                ++next_pattern;
+            }
+
+            if (atom_matches) {
+                p = next_pattern;
+                component_start =
+                    (flags & FNM_PATHNAME) != 0 && *s == '/';
                 ++s;
-                result = _fnm_match_bounded(p, s, flags, depth + 1u,
-                                            component_start, budget);
-                if (result == 0) return 0;
-                if (result == FNM_NOSYS) return FNM_NOSYS;
+                continue;
             }
+        }
+
+        if (!star_pattern || !star_retry || *star_retry == '\0' ||
+            ((flags & FNM_PATHNAME) && *star_retry == '/') ||
+            ((flags & FNM_PERIOD) && *star_retry == '.' &&
+             (star_retry == string ||
+              ((flags & FNM_PATHNAME) && star_retry > string &&
+               star_retry[-1] == '/'))))
             return FNM_NOMATCH;
-        }
-        if (!*s) return FNM_NOMATCH;
-        if (pc == '?') {
-            if ((flags & FNM_PATHNAME) && *s == '/') return FNM_NOMATCH;
-            if ((flags & FNM_PERIOD) && component_start && *s == '.') {
-                return FNM_NOMATCH;
-            }
-            component_start = ((flags & FNM_PATHNAME) && *s == '/');
-            ++p;
-            ++s;
-            continue;
-        }
-        if (pc == '[') {
-            const char* after = p;
-            int explicit_period = 0;
-            int class_result = _fnm_class_match(p, (unsigned char)*s,
-                                                flags, &after, &explicit_period);
-            if (class_result == -1) {
-                /* An unmatched '[' is an ordinary literal. */
-                class_result = _fnm_chareq((unsigned char)'[',
-                                           (unsigned char)*s, flags);
-                after = p + 1;
-            }
-            if (!class_result) return FNM_NOMATCH;
-            if ((flags & FNM_PERIOD) && component_start && *s == '.' &&
-                !explicit_period) return FNM_NOMATCH;
-            if ((flags & FNM_PATHNAME) && *s == '/') return FNM_NOMATCH;
-            ++s;
-            p = after;
-            component_start = ((flags & FNM_PATHNAME) && s[-1] == '/');
-            continue;
-        }
-        if (pc == '\\' && !(flags & FNM_NOESCAPE) && p[1]) {
-            ++p;
-            pc = (unsigned char)*p;
-        }
-        if ((flags & FNM_PERIOD) && component_start && *s == '.' && pc != '.') {
-            return FNM_NOMATCH;
-        }
-        if ((flags & FNM_PATHNAME) && *s == '/' && pc != '/') return FNM_NOMATCH;
-        if (!_fnm_chareq(pc, (unsigned char)*s, flags)) return FNM_NOMATCH;
-        ++p;
-        component_start = ((flags & FNM_PATHNAME) && *s == '/');
-        ++s;
+        if (!_fnm_budget_take(budget)) return FNM_NOSYS;
+        ++star_retry;
+        s = star_retry;
+        p = star_pattern;
+        component_start = 0;
     }
-    if (*s == '\0') return 0;
-    if ((flags & FNM_LEADING_DIR) && *s == '/') return 0;
-    return FNM_NOMATCH;
 }
 
 static inline int fnmatch(const char* pattern, const char* string, int flags) {
-    unsigned length;
+    size_t length;
+    unsigned budget = RIN_FNM_OPERATION_BUDGET;
     if (!pattern || !string) return FNM_NOMATCH;
     if ((flags & ~RIN_FNM_KNOWN_FLAGS) != 0) return FNM_NOSYS;
     for (length = 0; pattern[length] != '\0'; ++length) {
+        if (!_fnm_budget_take(&budget)) return FNM_NOSYS;
         if (length == RIN_FNM_MAX_INPUT) return FNM_NOSYS;
     }
     for (length = 0; string[length] != '\0'; ++length) {
+        if (!_fnm_budget_take(&budget)) return FNM_NOSYS;
         if (length == RIN_FNM_MAX_INPUT) return FNM_NOSYS;
     }
-    {
-        unsigned budget = RIN_FNM_OPERATION_BUDGET;
-        return _fnm_match_bounded(pattern, string, flags, 0u, 1, &budget);
-    }
+    return _fnm_match_bounded(pattern, string, flags, &budget);
 }
 
 #ifdef __cplusplus
