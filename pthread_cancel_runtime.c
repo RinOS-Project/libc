@@ -385,6 +385,9 @@ void pthread_testcancel(void) {
 void __rin_pthread_cancel_point_cleanup(
     void (*cleanup)(void*), void* argument) {
     pthread_t self = _RIN_PTHREAD_CANCEL_SELF();
+    RinPthreadCancelRecord* record;
+    __rin_pthread_cleanup_buffer cleanup_buffer;
+    int cleanup_pushed = 0;
     int old_state = PTHREAD_CANCEL_ENABLE;
     if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_state) != 0) {
         pthread_testcancel();
@@ -395,12 +398,20 @@ void __rin_pthread_cancel_point_cleanup(
         return;
     }
 
-    if (rin_pthread_cancel_take_pending(self, 0)) {
-        if (cleanup) cleanup(argument);
+    /* Keep the operation cleanup registered while cancellation is re-enabled.
+     * A request arriving after the pending-bit snapshot can be delivered by
+     * pthread_setcancelstate() itself; the stack cleanup closes that window. */
+    record = rin_pthread_cancel_self_cached(self);
+    if (record == NULL) record = rin_pthread_cancel_register_self(self);
+    cleanup_pushed = cleanup != NULL && record != NULL;
+    if (cleanup_pushed)
+        __rin_pthread_cleanup_push_node(&cleanup_buffer, cleanup, argument);
+    if (record != NULL && rin_pthread_cancel_consume_any(record)) {
+        if (cleanup_pushed) __rin_pthread_cleanup_pop_node(1);
         (void)pthread_setcancelstate(old_state, NULL);
         pthread_exit(PTHREAD_CANCELED);
     }
 
     (void)pthread_setcancelstate(old_state, NULL);
-    pthread_testcancel();
+    if (cleanup_pushed) __rin_pthread_cleanup_pop_node(0);
 }

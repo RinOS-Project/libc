@@ -96,6 +96,24 @@ static inline int rin_sem_futex_operation(const sem_t* sem, int operation) {
     return operation | (rin_sem_is_shared(sem) ? 0 : FUTEX_PRIVATE_FLAG);
 }
 
+/* Cancellation after a successful wake leaves sem->value untouched.  Drop
+ * this waiter's registration and pass the available token's wake to another
+ * sleeper so a positive value cannot strand the remaining waiters. */
+static inline void rin_sem_cancel_waiter_cleanup(void* argument) {
+    sem_t* sem = (sem_t*)argument;
+    int saved_errno = errno;
+    uint32_t state;
+    if (!sem) return;
+    rin_sem_waiter_remove(sem);
+    state = rin_sem_state_load(sem);
+    if ((state & RIN_SEM_WAITER_MASK) != 0u &&
+        __atomic_load_n(&sem->value, __ATOMIC_ACQUIRE) > 0) {
+        (void)_RIN_SEMAPHORE_FUTEX(
+            &sem->value, rin_sem_futex_operation(sem, FUTEX_WAKE), 1, NULL);
+    }
+    errno = saved_errno;
+}
+
 #define SEM_FAILED ((sem_t*)0)
 
 /* ═══════════════════════════════════════════════════════════════
@@ -175,9 +193,11 @@ static inline int sem_wait(sem_t* sem) {
         long ret = _RIN_SEMAPHORE_FUTEX(
             &sem->value, rin_sem_futex_operation(sem, FUTEX_WAIT), 0, NULL);
         
-        /* Woke up (or error) - decrement waiters */
+        /* Keep the waiter registered until cancellation cleanup has had a
+         * chance to hand off a token made available by this wake. */
+        __rin_pthread_cancel_point_cleanup_if_linked(
+            rin_sem_cancel_waiter_cleanup, sem);
         rin_sem_waiter_remove(sem);
-        __rin_pthread_cancel_point_if_linked();
 
         if (ret < 0 && errno != EAGAIN) {
             if (errno == 0) errno = EIO;
@@ -254,8 +274,9 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
             rin_sem_futex_operation(
                 sem, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME),
             0, abstime, FUTEX_BITSET_MATCH_ANY);
+        __rin_pthread_cancel_point_cleanup_if_linked(
+            rin_sem_cancel_waiter_cleanup, sem);
         rin_sem_waiter_remove(sem);
-        __rin_pthread_cancel_point_if_linked();
 
         if (ret < 0) {
             int err = errno;
