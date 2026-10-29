@@ -36,6 +36,30 @@ struct option {
     int         val;      /* flagがNULLの時の戻り値、またはflagに設定する値 */
 };
 
+static inline int _rin_getopt_match_long_option(
+    const struct option* longopts, const char* name, int name_len,
+    int* ambiguous_out) {
+    int prefix_index = -1;
+    int prefix_count = 0;
+    if (ambiguous_out) *ambiguous_out = 0;
+    if (!longopts || !name || !ambiguous_out || name_len <= 0) return -1;
+    for (int index = 0; longopts[index].name; ++index) {
+        const char* option_name = longopts[index].name;
+        int matched = 0;
+        while (matched < name_len && option_name[matched] != '\0' &&
+               option_name[matched] == name[matched]) {
+            ++matched;
+        }
+        if (matched != name_len) continue;
+        if (option_name[matched] == '\0') return index;
+        prefix_index = index;
+        ++prefix_count;
+    }
+    if (prefix_count == 1) return prefix_index;
+    if (prefix_count > 1) *ambiguous_out = 1;
+    return -1;
+}
+
 /* has_argの値 */
 #define no_argument       0
 #define required_argument 1
@@ -188,23 +212,12 @@ static inline int getopt_long(int argc, char* const argv[],
         while (name[name_len] && name[name_len] != '=') name_len++;
         if (name[name_len] == '=') eq = name + name_len + 1;
 
-        /* longoptsを検索 */
-        for (int i = 0; longopts[i].name; i++) {
-            const char* opt_name = longopts[i].name;
-            int match = 1;
-
-            /* 名前を比較 */
-            for (int j = 0; j < name_len; j++) {
-                if (opt_name[j] != name[j]) {
-                    match = 0;
-                    break;
-                }
-            }
-            if (match && opt_name[name_len] != '\0') {
-                match = 0;  /* 部分一致は不可 */
-            }
-
-            if (match) {
+        /* 完全一致を優先し、一意な前方一致だけを受理する。 */
+        int ambiguous = 0;
+        int option_index = _rin_getopt_match_long_option(
+            longopts, name, name_len, &ambiguous);
+        if (option_index >= 0) {
+                int i = option_index;
                 optind++;
                 if (longindex) *longindex = i;
 
@@ -235,9 +248,14 @@ static inline int getopt_long(int argc, char* const argv[],
                     return 0;
                 }
                 return longopts[i].val;
-            }
         }
 
+        if (ambiguous) {
+            optind++;
+            optopt = 0;
+            _rin_getopt_long_diagnostic(argv, "option is ambiguous", arg);
+            return '?';
+        }
         /* 見つからない */
         optind++;
         optopt = 0;
@@ -295,12 +313,11 @@ static inline int getopt_long_only(int argc, char* const argv[],
         while (name[name_len] && name[name_len] != '=') ++name_len;
         if (name[name_len] == '=') eq = name + name_len + 1;
 
-        for (int i = 0; longopts[i].name; i++) {
-            const char* opt_name = longopts[i].name;
-            int j = 0;
-            while (j < name_len && opt_name[j] == name[j]) ++j;
-            if (j != name_len || opt_name[j] != '\0') continue;
-
+        int ambiguous = 0;
+        int option_index = _rin_getopt_match_long_option(
+            longopts, name, name_len, &ambiguous);
+        if (option_index >= 0) {
+            int i = option_index;
             ++optind;
             _rin_getopt_pos = 0;
             if (longindex) *longindex = i;
@@ -330,6 +347,12 @@ static inline int getopt_long_only(int argc, char* const argv[],
                 return 0;
             }
             return longopts[i].val;
+        }
+        if (ambiguous) {
+            ++optind;
+            optopt = 0;
+            _rin_getopt_long_diagnostic(argv, "option is ambiguous", arg);
+            return '?';
         }
     }
 
