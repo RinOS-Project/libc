@@ -83,6 +83,9 @@
 #ifndef _POSIX_THREADS
 #define _POSIX_THREADS 200809L
 #endif
+#ifndef _POSIX_READER_WRITER_LOCKS
+#define _POSIX_READER_WRITER_LOCKS 200809L
+#endif
 #ifndef _POSIX_THREAD_SAFE_FUNCTIONS
 #define _POSIX_THREAD_SAFE_FUNCTIONS 200809L
 #endif
@@ -1866,6 +1869,7 @@ static inline long sysconf(int name) {
         case _SC_THREAD_SAFE_FUNCTIONS:
             return _POSIX_THREAD_SAFE_FUNCTIONS;
         case _SC_THREADS:
+        case _SC_READER_WRITER_LOCKS:
         case _SC_REALTIME_SIGNALS:
         case _SC_BARRIERS:
         case _SC_CLOCK_SELECTION:
@@ -1895,7 +1899,6 @@ static inline long sysconf(int name) {
 #endif
         case _SC_PRIORITIZED_IO:
         case _SC_REGEXP:
-        case _SC_READER_WRITER_LOCKS:
         case _SC_SEMAPHORES:
         case _SC_TIMERS:
         case _SC_BC_BASE_MAX:
