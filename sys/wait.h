@@ -88,8 +88,7 @@ static inline int __rin_waitid_event_result(intptr_t result) {
     return 0;
 }
 
-/* waitid() child selectors. Process-group and pidfd selectors need kernel
- * process-group/pidfd ownership and are therefore not emulated here. */
+/* waitid() child selectors. */
 #ifndef _IDTYPE_T_DEFINED
 #define _IDTYPE_T_DEFINED
 typedef int idtype_t;
@@ -97,6 +96,7 @@ typedef int idtype_t;
 #define P_ALL  0
 #define P_PID  1
 #define P_PGID 2
+#define P_PIDFD 3
 
 /* ═══════════════════════════════════════════════════════════════
  * 終了ステータスマクロ
