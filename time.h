@@ -1004,11 +1004,8 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
             result = _rin_time_result(
                 _RIN_TIME_CLOCK_GETTIME64(clk_id, &request));
             if (result < 0) return -1;
-            if (result != 0 || request.struct_size != sizeof(request) ||
-                request.version != RIN_CLOCK_GETTIME_ABI_VERSION ||
-                request.clock_id != (int32_t)clk_id ||
-                request.reserved0 != 0 || request.tv_nsec < 0 ||
-                request.tv_nsec >= 1000000000) {
+            if (result != 0 || !rin_clock_gettime_v1_valid(
+                    &request, (int32_t)clk_id)) {
                 errno = EIO;
                 return -1;
             }
