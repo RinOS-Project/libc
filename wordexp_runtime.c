@@ -27,6 +27,190 @@ static int wordexp_skip_command(const char* text, size_t length,
                                 size_t start, int no_command,
                                 size_t* end_out);
 
+typedef struct WordexpHereDoc {
+    struct WordexpHereDoc* next;
+    char* delimiter;
+    size_t delimiter_length;
+    int strip_leading_tabs;
+} WordexpHereDoc;
+
+static void wordexp_here_doc_list_free(WordexpHereDoc* document) {
+    while (document) {
+        WordexpHereDoc* next = document->next;
+        free(document->delimiter);
+        free(document);
+        document = next;
+    }
+}
+
+static int wordexp_here_doc_word_end(const char* text, size_t length,
+                                     size_t start, size_t* end_out) {
+    size_t index = start;
+    int quote = 0;
+    while (index < length) {
+        char ch = text[index];
+        if (quote == '\'') {
+            if (ch == '\'') quote = 0;
+            ++index;
+            continue;
+        }
+        if (quote == '"') {
+            if (ch == '\\' && index + 1u < length) {
+                index += 2u;
+                continue;
+            }
+            if (ch == '"') quote = 0;
+            ++index;
+            continue;
+        }
+        if (ch == '\\') {
+            if (index + 1u >= length) return WRDE_SYNTAX;
+            index += 2u;
+            continue;
+        }
+        if (ch == '\'' || ch == '"') {
+            quote = ch;
+            ++index;
+            continue;
+        }
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\v' ||
+            ch == '\f' || ch == ';' || ch == '|' || ch == '&' ||
+            ch == '(' || ch == ')' || ch == '<' || ch == '>')
+            break;
+        ++index;
+    }
+    if (quote != 0 || index == start) return WRDE_SYNTAX;
+    *end_out = index;
+    return 0;
+}
+
+static size_t wordexp_here_doc_remove_quotes(const char* text,
+                                             size_t start, size_t end,
+                                             char* output) {
+    size_t input = start;
+    size_t written = 0u;
+    int quote = 0;
+    while (input < end) {
+        char ch = text[input++];
+        if (quote == '\'') {
+            if (ch == '\'') quote = 0;
+            else output[written++] = ch;
+            continue;
+        }
+        if (quote == '"') {
+            if (ch == '"') {
+                quote = 0;
+                continue;
+            }
+            if (ch == '\\' && input < end) {
+                char escaped = text[input];
+                if (escaped == '$' || escaped == '`' || escaped == '"' ||
+                    escaped == '\\') {
+                    output[written++] = escaped;
+                    ++input;
+                    continue;
+                }
+                if (escaped == '\n') {
+                    ++input;
+                    continue;
+                }
+            }
+            output[written++] = ch;
+            continue;
+        }
+        if (ch == '\'' || ch == '"') {
+            quote = ch;
+            continue;
+        }
+        if (ch == '\\' && input < end) {
+            char escaped = text[input++];
+            if (escaped != '\n') output[written++] = escaped;
+            continue;
+        }
+        output[written++] = ch;
+    }
+    output[written] = '\0';
+    return written;
+}
+
+static int wordexp_parse_here_doc(const char* text, size_t length,
+                                  size_t operator_start,
+                                  WordexpHereDoc** document_out,
+                                  size_t* after_out) {
+    size_t index = operator_start + 2u;
+    size_t word_start;
+    size_t word_end;
+    size_t word_length;
+    WordexpHereDoc* document;
+    int strip_leading_tabs = 0;
+    int result;
+    if (index < length && text[index] == '-') {
+        strip_leading_tabs = 1;
+        ++index;
+    }
+    while (index < length && (text[index] == ' ' || text[index] == '\t'))
+        ++index;
+    word_start = index;
+    result = wordexp_here_doc_word_end(text, length, word_start, &word_end);
+    if (result != 0) return result;
+    document = (WordexpHereDoc*)malloc(sizeof(*document));
+    if (!document) return WRDE_NOSPACE;
+    word_length = word_end - word_start;
+    if (word_length == (size_t)-1) {
+        free(document);
+        return WRDE_NOSPACE;
+    }
+    document->delimiter = (char*)malloc(word_length + 1u);
+    if (!document->delimiter) {
+        free(document);
+        return WRDE_NOSPACE;
+    }
+    document->next = NULL;
+    document->delimiter_length = wordexp_here_doc_remove_quotes(
+        text, word_start, word_end, document->delimiter);
+    document->strip_leading_tabs = strip_leading_tabs;
+    *document_out = document;
+    *after_out = word_end;
+    return 0;
+}
+
+static int wordexp_skip_here_doc_bodies(const char* text, size_t length,
+                                        size_t* index_io,
+                                        WordexpHereDoc* documents) {
+    size_t index = *index_io;
+    WordexpHereDoc* document;
+    for (document = documents; document; document = document->next) {
+        int found = 0;
+        while (index <= length) {
+            size_t line_start = index;
+            size_t line_end;
+            size_t compare_start;
+            size_t compare_length;
+            while (index < length && text[index] != '\n') ++index;
+            line_end = index;
+            compare_start = line_start;
+            if (document->strip_leading_tabs) {
+                while (compare_start < line_end &&
+                       text[compare_start] == '\t')
+                    ++compare_start;
+            }
+            compare_length = line_end - compare_start;
+            if (compare_length == document->delimiter_length &&
+                memcmp(text + compare_start, document->delimiter,
+                       compare_length) == 0) {
+                if (index < length) ++index;
+                found = 1;
+                break;
+            }
+            if (index == length) break;
+            ++index;
+        }
+        if (!found) return WRDE_SYNTAX;
+    }
+    *index_io = index;
+    return 0;
+}
+
 static int wordexp_skip_backtick(const char* text, size_t length,
                                  size_t start, int no_command,
                                  size_t* end_out) {
@@ -225,6 +409,9 @@ static int wordexp_skip_command(const char* text, size_t length,
     size_t depth = 1u;
     int quote = 0;
     int word_start = 1;
+    int result = 0;
+    WordexpHereDoc* pending_documents = NULL;
+    WordexpHereDoc** pending_tail = &pending_documents;
     if (no_command) return WRDE_CMDSUB;
     while (index < length) {
         char ch = text[index];
@@ -270,37 +457,51 @@ static int wordexp_skip_command(const char* text, size_t length,
         if (ch == '$' && index + 2u < length &&
             text[index + 1u] == '(' && text[index + 2u] == '(') {
             size_t nested_end = 0u;
-            int result = wordexp_skip_arithmetic(
+            result = wordexp_skip_arithmetic(
                 text, length, index, 0, &nested_end);
-            if (result != 0) return result;
+            if (result != 0) goto done;
             index = nested_end;
             word_start = 0;
             continue;
         }
         if (ch == '$' && index + 1u < length && text[index + 1u] == '(') {
             size_t nested_end = 0u;
-            int result = wordexp_skip_command(
+            result = wordexp_skip_command(
                 text, length, index, 0, &nested_end);
-            if (result != 0) return result;
+            if (result != 0) goto done;
             index = nested_end;
             word_start = 0;
             continue;
         }
         if (ch == '$' && index + 1u < length && text[index + 1u] == '{') {
             size_t nested_end = 0u;
-            int result = wordexp_skip_parameter(
+            result = wordexp_skip_parameter(
                 text, length, index, 0, &nested_end);
-            if (result != 0) return result;
+            if (result != 0) goto done;
             index = nested_end;
             word_start = 0;
             continue;
         }
         if (ch == '`') {
             size_t nested_end = 0u;
-            int result = wordexp_skip_backtick(
+            result = wordexp_skip_backtick(
                 text, length, index, 0, &nested_end);
-            if (result != 0) return result;
+            if (result != 0) goto done;
             index = nested_end;
+            word_start = 0;
+            continue;
+        }
+        if (quote == 0 && ch == '<' && index + 1u < length &&
+            text[index + 1u] == '<' &&
+            (index + 2u >= length || text[index + 2u] != '<')) {
+            WordexpHereDoc* document = NULL;
+            size_t after_document = 0u;
+            result = wordexp_parse_here_doc(
+                text, length, index, &document, &after_document);
+            if (result != 0) goto done;
+            *pending_tail = document;
+            pending_tail = &document->next;
+            index = after_document;
             word_start = 0;
             continue;
         }
@@ -309,13 +510,30 @@ static int wordexp_skip_command(const char* text, size_t length,
             word_start = 1;
             continue;
         }
+        if (quote == 0 && ch == '\n' && pending_documents) {
+            ++index;
+            result = wordexp_skip_here_doc_bodies(
+                text, length, &index, pending_documents);
+            if (result != 0) goto done;
+            wordexp_here_doc_list_free(pending_documents);
+            pending_documents = NULL;
+            pending_tail = &pending_documents;
+            word_start = 1;
+            continue;
+        }
         if (quote == 0 && ch == '(') {
             ++depth;
             word_start = 1;
         } else if (quote == 0 && ch == ')') {
-            if (--depth == 0u) {
+            if (depth == 1u && pending_documents) {
+                result = WRDE_SYNTAX;
+                goto done;
+            }
+            --depth;
+            if (depth == 0u) {
                 *end_out = index + 1u;
-                return 0;
+                result = 0;
+                goto done;
             }
             word_start = 1;
         } else if (quote == 0 &&
@@ -327,7 +545,10 @@ static int wordexp_skip_command(const char* text, size_t length,
         }
         ++index;
     }
-    return WRDE_SYNTAX;
+    result = WRDE_SYNTAX;
+done:
+    wordexp_here_doc_list_free(pending_documents);
+    return result;
 }
 
 static int wordexp_validate_fragment(const char* text, size_t length,
