@@ -107,10 +107,8 @@
 #ifndef _POSIX_MONOTONIC_CLOCK
 #define _POSIX_MONOTONIC_CLOCK 200809L
 #endif
-#if defined(__x86_64__) || defined(_M_X64)
 #ifndef _POSIX_SPAWN
 #define _POSIX_SPAWN 200809L
-#endif
 #endif
 #ifndef _POSIX_REALTIME_SIGNALS
 #define _POSIX_REALTIME_SIGNALS 200809L
@@ -1874,9 +1872,7 @@ static inline long sysconf(int name) {
         case _SC_BARRIERS:
         case _SC_CLOCK_SELECTION:
         case _SC_MONOTONIC_CLOCK:
-#if defined(__x86_64__) || defined(_M_X64)
         case _SC_SPAWN:
-#endif
             return 200809L;
         case _SC_IOV_MAX:
             return IOV_MAX;
@@ -1940,9 +1936,6 @@ static inline long sysconf(int name) {
 #if (!defined(__x86_64__) && !defined(_M_X64)) || \
     (defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE))
         case _SC_THREAD_PROCESS_SHARED:
-#endif
-#if !defined(__x86_64__) && !defined(_M_X64)
-        case _SC_SPAWN:
 #endif
         case _SC_THREAD_ROBUST_PRIO_INHERIT:
         case _SC_THREAD_ROBUST_PRIO_PROTECT:
