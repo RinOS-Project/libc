@@ -2480,11 +2480,10 @@ static inline int _rin_fflush_all(void) {
     int failed = 0;
     int index;
 
-    /* Standard streams are fixed objects; keep their owner through the
-     * complete flush.  Pool entries are static too, so snapshot only their
-     * publication identity under the pool guard before taking FILE locks. */
-    flockfile(stdout);
-    flockfile(stderr);
+    /* Pool entries are static, so snapshot their publication identity under
+     * the pool guard.  Lock each stream only while flushing it: holding one
+     * FILE lock while waiting for another can invert a caller's flockfile()
+     * order and deadlock fflush(NULL). */
     _rin_stdio_lock_table_enter();
     for (index = 3; index < _STDIO_MAX_FILES; ++index) {
         if (_stdio_files_used[index] && count < _STDIO_MAX_FILES)
@@ -2492,15 +2491,17 @@ static inline int _rin_fflush_all(void) {
     }
     _rin_stdio_lock_table_leave();
 
+    flockfile(stdout);
     if (_rin_fflush_unlocked(stdout) != 0) failed = 1;
+    funlockfile(stdout);
+    flockfile(stderr);
     if (_rin_fflush_unlocked(stderr) != 0) failed = 1;
+    funlockfile(stderr);
     for (index = 0; index < (int)count; ++index) {
         flockfile(streams[index]);
         if (_rin_fflush_unlocked(streams[index]) != 0) failed = 1;
         funlockfile(streams[index]);
     }
-    funlockfile(stderr);
-    funlockfile(stdout);
     return failed ? EOF : 0;
 }
 
