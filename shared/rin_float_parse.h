@@ -353,6 +353,24 @@ static inline long double rin_fp_binary80_value(rin_fp_u64 significand,
     return converted.value;
 }
 
+static inline int rin_fp_binary80_is_subnormal(long double value)
+{
+    union {
+        long double value;
+        unsigned char bytes[sizeof(long double)];
+    } raw = {0};
+    rin_fp_u16 exponent;
+    rin_fp_u64 significand = 0u;
+    unsigned index;
+
+    raw.value = value;
+    exponent = (rin_fp_u16)raw.bytes[8] |
+               (rin_fp_u16)((rin_fp_u16)raw.bytes[9] << 8u);
+    for (index = 0u; index < 8u; ++index)
+        significand |= (rin_fp_u64)raw.bytes[index] << (index * 8u);
+    return (exponent & 0x7fffu) == 0u && significand != 0u;
+}
+
 static inline int rin_fp_compare_decimal_midpoint(
     const rin_fp_big_uint* decimal, int decimal_exponent, int sticky,
     rin_fp_u64 lower_significand, int lower_exponent,
@@ -1031,17 +1049,7 @@ rin_fp_parse_binary80_decimal_magnitude(const char* first, int negative,
                            : rin_fp_binary80_value(0u, 0u, negative);
         return result;
     }
-    {
-        union {
-            long double value;
-            unsigned char bytes[sizeof(long double)];
-        } raw = {0};
-        rin_fp_u16 exponent;
-        raw.value = result.value;
-        exponent = (rin_fp_u16)raw.bytes[8] |
-                   (rin_fp_u16)((rin_fp_u16)raw.bytes[9] << 8u);
-        result.subnormal = (exponent & 0x7fffu) == 0u;
-    }
+    result.subnormal = rin_fp_binary80_is_subnormal(result.value);
     return result;
 }
 
@@ -1157,17 +1165,7 @@ rin_fp_parse_binary80_hex_magnitude(const char* first, int negative,
             return result;
         }
     }
-    {
-        union {
-            long double value;
-            unsigned char bytes[sizeof(long double)];
-        } raw = {0};
-        rin_fp_u16 encoded_exponent;
-        raw.value = result.value;
-        encoded_exponent = (rin_fp_u16)raw.bytes[8] |
-                           (rin_fp_u16)((rin_fp_u16)raw.bytes[9] << 8u);
-        result.subnormal = (encoded_exponent & 0x7fffu) == 0u;
-    }
+    result.subnormal = rin_fp_binary80_is_subnormal(result.value);
     return result;
 }
 
