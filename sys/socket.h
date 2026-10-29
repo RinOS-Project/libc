@@ -354,6 +354,23 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define SO_PEERCRED     17  /* UNIX socketの接続時peer資格情報 */
 #define SO_NONBLOCK               0x5003 /* kernel socket nonblocking */
 
+/* RinOSでのソケットoption対応範囲:
+ * - SO_TYPEは全domain/typeで取得可能。SO_NONBLOCKは全typeで設定・取得可能。
+ * - SO_REUSEADDRはTCP/UDPのIPv4・IPv6でbind前に設定可能。既定値は0。
+ * - SO_SNDBUF/SO_RCVBUFはTCPとUDPのIPv4・IPv6で使用可能。値はbyte単位で、
+ *   最小1024。TCPの既定値は各65535、最大1048576。UDP送信の既定値・上限は
+ *   IPv4が65507、IPv6が65527。UDP受信は既定値がqueue上限で、最大32 datagram分。
+ *   受信queue内のデータより小さい値への変更はEBUSY。
+ * - SO_KEEPALIVEはTCPのみ（既定off）。probe開始は7200秒、間隔75秒、最大9回。
+ * - SO_BROADCASTはIPv4 UDPのみ。SO_LINGERはTCPのみ。
+ * - SO_ERRORは取得のみ。TCP/UNIXは保留errorを返し、TCPは取得時にclearする。
+ *   UDP/raw/packetは現状0を返す。SO_ACCEPTCONNはTCP/UNIXで取得可能。
+ * - SO_DEBUG/SO_DONTROUTE/SO_OOBINLINE/SO_REUSEPORT/SO_RCVLOWAT/SO_SNDLOWATと、
+ *   TCP_NODELAY/TCP_MAXSEG/TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNTは未対応で、
+ *   setsockopt/getsockoptはENOPROTOOPTを返す。
+ * set値はintをちょうど1個、取得bufferは少なくともint 1個を渡す。
+ */
+
 /* TCPオプション */
 #ifndef IPPROTO_TCP
 #define IPPROTO_TCP     6
