@@ -12,9 +12,25 @@ extern "C" {
 
 static unsigned int rin_libc_rand_state = 1U;
 
-static unsigned int rin_libc_rand_next(unsigned int state)
+static unsigned int rin_libc_rand_next_state(unsigned int state)
 {
-    return state * 1664525U + 1013904223U;
+    /* xorshift32 has a full 2^32-1 cycle for every nonzero state. */
+    if (state == 0U) state = 0x6D2B79F5U;
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return state;
+}
+
+static unsigned int rin_libc_rand_output(unsigned int state)
+{
+    /* Avalanche high state bits into rand()'s exposed low bits. */
+    state ^= state >> 16;
+    state *= 0x7FEB352DU;
+    state ^= state >> 15;
+    state *= 0x846CA68BU;
+    state ^= state >> 16;
+    return state;
 }
 
 int rand(void)
@@ -24,11 +40,11 @@ int rand(void)
     unsigned int next;
 
     do {
-        next = rin_libc_rand_next(observed);
+        next = rin_libc_rand_next_state(observed);
     } while (!__atomic_compare_exchange_n(
         &rin_libc_rand_state, &observed, next, 1,
         __ATOMIC_RELAXED, __ATOMIC_RELAXED));
-    return (int)(next & RIN_LIBC_RAND_MAX);
+    return (int)(rin_libc_rand_output(next) & RIN_LIBC_RAND_MAX);
 }
 
 void srand(unsigned int seed)
@@ -43,9 +59,9 @@ int rand_r(unsigned int* seed)
         errno = EINVAL;
         return 0;
     }
-    next = rin_libc_rand_next(*seed);
+    next = rin_libc_rand_next_state(*seed);
     *seed = next;
-    return (int)(next & RIN_LIBC_RAND_MAX);
+    return (int)(rin_libc_rand_output(next) & RIN_LIBC_RAND_MAX);
 }
 
 /* POSIX random(3) uses the same non-cryptographic process-wide generator
