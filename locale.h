@@ -250,15 +250,23 @@ int rin_locale_ctype_map(locale_t locobj, int character,
                          uint32_t operation);
 int rin_locale_current_ctype_map(int character, uint32_t operation);
 
-/* Locale-owned LC_TIME data for the *_l time parsing/formatting entrypoints.
- * The returned strings are immutable and remain valid for the lifetime of
- * the locale object.  LC_GLOBAL_LOCALE selects the process locale. */
+/* *_l時刻関数が参照するLC_TIMEデータ。返却文字列は不変でlocale objectの
+ * 寿命を越えて有効。LC_GLOBAL_LOCALEはprocess localeを選択する。
+ * time_formatのconversionはc/x/X/r。 */
 const char* rin_locale_l_weekday(locale_t locobj, int weekday, int abbreviated);
 const char* rin_locale_l_month(locale_t locobj, int month, int abbreviated);
 const char* rin_locale_l_am_pm(locale_t locobj, int hour);
 const char* rin_locale_l_time_format(locale_t locobj, char conversion);
 const char* rin_locale_l_codeset(locale_t locobj);
 const char* rin_locale_l_currency_string(locale_t locobj);
+enum {
+    RIN_LOCALE_MESSAGE_YESEXPR = 0,
+    RIN_LOCALE_MESSAGE_NOEXPR = 1,
+    RIN_LOCALE_MESSAGE_YESSTR = 2,
+    RIN_LOCALE_MESSAGE_NOSTR = 3
+};
+/* LC_MESSAGES catalog。無効なlocale/itemはNULL、有効だが未提供なら空文字。 */
+const char* rin_locale_l_message(locale_t locobj, int item);
 
 /* ═══════════════════════════════════════════════════════════════
  * RinOS拡張関数

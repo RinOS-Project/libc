@@ -69,10 +69,10 @@ typedef int nl_item;
 #define NOSTR 56
 #define CRNCYSTR 57
 
-/* Catalog-owned strings are immutable. Synthesized CRNCYSTR storage is
- * thread-local and is replaced by the next CRNCYSTR query in this thread.
- * Invalid items/locales return an empty string and set EINVAL; valid catalog
- * items without product data return an empty string without an error. */
+/* locale catalogの文字列は不変で、locale objectの寿命を越えて利用できる。
+ * CRNCYSTRだけはthread-local合成値で、同じthreadの次のCRNCYSTR照会で置き換わる。
+ * 対応localeデータのない有効itemは空文字を返し、errnoを変更しない。
+ * 無効なitemまたはlocaleは空文字とEINVALを返す。 */
 static inline char* rin_langinfo_for_locale(nl_item item, locale_t locale) {
     struct lconv* numeric = NULL;
     const char* value = NULL;
@@ -91,7 +91,7 @@ static inline char* rin_langinfo_for_locale(nl_item item, locale_t locale) {
         value = rin_locale_l_time_format(locale, 'X');
         break;
     case T_FMT_AMPM:
-        value = "";
+        value = rin_locale_l_time_format(locale, 'r');
         break;
     case AM_STR:
         value = rin_locale_l_am_pm(locale, 0);
@@ -152,12 +152,24 @@ static inline char* rin_langinfo_for_locale(nl_item item, locale_t locale) {
     case ERA_D_T_FMT:
     case ERA_T_FMT:
     case ALT_DIGITS:
-    case YESEXPR:
-    case NOEXPR:
-    case YESSTR:
-    case NOSTR:
-        /* The current product catalog has no values for these items. */
+        /* 現行LC_TIME catalogは西暦・Latin数字のみを提供する。 */
+        if (!rin_locale_l_time_format(locale, 'X')) {
+            errno = EINVAL;
+            return (char*)"";
+        }
         value = "";
+        break;
+    case YESEXPR:
+        value = rin_locale_l_message(locale, RIN_LOCALE_MESSAGE_YESEXPR);
+        break;
+    case NOEXPR:
+        value = rin_locale_l_message(locale, RIN_LOCALE_MESSAGE_NOEXPR);
+        break;
+    case YESSTR:
+        value = rin_locale_l_message(locale, RIN_LOCALE_MESSAGE_YESSTR);
+        break;
+    case NOSTR:
+        value = rin_locale_l_message(locale, RIN_LOCALE_MESSAGE_NOSTR);
         break;
     default:
         errno = EINVAL;
