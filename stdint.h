@@ -166,6 +166,33 @@ typedef uint64_t uintmax_t;
 #define UINT64_MAX 18446744073709551615ULL
 #endif
 
+/* C23 exposes the value width of every integer typedef in this header.  The
+ * exact-width and ABI aliases are backed by compiler-selected integer types. */
+#ifndef INT8_WIDTH
+#define INT8_WIDTH 8
+#endif
+#ifndef UINT8_WIDTH
+#define UINT8_WIDTH INT8_WIDTH
+#endif
+#ifndef INT16_WIDTH
+#define INT16_WIDTH 16
+#endif
+#ifndef UINT16_WIDTH
+#define UINT16_WIDTH INT16_WIDTH
+#endif
+#ifndef INT32_WIDTH
+#define INT32_WIDTH 32
+#endif
+#ifndef UINT32_WIDTH
+#define UINT32_WIDTH INT32_WIDTH
+#endif
+#ifndef INT64_WIDTH
+#define INT64_WIDTH 64
+#endif
+#ifndef UINT64_WIDTH
+#define UINT64_WIDTH INT64_WIDTH
+#endif
+
 /* The least-width aliases are the exact-width aliases in the Rin ABI. */
 #ifndef INT_LEAST8_MIN
 #define INT_LEAST8_MIN INT8_MIN
@@ -202,6 +229,31 @@ typedef uint64_t uintmax_t;
 #endif
 #ifndef UINT_LEAST64_MAX
 #define UINT_LEAST64_MAX UINT64_MAX
+#endif
+
+#ifndef INT_LEAST8_WIDTH
+#define INT_LEAST8_WIDTH INT8_WIDTH
+#endif
+#ifndef UINT_LEAST8_WIDTH
+#define UINT_LEAST8_WIDTH INT_LEAST8_WIDTH
+#endif
+#ifndef INT_LEAST16_WIDTH
+#define INT_LEAST16_WIDTH INT16_WIDTH
+#endif
+#ifndef UINT_LEAST16_WIDTH
+#define UINT_LEAST16_WIDTH INT_LEAST16_WIDTH
+#endif
+#ifndef INT_LEAST32_WIDTH
+#define INT_LEAST32_WIDTH INT32_WIDTH
+#endif
+#ifndef UINT_LEAST32_WIDTH
+#define UINT_LEAST32_WIDTH INT_LEAST32_WIDTH
+#endif
+#ifndef INT_LEAST64_WIDTH
+#define INT_LEAST64_WIDTH INT64_WIDTH
+#endif
+#ifndef UINT_LEAST64_WIDTH
+#define UINT_LEAST64_WIDTH INT_LEAST64_WIDTH
 #endif
 
 /* Keep the fast-width limits coupled to the compiler-selected ABI types. */
@@ -254,6 +306,80 @@ typedef uint64_t uintmax_t;
 #endif
 #ifndef UINT_FAST64_MAX
 #define UINT_FAST64_MAX __UINT_FAST64_MAX__
+#endif
+#endif
+
+#ifndef INT_FAST8_WIDTH
+#if defined(_MSC_VER)
+#define INT_FAST8_WIDTH 8
+#elif defined(__INT_FAST8_WIDTH__)
+#define INT_FAST8_WIDTH __INT_FAST8_WIDTH__
+#endif
+#endif
+#if defined(INT_FAST8_WIDTH) && !defined(UINT_FAST8_WIDTH)
+#define UINT_FAST8_WIDTH INT_FAST8_WIDTH
+#endif
+#ifndef INT_FAST16_WIDTH
+#if defined(_MSC_VER)
+#define INT_FAST16_WIDTH 16
+#elif defined(__INT_FAST16_WIDTH__)
+#define INT_FAST16_WIDTH __INT_FAST16_WIDTH__
+#endif
+#endif
+#if defined(INT_FAST16_WIDTH) && !defined(UINT_FAST16_WIDTH)
+#define UINT_FAST16_WIDTH INT_FAST16_WIDTH
+#endif
+#ifndef INT_FAST32_WIDTH
+#if defined(_MSC_VER)
+#define INT_FAST32_WIDTH 32
+#elif defined(__INT_FAST32_WIDTH__)
+#define INT_FAST32_WIDTH __INT_FAST32_WIDTH__
+#endif
+#endif
+#if defined(INT_FAST32_WIDTH) && !defined(UINT_FAST32_WIDTH)
+#define UINT_FAST32_WIDTH INT_FAST32_WIDTH
+#endif
+#ifndef INT_FAST64_WIDTH
+#if defined(_MSC_VER)
+#define INT_FAST64_WIDTH 64
+#elif defined(__INT_FAST64_WIDTH__)
+#define INT_FAST64_WIDTH __INT_FAST64_WIDTH__
+#endif
+#endif
+#if defined(INT_FAST64_WIDTH) && !defined(UINT_FAST64_WIDTH)
+#define UINT_FAST64_WIDTH INT_FAST64_WIDTH
+#endif
+
+#ifndef INTPTR_WIDTH
+#if defined(_MSC_VER)
+#if defined(_WIN64)
+#define INTPTR_WIDTH 64
+#else
+#define INTPTR_WIDTH 32
+#endif
+#elif defined(__INTPTR_WIDTH__)
+#define INTPTR_WIDTH __INTPTR_WIDTH__
+#else
+#define INTPTR_WIDTH (__SIZEOF_POINTER__ * __CHAR_BIT__)
+#endif
+#endif
+#ifndef UINTPTR_WIDTH
+#define UINTPTR_WIDTH INTPTR_WIDTH
+#endif
+#ifndef INTMAX_WIDTH
+#define INTMAX_WIDTH INT64_WIDTH
+#endif
+#ifndef UINTMAX_WIDTH
+#define UINTMAX_WIDTH INTMAX_WIDTH
+#endif
+
+#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
+    __STDC_VERSION__ >= 202311L && \
+    (defined(_MSC_VER) || \
+     (defined(__INT_FAST8_WIDTH__) && defined(__INT_FAST16_WIDTH__) && \
+      defined(__INT_FAST32_WIDTH__) && defined(__INT_FAST64_WIDTH__)))
+#ifndef __STDC_VERSION_STDINT_H__
+#define __STDC_VERSION_STDINT_H__ 202311L
 #endif
 #endif
 

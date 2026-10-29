@@ -2,6 +2,13 @@
 #ifndef _LIMITS_H
 #define _LIMITS_H
 
+#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
+    __STDC_VERSION__ >= 202311L
+#ifndef __STDC_VERSION_LIMITS_H__
+#define __STDC_VERSION_LIMITS_H__ 202311L
+#endif
+#endif
+
 /* Char limits */
 #ifndef CHAR_BIT
 #define CHAR_BIT    8
@@ -74,7 +81,70 @@
 #define ULLONG_MAX  18446744073709551615ULL
 #endif
 #ifndef BITINT_MAXWIDTH
+#ifdef __BITINT_MAXWIDTH__
+#define BITINT_MAXWIDTH __BITINT_MAXWIDTH__
+#else
 #define BITINT_MAXWIDTH 64
+#endif
+#endif
+
+/* C23 integer widths exclude padding bits and include the sign bit for
+ * signed types.  RinOS targets use the compiler's ABI width constants. */
+#ifndef BOOL_WIDTH
+#define BOOL_WIDTH 1
+#endif
+#ifndef CHAR_WIDTH
+#define CHAR_WIDTH CHAR_BIT
+#endif
+#ifndef SCHAR_WIDTH
+#ifdef __SCHAR_WIDTH__
+#define SCHAR_WIDTH __SCHAR_WIDTH__
+#else
+#define SCHAR_WIDTH CHAR_BIT
+#endif
+#endif
+#ifndef UCHAR_WIDTH
+#define UCHAR_WIDTH SCHAR_WIDTH
+#endif
+#ifndef SHRT_WIDTH
+#ifdef __SHRT_WIDTH__
+#define SHRT_WIDTH __SHRT_WIDTH__
+#else
+#define SHRT_WIDTH 16
+#endif
+#endif
+#ifndef USHRT_WIDTH
+#define USHRT_WIDTH SHRT_WIDTH
+#endif
+#ifndef INT_WIDTH
+#ifdef __INT_WIDTH__
+#define INT_WIDTH __INT_WIDTH__
+#else
+#define INT_WIDTH 32
+#endif
+#endif
+#ifndef UINT_WIDTH
+#define UINT_WIDTH INT_WIDTH
+#endif
+#ifndef LONG_WIDTH
+#ifdef __LONG_WIDTH__
+#define LONG_WIDTH __LONG_WIDTH__
+#else
+#define LONG_WIDTH (__SIZEOF_LONG__ * CHAR_BIT)
+#endif
+#endif
+#ifndef ULONG_WIDTH
+#define ULONG_WIDTH LONG_WIDTH
+#endif
+#ifndef LLONG_WIDTH
+#ifdef __LONG_LONG_WIDTH__
+#define LLONG_WIDTH __LONG_LONG_WIDTH__
+#else
+#define LLONG_WIDTH 64
+#endif
+#endif
+#ifndef ULLONG_WIDTH
+#define ULLONG_WIDTH LLONG_WIDTH
 #endif
 
 /* size_t is pointer-width on every supported ABI, including LLP64 hosts. */
