@@ -24,6 +24,7 @@
 #include "sys/syscall.h"
 #include "fcntl_flags.h"
 #include "stdlib.h"
+#include "string.h"
 #if defined(RIN_USERSPACE)
 #include "rin_atomic_wait.h"
 #endif
@@ -3425,19 +3426,22 @@ _STDIO_PRINTF_FN int asprintf(char** result, const char* fmt, ...) {
 
 /* perror - エラーメッセージ出力 */
 _RIN_STDIO_API void perror(const char* s) {
+    int error_number = errno;
+    const char* error_message = strerror(error_number);
     size_t length = 0;
+    size_t error_message_length = 0;
     int result = 0;
+    while (error_message[error_message_length]) ++error_message_length;
     flockfile(stderr);
-    if (!_rin_stdio_claim_byte_orientation(stderr)) {
-        funlockfile(stderr);
-        return;
-    }
     if (s && *s) {
         while (s[length]) ++length;
         if (_rin_stdio_write_all_buffered(stderr, s, length) != 0) result = -1;
         if (_rin_stdio_write_all_buffered(stderr, ": ", 2) != 0) result = -1;
     }
-    if (_rin_stdio_write_all_buffered(stderr, "Error\n", 6) != 0) result = -1;
+    if (_rin_stdio_write_all_buffered(stderr, error_message,
+                                      error_message_length) != 0)
+        result = -1;
+    if (_rin_stdio_write_all_buffered(stderr, "\n", 1) != 0) result = -1;
     (void)result;
     funlockfile(stderr);
 }
