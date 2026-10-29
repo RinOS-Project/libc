@@ -42,11 +42,19 @@ extern "C" {
  * ═══════════════════════════════════════════════════════════════*/
 
 struct dirent {
+#if defined(__RIN_FILE_OFFSET_BITS64)
+    ino64_t        d_ino;           /* inode番号 */
+    off_t          d_off;           /* 次のエントリへの64-bit cookie */
+#else
     unsigned long  d_ino;           /* inode番号 */
     unsigned long  d_off;           /* 次のエントリへのオフセット */
+#endif
     unsigned short d_reclen;        /* このエントリのサイズ */
     unsigned char  d_type;          /* ファイルタイプ */
     char           d_name[256];     /* ファイル名 */
+#if defined(__RIN_FILE_OFFSET_BITS64)
+    uint8_t        d_reserved[5];
+#endif
 };
 
 /* 64-bit inode/cookie を全アーキテクチャで同じ幅に保つ拡張record。 */
@@ -58,6 +66,22 @@ struct dirent64 {
     char           d_name[256];
     uint8_t        d_reserved[5];
 };
+
+#if defined(__RIN_FILE_OFFSET_BITS64)
+#if defined(__cplusplus)
+static_assert(sizeof(struct dirent) == sizeof(RinDirent64Abi),
+              "LFS dirent libc/kernel ABI size drift");
+static_assert(offsetof(struct dirent, d_name) ==
+                  offsetof(RinDirent64Abi, name),
+              "LFS dirent libc/kernel name offset drift");
+#else
+_Static_assert(sizeof(struct dirent) == sizeof(RinDirent64Abi),
+               "LFS dirent libc/kernel ABI size drift");
+_Static_assert(offsetof(struct dirent, d_name) ==
+                   offsetof(RinDirent64Abi, name),
+               "LFS dirent libc/kernel name offset drift");
+#endif
+#endif
 
 #if defined(__cplusplus)
 static_assert(sizeof(struct dirent64) == sizeof(RinDirent64Abi),
@@ -139,6 +163,48 @@ static inline void _rin_dir_unlock(DIR* dirp) {
 
 static inline int _rin_dir_read_entry_locked(DIR* dirp,
                                              struct dirent* output) {
+#if defined(__RIN_FILE_OFFSET_BITS64)
+    struct dirent64 record;
+    intptr_t result;
+    size_t index;
+    int has_terminator = 0;
+    if (dirp->eof) return 0;
+    result = _RIN_DIRENT_SYSCALL3(
+        SYS_READDIR64, (uintptr_t)dirp->fd, (uintptr_t)output,
+        (uintptr_t)sizeof(*output));
+    if (result == 0) {
+        dirp->eof = 1;
+        return 0;
+    }
+    result = _rin_dir_result(result);
+    if (result < 0) return -1;
+    if (result != 1) {
+        errno = EIO;
+        return -1;
+    }
+    memcpy(&record, output, sizeof(record));
+    if (record.d_reclen != sizeof(record)) {
+        errno = EIO;
+        return -1;
+    }
+    for (index = 0u; index < sizeof(record.d_reserved); ++index) {
+        if (record.d_reserved[index] != 0u) {
+            errno = EIO;
+            return -1;
+        }
+    }
+    for (index = 0u; index < sizeof(record.d_name); ++index) {
+        if (record.d_name[index] == '\0') {
+            has_terminator = 1;
+            break;
+        }
+    }
+    if (!has_terminator) {
+        errno = EIO;
+        return -1;
+    }
+    return 1;
+#else
     intptr_t result;
     if (dirp->eof) return 0;
 
@@ -160,6 +226,7 @@ static inline int _rin_dir_read_entry_locked(DIR* dirp,
     if (output != &dirp->entry)
         memcpy(output, &dirp->entry, sizeof(*output));
     return 1;
+#endif
 }
 
 static inline int _rin_dir_read_entry64_locked(DIR* dirp,
@@ -588,6 +655,11 @@ static inline off64_t telldir64(DIR* dirp) {
     return (off64_t)position;
 }
 
+#if defined(__RIN_FILE_OFFSET_BITS64)
+static inline off_t telldir(DIR* dirp) {
+    return (off_t)telldir64(dirp);
+}
+#else
 static inline long telldir(DIR* dirp) {
     off64_t position = telldir64(dirp);
     if (position < 0) return -1;
@@ -597,6 +669,7 @@ static inline long telldir(DIR* dirp) {
     }
     return (long)position;
 }
+#endif
 
 static inline void seekdir64(DIR* dirp, off64_t loc) {
     int64_t position = 0;
@@ -610,9 +683,15 @@ static inline void seekdir64(DIR* dirp, off64_t loc) {
     _rin_dir_unlock(dirp);
 }
 
+#if defined(__RIN_FILE_OFFSET_BITS64)
+static inline void seekdir(DIR* dirp, off_t loc) {
+    seekdir64(dirp, (off64_t)loc);
+}
+#else
 static inline void seekdir(DIR* dirp, long loc) {
     seekdir64(dirp, (off64_t)loc);
 }
+#endif
 
 static inline int dirfd(DIR* dirp) {
     if (!_rin_dir_valid(dirp)) {
