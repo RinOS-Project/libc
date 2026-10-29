@@ -89,6 +89,9 @@
 #ifndef _POSIX_READER_WRITER_LOCKS
 #define _POSIX_READER_WRITER_LOCKS 200809L
 #endif
+#ifndef _POSIX_TIMEOUTS
+#define _POSIX_TIMEOUTS 200809L
+#endif
 #ifndef _POSIX_THREAD_SAFE_FUNCTIONS
 #define _POSIX_THREAD_SAFE_FUNCTIONS -1
 #endif
@@ -2100,7 +2103,6 @@ static inline long sysconf(int name) {
 #endif
         case _SC_THREAD_ROBUST_PRIO_PROTECT:
         case _SC_THREAD_SPORADIC_SERVER:
-        case _SC_TIMEOUTS:
         case _SC_TYPED_MEMORY_OBJECTS:
         case _SC_V7_ILP32_OFF32:
         case _SC_V7_ILP32_OFFBIG:
@@ -2120,6 +2122,7 @@ static inline long sysconf(int name) {
              * unsupported option returns -1 without changing errno. */
             return -1;
         case _SC_THREAD_ROBUST_PRIO_INHERIT:
+        case _SC_TIMEOUTS:
             return 200809L;
         case _SC_SYNCHRONIZED_IO:
         case _SC_FSYNC:
