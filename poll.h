@@ -238,6 +238,62 @@ static inline int __rin_poll_timeval_to_ms(const struct timeval* timeout,
     return 0;
 }
 
+/* Linux updates select()'s timeval with the unspent portion of the original
+ * timeout. Measure only the poll wait, using CLOCK_MONOTONIC so wall-clock
+ * adjustments cannot extend or shorten it. */
+static inline int __rin_select_update_timeval(
+        struct timeval* timeout, const struct timespec* start) {
+    const uint64_t nanoseconds_per_second = UINT64_C(1000000000);
+    struct timespec now;
+    uint64_t requested_ns;
+    uint64_t elapsed_seconds;
+    uint64_t elapsed_ns;
+    uint64_t remaining_ns;
+    int saved_errno;
+
+    if (!timeout || !start) return 0;
+    saved_errno = errno;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    if (start->tv_sec < 0 || start->tv_nsec < 0 ||
+        start->tv_nsec >= 1000000000L || now.tv_sec < 0 ||
+        now.tv_nsec < 0 || now.tv_nsec >= 1000000000L) {
+        errno = EIO;
+        return -1;
+    }
+
+    requested_ns = (uint64_t)timeout->tv_sec * nanoseconds_per_second +
+                   (uint64_t)timeout->tv_usec * UINT64_C(1000);
+    if (now.tv_sec < start->tv_sec ||
+        (now.tv_sec == start->tv_sec && now.tv_nsec < start->tv_nsec)) {
+        elapsed_ns = 0u;
+    } else {
+        elapsed_seconds = (uint64_t)(now.tv_sec - start->tv_sec);
+        if (now.tv_nsec < start->tv_nsec) {
+            if (elapsed_seconds != 0u) --elapsed_seconds;
+            elapsed_ns = nanoseconds_per_second +
+                         (uint64_t)now.tv_nsec -
+                         (uint64_t)start->tv_nsec;
+        } else {
+            elapsed_ns = (uint64_t)now.tv_nsec -
+                         (uint64_t)start->tv_nsec;
+        }
+        if (elapsed_seconds >
+            (UINT64_MAX - elapsed_ns) / nanoseconds_per_second) {
+            elapsed_ns = UINT64_MAX;
+        } else {
+            elapsed_ns += elapsed_seconds * nanoseconds_per_second;
+        }
+    }
+
+    remaining_ns = elapsed_ns >= requested_ns
+        ? 0u : requested_ns - elapsed_ns;
+    timeout->tv_sec = (time_t)(remaining_ns / nanoseconds_per_second);
+    timeout->tv_usec = (long)((remaining_ns % nanoseconds_per_second) /
+                              UINT64_C(1000));
+    errno = saved_errno;
+    return 0;
+}
+
 /* poll - ファイルディスクリプタを監視
  * 戻り値: イベントが発生したfdの数、0=タイムアウト、-1=エラー
  */
@@ -285,6 +341,7 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     int timeout_ms;
     struct pollfd* pfds = NULL;
     nfds_t npfds = 0u;
+    struct timespec timeout_start;
 
     if (nfds < 0 || nfds > FD_SETSIZE) {
         errno = EINVAL;
@@ -298,7 +355,20 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
         return -1;
 
     if (npfds == 0) {
-        const int ret = poll(NULL, 0, timeout_ms);
+        int ret;
+        int poll_errno;
+        if (timeout && clock_gettime(CLOCK_MONOTONIC, &timeout_start) != 0) {
+            free(pfds);
+            return -1;
+        }
+        ret = poll(NULL, 0, timeout_ms);
+        poll_errno = errno;
+        if (timeout && __rin_select_update_timeval(
+                timeout, &timeout_start) != 0) {
+            free(pfds);
+            return -1;
+        }
+        errno = poll_errno;
         /* No descriptor below nfds was requested, so a successful select
          * must clear bits that were set only at or above nfds as well. */
         if (ret >= 0)
@@ -307,7 +377,17 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
         return ret;
     }
 
+    if (timeout && clock_gettime(CLOCK_MONOTONIC, &timeout_start) != 0) {
+        free(pfds);
+        return -1;
+    }
     int ret = poll(pfds, npfds, timeout_ms);
+    int poll_errno = errno;
+    if (timeout && __rin_select_update_timeval(timeout, &timeout_start) != 0) {
+        free(pfds);
+        return -1;
+    }
+    errno = poll_errno;
     if (ret < 0) {
         free(pfds);
         return ret;
