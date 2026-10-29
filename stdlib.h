@@ -733,10 +733,14 @@ static inline void* memalign(size_t alignment, size_t size) {
 /* posix_memalign - POSIX準拠アラインドメモリ確保 */
 static inline int posix_memalign(void** memptr, size_t alignment, size_t size) {
     void* ptr;
-    if (!memptr) return 22;  /* EINVAL */
-    if (alignment < sizeof(void*) || !_rin_is_power_of_two_size(alignment)) return 22;  /* EINVAL */
+    int saved_errno;
+    if (!memptr) return EINVAL;
+    if (alignment < sizeof(void*) || !_rin_is_power_of_two_size(alignment))
+        return EINVAL;
+    saved_errno = errno;
     ptr = _rin_aligned_alloc_internal(alignment, size, 0);
-    if (!ptr) return 12;  /* ENOMEM */
+    errno = saved_errno;
+    if (!ptr) return ENOMEM;
     *memptr = ptr;
     return 0;
 }
