@@ -338,24 +338,26 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     __rin_select_clear_sets(readfds, writefds, exceptfds);
 
     for (nfds_t i = 0u; i < npfds; ++i) {
+        int descriptor_ready = 0;
         if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
             if (readfds) {
                 FD_SET(pfds[i].fd, readfds);
-                ++ready_count;
+                descriptor_ready = 1;
             }
         }
         if (pfds[i].revents & (POLLOUT | POLLERR)) {
             if (writefds) {
                 FD_SET(pfds[i].fd, writefds);
-                ++ready_count;
+                descriptor_ready = 1;
             }
         }
         if (pfds[i].revents & POLLPRI) {
             if (exceptfds) {
                 FD_SET(pfds[i].fd, exceptfds);
-                ++ready_count;
+                descriptor_ready = 1;
             }
         }
+        if (descriptor_ready) ++ready_count;
     }
 
     free(pfds);
@@ -395,24 +397,26 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
         }
         __rin_select_clear_sets(readfds, writefds, exceptfds);
         for (nfds_t i = 0u; i < npfds; ++i) {
+            int descriptor_ready = 0;
             if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
                 if (readfds) {
                     FD_SET(pfds[i].fd, readfds);
-                    ++ready_count;
+                    descriptor_ready = 1;
                 }
             }
             if (pfds[i].revents & (POLLOUT | POLLERR)) {
                 if (writefds) {
                     FD_SET(pfds[i].fd, writefds);
-                    ++ready_count;
+                    descriptor_ready = 1;
                 }
             }
             if (pfds[i].revents & POLLPRI) {
                 if (exceptfds) {
                     FD_SET(pfds[i].fd, exceptfds);
-                    ++ready_count;
+                    descriptor_ready = 1;
                 }
             }
+            if (descriptor_ready) ++ready_count;
         }
         free(pfds);
         return ready_count;
