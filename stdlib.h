@@ -121,6 +121,13 @@ int __rin_stdlib_system_available(void);
 extern "C" {
 #endif
 
+/* POSIX pseudo-terminal allocation API. */
+int posix_openpt(int oflag);
+int grantpt(int fd);
+int unlockpt(int fd);
+char* ptsname(int fd);
+int ptsname_r(int fd, char* buffer, size_t buffer_size);
+
 /* ═══════════════════════════════════════════════════════════════
  * alloca - スタック上のメモリ確保
  * ═══════════════════════════════════════════════════════════════*/

@@ -11,6 +11,7 @@
 #include "../errno.h"
 #include "socket.h"
 #include "syscall.h"
+#include <rin/tty/abi.h>
 
 #ifndef _RIN_IOCTL_SYSCALL3
 #define _RIN_IOCTL_SYSCALL3(number, argument1, argument2, argument3) \
@@ -77,6 +78,14 @@ extern "C" {
 #define TCSBRK      0x5409
 #define TCXONC      0x540A
 #define TCFLSH      0x540B
+
+/* PTY master allocation controls use the public kernel TTY ABI. */
+#ifndef TIOCGPTN
+#define TIOCGPTN    RIN_TTY_IOCTL_TIOCGPTN
+#endif
+#ifndef TIOCSPTLCK
+#define TIOCSPTLCK  RIN_TTY_IOCTL_TIOCSPTLCK
+#endif
 
 #define TIOCEXCL    0x540C  /* 排他モード設定 */
 #define TIOCNXCL    0x540D  /* 排他モード解除 */
