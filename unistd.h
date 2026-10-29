@@ -454,11 +454,16 @@ static inline int _rin_unistd_status(intptr_t result) {
  * ファイル操作
  * ═══════════════════════════════════════════════════════════════*/
 
+/* Keep scalar I/O requests within the kernel's bounded transfer size. */
+#define _RIN_UNISTD_POSITIONAL_IO_MAX 16777216u
+
 static inline ssize_t read(int fd, void* buf, size_t count) {
     if (count > (size_t)SSIZE_MAX) {
         errno = EINVAL;
         return -1;
     }
+    if (count > (size_t)_RIN_UNISTD_POSITIONAL_IO_MAX)
+        count = (size_t)_RIN_UNISTD_POSITIONAL_IO_MAX;
     __rin_pthread_cancel_point_if_linked();
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL3(
         SYS_READ, (uintptr_t)(intptr_t)fd, (uintptr_t)buf, (uintptr_t)count));
@@ -480,6 +485,8 @@ static inline ssize_t write(int fd, const void* buf, size_t count) {
         errno = EINVAL;
         return -1;
     }
+    if (count > (size_t)_RIN_UNISTD_POSITIONAL_IO_MAX)
+        count = (size_t)_RIN_UNISTD_POSITIONAL_IO_MAX;
     __rin_pthread_cancel_point_if_linked();
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL3(
         SYS_WRITE, (uintptr_t)(intptr_t)fd, (uintptr_t)buf, (uintptr_t)count));
@@ -500,8 +507,6 @@ static inline ssize_t write(int fd, const void* buf, size_t count) {
  * same syscall contract is exact on i386 and x86_64.  Large libc requests
  * are split at the kernel's bounded-transfer limit without changing the
  * open-file description position. */
-#define _RIN_UNISTD_POSITIONAL_IO_MAX 16777216u
-
 static inline ssize_t _rin_unistd_positional_io(int fd, void const* buffer,
                                                  size_t count, int64_t offset,
                                                  int is_write) {
