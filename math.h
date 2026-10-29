@@ -91,7 +91,7 @@ typedef long double double_t;
 #if defined(__GNUC__) || defined(__clang__)
 #define HUGE_VAL    __builtin_huge_val()
 #define HUGE_VALF   __builtin_huge_valf()
-#define HUGE_VALL   __builtin_huge_vall()
+#define HUGE_VALL   ((long double)__builtin_huge_val())
 #define INFINITY    __builtin_inff()
 #define NAN         __builtin_nanf("")
 #else
@@ -390,7 +390,7 @@ static inline float nextupf(float x) {
 }
 
 static inline long double nextupl(long double x) {
-    return nextafterl(x, HUGE_VALL);
+    return nextafterl(x, (long double)HUGE_VAL);
 }
 
 static inline double nextdown(double x) {
@@ -402,7 +402,7 @@ static inline float nextdownf(float x) {
 }
 
 static inline long double nextdownl(long double x) {
-    return nextafterl(x, -HUGE_VALL);
+    return nextafterl(x, -(long double)HUGE_VAL);
 }
 
 #ifdef __cplusplus
