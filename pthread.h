@@ -1547,6 +1547,10 @@ extern int pthread_rwlock_init(pthread_rwlock_t* rwlock, const pthread_rwlockatt
 extern int pthread_rwlock_destroy(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_rdlock(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_wrlock(pthread_rwlock_t* rwlock);
+extern int pthread_rwlock_timedrdlock(pthread_rwlock_t* rwlock,
+                                      const struct timespec* abstime);
+extern int pthread_rwlock_timedwrlock(pthread_rwlock_t* rwlock,
+                                      const struct timespec* abstime);
 extern int pthread_rwlock_clockrdlock(
     pthread_rwlock_t* rwlock, clockid_t clock_id,
     const struct timespec* abstime);

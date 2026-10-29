@@ -1889,6 +1889,133 @@ int pthread_rwlock_wrlock(pthread_rwlock_t* rwlock) {
     return 0;
 }
 
+static int rin_pthread_rwlock_timedlock_impl(
+    pthread_rwlock_t* rwlock, const struct timespec* abstime, int writer) {
+    int result;
+    int acquired = 0;
+    int waiter_registered = 0;
+    RinPthreadRwlockWaitCleanup cleanup;
+    if (!rwlock || !abstime || abstime->tv_nsec < 0 ||
+        abstime->tv_nsec >= 1000000000L)
+        return EINVAL;
+
+    result = pthread_mutex_timedlock(&rwlock->mutex, abstime);
+    if (result != 0) return result;
+    cleanup.rwlock = rwlock;
+    cleanup.writer = writer;
+
+    if (writer) {
+        rwlock->waiting_writers++;
+        waiter_registered = 1;
+        while (rin_pthread_rwlock_writer_active(rwlock) ||
+               rwlock->readers > 0) {
+            pthread_cleanup_push(rin_pthread_rwlock_wait_cancel_cleanup,
+                                 &cleanup);
+            result = pthread_cond_timedwait(&rwlock->can_write,
+                                            &rwlock->mutex, abstime);
+            pthread_cleanup_pop(0);
+            if (result != 0) {
+                --rwlock->waiting_writers;
+                waiter_registered = 0;
+                if (rin_pthread_mutex_owned_by_current_thread(
+                        &rwlock->mutex)) {
+                    if (result == ETIMEDOUT &&
+                        !rin_pthread_rwlock_writer_active(rwlock) &&
+                        rwlock->readers == 0 &&
+                        rwlock->waiting_writers == 0) {
+                        rwlock->writer |=
+                            RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
+                        acquired = 1;
+                        result = 0;
+                        break;
+                    }
+                    {
+                        int notify_result =
+                            rin_pthread_rwlock_notify_waiters_locked(rwlock);
+                        int unlock_result =
+                            pthread_mutex_unlock(&rwlock->mutex);
+                        if (notify_result != 0) return notify_result;
+                        if (unlock_result != 0) return unlock_result;
+                    }
+                }
+                return result;
+            }
+        }
+        if (waiter_registered) --rwlock->waiting_writers;
+        if (!acquired) {
+            if (!rin_pthread_rwlock_writer_active(rwlock) &&
+                rwlock->readers == 0) {
+                rwlock->writer |= RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
+            } else {
+                (void)rin_pthread_rwlock_notify_waiters_locked(rwlock);
+                (void)pthread_mutex_unlock(&rwlock->mutex);
+                return EBUSY;
+            }
+        }
+    } else {
+        while (rin_pthread_rwlock_writer_active(rwlock) ||
+               rwlock->waiting_writers > 0) {
+            rwlock->waiting_readers++;
+            pthread_cleanup_push(rin_pthread_rwlock_wait_cancel_cleanup,
+                                 &cleanup);
+            result = pthread_cond_timedwait(&rwlock->can_read,
+                                            &rwlock->mutex, abstime);
+            pthread_cleanup_pop(0);
+            __atomic_fetch_sub(&rwlock->waiting_readers, 1,
+                               __ATOMIC_SEQ_CST);
+            if (result != 0) {
+                if (result == ETIMEDOUT &&
+                    !rin_pthread_rwlock_writer_active(rwlock) &&
+                    rwlock->waiting_writers == 0) {
+                    rwlock->readers++;
+                    acquired = 1;
+                    result = 0;
+                    break;
+                }
+                if (rin_pthread_mutex_owned_by_current_thread(
+                        &rwlock->mutex)) {
+                    int unlock_result =
+                        pthread_mutex_unlock(&rwlock->mutex);
+                    if (unlock_result != 0) return unlock_result;
+                }
+                return result;
+            }
+        }
+        if (!acquired) {
+            if (!rin_pthread_rwlock_writer_active(rwlock) &&
+                rwlock->waiting_writers == 0) {
+                rwlock->readers++;
+            } else {
+                (void)pthread_mutex_unlock(&rwlock->mutex);
+                return EBUSY;
+            }
+        }
+    }
+
+    result = pthread_mutex_unlock(&rwlock->mutex);
+    if (result != 0) {
+        rin_pthread_rwlock_rollback_acquire(rwlock, writer);
+        return result;
+    }
+    return 0;
+}
+
+int pthread_rwlock_timedrdlock(pthread_rwlock_t* rwlock,
+                               const struct timespec* abstime) {
+    int saved_errno = errno;
+    int result = rin_pthread_rwlock_timedlock_impl(rwlock, abstime, 0);
+    errno = saved_errno;
+    return result;
+}
+
+int pthread_rwlock_timedwrlock(pthread_rwlock_t* rwlock,
+                               const struct timespec* abstime) {
+    int saved_errno = errno;
+    int result = rin_pthread_rwlock_timedlock_impl(rwlock, abstime, 1);
+    errno = saved_errno;
+    return result;
+}
+
 int pthread_rwlock_tryrdlock(pthread_rwlock_t* rwlock) {
     int result;
     if (!rwlock) return EINVAL;
