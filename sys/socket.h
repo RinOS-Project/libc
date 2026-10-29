@@ -773,6 +773,10 @@ static inline int sendmmsg(int sockfd, struct mmsghdr* messages,
         return -1;
     }
     if (count == 0u) return 0;
+    if (((unsigned int)flags & MSG_WAITFORONE) != 0u) {
+        errno = EINVAL;
+        return -1;
+    }
     result = __rin_socket_mmsg_call(0, sockfd, messages, count, flags);
     if (__rin_socket_raw_error(result) != 0) result = -1;
     __rin_pthread_cancel_point_if_linked();
@@ -830,6 +834,7 @@ static inline int recvmmsg(int sockfd, struct mmsghdr* messages,
     for (;;) {
         intptr_t raw;
         int wait_result;
+        short poll_events = 0;
         if (!caller_dontwait && !nonblocking) {
             struct pollfd descriptor;
             int poll_timeout = -1;
@@ -861,6 +866,7 @@ static inline int recvmmsg(int sockfd, struct mmsghdr* messages,
                 errno = EAGAIN;
                 return -1;
             }
+            poll_events = descriptor.revents;
         }
 
         raw = __rin_socket_mmsg_call(
@@ -868,7 +874,8 @@ static inline int recvmmsg(int sockfd, struct mmsghdr* messages,
             count - (unsigned int)completed, batch_flags);
         if (raw < 0) {
             int error_number = (int)-raw;
-            if (error_number == EAGAIN && !caller_dontwait && !nonblocking)
+            if (error_number == EAGAIN && !caller_dontwait && !nonblocking &&
+                (poll_events & (POLLERR | POLLHUP | POLLNVAL)) == 0)
                 continue;
             if (has_timeout &&
                 __rin_socket_mmsg_timeout_update(
