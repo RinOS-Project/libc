@@ -37,6 +37,7 @@ extern "C" {
 #define GLOB_TILDE    0x0400  /* チルダ展開 */
 #define GLOB_ONLYDIR  0x1000  /* ディレクトリのみ */
 #define GLOB_ALTDIRFUNC 0x2000 /* glob_tのfilesystem callbacksを使う */
+#define GLOB_MAGCHAR   0x0800 /* glob_t.gl_flags出力専用 */
 
 /* ═══════════════════════════════════════════════════════════════
  * エラーコード
@@ -959,7 +960,8 @@ static inline int _rin_glob_no_match(glob_t* pglob, int flags)
         pglob->gl_pathv = NULL;
         pglob->gl_flags = flags;
         if (!(flags & GLOB_DOOFFS)) pglob->gl_offs = 0u;
-    }
+    } else
+        pglob->gl_flags |= flags;
     return GLOB_NOMATCH;
 }
 
@@ -1042,6 +1044,7 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
     int aggregate_has_result = 0;
     int aggregate_result = 0;
     int alternative_flags;
+    int aggregate_output_flags = 0;
     _RinGlobMatchList matches = {NULL, 0u, 0u};
     char* alternative;
 
@@ -1125,6 +1128,7 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
             aggregate_has_result ? alternative_flags | GLOB_APPEND
                                  : alternative_flags,
             errfunc, &aggregate, brace_depth + 1u);
+        aggregate_output_flags |= aggregate.gl_flags & GLOB_MAGCHAR;
         if (result == 0) {
             aggregate_has_result = 1;
         } else if (result == GLOB_ABORTED) {
@@ -1145,7 +1149,8 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
             if (_rin_glob_match_list_add(&matches, pattern) != 0)
                 return GLOB_NOSPACE;
         } else {
-            return _rin_glob_no_match(pglob, flags);
+            return _rin_glob_no_match(
+                pglob, flags | aggregate_output_flags);
         }
     } else {
         matches.items = (char**)malloc(
@@ -1163,7 +1168,8 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
         aggregate.gl_pathc = 0u;
     }
     if (!(flags & GLOB_NOSORT)) _rin_glob_sort(&matches);
-    found = _rin_glob_commit(pglob, flags, &matches);
+    found = _rin_glob_commit(
+        pglob, flags | aggregate_output_flags, &matches);
     if (found != 0) _rin_glob_match_list_free(&matches);
     return found != 0 ? found : aggregate_result;
 }
@@ -1235,6 +1241,7 @@ static inline int _rin_glob_run_body(
     size_t cursor = 0u;
     size_t old_pathc;
     int has_wildcard = 0;
+    int output_flags;
     int trailing_slash;
     char* prefix;
     _RinGlobComponent* components;
@@ -1312,6 +1319,7 @@ static inline int _rin_glob_run_body(
         if (components[component_count].wildcard > 0) has_wildcard = 1;
         ++component_count;
     }
+    output_flags = flags | (has_wildcard ? GLOB_MAGCHAR : 0);
     context.flags = flags | (trailing_slash ? GLOB_MARK : 0);
     context.require_directory = trailing_slash;
     context.errfunc = errfunc;
@@ -1333,7 +1341,8 @@ static inline int _rin_glob_run_body(
             if (result == GLOB_ABORTED && matches.count != 0u) {
                 int publish_result;
                 if (!(flags & GLOB_NOSORT)) _rin_glob_sort(&matches);
-                publish_result = _rin_glob_commit(pglob, flags, &matches);
+                publish_result = _rin_glob_commit(
+                    pglob, output_flags, &matches);
                 if (publish_result != 0) {
                     _rin_glob_match_list_free(&matches);
                     return publish_result;
@@ -1354,12 +1363,12 @@ static inline int _rin_glob_run_body(
             }
         } else {
             _rin_glob_match_list_free(&matches);
-            return _rin_glob_no_match(pglob, flags);
+            return _rin_glob_no_match(pglob, output_flags);
         }
     }
     if (!(flags & GLOB_NOSORT)) _rin_glob_sort(&matches);
     {
-        int result = _rin_glob_commit(pglob, flags, &matches);
+        int result = _rin_glob_commit(pglob, output_flags, &matches);
         if (result != 0) _rin_glob_match_list_free(&matches);
         return result;
     }
