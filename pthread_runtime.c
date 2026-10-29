@@ -440,7 +440,7 @@ static int rin_thread_stack_take(pthread_t tid, void** alloc_base,
     return found ? 0 : -1;
 }
 
-int pthread_setname_np(pthread_t thread, const char* name) {
+static int rin_pthread_setname_np_impl(pthread_t thread, const char* name) {
     char candidate[16] = {0};
     RinThreadNameCallV1 request;
     intptr_t result;
@@ -461,7 +461,15 @@ int pthread_setname_np(pthread_t thread, const char* name) {
     return _rin_pthread_error_from_result(result);
 }
 
-int pthread_getname_np(pthread_t thread, char* name, size_t length) {
+int pthread_setname_np(pthread_t thread, const char* name) {
+    int saved_errno = errno;
+    int result = rin_pthread_setname_np_impl(thread, name);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_getname_np_impl(pthread_t thread, char* name,
+                                       size_t length) {
     RinThreadNameCallV1 request;
     intptr_t result;
     size_t terminator = RIN_THREAD_NAME_CAPACITY;
@@ -501,6 +509,13 @@ int pthread_getname_np(pthread_t thread, char* name, size_t length) {
     for (size_t index = 0u; index <= terminator; ++index)
         name[index] = request.name[index];
     return 0;
+}
+
+int pthread_getname_np(pthread_t thread, char* name, size_t length) {
+    int saved_errno = errno;
+    int result = rin_pthread_getname_np_impl(thread, name, length);
+    errno = saved_errno;
+    return result;
 }
 
 void __rin_pthread_run_exit_destructors(void) {
@@ -604,8 +619,9 @@ static void rin_pthread_start_release(rin_thread_start_record_t* record,
         &record->start_release, FUTEX_WAKE_PRIVATE, 1, NULL);
 }
 
-int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
-                   void* (*start_routine)(void*), void* arg) {
+static int rin_pthread_create_impl(pthread_t* thread,
+                                   const pthread_attr_t* attr,
+                                   void* (*start_routine)(void*), void* arg) {
     void* stack_usable_base = NULL;
     uintptr_t stack_usable_size = 0;
     uintptr_t stack_guard_size = 0;
@@ -898,7 +914,15 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
     }
 }
 
-int pthread_join(pthread_t thread, void** retval) {
+int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
+                   void* (*start_routine)(void*), void* arg) {
+    int saved_errno = errno;
+    int result = rin_pthread_create_impl(thread, attr, start_routine, arg);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_join_impl(pthread_t thread, void** retval) {
     int detached = 0;
     if (retval) *retval = NULL;
     if (thread == 0u) return ESRCH;
@@ -957,7 +981,14 @@ int pthread_join(pthread_t thread, void** retval) {
     return 0;
 }
 
-int pthread_detach(pthread_t thread) {
+int pthread_join(pthread_t thread, void** retval) {
+    int saved_errno = errno;
+    int result = rin_pthread_join_impl(thread, retval);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_detach_impl(pthread_t thread) {
     int found = 0;
     int already_detached = 0;
 
@@ -994,6 +1025,13 @@ int pthread_detach(pthread_t thread) {
         (void)rin_thread_stack_take(thread, NULL, NULL, NULL, NULL);
         return 0;
     }
+}
+
+int pthread_detach(pthread_t thread) {
+    int saved_errno = errno;
+    int result = rin_pthread_detach_impl(thread);
+    errno = saved_errno;
+    return result;
 }
 
 int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexattr_t* attr) {
@@ -1604,7 +1642,8 @@ static void rin_pthread_once_cancel_reset(void* argument) {
         once_control, FUTEX_WAKE_PRIVATE, 0x7fffffff, NULL);
 }
 
-int pthread_once(pthread_once_t* once_control, void (*init_routine)(void)) {
+static int rin_pthread_once_impl(pthread_once_t* once_control,
+                                 void (*init_routine)(void)) {
     if (!once_control || !init_routine) return EINVAL;
 
 retry_initialization:
@@ -1637,6 +1676,13 @@ retry_initialization:
             goto retry_initialization;
     }
     return 0;
+}
+
+int pthread_once(pthread_once_t* once_control, void (*init_routine)(void)) {
+    int saved_errno = errno;
+    int result = rin_pthread_once_impl(once_control, init_routine);
+    errno = saved_errno;
+    return result;
 }
 
 int pthread_rwlock_init(pthread_rwlock_t* rwlock, const pthread_rwlockattr_t* attr) {

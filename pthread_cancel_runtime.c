@@ -164,7 +164,7 @@ void rin_pthread_cancel_take_exit(pthread_t thread, void** value) {
     rin_pthread_cancel_unlock();
 }
 
-int pthread_setcancelstate(int state, int* oldstate) {
+static int rin_pthread_setcancelstate_impl(int state, int* oldstate) {
     pthread_t self = _RIN_PTHREAD_CANCEL_SELF();
     RinPthreadCancelRecord* record;
     if (state != PTHREAD_CANCEL_ENABLE && state != PTHREAD_CANCEL_DISABLE)
@@ -183,7 +183,14 @@ int pthread_setcancelstate(int state, int* oldstate) {
     return 0;
 }
 
-int pthread_setcanceltype(int type, int* oldtype) {
+int pthread_setcancelstate(int state, int* oldstate) {
+    int saved_errno = errno;
+    int result = rin_pthread_setcancelstate_impl(state, oldstate);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_setcanceltype_impl(int type, int* oldtype) {
     pthread_t self = _RIN_PTHREAD_CANCEL_SELF();
     RinPthreadCancelRecord* record;
     if (type != PTHREAD_CANCEL_DEFERRED &&
@@ -201,6 +208,13 @@ int pthread_setcanceltype(int type, int* oldtype) {
     record->type = type;
     rin_pthread_cancel_unlock();
     return 0;
+}
+
+int pthread_setcanceltype(int type, int* oldtype) {
+    int saved_errno = errno;
+    int result = rin_pthread_setcanceltype_impl(type, oldtype);
+    errno = saved_errno;
+    return result;
 }
 
 int pthread_cancel(pthread_t thread) {
