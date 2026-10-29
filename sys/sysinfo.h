@@ -55,6 +55,32 @@ static inline int sysinfo(struct sysinfo* information) {
                         RIN_SYSTEM_INFO_SNAPSHOT_LAYOUT_LINUX_SYSINFO);
 }
 
+/* Return which Linux sysinfo metrics the kernel can report accurately.
+ * This RinOS extension leaves struct sysinfo's Linux-compatible layout
+ * unchanged. Bits clear in the result correspond to fields that sysinfo()
+ * zero-fills because RinOS has no authoritative value for them. */
+static inline int rin_sysinfo_valid_metrics(uint32_t* valid_metrics_out) {
+    RinSystemInfoSnapshotV1 snapshot = {0};
+    if (valid_metrics_out == 0) {
+        errno = EFAULT;
+        return -1;
+    }
+    snapshot.struct_size = sizeof(snapshot);
+    snapshot.version = RIN_SYSTEM_INFO_SNAPSHOT_VERSION_V1;
+    if (syscall(RIN_SYS_SYSTEM_INFO_SNAPSHOT_V1, &snapshot,
+                RIN_SYSTEM_INFO_SNAPSHOT_LAYOUT_RIN_V1) < 0)
+        return -1;
+    if (snapshot.struct_size != sizeof(snapshot) ||
+        snapshot.version != RIN_SYSTEM_INFO_SNAPSHOT_VERSION_V1 ||
+        (snapshot.valid_metrics & ~RIN_SYSTEM_INFO_SNAPSHOT_DEFINED_MASK) != 0u ||
+        snapshot.reserved != 0u) {
+        errno = EIO;
+        return -1;
+    }
+    *valid_metrics_out = snapshot.valid_metrics;
+    return 0;
+}
+
 #ifdef __cplusplus
 }
 #endif

@@ -619,6 +619,9 @@ static inline int close(int fd) {
 #ifndef CLOSE_RANGE_CLOEXEC
 #define CLOSE_RANGE_CLOEXEC RIN_CLOSE_RANGE_FLAG_CLOEXEC
 #endif
+#ifndef CLOSE_RANGE_UNSHARE
+#define CLOSE_RANGE_UNSHARE RIN_CLOSE_RANGE_FLAG_UNSHARE
+#endif
 
 static inline int close_range(unsigned int first, unsigned int last,
                               int flags) {
@@ -1863,7 +1866,7 @@ static inline int _rin_unistd_get_system_info_snapshot(
     if (information->struct_size != sizeof(*information) ||
         information->version != RIN_SYSTEM_INFO_SNAPSHOT_VERSION_V1 ||
         (information->valid_metrics & RIN_SYSTEM_INFO_SNAPSHOT_MEMORY_VALID) == 0u ||
-        (information->valid_metrics & ~RIN_SYSTEM_INFO_SNAPSHOT_VALID_MASK) != 0u ||
+        (information->valid_metrics & ~RIN_SYSTEM_INFO_SNAPSHOT_DEFINED_MASK) != 0u ||
         information->reserved != 0u || information->total_ram_bytes == 0u ||
         information->available_ram_bytes > information->total_ram_bytes ||
         (information->total_ram_bytes % RIN_SYSTEM_INFO_SNAPSHOT_PAGE_SIZE) != 0u ||
