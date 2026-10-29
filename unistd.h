@@ -1006,6 +1006,10 @@ static inline char* realpath(const char* path, char* resolved_path) {
             }
             link_length = readlink(candidate, link_target, sizeof(link_target));
             if (link_length < 0) goto fail;
+            if (link_length == 0) {
+                errno = ENOENT;
+                goto fail;
+            }
             if ((size_t)link_length >= sizeof(link_target)) {
                 errno = ENAMETOOLONG;
                 goto fail;
