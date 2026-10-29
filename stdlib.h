@@ -91,7 +91,16 @@
 #endif
 #endif
 #ifndef _RIN_STDLIB_SYSTEM_AVAILABLE
-#define _RIN_STDLIB_SYSTEM_AVAILABLE() 0
+#ifndef MIDL_PASS
+#ifdef __cplusplus
+extern "C" {
+#endif
+int __rin_stdlib_system_available(void);
+#ifdef __cplusplus
+}
+#endif
+#endif
+#define _RIN_STDLIB_SYSTEM_AVAILABLE() __rin_stdlib_system_available()
 #endif
 
 #ifndef MIDL_PASS
@@ -347,12 +356,7 @@ static inline char* secure_getenv(const char* name) {
 }
 
 static inline int clearenv(void) {
-    if (environ) {
-        environ[0] = NULL;
-    } else {
-        errno = ENOSYS;
-        return -1;
-    }
+    if (environ) environ[0] = NULL;
     return 0;
 }
 #endif /* !_MSVCRT_COMPAT */
