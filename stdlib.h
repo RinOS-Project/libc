@@ -761,11 +761,13 @@ static inline char* strdup(const char* s) {
     if (!s) return NULL;
     size_t len = _strdup_strlen(s) + 1;
     char* dup = (char*)malloc(len);
-    if (dup) {
-        const char* src = s;
-        char* dst = dup;
-        while (len--) *dst++ = *src++;
+    if (!dup) {
+        errno = ENOMEM;
+        return NULL;
     }
+    const char* src = s;
+    char* dst = dup;
+    while (len--) *dst++ = *src++;
     return dup;
 }
 #endif
@@ -779,13 +781,15 @@ static inline char* strndup(const char* s, size_t n) {
         return NULL;
     }
     char* dup = (char*)malloc(len + 1);
-    if (dup) {
-        const char* src = s;
-        char* dst = dup;
-        size_t i;
-        for (i = 0; i < len; i++) *dst++ = *src++;
-        *dst = '\0';
+    if (!dup) {
+        errno = ENOMEM;
+        return NULL;
     }
+    const char* src = s;
+    char* dst = dup;
+    size_t i;
+    for (i = 0; i < len; i++) *dst++ = *src++;
+    *dst = '\0';
     return dup;
 }
 
