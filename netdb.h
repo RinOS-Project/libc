@@ -1559,8 +1559,8 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     if (((uint32_t)flags & ~RIN_RESOLVED_NAMEINFO_SUPPORTED_FLAGS) != 0u) {
         return EAI_BADFLAGS;
     }
-    host_requested = host != NULL && hostlen != 0u;
-    service_requested = serv != NULL && servlen != 0u;
+    host_requested = host != NULL;
+    service_requested = serv != NULL;
     if (!host_requested && !service_requested) return EAI_NONAME;
 
     memset(numeric_host, 0, sizeof(numeric_host));
