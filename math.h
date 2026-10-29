@@ -279,6 +279,25 @@ static inline int _libc_fpclassify_d(double x) {
     default: _libc_fpclassify_d)(x)
 #define issubnormal(x) (fpclassify(x) == FP_SUBNORMAL)
 #define iszero(x) (fpclassify(x) == FP_ZERO)
+static inline int _libc_issignaling_f(float x) {
+    union { float value; unsigned int bits; } u;
+    u.value = x;
+    unsigned int exponent = (u.bits >> 23) & 0xFFU;
+    unsigned int fraction = u.bits & 0x7FFFFFU;
+    return exponent == 0xFFU && fraction != 0 && (fraction & 0x400000U) == 0;
+}
+static inline int _libc_issignaling_d(double x) {
+    union { double value; unsigned long long bits; } u;
+    u.value = x;
+    unsigned long long exponent = (u.bits >> 52) & 0x7FFU;
+    unsigned long long fraction = u.bits & 0xFFFFFFFFFFFFFULL;
+    return exponent == 0x7FFU && fraction != 0 &&
+           (fraction & (1ULL << 51)) == 0;
+}
+#define issignaling(x) _Generic((x), \
+    float: _libc_issignaling_f, \
+    double: _libc_issignaling_d, \
+    default: _libc_issignaling_d)(x)
 
 #endif /* !__cplusplus */
 
@@ -329,6 +348,27 @@ static inline int iszero(double x) {
 static inline int iszero(long double x) {
     return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL,
                                 FP_SUBNORMAL, FP_ZERO, x) == FP_ZERO;
+}
+
+static inline int issignaling(float x) {
+    union { float value; unsigned int bits; } u;
+    u.value = x;
+    unsigned int exponent = (u.bits >> 23) & 0xFFU;
+    unsigned int fraction = u.bits & 0x7FFFFFU;
+    return exponent == 0xFFU && fraction != 0 && (fraction & 0x400000U) == 0;
+}
+
+static inline int issignaling(double x) {
+    union { double value; unsigned long long bits; } u;
+    u.value = x;
+    unsigned long long exponent = (u.bits >> 52) & 0x7FFU;
+    unsigned long long fraction = u.bits & 0xFFFFFFFFFFFFFULL;
+    return exponent == 0x7FFU && fraction != 0 &&
+           (fraction & (1ULL << 51)) == 0;
+}
+
+static inline int issignaling(long double x) {
+    return issignaling((double)x);
 }
 #endif
 
