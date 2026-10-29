@@ -768,8 +768,12 @@ static inline char* strdup(const char* s) {
 
 static inline char* strndup(const char* s, size_t n) {
     if (!s) return NULL;
-    size_t len = _strdup_strlen(s);
-    if (len > n) len = n;
+    size_t len = 0;
+    while (len < n && s[len] != '\0') len++;
+    if (len == SIZE_MAX) {
+        errno = ENOMEM;
+        return NULL;
+    }
     char* dup = (char*)malloc(len + 1);
     if (dup) {
         const char* src = s;
