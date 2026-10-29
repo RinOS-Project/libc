@@ -225,17 +225,16 @@ static inline const char* inet_ntop(int af, const void* src, char* dst, socklen_
         return NULL;
     }
     if (af == AF_INET) {
-        if (size < 16) {
+        const struct in_addr* addr = (const struct in_addr*)src;
+        char* buf = inet_ntoa(*addr);
+        size_t required = 0u;
+        while (buf[required] != '\0') ++required;
+        if ((size_t)size <= required) {
             errno = ENOSPC;
             return NULL;
         }
-        const struct in_addr* addr = (const struct in_addr*)src;
-        char* buf = inet_ntoa(*addr);
-        char* p = dst;
-        while (*buf && (size_t)(p - dst) < size - 1) {
-            *p++ = *buf++;
-        }
-        *p = '\0';
+        for (size_t index = 0u; index <= required; ++index)
+            dst[index] = buf[index];
         return dst;
     }
     if (af == AF_INET6) {
