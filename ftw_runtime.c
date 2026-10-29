@@ -180,8 +180,7 @@ static int rin_ftw_read_names(const char* path, RinFtwNames* names) {
 static char* rin_ftw_child_path(const char* parent, const char* child) {
     size_t parent_length = rin_ftw_length(parent);
     size_t child_length = rin_ftw_length(child);
-    int needs_separator = parent_length != 0u &&
-                          parent[parent_length - 1u] != '/';
+    int needs_separator = !(parent_length == 1u && parent[0] == '/');
     size_t total = parent_length + (needs_separator ? 1u : 0u) + child_length;
     char* result;
     size_t index;
@@ -221,14 +220,13 @@ static char* rin_ftw_parent_path(const char* path) {
     return rin_ftw_copy(path, length);
 }
 
-static int rin_ftw_invoke(RinFtwState* state, const char* display_path,
-                          const char* walk_path,
+static int rin_ftw_invoke(RinFtwState* state, const char* path,
                           const struct stat* status, int type, int level) {
     struct FTW information;
     int result;
     int callback_errno;
     if ((state->flags & FTW_CHDIR) != 0) {
-        char* parent = rin_ftw_parent_path(walk_path);
+        char* parent = rin_ftw_parent_path(path);
         if (!parent) return -1;
         if (chdir(parent) != 0) {
             free(parent);
@@ -237,13 +235,13 @@ static int rin_ftw_invoke(RinFtwState* state, const char* display_path,
         free(parent);
     }
 
-    information.base = (int)rin_ftw_base(display_path);
+    information.base = (int)rin_ftw_base(path);
     information.level = level;
     errno = 0;
     if (state->is_nftw)
-        result = state->callback4(display_path, status, type, &information);
+        result = state->callback4(path, status, type, &information);
     else
-        result = state->callback3(display_path, status, type);
+        result = state->callback3(path, status, type);
     callback_errno = errno;
     if (result != 0) {
         if (result == -1 && callback_errno == 0) {
@@ -258,8 +256,7 @@ static int rin_ftw_invoke(RinFtwState* state, const char* display_path,
     return 0;
 }
 
-static int rin_ftw_stat_error(RinFtwState* state, const char* walk_path,
-                              const char* display_path,
+static int rin_ftw_stat_error(RinFtwState* state, const char* path,
                               int level, int stat_error) {
     struct stat link_status;
     struct stat empty_status;
@@ -271,16 +268,14 @@ static int rin_ftw_stat_error(RinFtwState* state, const char* walk_path,
     for (index = 0u; index < sizeof(empty_status); ++index) bytes[index] = 0u;
     if ((state->flags & FTW_PHYS) == 0 &&
         (stat_error == ENOENT || stat_error == ENOTDIR) &&
-        lstat(walk_path, &link_status) == 0 &&
-        S_ISLNK(link_status.st_mode)) {
+        lstat(path, &link_status) == 0 && S_ISLNK(link_status.st_mode)) {
         type = FTW_SLN;
         callback_status = &link_status;
     } else if (stat_error != EACCES) {
         errno = stat_error;
         return -1;
     }
-    return rin_ftw_invoke(state, display_path, walk_path, callback_status,
-                          type, level);
+    return rin_ftw_invoke(state, path, callback_status, type, level);
 }
 
 static int rin_ftw_seen_ancestor(const RinFtwAncestor* ancestor,
@@ -296,8 +291,7 @@ static int rin_ftw_seen_ancestor(const RinFtwAncestor* ancestor,
 
 /* Return zero to continue, one when a callback requested a stop, and minus
  * one for a traversal error. */
-static int rin_ftw_walk(RinFtwState* state, const char* walk_path,
-                        const char* display_path, int level,
+static int rin_ftw_walk(RinFtwState* state, const char* path, int level,
                         const RinFtwAncestor* ancestors, int is_root) {
     struct stat status;
     RinFtwNames names;
@@ -308,38 +302,32 @@ static int rin_ftw_walk(RinFtwState* state, const char* walk_path,
     int result;
     size_t index;
 
-    if ((physical ? lstat(walk_path, &status) : stat(walk_path, &status)) != 0)
-        return rin_ftw_stat_error(state, walk_path, display_path, level,
-                                  errno);
+    if ((physical ? lstat(path, &status) : stat(path, &status)) != 0)
+        return rin_ftw_stat_error(state, path, level, errno);
 
     if (!is_root && (state->flags & FTW_MOUNT) != 0 &&
         status.st_dev != state->root_device)
         return 0;
 
     if (S_ISLNK(status.st_mode) && physical)
-        return rin_ftw_invoke(state, display_path, walk_path, &status,
-                              FTW_SL, level);
+        return rin_ftw_invoke(state, path, &status, FTW_SL, level);
 
     if (!S_ISDIR(status.st_mode))
-        return rin_ftw_invoke(state, display_path, walk_path, &status,
-                              FTW_F, level);
+        return rin_ftw_invoke(state, path, &status, FTW_F, level);
 
     directory_cycle = !physical && rin_ftw_seen_ancestor(ancestors, &status);
     if (directory_cycle) {
         if (depth_first) return 0;
-        return rin_ftw_invoke(state, display_path, walk_path, &status,
-                              FTW_D, level);
+        return rin_ftw_invoke(state, path, &status, FTW_D, level);
     }
 
-    read_result = rin_ftw_read_names(walk_path, &names);
+    read_result = rin_ftw_read_names(path, &names);
     if (read_result == 1)
-        return rin_ftw_invoke(state, display_path, walk_path, &status,
-                              FTW_DNR, level);
+        return rin_ftw_invoke(state, path, &status, FTW_DNR, level);
     if (read_result < 0) return -1;
 
     if (!depth_first) {
-        result = rin_ftw_invoke(state, display_path, walk_path, &status,
-                                FTW_D, level);
+        result = rin_ftw_invoke(state, path, &status, FTW_D, level);
         if (result != 0) {
             rin_ftw_names_clear(&names);
             return result;
@@ -352,26 +340,15 @@ static int rin_ftw_walk(RinFtwState* state, const char* walk_path,
         current.inode = status.st_ino;
         current.parent = ancestors;
         for (index = 0u; index < names.count; ++index) {
-            char* child_walk_path = rin_ftw_child_path(walk_path,
-                                                        names.values[index]);
-            char* child_display_path;
-            if (!child_walk_path) {
-                rin_ftw_names_clear(&names);
-                return -1;
-            }
-            child_display_path = rin_ftw_child_path(display_path,
-                                                      names.values[index]);
-            if (!child_display_path) {
-                free(child_walk_path);
+            char* child_path = rin_ftw_child_path(path, names.values[index]);
+            if (!child_path) {
                 rin_ftw_names_clear(&names);
                 return -1;
             }
             result = level == INT_MAX
                 ? (errno = EOVERFLOW, -1)
-                : rin_ftw_walk(state, child_walk_path, child_display_path,
-                               level + 1, &current, 0);
-            free(child_display_path);
-            free(child_walk_path);
+                : rin_ftw_walk(state, child_path, level + 1, &current, 0);
+            free(child_path);
             if (result != 0) {
                 rin_ftw_names_clear(&names);
                 return result;
@@ -381,8 +358,7 @@ static int rin_ftw_walk(RinFtwState* state, const char* walk_path,
     rin_ftw_names_clear(&names);
 
     if (depth_first)
-        return rin_ftw_invoke(state, display_path, walk_path, &status,
-                              FTW_DP, level);
+        return rin_ftw_invoke(state, path, &status, FTW_DP, level);
     return 0;
 }
 
@@ -420,6 +396,9 @@ static char* rin_ftw_absolute_path(const char* path, const char* cwd) {
     }
     if (!result) return NULL;
 
+    path_length = rin_ftw_length(result);
+    while (path_length > 1u && result[path_length - 1u] == '/')
+        result[--path_length] = '\0';
     return result;
 }
 
@@ -431,7 +410,6 @@ static int rin_ftw_run(const char* path, int fd_limit, int flags,
     char cwd[PATH_MAX];
     char* saved_cwd = NULL;
     char* walk_path = NULL;
-    char* display_path = NULL;
     int traversal_locked = 0;
     int result;
     int saved_errno;
@@ -494,6 +472,7 @@ static int rin_ftw_run(const char* path, int fd_limit, int flags,
         traversal_locked = 0;
     } else {
         size_t length = rin_ftw_length(path);
+        while (length > 1u && path[length - 1u] == '/') --length;
         if (length >= PATH_MAX) {
             errno = ENAMETOOLONG;
             result = -1;
@@ -506,12 +485,6 @@ static int rin_ftw_run(const char* path, int fd_limit, int flags,
         }
     }
 
-    display_path = rin_ftw_copy(path, rin_ftw_length(path));
-    if (!display_path) {
-        result = -1;
-        goto done;
-    }
-
     state.flags = flags;
     state.is_nftw = is_nftw;
     state.root_device = 0;
@@ -522,21 +495,19 @@ static int rin_ftw_run(const char* path, int fd_limit, int flags,
     if ((flags & FTW_MOUNT) != 0) {
         if ((flags & FTW_PHYS) != 0) {
             if (lstat(walk_path, &root_status) != 0) {
-                result = rin_ftw_stat_error(&state, walk_path, display_path,
-                                            0, errno);
+                result = rin_ftw_stat_error(&state, walk_path, 0, errno);
                 if (state.stopped) result = state.stop_value;
                 goto finished_walk;
             }
         } else if (stat(walk_path, &root_status) != 0) {
-            result = rin_ftw_stat_error(&state, walk_path, display_path,
-                                        0, errno);
+            result = rin_ftw_stat_error(&state, walk_path, 0, errno);
             if (state.stopped) result = state.stop_value;
             goto finished_walk;
         }
         state.root_device = root_status.st_dev;
     }
 
-    result = rin_ftw_walk(&state, walk_path, display_path, 0, NULL, 1);
+    result = rin_ftw_walk(&state, walk_path, 0, NULL, 1);
     if (state.stopped) result = state.stop_value;
 
 finished_walk:
@@ -548,7 +519,6 @@ finished_walk:
     errno = saved_errno;
 done:
     free(walk_path);
-    free(display_path);
     free(saved_cwd);
     if (traversal_locked) {
         int unlock_result = pthread_mutex_unlock(&g_rin_ftw_chdir_mutex);

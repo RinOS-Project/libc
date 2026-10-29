@@ -213,13 +213,6 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
         }
         {
             long wait_result;
-            /* A negative CLOCK_REALTIME deadline is already expired. Retry
-             * the atomic acquisition check once before returning timeout,
-             * and never pass an invalid absolute time to the futex ABI. */
-            if (abstime && abstime->tv_sec < 0) {
-                timed_out = 1;
-                continue;
-            }
             if (abstime) {
                 wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
                     &mutex->locked,
@@ -1011,7 +1004,8 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
 int pthread_mutex_timedlock(pthread_mutex_t* mutex,
                             const struct timespec* abstime) {
     if (!mutex || !abstime) return EINVAL;
-    if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
+    if (abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
+        abstime->tv_nsec >= 1000000000L)
         return EINVAL;
 
     pthread_t self = _RIN_PTHREAD_RUNTIME_SELF();
@@ -1041,14 +1035,6 @@ int pthread_mutex_timedlock(pthread_mutex_t* mutex,
             if (c != 2)
                 c = __atomic_exchange_n(&mutex->locked, 2, __ATOMIC_ACQUIRE);
             while (c != 0) {
-                if (abstime->tv_sec < 0) {
-                    int unlocked = 0;
-                    if (__atomic_compare_exchange_n(
-                            &mutex->locked, &unlocked, 2, 0,
-                            __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
-                        break;
-                    return ETIMEDOUT;
-                }
                 long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
                     &mutex->locked,
                     rin_pthread_mutex_futex_operation(

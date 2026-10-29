@@ -111,20 +111,6 @@ static inline unsigned int __rin_mxcsr_get(void) {
 static inline void __rin_mxcsr_set(unsigned int mxcsr) {
     __asm__ volatile ("ldmxcsr %0" : : "m"(mxcsr) : "memory");
 }
-
-/* SSE/SIMD rounding is the canonical mode. Keep x87 in step when an
- * application has changed MXCSR directly. */
-static inline unsigned int __rin_fenv_mxcsr_round(void) {
-    return (__rin_mxcsr_get() >> 3) & 0x0C00u;
-}
-
-static inline void __rin_fenv_set_x87_round(unsigned int round) {
-    unsigned short control;
-    __asm__ volatile ("fnstcw %0" : "=m"(control));
-    control = (unsigned short)((control & (unsigned short)~0x0C00u) |
-                               (round & 0x0C00u));
-    __asm__ volatile ("fldcw %0" : : "m"(control));
-}
 #endif
 #endif
 
@@ -203,9 +189,9 @@ static inline int fesetexceptflag(const fexcept_t* flagp, int excepts) {
 /* 丸めモードを取得 */
 static inline int fegetround(void) {
 #if defined(__i386__) || defined(__x86_64__)
-    unsigned int round = __rin_fenv_mxcsr_round();
-    __rin_fenv_set_x87_round(round);
-    return (int)round;
+    unsigned short control;
+    __asm__ volatile ("fnstcw %0" : "=m"(control));
+    return control & 0x0C00;
 #else
     return FE_TONEAREST;
 #endif
@@ -245,10 +231,7 @@ static inline int fegetenv(fenv_t* envp) {
 
 #if defined(__i386__) || defined(__x86_64__)
     __rin_x87_environment_t x87_environment;
-    unsigned int round = __rin_fenv_mxcsr_round();
     __rin_x87_getenv(&x87_environment);
-    x87_environment.control = (unsigned short)(
-        (x87_environment.control & (unsigned short)~0x0C00u) | round);
     *envp = __fe_dfl_env;
     envp->__control = x87_environment.control;
     envp->__status = x87_environment.status;
@@ -269,17 +252,13 @@ static inline int fesetenv(const fenv_t* envp) {
 
 #if defined(__i386__) || defined(__x86_64__)
     __rin_x87_environment_t x87_environment;
-    unsigned int mxcsr = envp->__others[0];
-    unsigned int round = (mxcsr >> 3) & 0x0C00u;
     __rin_x87_getenv(&x87_environment);
     x87_environment.control = (unsigned short)envp->__control;
-    x87_environment.control = (unsigned short)(
-        (x87_environment.control & (unsigned short)~0x0C00u) | round);
     x87_environment.status = (unsigned short)envp->__status;
     x87_environment.tag = (unsigned short)envp->__tag;
     __rin_x87_setenv(&x87_environment);
 #if defined(__i386__) || defined(__x86_64__)
-    __rin_mxcsr_set(mxcsr);
+    __rin_mxcsr_set(envp->__others[0]);
 #endif
 #else
     return -1;
