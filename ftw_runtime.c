@@ -4,6 +4,7 @@
 
 #include "dirent.h"
 #include "errno.h"
+#include "fcntl.h"
 #include "limits.h"
 #include "pthread.h"
 #include "stdlib.h"
@@ -28,6 +29,7 @@ typedef struct RinFtwAncestor {
 typedef struct RinFtwState {
     int flags;
     int is_nftw;
+    int fd_limit;
     dev_t root_device;
     RinFtwCallback3 callback3;
     RinFtwCallback4 callback4;
@@ -125,19 +127,19 @@ static int rin_ftw_names_append(RinFtwNames* names, const char* name,
     return 0;
 }
 
-/* Return zero for a complete snapshot, one when the directory is unreadable,
- * and minus one for all other errors. The stream is always closed before the
- * caller descends, so a one-descriptor limit is sufficient at every depth. */
-static int rin_ftw_read_names(const char* path, RinFtwNames* names) {
-    DIR* directory;
+/* 0は一覧取得成功、1は読み取り不可、-1はその他のエラーを表す。
+ * 子へ進む前にdirectory streamを閉じる。 */
+static int rin_ftw_read_names_stream(DIR* directory, RinFtwNames* names) {
     int read_error = 0;
     int close_error = 0;
 
+    if (!directory || !names) {
+        errno = EFAULT;
+        return -1;
+    }
     names->values = NULL;
     names->count = 0u;
     names->capacity = 0u;
-    directory = opendir(path);
-    if (!directory) return errno == EACCES ? 1 : -1;
 
     for (;;) {
         struct dirent* entry;
@@ -175,6 +177,34 @@ static int rin_ftw_read_names(const char* path, RinFtwNames* names) {
         return -1;
     }
     return 0;
+}
+
+static int rin_ftw_read_names(const char* path, RinFtwNames* names) {
+    DIR* directory;
+    if (!path || !names) {
+        errno = EFAULT;
+        return -1;
+    }
+    directory = opendir(path);
+    if (!directory) return errno == EACCES ? 1 : -1;
+    return rin_ftw_read_names_stream(directory, names);
+}
+
+static int rin_ftw_read_names_fd(int descriptor, RinFtwNames* names) {
+    DIR* directory;
+    if (descriptor < 0 || !names) {
+        if (descriptor >= 0) (void)close(descriptor);
+        errno = EFAULT;
+        return -1;
+    }
+    directory = fdopendir(descriptor);
+    if (!directory) {
+        int saved_errno = errno;
+        (void)close(descriptor);
+        errno = saved_errno;
+        return saved_errno == EACCES ? 1 : -1;
+    }
+    return rin_ftw_read_names_stream(directory, names);
 }
 
 static char* rin_ftw_child_path(const char* parent, const char* child) {
@@ -221,9 +251,12 @@ static char* rin_ftw_parent_path(const char* path) {
     return rin_ftw_copy(path, length);
 }
 
-static int rin_ftw_invoke(RinFtwState* state, const char* display_path,
-                          const char* walk_path,
-                          const struct stat* status, int type, int level) {
+static int rin_ftw_invoke_checked(RinFtwState* state,
+                                  const char* display_path,
+                                  const char* walk_path,
+                                  const struct stat* status, int type,
+                                  int level,
+                                  const struct stat* expected_parent) {
     struct FTW information;
     int result;
     int callback_errno;
@@ -235,6 +268,15 @@ static int rin_ftw_invoke(RinFtwState* state, const char* display_path,
             return -1;
         }
         free(parent);
+        if (expected_parent) {
+            struct stat current_directory;
+            if (stat(".", &current_directory) != 0) return -1;
+            if (current_directory.st_dev != expected_parent->st_dev ||
+                current_directory.st_ino != expected_parent->st_ino) {
+                errno = EAGAIN;
+                return -1;
+            }
+        }
     }
 
     information.base = (int)rin_ftw_base(display_path);
@@ -256,6 +298,13 @@ static int rin_ftw_invoke(RinFtwState* state, const char* display_path,
     }
     errno = callback_errno;
     return 0;
+}
+
+static int rin_ftw_invoke(RinFtwState* state, const char* display_path,
+                          const char* walk_path,
+                          const struct stat* status, int type, int level) {
+    return rin_ftw_invoke_checked(state, display_path, walk_path, status,
+                                  type, level, NULL);
 }
 
 static int rin_ftw_stat_error(RinFtwState* state, const char* walk_path,
@@ -294,6 +343,340 @@ static int rin_ftw_seen_ancestor(const RinFtwAncestor* ancestor,
     return 0;
 }
 
+static int rin_ftw_same_object(const struct stat* left,
+                               const struct stat* right) {
+    return left && right && left->st_dev == right->st_dev &&
+           left->st_ino == right->st_ino;
+}
+
+/* 絶対pathをcomponentごとに開き、symlinkを経由しないdirectory FDを返す。 */
+static int rin_ftw_open_directory_path(const char* path, int fd_limit,
+                                       const struct stat* expected) {
+    const int directory_flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC |
+                                O_NOFOLLOW;
+    struct stat status;
+    size_t cursor = 0u;
+    int descriptor;
+    if (!path || path[0] != '/') {
+        errno = EINVAL;
+        return -1;
+    }
+    descriptor = open("/", directory_flags);
+    if (descriptor < 0) return -1;
+    while (path[cursor] == '/') ++cursor;
+    while (path[cursor] != '\0') {
+        char component[NAME_MAX + 1u];
+        size_t start = cursor;
+        size_t length;
+        int next_descriptor;
+        while (path[cursor] != '\0' && path[cursor] != '/') ++cursor;
+        length = cursor - start;
+        while (path[cursor] == '/') ++cursor;
+        if (length == 0u ||
+            (length == 1u && path[start] == '.'))
+            continue;
+        if (length > NAME_MAX) {
+            (void)close(descriptor);
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        if (fd_limit < 2) {
+            (void)close(descriptor);
+            errno = EMFILE;
+            return -1;
+        }
+        for (size_t index = 0u; index < length; ++index)
+            component[index] = path[start + index];
+        component[length] = '\0';
+        next_descriptor = openat(descriptor, component, directory_flags);
+        if (next_descriptor < 0) {
+            int saved_errno = errno;
+            (void)close(descriptor);
+            errno = saved_errno;
+            return -1;
+        }
+        if (fstat(next_descriptor, &status) != 0) {
+            int saved_errno = errno;
+            (void)close(next_descriptor);
+            (void)close(descriptor);
+            errno = saved_errno;
+            return -1;
+        }
+        if (close(descriptor) != 0) {
+            int saved_errno = errno;
+            (void)close(next_descriptor);
+            errno = saved_errno;
+            return -1;
+        }
+        descriptor = next_descriptor;
+    }
+    if (fstat(descriptor, &status) != 0) {
+        int saved_errno = errno;
+        (void)close(descriptor);
+        errno = saved_errno;
+        return -1;
+    }
+    if (expected && !rin_ftw_same_object(&status, expected)) {
+        (void)close(descriptor);
+        errno = EAGAIN;
+        return -1;
+    }
+    return descriptor;
+}
+
+/* 親directoryをno-followで開き、必要なら既知のinode identityを確認する。 */
+static int rin_ftw_open_parent_path(const char* path, int fd_limit,
+                                    const struct stat* expected_parent,
+                                    int* parent_descriptor,
+                                    struct stat* parent_status,
+                                    char leaf[NAME_MAX + 1u]) {
+    size_t length;
+    size_t leaf_start;
+    size_t leaf_length;
+    size_t slash;
+    size_t parent_length;
+    char* parent_path;
+    int descriptor;
+    if (!path || !parent_descriptor || !parent_status || !leaf ||
+        path[0] != '/') {
+        errno = EINVAL;
+        return -1;
+    }
+    length = rin_ftw_length(path);
+    while (length > 1u && path[length - 1u] == '/') --length;
+    if (length == 1u && path[0] == '/') {
+        *parent_descriptor = -1;
+        leaf[0] = '\0';
+        (void)fd_limit;
+        (void)parent_status;
+        return 0;
+    }
+    slash = length;
+    while (slash > 0u && path[slash - 1u] != '/') --slash;
+    leaf_start = slash;
+    leaf_length = length - leaf_start;
+    if (leaf_length == 0u || leaf_length > NAME_MAX) {
+        errno = leaf_length == 0u ? EINVAL : ENAMETOOLONG;
+        return -1;
+    }
+    for (size_t index = 0u; index < leaf_length; ++index)
+        leaf[index] = path[leaf_start + index];
+    leaf[leaf_length] = '\0';
+    parent_length = slash <= 1u ? 1u : slash - 1u;
+    parent_path = rin_ftw_copy(path, parent_length);
+    if (!parent_path) return -1;
+    descriptor = rin_ftw_open_directory_path(parent_path, fd_limit,
+                                              expected_parent);
+    free(parent_path);
+    if (descriptor < 0) return -1;
+    if (fstat(descriptor, parent_status) != 0) {
+        int saved_errno = errno;
+        (void)close(descriptor);
+        errno = saved_errno;
+        return -1;
+    }
+    *parent_descriptor = descriptor;
+    return 0;
+}
+
+/* FTW_PHYSは親directoryのidentityを確認したdescriptor相対走査を使う。 */
+static int rin_ftw_walk_physical(RinFtwState* state, const char* walk_path,
+                                 const char* display_path, int level,
+                                 const RinFtwAncestor* ancestors,
+                                 int is_root) {
+    struct stat expected_parent_storage;
+    const struct stat* expected_parent = NULL;
+    struct stat parent_status;
+    struct stat status;
+    struct stat opened_status;
+    char leaf[NAME_MAX + 1u];
+    int parent_descriptor = -1;
+    int node_descriptor = -1;
+    int parent_result;
+    int result;
+    int depth_first = (state->flags & FTW_DEPTH) != 0;
+    int root_is_slash;
+    int directory_cycle;
+    if (ancestors) {
+        unsigned char* bytes = (unsigned char*)&expected_parent_storage;
+        for (size_t index = 0u; index < sizeof(expected_parent_storage); ++index)
+            bytes[index] = 0u;
+        expected_parent_storage.st_dev = ancestors->device;
+        expected_parent_storage.st_ino = ancestors->inode;
+        expected_parent = &expected_parent_storage;
+    }
+    parent_result = rin_ftw_open_parent_path(
+        walk_path, state->fd_limit, expected_parent, &parent_descriptor,
+        &parent_status, leaf);
+    if (parent_result < 0) return -1;
+    root_is_slash = parent_descriptor < 0;
+
+    if (root_is_slash) {
+        node_descriptor = rin_ftw_open_directory_path(
+            walk_path, state->fd_limit, NULL);
+        if (node_descriptor < 0) return -1;
+        if (fstat(node_descriptor, &status) != 0) {
+            int saved_errno = errno;
+            (void)close(node_descriptor);
+            errno = saved_errno;
+            return -1;
+        }
+        parent_status = status;
+    } else if (fstatat(parent_descriptor, leaf, &status,
+                      AT_SYMLINK_NOFOLLOW) != 0) {
+        int stat_error = errno;
+        if (stat_error == EACCES) {
+            struct stat empty_status;
+            unsigned char* bytes = (unsigned char*)&empty_status;
+            for (size_t index = 0u; index < sizeof(empty_status); ++index)
+                bytes[index] = 0u;
+            result = rin_ftw_invoke_checked(state, display_path, walk_path,
+                &empty_status, FTW_NS, level, &parent_status);
+            (void)close(parent_descriptor);
+            return result;
+        }
+        (void)close(parent_descriptor);
+        errno = stat_error;
+        return -1;
+    }
+
+    if (is_root && (state->flags & FTW_MOUNT) != 0)
+        state->root_device = status.st_dev;
+    if (!is_root && (state->flags & FTW_MOUNT) != 0 &&
+        status.st_dev != state->root_device) {
+        if (parent_descriptor >= 0) (void)close(parent_descriptor);
+        return 0;
+    }
+    if (S_ISLNK(status.st_mode)) {
+        result = rin_ftw_invoke_checked(state, display_path, walk_path,
+            &status, FTW_SL, level, &parent_status);
+        if (parent_descriptor >= 0) (void)close(parent_descriptor);
+        return result;
+    }
+    if (!S_ISDIR(status.st_mode)) {
+        result = rin_ftw_invoke_checked(state, display_path, walk_path,
+            &status, FTW_F, level, &parent_status);
+        if (parent_descriptor >= 0) (void)close(parent_descriptor);
+        return result;
+    }
+
+    directory_cycle = rin_ftw_seen_ancestor(ancestors, &status);
+    if (directory_cycle) {
+        if (parent_descriptor >= 0) (void)close(parent_descriptor);
+        if (depth_first) return 0;
+        return rin_ftw_invoke_checked(state, display_path, walk_path,
+            &status, FTW_D, level, &parent_status);
+    }
+
+    if (!root_is_slash) {
+        if (state->fd_limit < 2) {
+            (void)close(parent_descriptor);
+            errno = EMFILE;
+            return -1;
+        }
+        node_descriptor = openat(parent_descriptor, leaf,
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    }
+    if (node_descriptor < 0) {
+        int open_error = errno;
+        struct stat replacement;
+        if (!root_is_slash &&
+            fstatat(parent_descriptor, leaf, &replacement,
+                    AT_SYMLINK_NOFOLLOW) == 0 &&
+            S_ISLNK(replacement.st_mode)) {
+            result = rin_ftw_invoke_checked(state, display_path, walk_path,
+                &replacement, FTW_SL, level, &parent_status);
+            (void)close(parent_descriptor);
+            return result;
+        }
+        if (open_error == EACCES) {
+            result = rin_ftw_invoke_checked(state, display_path, walk_path,
+                &status, FTW_DNR, level, &parent_status);
+            (void)close(parent_descriptor);
+            return result;
+        }
+        if (parent_descriptor >= 0) (void)close(parent_descriptor);
+        errno = open_error;
+        return -1;
+    }
+    if (fstat(node_descriptor, &opened_status) != 0) {
+        int saved_errno = errno;
+        (void)close(node_descriptor);
+        if (parent_descriptor >= 0) (void)close(parent_descriptor);
+        errno = saved_errno;
+        return -1;
+    }
+    if (!rin_ftw_same_object(&status, &opened_status)) {
+        (void)close(node_descriptor);
+        if (parent_descriptor >= 0) (void)close(parent_descriptor);
+        errno = EAGAIN;
+        return -1;
+    }
+    status = opened_status;
+    if (parent_descriptor >= 0) {
+        if (close(parent_descriptor) != 0) {
+            int saved_errno = errno;
+            (void)close(node_descriptor);
+            errno = saved_errno;
+            return -1;
+        }
+        parent_descriptor = -1;
+    }
+
+    {
+        RinFtwNames names;
+        RinFtwAncestor current;
+        int read_result = rin_ftw_read_names_fd(node_descriptor, &names);
+        node_descriptor = -1;
+        if (read_result == 1)
+            return rin_ftw_invoke_checked(state, display_path, walk_path,
+                &status, FTW_DNR, level, &parent_status);
+        if (read_result < 0) return -1;
+        if (!depth_first) {
+            result = rin_ftw_invoke_checked(state, display_path, walk_path,
+                &status, FTW_D, level, &parent_status);
+            if (result != 0) {
+                rin_ftw_names_clear(&names);
+                return result;
+            }
+        }
+        current.device = status.st_dev;
+        current.inode = status.st_ino;
+        current.parent = ancestors;
+        for (size_t index = 0u; index < names.count; ++index) {
+            char* child_walk_path = rin_ftw_child_path(walk_path,
+                                                       names.values[index]);
+            char* child_display_path;
+            if (!child_walk_path) {
+                rin_ftw_names_clear(&names);
+                return -1;
+            }
+            child_display_path = rin_ftw_child_path(display_path,
+                                                     names.values[index]);
+            if (!child_display_path) {
+                free(child_walk_path);
+                rin_ftw_names_clear(&names);
+                return -1;
+            }
+            result = level == INT_MAX
+                ? (errno = EOVERFLOW, -1)
+                : rin_ftw_walk_physical(state, child_walk_path,
+                    child_display_path, level + 1, &current, 0);
+            free(child_display_path);
+            free(child_walk_path);
+            if (result != 0) {
+                rin_ftw_names_clear(&names);
+                return result;
+            }
+        }
+        rin_ftw_names_clear(&names);
+    }
+    if (depth_first)
+        return rin_ftw_invoke_checked(state, display_path, walk_path,
+            &status, FTW_DP, level, &parent_status);
+    return 0;
+}
+
 /* Return zero to continue, one when a callback requested a stop, and minus
  * one for a traversal error. */
 static int rin_ftw_walk(RinFtwState* state, const char* walk_path,
@@ -307,6 +690,10 @@ static int rin_ftw_walk(RinFtwState* state, const char* walk_path,
     int directory_cycle;
     int result;
     size_t index;
+
+    if (physical)
+        return rin_ftw_walk_physical(state, walk_path, display_path, level,
+                                     ancestors, is_root);
 
     if ((physical ? lstat(walk_path, &status) : stat(walk_path, &status)) != 0)
         return rin_ftw_stat_error(state, walk_path, display_path, level,
@@ -514,20 +901,14 @@ static int rin_ftw_run(const char* path, int fd_limit, int flags,
 
     state.flags = flags;
     state.is_nftw = is_nftw;
+    state.fd_limit = fd_limit;
     state.root_device = 0;
     state.callback3 = callback3;
     state.callback4 = callback4;
     state.stopped = 0;
     state.stop_value = 0;
-    if ((flags & FTW_MOUNT) != 0) {
-        if ((flags & FTW_PHYS) != 0) {
-            if (lstat(walk_path, &root_status) != 0) {
-                result = rin_ftw_stat_error(&state, walk_path, display_path,
-                                            0, errno);
-                if (state.stopped) result = state.stop_value;
-                goto finished_walk;
-            }
-        } else if (stat(walk_path, &root_status) != 0) {
+    if ((flags & FTW_MOUNT) != 0 && (flags & FTW_PHYS) == 0) {
+        if (stat(walk_path, &root_status) != 0) {
             result = rin_ftw_stat_error(&state, walk_path, display_path,
                                         0, errno);
             if (state.stopped) result = state.stop_value;
