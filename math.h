@@ -1543,9 +1543,14 @@ static inline double ldexp(double x, int exp) {
         if (x == 0.0 || x == previous) return x;
         exp += 1022;
     }
-    while (exp > 0) { x *= 2.0; exp--; }
-    while (exp < 0) { x /= 2.0; exp++; }
-    return x;
+    if (exp == 0) return x;
+
+    /* The remaining exponent is representable as a normal power of two.
+     * One multiplication performs the required final rounding; iterating
+     * once per exponent step was both slower and exposed extra intermediates. */
+    union { double value; unsigned long long bits; } scale;
+    scale.bits = (unsigned long long)(exp + 1023) << 52;
+    return x * scale.value;
 }
 
 static inline float ldexpf(float x, int exp) {
