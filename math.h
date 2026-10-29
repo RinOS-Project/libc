@@ -359,6 +359,31 @@ static inline long double nexttowardl(long double from, long double to) {
     return nextafterl(from, to);
 }
 
+/* C23 nextup/nextdown are directional forms of nextafter. */
+static inline double nextup(double x) {
+    return nextafter(x, HUGE_VAL);
+}
+
+static inline float nextupf(float x) {
+    return nextafterf(x, HUGE_VALF);
+}
+
+static inline long double nextupl(long double x) {
+    return nextafterl(x, HUGE_VALL);
+}
+
+static inline double nextdown(double x) {
+    return nextafter(x, -HUGE_VAL);
+}
+
+static inline float nextdownf(float x) {
+    return nextafterf(x, -HUGE_VALF);
+}
+
+static inline long double nextdownl(long double x) {
+    return nextafterl(x, -HUGE_VALL);
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
