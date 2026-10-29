@@ -3,6 +3,19 @@
  * getrandom/getentropy compatibility helpers
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    !defined(_RIN_RANDOM_SYSCALL3) && \
+    (defined(__unix__) || defined(__APPLE__)) && \
+    (defined(__GNUC__) || defined(__clang__))
+#if defined(__linux__) && defined(__has_include_next) && \
+    __has_include_next(<sys/random.h>)
+#include_next <sys/random.h>
+#else
+#define RIN_SYS_RANDOM_HOSTED_UNAVAILABLE 1
+#endif
+#else
+
 #ifndef _SYS_RANDOM_H
 #define _SYS_RANDOM_H
 
@@ -64,6 +77,7 @@ static inline int getentropy(void* buffer, size_t length)
     while (offset < length) {
         ssize_t received = getrandom(bytes + offset, length - offset, 0);
         if (received <= 0) {
+            if (received < 0 && errno == EINTR) continue;
             if (received == 0) errno = EIO;
             return -1;
         }
@@ -77,3 +91,5 @@ static inline int getentropy(void* buffer, size_t length)
 #endif
 
 #endif /* _SYS_RANDOM_H */
+
+#endif /* hosted random provider selection */
