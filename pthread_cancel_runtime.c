@@ -358,8 +358,9 @@ static void rin_pthread_cancel_wake_wait_locked(
     (void)_RIN_PTHREAD_CANCEL_FUTEX(word, operation, 0x7fffffff, NULL);
 }
 
-int __rin_pthread_cancel_wait_register(volatile unsigned int* word,
-                                       int wake_operation) {
+static int rin_pthread_cancel_wait_register_impl(
+    volatile unsigned int* word, int wake_operation,
+    int cancellation_point) {
     pthread_t self = _RIN_PTHREAD_CANCEL_SELF();
     RinPthreadCancelRecord* record;
     int result = 0;
@@ -375,16 +376,39 @@ int __rin_pthread_cancel_wait_register(volatile unsigned int* word,
     } else if (record->cancel_wait_word != NULL &&
                record->cancel_wait_word != word) {
         result = EBUSY;
-    } else if (__atomic_load_n(&record->state, __ATOMIC_ACQUIRE) ==
-                   PTHREAD_CANCEL_ENABLE &&
-               __atomic_load_n(&record->pending, __ATOMIC_ACQUIRE)) {
-        result = EINTR;
     } else {
         record->cancel_wait_word = word;
         record->cancel_wait_wake_operation = wake_operation;
+        if (__atomic_load_n(&record->state, __ATOMIC_ACQUIRE) ==
+                PTHREAD_CANCEL_ENABLE &&
+            __atomic_load_n(&record->pending, __ATOMIC_ACQUIRE)) {
+            if (cancellation_point) {
+                record->cancel_wait_word = NULL;
+                record->cancel_wait_wake_operation = 0;
+                result = EINTR;
+            } else if (__atomic_load_n(&record->type, __ATOMIC_ACQUIRE) ==
+                       PTHREAD_CANCEL_ASYNCHRONOUS) {
+                /* Atomic wait is not a deferred cancellation point.  An
+                 * already pending asynchronous request must still force the
+                 * registered waiter out before it can park. */
+                rin_pthread_cancel_wake_wait_locked(record);
+            }
+        }
     }
     rin_pthread_cancel_unlock();
     return result;
+}
+
+int __rin_pthread_cancel_wait_register(volatile unsigned int* word,
+                                       int wake_operation) {
+    return rin_pthread_cancel_wait_register_impl(
+        word, wake_operation, 1);
+}
+
+int __rin_pthread_cancel_wait_register_noncancel(
+    volatile unsigned int* word, int wake_operation) {
+    return rin_pthread_cancel_wait_register_impl(
+        word, wake_operation, 0);
 }
 
 int __rin_pthread_cancel_wait_unregister(volatile unsigned int* word) {
@@ -534,7 +558,13 @@ static RinPthreadCancelRecord* rin_pthread_cancel_register_self(
             rin_pthread_cancel_insert_locked(record);
         }
     } else if (!__atomic_load_n(&record->active, __ATOMIC_ACQUIRE)) {
+        /* Reviving a dead TID slot: the record stays linked in both
+         * chains, so preserve the links that initialization clears. */
+        RinPthreadCancelRecord* hash_next = record->hash_next;
+        RinPthreadCancelRecord* all_next = record->all_next;
         rin_pthread_cancel_initialize_record(record, self);
+        record->hash_next = hash_next;
+        record->all_next = all_next;
     }
     if (record != NULL) t_rin_pthread_cancel_self = record;
     rin_pthread_cancel_unlock();
@@ -566,7 +596,11 @@ int rin_pthread_cancel_register(pthread_t thread) {
         rin_pthread_cancel_initialize_record(record, thread);
         rin_pthread_cancel_insert_locked(record);
     } else if (!__atomic_load_n(&record->active, __ATOMIC_ACQUIRE)) {
+        RinPthreadCancelRecord* hash_next = record->hash_next;
+        RinPthreadCancelRecord* all_next = record->all_next;
         rin_pthread_cancel_initialize_record(record, thread);
+        record->hash_next = hash_next;
+        record->all_next = all_next;
     }
     rin_pthread_cancel_unlock();
     return 0;
@@ -727,9 +761,6 @@ static void rin_pthread_cancel_async_deliver_now(
 static void rin_pthread_cancel_async_defer_self(void) {
     pthread_t self = _RIN_PTHREAD_CANCEL_SELF();
     RinPthreadCancelRecord* record;
-    if (__atomic_load_n(&g_rin_pthread_cancel_async_count,
-                        __ATOMIC_ACQUIRE) == 0)
-        return;
     record = rin_pthread_cancel_self_cached(self);
     if (record == NULL) return;
     __atomic_add_fetch(&record->async_defer, 1, __ATOMIC_ACQ_REL);
@@ -742,17 +773,21 @@ static void rin_pthread_cancel_async_release_self(void) {
     /* No gate here: defer may have run while the count was nonzero and
      * the count may have reached zero since (e.g. flipping the last
      * async thread back to deferred mid-section).  Keying off the depth
-     * keeps every pair balanced; a zero depth means defer skipped. */
+     * keeps every pair balanced.  A zero depth usually means defer
+     * skipped, but a flip to async mid-section sets the skip flag with
+     * the depth still at zero, so the skip check below must run even
+     * then. */
     record = rin_pthread_cancel_self_cached(self);
     if (record == NULL) return;
-    if (__atomic_load_n(&record->async_defer, __ATOMIC_ACQUIRE) == 0)
-        return;
-    depth =
-        __atomic_sub_fetch(&record->async_defer, 1, __ATOMIC_ACQ_REL);
-    if (depth < 0) {
-        /* Unpaired release: clamp instead of wedging delivery. */
-        __atomic_store_n(&record->async_defer, 0, __ATOMIC_RELAXED);
-        return;
+    depth = __atomic_load_n(&record->async_defer, __ATOMIC_ACQUIRE);
+    if (depth > 0) {
+        depth = __atomic_sub_fetch(&record->async_defer, 1,
+                                   __ATOMIC_ACQ_REL);
+        if (depth < 0) {
+            /* Unpaired release: clamp instead of wedging delivery. */
+            __atomic_store_n(&record->async_defer, 0, __ATOMIC_RELAXED);
+            return;
+        }
     }
     /* Deliver only a wake the handler had to skip mid-section.  A plain
      * unlock must not unwind: pthread_cancel on an async self only arms
@@ -764,6 +799,16 @@ static void rin_pthread_cancel_async_release_self(void) {
         if (rin_pthread_cancel_async_deliverable(record))
             rin_pthread_cancel_async_deliver_now(record);
     }
+}
+
+/* Small runtime locks outside this file use these hooks to defer asynchronous
+ * cancellation only while their non-recoverable critical section is held. */
+void __rin_pthread_async_cancel_defer(void) {
+    rin_pthread_cancel_async_defer_self();
+}
+
+void __rin_pthread_async_cancel_resume(void) {
+    rin_pthread_cancel_async_release_self();
 }
 
 /* SIGCANCEL delivery.  Runs on the target thread at an instruction

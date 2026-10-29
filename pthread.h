@@ -1681,6 +1681,8 @@ int rin_pthread_cancel_pending_enabled(pthread_t thread);
 int rin_pthread_cancel_register_created(pthread_t thread);
 int __rin_pthread_cancel_wait_register(volatile unsigned int* word,
                                        int wake_operation);
+int __rin_pthread_cancel_wait_register_noncancel(
+    volatile unsigned int* word, int wake_operation);
 int __rin_pthread_cancel_wait_unregister(volatile unsigned int* word);
 
 #define __RIN_PTHREAD_CLEANUP_CAT_INNER(left, right) left##right
