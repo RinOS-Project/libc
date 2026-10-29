@@ -111,7 +111,7 @@ extern "C" {
 #endif
 
 #ifndef OPEN_MAX
-#define OPEN_MAX        256         /* Maximum open files */
+#define OPEN_MAX        1024        /* Maximum open files */
 #endif
 
 #ifndef ARG_MAX
