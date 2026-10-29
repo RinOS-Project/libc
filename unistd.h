@@ -1765,30 +1765,14 @@ static inline unsigned int sleep(unsigned int seconds) {
 }
 
 static inline int usleep(useconds_t usec) {
-    intptr_t result;
     if (usec >= 1000000U) {
         errno = EINVAL;
         return -1;
     }
-    if (usec == 0) {
-        __rin_pthread_cancel_point_if_linked();
-        return 0;
-    }
-    /* SYS_SLEEP has millisecond granularity; round up so it never returns
-     * before the requested microsecond interval has elapsed. */
-    uintptr_t ms = ((uintptr_t)usec + 999u) / 1000u;
-    __rin_pthread_cancel_point_if_linked();
-    result = _RIN_UNISTD_SLEEP(ms);
-    __rin_pthread_cancel_point_if_linked();
-    if (result < 0) {
-        if (__rin_syscall_posixize(result) != -1) errno = EIO;
-        return -1;
-    }
-    if (result > 0) {
-        errno = EIO;
-        return -1;
-    }
-    return 0;
+    struct timespec request;
+    request.tv_sec = 0;
+    request.tv_nsec = (long)usec * 1000L;
+    return nanosleep(&request, 0);
 }
 
 /* ═══════════════════════════════════════════════════════════════
