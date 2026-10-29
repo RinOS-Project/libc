@@ -124,6 +124,10 @@ static inline float nanf(const char* tagp) {
 #endif
 }
 
+static inline long double nanl(const char* tagp) {
+    return (long double)nan(tagp);
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * 浮動小数点分類関数 - IEEE 754 完全実装
  * C++モードでは cmath.h が std:: 版を提供するため、Cのみで定義
@@ -1561,6 +1565,156 @@ static inline double exp2(double x) {
 
 static inline float exp2f(float x) {
     return powf(2.0f, x);
+}
+
+/* RinOS long double has the binary64 representation and calling convention.
+ * Keep the standard long-double entry points available to C consumers while
+ * sharing the corresponding double implementation. */
+static inline long double fabsl(long double x) {
+    return (long double)fabs((double)x);
+}
+
+static inline long double fmodl(long double x, long double y) {
+    return (long double)fmod((double)x, (double)y);
+}
+
+static inline long double sinl(long double x) {
+    return (long double)sin((double)x);
+}
+
+static inline long double cosl(long double x) {
+    return (long double)cos((double)x);
+}
+
+static inline long double tanl(long double x) {
+    return (long double)tan((double)x);
+}
+
+static inline long double sqrtl(long double x) {
+    return (long double)sqrt((double)x);
+}
+
+static inline long double powl(long double x, long double y) {
+    return (long double)pow((double)x, (double)y);
+}
+
+static inline long double expl(long double x) {
+    return (long double)exp((double)x);
+}
+
+static inline long double logl(long double x) {
+    return (long double)log((double)x);
+}
+
+static inline long double log10l(long double x) {
+    return (long double)log10((double)x);
+}
+
+static inline long double log2l(long double x) {
+    return (long double)log2((double)x);
+}
+
+static inline long double log1pl(long double x) {
+    return (long double)log1p((double)x);
+}
+
+static inline long double expm1l(long double x) {
+    return (long double)expm1((double)x);
+}
+
+static inline long double asinl(long double x) {
+    return (long double)asin((double)x);
+}
+
+static inline long double acosl(long double x) {
+    return (long double)acos((double)x);
+}
+
+static inline long double atanl(long double x) {
+    return (long double)atan((double)x);
+}
+
+static inline long double atan2l(long double y, long double x) {
+    return (long double)atan2((double)y, (double)x);
+}
+
+static inline long double sinhl(long double x) {
+    return (long double)sinh((double)x);
+}
+
+static inline long double coshl(long double x) {
+    return (long double)cosh((double)x);
+}
+
+static inline long double tanhl(long double x) {
+    return (long double)tanh((double)x);
+}
+
+static inline long double asinhl(long double x) {
+    return (long double)asinh((double)x);
+}
+
+static inline long double acoshl(long double x) {
+    return (long double)acosh((double)x);
+}
+
+static inline long double atanhl(long double x) {
+    return (long double)atanh((double)x);
+}
+
+static inline long double cbrtl(long double x) {
+    return (long double)cbrt((double)x);
+}
+
+static inline long double hypotl(long double x, long double y) {
+    return (long double)hypot((double)x, (double)y);
+}
+
+static inline long double modfl(long double x, long double* iptr) {
+    double integral;
+    double fractional = modf((double)x, &integral);
+    *iptr = (long double)integral;
+    return (long double)fractional;
+}
+
+static inline long double copysignl(long double x, long double y) {
+    return (long double)copysign((double)x, (double)y);
+}
+
+static inline long double frexpl(long double x, int* exp) {
+    return (long double)frexp((double)x, exp);
+}
+
+static inline long double ldexpl(long double x, int exp) {
+    return (long double)ldexp((double)x, exp);
+}
+
+static inline long double scalbnl(long double x, int exp) {
+    return (long double)scalbn((double)x, exp);
+}
+
+static inline long double remainderl(long double x, long double y) {
+    return (long double)remainder((double)x, (double)y);
+}
+
+static inline long double fminl(long double x, long double y) {
+    return (long double)fmin((double)x, (double)y);
+}
+
+static inline long double fmaxl(long double x, long double y) {
+    return (long double)fmax((double)x, (double)y);
+}
+
+static inline long double fdiml(long double x, long double y) {
+    return (long double)fdim((double)x, (double)y);
+}
+
+static inline long double fmal(long double x, long double y, long double z) {
+    return (long double)fma((double)x, (double)y, (double)z);
+}
+
+static inline long double exp2l(long double x) {
+    return (long double)exp2((double)x);
 }
 
 /* 浮動小数点分類関数はマクロとして定義済み (isnan, isinf, isfinite等) */
