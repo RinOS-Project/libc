@@ -1193,6 +1193,20 @@ static inline int _rin_time_timespec_to_ns(const struct timespec* input,
     return 0;
 }
 
+static inline int _rin_time_timer_value_to_ns(
+    const struct timespec* input, int flags, uint64_t* output) {
+    if (!input || !output) return EFAULT;
+    if (input->tv_nsec < 0 || input->tv_nsec >= 1000000000L)
+        return EINVAL;
+    if (input->tv_sec < 0) {
+        if ((flags & TIMER_ABSTIME) == 0) return EINVAL;
+        /* A normalized negative absolute deadline is already expired. */
+        *output = 0u;
+        return 0;
+    }
+    return _rin_time_timespec_to_ns(input, output);
+}
+
 /* Set the shared wall clock only through the authenticated, capability-gated
  * kernel owner.  CLOCK_MONOTONIC and CPU clocks are immutable. */
 static inline int clock_settime(clockid_t clk_id,
@@ -1332,7 +1346,8 @@ static inline int timer_settime(timer_t timer_id, int flags,
         errno = EINVAL;
         return -1;
     }
-    error = _rin_time_timespec_to_ns(&value->it_value, &value_ns);
+    error = _rin_time_timer_value_to_ns(
+        &value->it_value, flags, &value_ns);
     if (error != 0) {
         errno = error;
         return -1;
