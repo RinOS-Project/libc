@@ -286,6 +286,7 @@ static inline int tcgetattr(int fd, struct termios* termios_p) {
 
 static inline int tcsetattr(int fd, int optional_actions, const struct termios* termios_p) {
     unsigned long request;
+    RinTtyTermiosV1 attributes = {0};
     if (!termios_p) {
         errno = EFAULT;
         return -1;
@@ -298,7 +299,20 @@ static inline int tcsetattr(int fd, int optional_actions, const struct termios* 
             errno = EINVAL;
             return -1;
     }
-    return _rin_termios_ioctl_status(fd, request, (void*)termios_p);
+    /* The public termios layout has three bytes of ABI padding before the
+     * speed fields.  Do not forward indeterminate padding as the versioned
+     * TTY record's reserved bytes, which the kernel correctly requires to be
+     * zero. */
+    attributes.c_iflag = termios_p->c_iflag;
+    attributes.c_oflag = termios_p->c_oflag;
+    attributes.c_cflag = termios_p->c_cflag;
+    attributes.c_lflag = termios_p->c_lflag;
+    attributes.c_line = termios_p->c_line;
+    for (unsigned int index = 0u; index < RIN_TTY_NCCS; ++index)
+        attributes.c_cc[index] = termios_p->c_cc[index];
+    attributes.c_ispeed = termios_p->c_ispeed;
+    attributes.c_ospeed = termios_p->c_ospeed;
+    return _rin_termios_ioctl_status(fd, request, &attributes);
 }
 
 static inline int tcsendbreak(int fd, int duration) {
