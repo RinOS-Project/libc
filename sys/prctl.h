@@ -273,7 +273,7 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         }
         return (int)result;
     }
-    errno = ENOSYS;
+    errno = EINVAL;
     return -1;
 }
 
