@@ -1048,7 +1048,8 @@ static inline int _rin_mkostemps_internal(char* tmpl, int suffixlen,
         return -1;
     }
 
-    if (suffixlen < 0 || (flags & ~(O_APPEND | O_CLOEXEC)) != 0) {
+    if (suffixlen < 0 ||
+        (flags & ~(O_APPEND | O_CLOEXEC | O_SYNC)) != 0) {
         errno = EINVAL;
         return -1;
     }
