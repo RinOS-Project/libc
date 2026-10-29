@@ -133,6 +133,7 @@
 #define LINUX_NR_sysinfo    116
 #define LINUX_NR_ipc            117
 #define LINUX_NR_fsync          118
+#define LINUX_NR_syncfs         373
 #define LINUX_NR_sigreturn      119
 #define LINUX_NR_clone          120
 #define LINUX_NR_setdomainname  121
