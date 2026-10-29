@@ -802,24 +802,35 @@ static inline size_t wcsnrtombs(char* dest, const wchar_t** src, size_t nwc,
                                 size_t len, mbstate_t* ps) {
     const wchar_t* cursor;
     size_t converted = 0u;
+    rin_unicode_mbstate_t local_state = {0u, 0u};
+    rin_unicode_mbstate_t* active_state = ps
+        ? (rin_unicode_mbstate_t*)ps : &local_state;
     if (!src || !(cursor = *src)) return 0u;
     while (nwc != 0u && *cursor != L'\0') {
         char encoded[4];
+        rin_unicode_mbstate_t candidate_state = *active_state;
         size_t written =
 #if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
             rin_locale_current_wcrtomb32(
                 encoded, (uint32_t)*cursor,
-                (struct rin_unicode_mbstate*)ps);
+                (struct rin_unicode_mbstate*)&candidate_state);
 #else
             rin_unicode_wcrtomb32(
-                encoded, (uint32_t)*cursor, (rin_unicode_mbstate_t*)ps);
+                encoded, (uint32_t)*cursor, &candidate_state);
 #endif
-        if (written == (size_t)-1) return (size_t)-1;
+        if (written == (size_t)-1) {
+            if (dest) *src = cursor;
+#if !defined(RIN_USERSPACE) || defined(_MSVCRT_COMPAT)
+            errno = EILSEQ;
+#endif
+            return (size_t)-1;
+        }
         if (dest && (converted > len || written > len - converted)) break;
         if (dest) {
             for (size_t index = 0u; index < written; ++index)
                 dest[converted + index] = encoded[index];
         }
+        *active_state = candidate_state;
         converted += written;
         ++cursor;
         --nwc;
@@ -839,21 +850,35 @@ static inline size_t mbsnrtowcs(wchar_t* dest, const char** src, size_t nms,
                                 size_t len, mbstate_t* ps) {
     const char* cursor;
     size_t converted = 0u;
+    rin_unicode_mbstate_t local_state = {0u, 0u};
+    rin_unicode_mbstate_t* active_state = ps
+        ? (rin_unicode_mbstate_t*)ps : &local_state;
     if (!src || !(cursor = *src)) return 0u;
     while (nms != 0u && *cursor != '\0' &&
            (!dest || converted < len)) {
         uint32_t codepoint = 0u;
+        rin_unicode_mbstate_t previous_state = *active_state;
         size_t remaining = nms;
         size_t read =
 #if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
             rin_locale_current_mbrtowc32(
                 &codepoint, cursor, remaining,
-                (struct rin_unicode_mbstate*)ps);
+                (struct rin_unicode_mbstate*)active_state);
 #else
             rin_unicode_mbrtowc32(
-                &codepoint, cursor, remaining, (rin_unicode_mbstate_t*)ps);
+                &codepoint, cursor, remaining, active_state);
 #endif
-        if (read == (size_t)-1 || read == (size_t)-2) return (size_t)-1;
+        if (read == (size_t)-1) {
+            if (dest) *src = cursor;
+#if !defined(RIN_USERSPACE) || defined(_MSVCRT_COMPAT)
+            errno = EILSEQ;
+#endif
+            return (size_t)-1;
+        }
+        if (read == (size_t)-2) {
+            *active_state = previous_state;
+            break;
+        }
         if (dest) dest[converted] = (wchar_t)codepoint;
         ++converted;
         cursor += read;
