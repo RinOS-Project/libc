@@ -26,6 +26,7 @@
 #include "sys/ioctl.h"
 #include "sys/types.h"
 #include <rin/tty/abi.h>
+#include "termio.h"
 
 #ifdef __cplusplus
 extern "C" {
