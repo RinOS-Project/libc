@@ -29,6 +29,17 @@
 #include "rin_atomic_wait.h"
 #endif
 
+/* Keep this primitive local: RinCompiler's freestanding profile does not
+ * provide compiler-specific signbit builtins. */
+static inline int _rin_stdio_double_signbit(double value) {
+    union {
+        double floating;
+        uint64_t bits;
+    } representation;
+    representation.floating = value;
+    return (int)(representation.bits >> 63);
+}
+
 #ifndef F_GETFL
 #define F_GETFL 3
 #endif
@@ -1560,8 +1571,8 @@ _RIN_STDIO_API FILE* fopen(const char* path, const char* mode) {
     if (_rin_stdio_parse_mode(mode, &flags) != 0) return NULL;
 
     intptr_t raw_fd = _rin_stdio_syscall_result(
-        _RIN_STDIO_SYSCALL2(SYS_OPEN, (uintptr_t)path,
-                            (uintptr_t)flags));
+        _RIN_STDIO_SYSCALL3(SYS_OPEN, (uintptr_t)path,
+                            (uintptr_t)flags, (uintptr_t)0666u));
     int fd;
     if (_rin_stdio_fd_from_result(raw_fd, &fd) != 0) {
         if (raw_fd >= 0)
@@ -1742,8 +1753,8 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
         errno = saved_errno;
         return NULL;
     }
-    new_fd = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL2(
-        SYS_OPEN, (uintptr_t)path, (uintptr_t)flags));
+    new_fd = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
+        SYS_OPEN, (uintptr_t)path, (uintptr_t)flags, (uintptr_t)0666u));
     if (new_fd < 0) {
         int saved_errno = errno;
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
@@ -3057,7 +3068,9 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                             ftmp[fi++] = *ns++;
                     } else {
                         /* Normal number */
-                        if (__builtin_signbit(val)) {
+                        if (val < 0.0L ||
+                            (val == 0.0L &&
+                             _rin_stdio_double_signbit((double)val))) {
                             ftmp[fi++] = '-';
                             val = -val;
                         }
