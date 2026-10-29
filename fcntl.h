@@ -696,7 +696,7 @@ static inline int posix_fallocate(int fd, off_t offset, off_t len) {
     uint64_t unsigned_length;
     intptr_t result;
 
-    if (offset < 0 || len < 0) return EINVAL;
+    if (offset < 0 || len <= 0) return EINVAL;
     unsigned_offset = (uint64_t)offset;
     unsigned_length = (uint64_t)len;
     if (unsigned_offset > UINT64_MAX - unsigned_length) return EOVERFLOW;
