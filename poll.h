@@ -169,22 +169,9 @@ static inline int __rin_ppoll_syscall_once(
     return (int)result;
 }
 
-static inline int __rin_poll_current_sigmask(sigset_t* mask_out) {
-    if (!mask_out) {
-        errno = EINVAL;
-        return -1;
-    }
-    return sigprocmask(SIG_SETMASK, NULL, mask_out);
-}
-
-static inline int __rin_poll_syscall_with_current_mask(
+static inline int __rin_poll_syscall_without_mask_change(
     struct pollfd* fds, nfds_t nfds, int timeout_ms) {
-    sigset_t current_mask = 0u;
-    if (__rin_poll_current_sigmask(&current_mask) != 0) {
-        __rin_poll_clear_revents(fds, nfds);
-        return -1;
-    }
-    return __rin_ppoll_syscall_once(fds, nfds, timeout_ms, &current_mask);
+    return __rin_ppoll_syscall_once(fds, nfds, timeout_ms, NULL);
 }
 
 static inline int __rin_poll_timespec_to_ms(const struct timespec* timeout,
@@ -262,7 +249,8 @@ static inline int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
     }
     if (timeout < 0) timeout = -1;
     {
-        int result = __rin_poll_syscall_with_current_mask(fds, nfds, timeout);
+        int result = __rin_poll_syscall_without_mask_change(
+            fds, nfds, timeout);
         __rin_pthread_cancel_point_if_linked();
         return result;
     }
@@ -282,7 +270,7 @@ static inline int ppoll(struct pollfd* fds, nfds_t nfds,
     }
     if (__rin_poll_timespec_to_ms(timeout_ts, &timeout) != 0) return -1;
     result = !sigmask
-        ? __rin_poll_syscall_with_current_mask(fds, nfds, timeout)
+        ? __rin_poll_syscall_without_mask_change(fds, nfds, timeout)
         : __rin_ppoll_syscall_once(fds, nfds, timeout, sigmask);
     __rin_pthread_cancel_point_if_linked();
     return result;
