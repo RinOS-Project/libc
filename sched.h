@@ -329,7 +329,7 @@ static inline int sched_getscheduler(pid_t pid) {
 /* スケジューリングポリシーを設定 */
 static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_param* param) {
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
-    RinThreadSchedParametersV1 parameters;
+    RinThreadSchedParametersV2 parameters;
     intptr_t result;
     uint32_t thread_id;
     if (!param || pid < 0) { errno = EINVAL; return -1; }
@@ -344,11 +344,11 @@ static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_p
         thread_id = (uint32_t)result;
     }
     parameters.struct_size = (uint32_t)sizeof(parameters);
-    parameters.version = RIN_THREAD_SCHED_ABI_VERSION;
+    parameters.version = RIN_THREAD_SCHED_ABI_VERSION_2;
     parameters.reserved0 = 0u;
     parameters.policy = policy;
-    parameters.priority = param->sched_priority;
-    parameters.reserved1 = 0u;
+    parameters.priority = 0;
+    parameters.user_priority_address = (uint64_t)(uintptr_t)&param->sched_priority;
     result = _rin_sched_result(_RIN_SCHED_SYSCALL2(
         SYS_THREAD_SCHED_SET, thread_id, &parameters));
     if (result < 0) return -1;
@@ -388,13 +388,7 @@ static inline int sched_getparam(pid_t pid, struct sched_param* param) {
         errno = EINVAL;
         return -1;
     }
-    /* Keep a failed scheduler query from exposing a stale priority. */
-    param->sched_priority = 0;
-
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
-    RinThreadSchedParametersV1 parameters = {
-        (uint32_t)sizeof(parameters), RIN_THREAD_SCHED_ABI_VERSION, 0u,
-        SCHED_OTHER, 0, 0u};
     intptr_t result;
     uint32_t thread_id = pid == 0 ? 0u : (uint32_t)pid;
     if (pid < 0) { errno = ESRCH; return -1; }
@@ -408,15 +402,10 @@ static inline int sched_getparam(pid_t pid, struct sched_param* param) {
         thread_id = (uint32_t)result;
     }
     result = _rin_sched_result(_RIN_SCHED_SYSCALL2(
-        SYS_THREAD_SCHED_GET, thread_id, &parameters));
+        SYS_THREAD_SCHED_GETPARAM, thread_id,
+        (uintptr_t)&param->sched_priority));
     if (result < 0) return -1;
-    if (result != 0 || parameters.struct_size != sizeof(parameters) ||
-        parameters.version != RIN_THREAD_SCHED_ABI_VERSION ||
-        parameters.reserved0 != 0u || parameters.reserved1 != 0u) {
-        errno = EIO;
-        return -1;
-    }
-    param->sched_priority = parameters.priority;
+    if (result != 0) { errno = EIO; return -1; }
     return 0;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
     if (pid < 0) { errno = ESRCH; return -1; }
@@ -565,15 +554,9 @@ static inline int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t* mas
         errno = EINVAL;
         return -1;
     }
-    /* Do not expose a partial kernel write when the producer reports failure. */
-    __rin_sched_cpu_zero(mask);
-    if (_rin_sched_status(_RIN_SCHED_SYSCALL3(
-            SYS_SCHED_GETAFFINITY, (uintptr_t)pid, cpusetsize,
-            (uintptr_t)mask)) < 0) {
-        __rin_sched_cpu_zero(mask);
-        return -1;
-    }
-    return 0;
+    return _rin_sched_status(_RIN_SCHED_SYSCALL3(
+        SYS_SCHED_GETAFFINITY, (uintptr_t)pid, cpusetsize,
+        (uintptr_t)mask));
 }
 
 /* CPU affinity を設定 */
@@ -595,15 +578,9 @@ static inline int rin_sched_get_numa_policy(RinNumaMemoryPolicyV1* policy)
         errno = EINVAL;
         return -1;
     }
-    /* Do not expose a partial policy copy-out after a backend failure. */
-    *policy = (RinNumaMemoryPolicyV1){0};
-    if (_rin_sched_status(_RIN_SCHED_SYSCALL2(
-            SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_GET,
-            (uintptr_t)policy)) < 0) {
-        *policy = (RinNumaMemoryPolicyV1){0};
-        return -1;
-    }
-    return 0;
+    return _rin_sched_status(_RIN_SCHED_SYSCALL2(
+        SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_GET,
+        (uintptr_t)policy));
 }
 
 static inline int rin_sched_set_numa_policy(
