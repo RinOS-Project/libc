@@ -1947,8 +1947,8 @@ static inline size_t _rin_fread_unlocked(void* ptr, size_t size, size_t nmemb, F
         if (stream) stream->error = 1;
         return 0;
     }
-    if (!_rin_stdio_claim_byte_orientation(stream)) return 0;
     if (size == 0 || nmemb == 0) return 0;
+    if (!_rin_stdio_claim_byte_orientation(stream)) return 0;
     if (_rin_stdio_flush_output_buffer(stream) != 0) return 0;
     if (nmemb > (size_t)-1 / size) {
         errno = EOVERFLOW;
@@ -2003,8 +2003,8 @@ static inline size_t _rin_fwrite_unlocked(const void* ptr, size_t size, size_t n
         if (stream) stream->error = 1;
         return 0;
     }
-    if (!_rin_stdio_claim_byte_orientation(stream)) return 0;
     if (size == 0 || nmemb == 0) return 0;
+    if (!_rin_stdio_claim_byte_orientation(stream)) return 0;
     if (nmemb > (size_t)-1 / size) {
         errno = EOVERFLOW;
         stream->error = 1;
