@@ -353,7 +353,7 @@ static inline int open(const char* pathname, int flags, ...) {
         va_end(ap);
     }
 
-    int fd = _fcntl_result_to_int(_syscall3(
+    int fd = _fcntl_result_to_int(_RIN_FCNTL_SYSCALL3(
         (uintptr_t)SYS_OPEN, (uintptr_t)pathname, (uintptr_t)flags,
         (uintptr_t)mode));
 
