@@ -1382,7 +1382,7 @@ static inline int timer_settime(timer_t timer_id, int flags,
 
 static inline int timer_gettime(timer_t timer_id,
                                 struct itimerspec* value) {
-    RinTimerSpecV1 result_wire;
+    RinTimerSpecV1 result_wire = {0};
     struct itimerspec converted;
     intptr_t result;
     int error;
