@@ -1552,19 +1552,13 @@ typedef uint64_t sigset_t;
 #endif
 
 static inline int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset) {
-    sigset_t snapshot = 0;
-    const sigset_t* set_argument = set;
     intptr_t result;
     int saved_errno = errno;
     int error = 0;
     if (set && how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK)
         return EINVAL;
-    if (set) {
-        snapshot = *set & ~(UINT64_C(1) << __RIN_SIGCANCEL);
-        set_argument = &snapshot;
-    }
     result = _RIN_PTHREAD_SIGMASK_SYSCALL4(
-        SYS_rt_sigprocmask, how, set_argument, oldset, sizeof(sigset_t));
+        SYS_rt_sigprocmask, how, set, oldset, sizeof(sigset_t));
     error = _rin_pthread_error_from_result(result);
     errno = saved_errno;
     return error;
