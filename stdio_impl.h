@@ -35,6 +35,8 @@
 #define F_SETFL 4
 #endif
 
+#define _RIN_STDIO_MAX_SYSCALL_TRANSFER_BYTES 16777216u
+
 #ifndef _RIN_STDIO_SYSCALL1
 #define _RIN_STDIO_SYSCALL1(number, arg1) \
     _syscall1((uintptr_t)(number), (uintptr_t)(arg1))
@@ -844,6 +846,8 @@ static inline intptr_t _rin_stdio_read_backend(FILE* stream,
     if (rin_stdio_memstream_read(stream, output, length, &result))
         return result;
 #endif
+    if (length > (size_t)_RIN_STDIO_MAX_SYSCALL_TRANSFER_BYTES)
+        length = (size_t)_RIN_STDIO_MAX_SYSCALL_TRANSFER_BYTES;
     return _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
         SYS_READ, (uintptr_t)stream->fd, (uintptr_t)output,
         (uintptr_t)length));
@@ -857,6 +861,8 @@ static inline intptr_t _rin_stdio_write_backend(FILE* stream,
     if (rin_stdio_memstream_write(stream, input, length, &result))
         return result;
 #endif
+    if (length > (size_t)_RIN_STDIO_MAX_SYSCALL_TRANSFER_BYTES)
+        length = (size_t)_RIN_STDIO_MAX_SYSCALL_TRANSFER_BYTES;
     return _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
         SYS_WRITE, (uintptr_t)stream->fd, (uintptr_t)input,
         (uintptr_t)length));
@@ -1991,7 +1997,7 @@ static inline size_t _rin_fread_unlocked(void* ptr, size_t size, size_t nmemb, F
             break;
         }
         prefix += (size_t)(uintptr_t)n;
-    } while (buffered_input && prefix < total);
+    } while (prefix < total);
     return prefix / size;
 }
 
@@ -2029,14 +2035,23 @@ static inline size_t _rin_fwrite_unlocked(const void* ptr, size_t size, size_t n
                                            NULL);
         return copied / size;
     }
-    n = _rin_stdio_write_backend(stream, (const unsigned char*)ptr, total);
-    if (n < 0) { stream->error = 1; return 0; }
-    if ((uintptr_t)n > (uintptr_t)total) {
-        errno = EIO;
-        stream->error = 1;
-        return 0;
+    copied = 0u;
+    while (copied < total) {
+        size_t remaining = total - copied;
+        n = _rin_stdio_write_backend(
+            stream, (const unsigned char*)ptr + copied, remaining);
+        if (n < 0) {
+            stream->error = 1;
+            return copied / size;
+        }
+        if (n == 0 || (uintptr_t)n > (uintptr_t)remaining) {
+            errno = EIO;
+            stream->error = 1;
+            return copied / size;
+        }
+        copied += (size_t)(uintptr_t)n;
     }
-    return (size_t)(uintptr_t)n / size;
+    return nmemb;
 }
 
 _RIN_STDIO_API size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
