@@ -570,12 +570,14 @@ static inline int _rin_glob_add_marked(_RinGlobMatchList* list,
 static inline int _rin_glob_expand(_RinGlobContext* context,
                                    const _RinGlobComponent* components,
                                    size_t component_count, size_t index,
-                                   const char* prefix);
+                                   const char* prefix,
+                                   _RinGlobExpandScratch* scratch_frames);
 
 static inline int _rin_glob_expand_body(
     _RinGlobContext* context, const _RinGlobComponent* components,
     size_t component_count, size_t index, const char* prefix,
-    _RinGlobExpandScratch* scratch)
+    _RinGlobExpandScratch* scratch,
+    _RinGlobExpandScratch* scratch_frames)
 {
     char* raw_component;
     char* literal_component;
@@ -616,7 +618,7 @@ static inline int _rin_glob_expand_body(
                                      _RIN_GLOB_MAX_PATH);
         if (result == 0)
             result = _rin_glob_expand(context, components, component_count,
-                                      index + 1u, child);
+                                      index + 1u, child, scratch_frames);
         return result;
     }
     {
@@ -666,7 +668,7 @@ static inline int _rin_glob_expand_body(
                 if (!is_directory) continue;
             }
             result = _rin_glob_expand(context, components, component_count,
-                                      index + 1u, child);
+                                      index + 1u, child, scratch_frames);
             if (result != 0) break;
         }
         if (_RIN_GLOB_CLOSEDIR(directory_stream) != 0 && result == 0) {
@@ -680,16 +682,15 @@ static inline int _rin_glob_expand_body(
 static inline int _rin_glob_expand(_RinGlobContext* context,
                                    const _RinGlobComponent* components,
                                    size_t component_count, size_t index,
-                                   const char* prefix)
+                                   const char* prefix,
+                                   _RinGlobExpandScratch* scratch_frames)
 {
-    _RinGlobExpandScratch* scratch =
-        (_RinGlobExpandScratch*)malloc(sizeof(*scratch));
-    int result;
-    if (!scratch) return GLOB_NOSPACE;
-    result = _rin_glob_expand_body(
-        context, components, component_count, index, prefix, scratch);
-    free(scratch);
-    return result;
+    if (!scratch_frames || index > component_count ||
+        index > _RIN_GLOB_MAX_COMPONENTS)
+        return GLOB_ABORTED;
+    return _rin_glob_expand_body(context, components, component_count, index,
+                                  prefix, &scratch_frames[index],
+                                  scratch_frames);
 }
 
 static inline int _rin_glob_string_compare(const char* left, const char* right)
@@ -1070,6 +1071,7 @@ static inline int _rin_glob_run_body(
     _RinGlobComponent* components;
     _RinGlobMatchList matches = { NULL, 0u, 0u };
     _RinGlobContext context;
+    _RinGlobExpandScratch* scratch_frames;
 
     if (!pglob || !pattern || !scratch) {
         errno = EINVAL;
@@ -1146,9 +1148,13 @@ static inline int _rin_glob_run_body(
         errno = EINVAL;
         return GLOB_ABORTED;
     }
+    scratch_frames = (_RinGlobExpandScratch*)malloc(
+        (component_count + 1u) * sizeof(*scratch_frames));
+    if (!scratch_frames) return GLOB_NOSPACE;
     {
         int result = _rin_glob_expand(&context, components, component_count,
-                                      0u, prefix);
+                                      0u, prefix, scratch_frames);
+        free(scratch_frames);
         if (result != 0) {
             if (result == GLOB_ABORTED && matches.count != 0u) {
                 int publish_result;
