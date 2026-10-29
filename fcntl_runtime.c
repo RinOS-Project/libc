@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "fcntl.h"
 #include "sys/mman.h"
+#include "unistd.h"
 
 int _fcntl_fd_flags[_FCNTL_MAX_FDS];
 int _fcntl_fl_flags[_FCNTL_MAX_FDS];
@@ -50,11 +51,26 @@ int shm_open(const char* name, int oflag, mode_t mode) {
         return -1;
     }
     if (rin_shm_name_path(name, path) != 0) return -1;
-    return openat(AT_FDCWD, path, oflag, mode);
+    return openat(AT_FDCWD, path, oflag | O_CLOEXEC, mode);
 }
 
 int shm_unlink(const char* name) {
     char path[sizeof("/dev/shm/") + NAME_MAX];
     if (rin_shm_name_path(name, path) != 0) return -1;
     return unlinkat(AT_FDCWD, path, 0);
+}
+
+int memfd_create(const char* name, unsigned int flags) {
+    if (name == 0) {
+        errno = EFAULT;
+        return -1;
+    }
+    if ((flags & ~MFD_CLOEXEC) != 0u) {
+        errno = EINVAL;
+        return -1;
+    }
+    (void)name;
+    return openat(AT_FDCWD, "/dev/shm", O_TMPFILE | O_RDWR |
+                      ((flags & MFD_CLOEXEC) != 0u ? O_CLOEXEC : 0),
+                  0600);
 }
