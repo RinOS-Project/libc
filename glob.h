@@ -36,6 +36,7 @@ extern "C" {
 #define GLOB_NOMAGIC  0x0200  /* ワイルドカードなしでも展開 */
 #define GLOB_TILDE    0x0400  /* チルダ展開 */
 #define GLOB_ONLYDIR  0x1000  /* ディレクトリのみ */
+#define GLOB_ALTDIRFUNC 0x2000 /* glob_tのfilesystem callbacksを使う */
 
 /* ═══════════════════════════════════════════════════════════════
  * エラーコード
@@ -113,6 +114,7 @@ typedef struct _RinGlobContext {
     int flags;
     int require_directory;
     int (*errfunc)(const char*, int);
+    glob_t* pglob;
     _RinGlobMatchList* matches;
 } _RinGlobContext;
 
@@ -547,20 +549,38 @@ static inline int _rin_glob_path_join(const char* prefix, const char* name,
 }
 
 static inline int _rin_glob_entry_is_directory(const char* path,
+                                               _RinGlobContext* context,
                                                const struct dirent* entry,
                                                int* is_directory)
 {
     struct stat status;
-    if (!path || !is_directory) return GLOB_ABORTED;
-    if (entry && entry->d_type == DT_DIR) {
+    int alternative;
+    if (!path || !context || !is_directory) return GLOB_ABORTED;
+    alternative = (context->flags & GLOB_ALTDIRFUNC) != 0;
+    if (!alternative && entry && entry->d_type == DT_DIR) {
         *is_directory = 1;
         return 0;
     }
-    if (entry && entry->d_type != DT_UNKNOWN && entry->d_type != DT_LNK) {
+    if (!alternative && entry && entry->d_type != DT_UNKNOWN &&
+        entry->d_type != DT_LNK) {
         *is_directory = 0;
         return 0;
     }
-    if (_RIN_GLOB_STAT(path, &status) != 0) {
+    if (alternative) {
+        if (context->pglob->gl_lstat(path, &status) != 0) {
+            if (errno == ENOENT || errno == ENOTDIR) {
+                *is_directory = 0;
+                return 0;
+            }
+            return GLOB_ABORTED;
+        }
+        if (!S_ISLNK(status.st_mode)) {
+            *is_directory = S_ISDIR(status.st_mode) ? 1 : 0;
+            return 0;
+        }
+    }
+    if ((alternative ? context->pglob->gl_stat(path, &status)
+                     : _RIN_GLOB_STAT(path, &status)) != 0) {
         if (errno == ENOENT || errno == ENOTDIR) {
             *is_directory = 0;
             return 0;
@@ -569,6 +589,44 @@ static inline int _rin_glob_entry_is_directory(const char* path,
     }
     *is_directory = S_ISDIR(status.st_mode) ? 1 : 0;
     return 0;
+}
+
+static inline void* _rin_glob_opendir(_RinGlobContext* context,
+                                      const char* path)
+{
+    if (context->flags & GLOB_ALTDIRFUNC)
+        return context->pglob->gl_opendir(path);
+    return (void*)_RIN_GLOB_OPENDIR(path);
+}
+
+static inline struct dirent* _rin_glob_readdir(_RinGlobContext* context,
+                                               void* directory)
+{
+    if (context->flags & GLOB_ALTDIRFUNC)
+        return (struct dirent*)context->pglob->gl_readdir(directory);
+    return _RIN_GLOB_READDIR((DIR*)directory);
+}
+
+static inline int _rin_glob_closedir(_RinGlobContext* context,
+                                     void* directory)
+{
+    if (context->flags & GLOB_ALTDIRFUNC) {
+        context->pglob->gl_closedir(directory);
+        return 0;
+    }
+    return _RIN_GLOB_CLOSEDIR((DIR*)directory);
+}
+
+static inline int _rin_glob_path_stat(_RinGlobContext* context,
+                                      const char* path, struct stat* status,
+                                      int no_follow)
+{
+    if (context->flags & GLOB_ALTDIRFUNC) {
+        int (*callback)(const char*, void*) = no_follow
+            ? context->pglob->gl_lstat : context->pglob->gl_stat;
+        return callback(path, status);
+    }
+    return _RIN_GLOB_STAT(path, status);
 }
 
 static inline int _rin_glob_report_error(_RinGlobContext* context,
@@ -641,7 +699,11 @@ static inline int _rin_glob_expand_body(
     if (index == component_count) {
         struct stat status;
         if (prefix[0] == '\0') return 0;
-        if (_RIN_GLOB_STAT(prefix, &status) != 0) {
+        int no_follow = (context->flags & GLOB_ALTDIRFUNC) &&
+                        !(context->flags & GLOB_ONLYDIR) &&
+                        !context->require_directory &&
+                        !(context->flags & GLOB_MARK);
+        if (_rin_glob_path_stat(context, prefix, &status, no_follow) != 0) {
             int saved_errno = errno;
             if (saved_errno == ENOENT || saved_errno == ENOTDIR) return 0;
             return _rin_glob_report_error(context, prefix, saved_errno);
@@ -672,7 +734,7 @@ static inline int _rin_glob_expand_body(
     }
     {
         const char* directory = prefix[0] != '\0' ? prefix : ".";
-        DIR* directory_stream = _RIN_GLOB_OPENDIR(directory);
+        void* directory_stream = _rin_glob_opendir(context, directory);
         struct dirent* entry;
         int dot_allowed = _rin_glob_component_allows_period(raw_component,
                                                              context->flags);
@@ -685,7 +747,7 @@ static inline int _rin_glob_expand_body(
         for (;;) {
             int is_directory = 0;
             errno = 0;
-            entry = _RIN_GLOB_READDIR(directory_stream);
+            entry = _rin_glob_readdir(context, directory_stream);
             if (!entry) {
                 int saved_errno = errno;
                 if (saved_errno != 0)
@@ -712,7 +774,7 @@ static inline int _rin_glob_expand_body(
                                          _RIN_GLOB_MAX_PATH);
             if (result != 0) break;
             if (index + 1u < component_count) {
-                result = _rin_glob_entry_is_directory(child, entry,
+                result = _rin_glob_entry_is_directory(child, context, entry,
                                                       &is_directory);
                 if (result != 0) {
                     int saved_errno = errno;
@@ -727,7 +789,8 @@ static inline int _rin_glob_expand_body(
                                       index + 1u, child, scratch_frames);
             if (result != 0) break;
         }
-        if (_RIN_GLOB_CLOSEDIR(directory_stream) != 0 && result == 0) {
+        if (_rin_glob_closedir(context, directory_stream) != 0 &&
+            result == 0) {
             int saved_errno = errno;
             result = _rin_glob_report_error(context, directory, saved_errno);
         }
@@ -949,6 +1012,11 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
 
     if (!pattern || !pglob || !handled || !scratch) return GLOB_ABORTED;
     *handled = 0;
+    aggregate.gl_closedir = pglob->gl_closedir;
+    aggregate.gl_readdir = pglob->gl_readdir;
+    aggregate.gl_opendir = pglob->gl_opendir;
+    aggregate.gl_lstat = pglob->gl_lstat;
+    aggregate.gl_stat = pglob->gl_stat;
     found = _rin_glob_find_brace(
         pattern, flags, &open, &close, &comma, scratch);
     if (found < 0) {
@@ -1123,7 +1191,8 @@ static inline int _rin_glob_run_body(
     const int known_flags = GLOB_ERR | GLOB_MARK | GLOB_NOSORT |
                             GLOB_DOOFFS | GLOB_NOCHECK | GLOB_APPEND |
                             GLOB_NOESCAPE | GLOB_PERIOD | GLOB_BRACE |
-                            GLOB_NOMAGIC | GLOB_TILDE | GLOB_ONLYDIR;
+                            GLOB_NOMAGIC | GLOB_TILDE | GLOB_ONLYDIR |
+                            GLOB_ALTDIRFUNC;
     size_t pattern_length;
     size_t component_count = 0u;
     size_t cursor = 0u;
@@ -1143,6 +1212,10 @@ static inline int _rin_glob_run_body(
     prefix = scratch->prefix;
     components = scratch->components;
     if ((flags & ~known_flags) != 0)
+        return GLOB_NOSYS;
+    if ((flags & GLOB_ALTDIRFUNC) &&
+        (!pglob->gl_opendir || !pglob->gl_readdir ||
+         !pglob->gl_closedir || !pglob->gl_lstat || !pglob->gl_stat))
         return GLOB_NOSYS;
     {
         int tilde_handled = 0;
@@ -1205,6 +1278,7 @@ static inline int _rin_glob_run_body(
     context.flags = flags | (trailing_slash ? GLOB_MARK : 0);
     context.require_directory = trailing_slash;
     context.errfunc = errfunc;
+    context.pglob = pglob;
     context.matches = &matches;
     old_pathc = (flags & GLOB_APPEND) ? pglob->gl_pathc : 0u;
     if ((flags & GLOB_APPEND) && old_pathc != 0u && !pglob->gl_pathv) {
