@@ -650,7 +650,6 @@ static inline double pow(double base, double exponent) {
                   magnitude < 9007199254740992.0 &&
                   trunc(magnitude / 2.0) * 2.0 != magnitude;
 
-    if (!integral_exp && base < 0.0) return NAN;
     if (__builtin_isinf(exponent)) {
         double abs_base = fabs(base);
         if (abs_base == 1.0) return 1.0;
@@ -662,6 +661,7 @@ static inline double pow(double base, double exponent) {
         double result = neg_exp ? 0.0 : INFINITY;
         return (negative_base && odd_exp) ? -result : result;
     }
+    if (!integral_exp && base < 0.0) return NAN;
     if (base == 0.0) {
         double result = neg_exp ? INFINITY : 0.0;
         return (negative_base && odd_exp) ? -result : result;
