@@ -8,6 +8,7 @@
 #define _SYS_SOCKET_H
 
 #include "types.h"
+#include <sys/types.h>
 #include "syscall.h"
 #include "../stdint.h"
 #include "../time.h"
@@ -349,6 +350,8 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define SO_SNDTIMEO     21  /* 送信タイムアウト */
 #define SO_ACCEPTCONN   30  /* accept可能か */
 #define SO_REUSEPORT    15  /* ポート再利用 */
+#define SO_PASSCRED     16  /* UNIX socketで送信者資格情報を受信 */
+#define SO_PEERCRED     17  /* UNIX socketの接続時peer資格情報 */
 #define SO_NONBLOCK               0x5003 /* kernel socket nonblocking */
 
 /* TCPオプション */
@@ -466,6 +469,13 @@ static inline int __rin_socket_message_length(const struct msghdr* message,
 }
 
 #define SCM_RIGHTS 0x01
+#define SCM_CREDENTIALS 0x02
+
+struct ucred {
+    pid_t pid;
+    uid_t uid;
+    gid_t gid;
+};
 
 #ifdef __cplusplus
 #define __RIN_CMSG_CONSTEXPR constexpr
