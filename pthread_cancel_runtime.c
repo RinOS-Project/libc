@@ -15,6 +15,8 @@ typedef struct RinPthreadCancelRecord {
     int detached;
     void* exit_value;
     __rin_pthread_cleanup_buffer* cleanup_top;
+    volatile unsigned int* cancel_wait_word;
+    int cancel_wait_wake_operation;
 } RinPthreadCancelRecord;
 
 #define RIN_PTHREAD_CANCEL_SIGNAL __RIN_SIGCANCEL
@@ -30,6 +32,10 @@ typedef struct RinPthreadCancelRecord {
 #define _RIN_PTHREAD_CANCEL_WAKE(process, thread, signum) \
     _syscall3((uintptr_t)SYS_tgkill, (uintptr_t)(process), \
               (uintptr_t)(thread), (uintptr_t)(signum))
+#endif
+#ifndef _RIN_PTHREAD_CANCEL_FUTEX
+#define _RIN_PTHREAD_CANCEL_FUTEX(address, operation, value, timeout) \
+    syscall(SYS_futex, (address), (operation), (value), (timeout), NULL, 0)
 #endif
 
 static RinPthreadCancelRecord g_rin_pthread_cancel_records[
@@ -77,6 +83,67 @@ static void rin_pthread_cancel_initialize_record(
     record->detached = 0;
     record->exit_value = NULL;
     record->cleanup_top = NULL;
+    record->cancel_wait_word = NULL;
+    record->cancel_wait_wake_operation = 0;
+}
+
+/* Bump the futex word before waking so cancellation cannot be lost
+ * between wait registration and entering FUTEX_WAIT. */
+static void rin_pthread_cancel_wake_wait_locked(
+    RinPthreadCancelRecord* record) {
+    volatile unsigned int* word = record->cancel_wait_word;
+    if (word == NULL) return;
+    __atomic_fetch_add(word, 1u, __ATOMIC_RELEASE);
+    (void)_RIN_PTHREAD_CANCEL_FUTEX(
+        word, record->cancel_wait_wake_operation, 0x7fffffff, NULL);
+}
+
+int __rin_pthread_cancel_wait_register(volatile unsigned int* word,
+                                       int wake_operation) {
+    pthread_t self = _RIN_PTHREAD_CANCEL_SELF();
+    RinPthreadCancelRecord* record;
+    int result;
+    if (word == NULL || (wake_operation & 0x7f) != FUTEX_WAKE)
+        return EINVAL;
+    result = rin_pthread_cancel_register(self);
+    if (result != 0) return result;
+    rin_pthread_cancel_lock();
+    record = rin_pthread_cancel_find_locked(self);
+    if (record == NULL || !record->active) {
+        result = ESRCH;
+    } else if (record->cancel_wait_word != NULL &&
+               record->cancel_wait_word != word) {
+        result = EBUSY;
+    } else if (record->state == PTHREAD_CANCEL_ENABLE &&
+               __atomic_load_n(&record->pending, __ATOMIC_ACQUIRE)) {
+        result = EINTR;
+    } else {
+        record->cancel_wait_word = word;
+        record->cancel_wait_wake_operation = wake_operation;
+        result = 0;
+    }
+    rin_pthread_cancel_unlock();
+    return result;
+}
+
+int __rin_pthread_cancel_wait_unregister(volatile unsigned int* word) {
+    pthread_t self = _RIN_PTHREAD_CANCEL_SELF();
+    RinPthreadCancelRecord* record;
+    int pending = 0;
+    if (word == NULL) return 0;
+    rin_pthread_cancel_lock();
+    record = rin_pthread_cancel_find_locked(self);
+    if (record != NULL) {
+        if (record->cancel_wait_word == word) {
+            record->cancel_wait_word = NULL;
+            record->cancel_wait_wake_operation = 0;
+        }
+        pending = record->active &&
+            record->state == PTHREAD_CANCEL_ENABLE &&
+            __atomic_load_n(&record->pending, __ATOMIC_ACQUIRE);
+    }
+    rin_pthread_cancel_unlock();
+    return pending;
 }
 
 int rin_pthread_cancel_register(pthread_t thread) {
@@ -136,6 +203,8 @@ void rin_pthread_cancel_exit(pthread_t thread, void* value) {
     if (record) {
         record->active = 0;
         record->pending = 0;
+        record->cancel_wait_word = NULL;
+        record->cancel_wait_wake_operation = 0;
         record->exit_value = value;
         record->cleanup_top = NULL;
         if (record->detached) {
@@ -259,6 +328,7 @@ int pthread_cancel(pthread_t thread) {
         __atomic_store_n(&record->pending, 1, __ATOMIC_RELEASE);
     should_wake = record->state == PTHREAD_CANCEL_ENABLE &&
         __atomic_load_n(&record->pending, __ATOMIC_ACQUIRE);
+    if (should_wake) rin_pthread_cancel_wake_wait_locked(record);
     rin_pthread_cancel_unlock();
     if (should_wake) {
         intptr_t process = _RIN_PTHREAD_CANCEL_GETPID();

@@ -1448,6 +1448,7 @@ static int rin_pthread_cond_wait_impl(pthread_cond_t* cond,
                                       pthread_mutex_t* mutex) {
     int result = 0;
     int mutex_result;
+    int cancel_wait_registered = 0;
 
     if (!cond || !mutex) return EINVAL;
     pthread_testcancel();
@@ -1460,7 +1461,12 @@ static int rin_pthread_cond_wait_impl(pthread_cond_t* cond,
         return mutex_result;
     }
 
-    while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
+    result = __rin_pthread_cancel_wait_register(
+        &cond->generation,
+        rin_pthread_cond_futex_operation(cond, FUTEX_WAKE));
+    if (result == 0) cancel_wait_registered = 1;
+    while (result == 0 &&
+           __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
         long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
             &cond->generation,
             rin_pthread_cond_futex_operation(cond, FUTEX_WAIT),
@@ -1482,10 +1488,13 @@ static int rin_pthread_cond_wait_impl(pthread_cond_t* cond,
         }
     }
 
-    __atomic_fetch_sub(&cond->waiting, 1, __ATOMIC_SEQ_CST);
     mutex_result = pthread_mutex_lock(mutex);
+    if (cancel_wait_registered &&
+        __rin_pthread_cancel_wait_unregister(&cond->generation))
+        result = EINTR;
+    __atomic_fetch_sub(&cond->waiting, 1, __ATOMIC_SEQ_CST);
     if (mutex_result != 0) return mutex_result;
-    if (result == EINTR) pthread_testcancel();
+    pthread_testcancel();
     return result == EINTR ? 0 : result;
 }
 
@@ -1500,6 +1509,7 @@ static int rin_pthread_cond_timedwait_impl(
     pthread_cond_t* cond, pthread_mutex_t* mutex,
     const struct timespec* abstime) {
     int mutex_result;
+    int cancel_wait_registered = 0;
 
     if (!cond || !mutex || !abstime) return EINVAL;
     pthread_testcancel();
@@ -1517,8 +1527,12 @@ static int rin_pthread_cond_timedwait_impl(
         return mutex_result;
     }
 
-    int result = 0;
-    while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
+    int result = __rin_pthread_cancel_wait_register(
+        &cond->generation,
+        rin_pthread_cond_futex_operation(cond, FUTEX_WAKE));
+    if (result == 0) cancel_wait_registered = 1;
+    while (result == 0 &&
+           __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
 #if !defined(RIN_TIME_ABI64)
         if (abstime->tv_sec < 0) {
             result = ETIMEDOUT;
@@ -1585,10 +1599,13 @@ static int rin_pthread_cond_timedwait_impl(
         }
     }
 
-    __atomic_fetch_sub(&cond->waiting, 1, __ATOMIC_SEQ_CST);
     mutex_result = pthread_mutex_lock(mutex);
+    if (cancel_wait_registered &&
+        __rin_pthread_cancel_wait_unregister(&cond->generation))
+        result = EINTR;
+    __atomic_fetch_sub(&cond->waiting, 1, __ATOMIC_SEQ_CST);
     if (mutex_result != 0) return mutex_result;
-    if (result == EINTR) pthread_testcancel();
+    pthread_testcancel();
     return result == EINTR ? 0 : result;
 }
 
