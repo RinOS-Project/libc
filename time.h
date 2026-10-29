@@ -7,6 +7,8 @@
 #ifndef _TIME_H
 #define _TIME_H
 
+#define __STDC_VERSION_TIME_H__ 202311L
+
 #include "stddef.h"
 #include "stdint.h"
 #include "signal.h"
@@ -417,6 +419,9 @@ static inline int _rin_time_ns_to_timespec(uint64_t nanoseconds,
 #define CLOCK_REALTIME           RIN_CLOCK_ID_REALTIME
 #ifndef TIME_UTC
 #define TIME_UTC                  1
+#endif
+#ifndef TIME_MONOTONIC
+#define TIME_MONOTONIC           2
 #endif
 #define CLOCK_MONOTONIC          RIN_CLOCK_ID_MONOTONIC
 #define CLOCK_PROCESS_CPUTIME_ID RIN_CLOCK_ID_PROCESS_CPUTIME
@@ -1091,9 +1096,19 @@ static inline int _rin_time_realtime_deadline_relative(
 }
 
 static inline int timespec_get(struct timespec* ts, int base) {
-    if (base != TIME_UTC) return 0;
-    if (clock_gettime(CLOCK_REALTIME, ts) != 0) return 0;
-    return TIME_UTC;
+    clockid_t clock_id;
+    switch (base) {
+        case TIME_UTC:
+            clock_id = CLOCK_REALTIME;
+            break;
+        case TIME_MONOTONIC:
+            clock_id = CLOCK_MONOTONIC;
+            break;
+        default:
+            return 0;
+    }
+    if (clock_gettime(clock_id, ts) != 0) return 0;
+    return base;
 }
 
 static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
@@ -1149,9 +1164,19 @@ static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
 }
 
 static inline int timespec_getres(struct timespec* ts, int base) {
-    if (base != TIME_UTC) return 0;
-    if (ts && clock_getres(CLOCK_REALTIME, ts) != 0) return 0;
-    return TIME_UTC;
+    clockid_t clock_id;
+    switch (base) {
+        case TIME_UTC:
+            clock_id = CLOCK_REALTIME;
+            break;
+        case TIME_MONOTONIC:
+            clock_id = CLOCK_MONOTONIC;
+            break;
+        default:
+            return 0;
+    }
+    if (clock_getres(clock_id, ts) != 0) return 0;
+    return base;
 }
 
 static inline int _rin_time_timespec_to_ns(const struct timespec* input,
