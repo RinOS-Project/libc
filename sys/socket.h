@@ -517,10 +517,25 @@ static inline int getsockopt(int sockfd, int level, int optname,
 /* The kernel32 socket dispatcher has no restartable blocking wait boundary.
  * Keep its Unix accept retry contract sleep-based at the libc boundary, while
  * preserving immediate EAGAIN for nonblocking or non-listening sockets. */
-static inline int __rin_socket_accept_backoff(int sockfd,
-                                               uint32_t* delay_ms) {
+typedef struct __RinSocketAcceptWait {
+    uint64_t deadline_ms;
+    uint32_t delay_ms;
+    int initialized;
+    int timed;
+} __RinSocketAcceptWait;
+
+static inline int __rin_socket_accept_wait_init(
+    int sockfd, __RinSocketAcceptWait* wait) {
     int nonblocking = 0;
     socklen_t option_size = (socklen_t)sizeof(nonblocking);
+    struct timeval timeout = {0, 0};
+    struct timespec now;
+    uint64_t timeout_ms;
+
+    if (!wait) {
+        errno = EINVAL;
+        return 0;
+    }
     if (getsockopt(sockfd, SOL_SOCKET, SO_NONBLOCK, &nonblocking,
                    &option_size) != 0)
         return 0;
@@ -544,11 +559,117 @@ static inline int __rin_socket_accept_backoff(int sockfd,
         return 0;
     }
 
-    struct timespec delay = {0, (long)*delay_ms * 1000000L};
-    if (nanosleep(&delay, 0) != 0) return 0;
-    if (*delay_ms < 256u) {
-        *delay_ms = *delay_ms > 128u ? 256u : *delay_ms * 2u;
+    option_size = (socklen_t)sizeof(timeout);
+    if (getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                   &option_size) != 0)
+        return 0;
+    if (option_size != (socklen_t)sizeof(timeout) ||
+        timeout.tv_sec < 0 || timeout.tv_usec < 0 ||
+        timeout.tv_usec >= 1000000L) {
+        errno = EIO;
+        return 0;
     }
+
+    wait->timed = timeout.tv_sec != 0 || timeout.tv_usec != 0;
+    wait->deadline_ms = 0u;
+    if (wait->timed) {
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+        if (now.tv_sec < 0 || now.tv_nsec < 0 ||
+            now.tv_nsec >= 1000000000L ||
+            (uint64_t)now.tv_sec >
+                (UINT64_MAX - (uint64_t)now.tv_nsec / 1000000u) / 1000u) {
+            errno = EOVERFLOW;
+            return 0;
+        }
+        timeout_ms = (uint64_t)timeout.tv_sec > UINT64_MAX / 1000u
+            ? UINT64_MAX
+            : (uint64_t)timeout.tv_sec * 1000u;
+        if (timeout_ms != UINT64_MAX) {
+            uint64_t fractional_ms =
+                ((uint64_t)timeout.tv_usec + 999u) / 1000u;
+            timeout_ms = timeout_ms > UINT64_MAX - fractional_ms
+                ? UINT64_MAX : timeout_ms + fractional_ms;
+        }
+        wait->deadline_ms = (uint64_t)now.tv_sec * 1000u +
+                            (uint64_t)now.tv_nsec / 1000000u;
+        wait->deadline_ms = wait->deadline_ms > UINT64_MAX - timeout_ms
+            ? UINT64_MAX : wait->deadline_ms + timeout_ms;
+    }
+    wait->delay_ms = 1u;
+    wait->initialized = 1;
+    return 1;
+}
+
+static inline int __rin_socket_accept_backoff(
+    int sockfd, __RinSocketAcceptWait* wait) {
+    uint32_t delay_ms;
+    if (!wait) {
+        errno = EINVAL;
+        return 0;
+    }
+    if (!wait->initialized && !__rin_socket_accept_wait_init(sockfd, wait))
+        return 0;
+    delay_ms = wait->delay_ms;
+    if (wait->timed) {
+        struct timespec now;
+        uint64_t now_ms;
+        uint64_t fractional_ms;
+        uint64_t remaining_ms;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+        if (now.tv_sec < 0 || now.tv_nsec < 0 ||
+            now.tv_nsec >= 1000000000L) {
+            errno = EOVERFLOW;
+            return 0;
+        }
+        fractional_ms = (uint64_t)now.tv_nsec / 1000000u;
+        if ((uint64_t)now.tv_sec >
+            (UINT64_MAX - fractional_ms) / 1000u) {
+            errno = EOVERFLOW;
+            return 0;
+        }
+        now_ms = (uint64_t)now.tv_sec * 1000u +
+                 fractional_ms;
+        if (now_ms >= wait->deadline_ms) {
+            errno = EAGAIN;
+            return 0;
+        }
+        remaining_ms = wait->deadline_ms - now_ms;
+        if (remaining_ms < delay_ms)
+            delay_ms = (uint32_t)remaining_ms;
+        if (delay_ms == 0u) delay_ms = 1u;
+    }
+
+    struct timespec delay = {0, (long)delay_ms * 1000000L};
+    if (nanosleep(&delay, 0) != 0) return 0;
+    if (wait->delay_ms < 256u) {
+        wait->delay_ms = wait->delay_ms > 128u
+            ? 256u : wait->delay_ms * 2u;
+    }
+    return 1;
+}
+
+static inline int __rin_socket_accept_wait_expired(
+    const __RinSocketAcceptWait* wait) {
+    struct timespec now;
+    uint64_t now_ms;
+    uint64_t fractional_ms;
+    if (!wait || !wait->initialized || !wait->timed) return 0;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    if (now.tv_sec < 0 || now.tv_nsec < 0 ||
+        now.tv_nsec >= 1000000000L) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    fractional_ms = (uint64_t)now.tv_nsec / 1000000u;
+    if ((uint64_t)now.tv_sec >
+        (UINT64_MAX - fractional_ms) / 1000u) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    now_ms = (uint64_t)now.tv_sec * 1000u +
+             fractional_ms;
+    if (now_ms < wait->deadline_ms) return 0;
+    errno = EAGAIN;
     return 1;
 }
 
@@ -560,9 +681,10 @@ static inline void __rin_socket_cancel_close_fd(void* argument) {
 
 static inline int accept(int sockfd, struct sockaddr* addr,
                          socklen_t* addrlen) {
-    uint32_t delay_ms = 1u;
+    __RinSocketAcceptWait wait = {0u, 1u, 0, 0};
     __rin_pthread_cancel_point_if_linked();
     for (;;) {
+        if (__rin_socket_accept_wait_expired(&wait) != 0) return -1;
         const intptr_t result =
             _RIN_SOCKET_SYSCALL3(SYS_ACCEPT, sockfd, addr, addrlen);
         if (result >= 0) {
@@ -575,7 +697,7 @@ static inline int accept(int sockfd, struct sockaddr* addr,
         __rin_pthread_cancel_point_if_linked();
         (void)__rin_socket_raw_error(result);
         if (errno != EAGAIN ||
-            !__rin_socket_accept_backoff(sockfd, &delay_ms))
+            !__rin_socket_accept_backoff(sockfd, &wait))
             return -1;
     }
 }
@@ -937,9 +1059,10 @@ failed:
 
 static inline int accept4(int sockfd, struct sockaddr* addr,
                           socklen_t* addrlen, int flags) {
-    uint32_t delay_ms = 1u;
+    __RinSocketAcceptWait wait = {0u, 1u, 0, 0};
     __rin_pthread_cancel_point_if_linked();
     for (;;) {
+        if (__rin_socket_accept_wait_expired(&wait) != 0) return -1;
         const intptr_t result = _RIN_SOCKET_SYSCALL5(
             SYS_ACCEPT4, sockfd, addr, addrlen, flags, 0u);
         if (result >= 0) {
@@ -952,7 +1075,7 @@ static inline int accept4(int sockfd, struct sockaddr* addr,
         __rin_pthread_cancel_point_if_linked();
         (void)__rin_socket_raw_error(result);
         if (errno != EAGAIN ||
-            !__rin_socket_accept_backoff(sockfd, &delay_ms))
+            !__rin_socket_accept_backoff(sockfd, &wait))
             return -1;
     }
 }
