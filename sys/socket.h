@@ -229,6 +229,37 @@ struct sockaddr_in6 {
     uint32_t        sin6_scope_id; /* スコープID */
 };
 
+/* Link-layer address used by AF_PACKET / PF_PACKET. Protocol is in network
+ * byte order, and sll_ifindex is the namespace-visible interface index. */
+struct sockaddr_ll {
+    sa_family_t sll_family;
+    uint16_t sll_protocol;
+    int32_t sll_ifindex;
+    uint16_t sll_hatype;
+    uint8_t sll_pkttype;
+    uint8_t sll_halen;
+    uint8_t sll_addr[8];
+};
+
+struct packet_mreq {
+    int32_t mr_ifindex;
+    uint16_t mr_type;
+    uint16_t mr_alen;
+    uint8_t mr_address[8];
+};
+
+#if defined(__cplusplus)
+static_assert(sizeof(struct sockaddr_ll) == 20u, "sockaddr_ll ABI drift");
+static_assert(offsetof(struct sockaddr_ll, sll_addr) == 12u,
+              "sockaddr_ll address offset drift");
+static_assert(sizeof(struct packet_mreq) == 16u, "packet_mreq ABI drift");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(struct sockaddr_ll) == 20u, "sockaddr_ll ABI drift");
+_Static_assert(offsetof(struct sockaddr_ll, sll_addr) == 12u,
+               "sockaddr_ll address offset drift");
+_Static_assert(sizeof(struct packet_mreq) == 16u, "packet_mreq ABI drift");
+#endif
+
 /* Stable 20-byte IPv6 multicast membership ABI shared with the kernel's
  * setsockopt boundary. */
 struct ipv6_mreq {
@@ -289,6 +320,16 @@ static inline uint32_t ntohl(uint32_t netlong) {
 
 /* ソケットレベル */
 #define SOL_SOCKET  1
+#define SOL_PACKET  263
+
+#define PACKET_ADD_MEMBERSHIP 1
+#define PACKET_DROP_MEMBERSHIP 2
+#define PACKET_MR_PROMISC 1
+#define PACKET_HOST 0
+#define PACKET_BROADCAST 1
+#define PACKET_MULTICAST 2
+#define PACKET_OTHERHOST 3
+#define PACKET_OUTGOING 4
 
 /* ソケットオプション */
 #define SO_DEBUG        1   /* デバッグ情報 */
