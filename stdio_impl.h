@@ -3921,7 +3921,7 @@ _RIN_STDIO_API char* tmpnam(char* s) {
     intptr_t result;
     intptr_t process_id;
 
-    process_id = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL0(SYS_GETPID));
+    process_id = _rin_stdio_syscall_result(_syscall0((uintptr_t)SYS_GETPID));
     if (process_id < 0) return NULL;
     if ((uint64_t)process_id > UINT32_MAX) {
         errno = EOVERFLOW;
