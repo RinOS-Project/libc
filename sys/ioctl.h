@@ -187,15 +187,64 @@ static inline int _rin_ioctl_result_status_zero(intptr_t raw_result) {
  *              virtual-terminal descriptor、未admit fd は ENOTTY。
  *   未対応 req : EINVAL。
  */
+typedef enum _rin_ioctl_argument_kind {
+    _RIN_IOCTL_ARGUMENT_NONE,
+    _RIN_IOCTL_ARGUMENT_SCALAR_INT,
+    _RIN_IOCTL_ARGUMENT_POINTER
+} _rin_ioctl_argument_kind;
+
+static inline _rin_ioctl_argument_kind
+_rin_ioctl_get_argument_kind(unsigned long request) {
+    switch (request) {
+        /* Requests whose ABI has no third argument. */
+        case TIOCEXCL:
+        case TIOCNXCL:
+        case TIOCNOTTY:
+        case TIOCSBRK:
+        case TIOCCBRK:
+        case FIOCLEX:
+        case FIONCLEX:
+            return _RIN_IOCTL_ARGUMENT_NONE;
+
+        /* These legacy terminal requests carry an int value by value. */
+        case TCSBRK:
+        case TCXONC:
+        case TCFLSH:
+        case TCSBRKP:
+        case TIOCSCTTY:
+            return _RIN_IOCTL_ARGUMENT_SCALAR_INT;
+
+        default:
+            /* Encoded _IO requests declare no payload. Legacy low-valued
+             * requests are classified explicitly above because their
+             * direction/size bits do not describe their argument. */
+            if (request > 0xffffUL && _IOC_DIR(request) == _IOC_NONE &&
+                _IOC_SIZE(request) == 0u)
+                return _RIN_IOCTL_ARGUMENT_NONE;
+            return _RIN_IOCTL_ARGUMENT_POINTER;
+    }
+}
+
 static inline int ioctl(int fd, unsigned long request, ...) {
     va_list ap;
-    void* arg_ptr;
+    uintptr_t arg_word = 0u;
     intptr_t raw_result;
-    va_start(ap, request);
-    arg_ptr = va_arg(ap, void*);
-    va_end(ap);
+    _rin_ioctl_argument_kind argument_kind =
+        _rin_ioctl_get_argument_kind(request);
+
+    if (argument_kind != _RIN_IOCTL_ARGUMENT_NONE) {
+        va_start(ap, request);
+        if (argument_kind == _RIN_IOCTL_ARGUMENT_SCALAR_INT) {
+            /* Default argument promotions pass these legacy scalar values
+             * as int. Zero-extend to the fixed-width ioctl syscall word. */
+            arg_word = (uintptr_t)(uint32_t)va_arg(ap, int);
+        } else {
+            arg_word = (uintptr_t)va_arg(ap, void*);
+        }
+        va_end(ap);
+    }
     raw_result = _RIN_IOCTL_SYSCALL3(
-        SYS_IOCTL, (uintptr_t)fd, (uintptr_t)request, (uintptr_t)arg_ptr);
+        SYS_IOCTL, (uintptr_t)fd, (uintptr_t)request, arg_word);
     return _rin_ioctl_result_status_zero(raw_result);
 }
 
