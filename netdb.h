@@ -526,6 +526,22 @@ static inline int _netdb_resolved_gai_error(int transact_status) {
     return EAI_FAIL;
 }
 
+static inline int _netdb_resolved_system_error_status(
+    const RinResolvedMsgHeader* header, const void* payload) {
+    if (!header || header->status != EAI_SYSTEM) return EAI_FAIL;
+    if (header->version == RIN_RESOLVED_VERSION_V1 &&
+        header->payload_len == 0u)
+        return EAI_SYSTEM;
+    if (header->version == RIN_RESOLVED_VERSION_V2 && payload != NULL &&
+        rin_resolved_system_error_v2_valid(
+            (const RinResolvedSystemErrorV2*)payload,
+            header->payload_len, header->status)) {
+        errno = ((const RinResolvedSystemErrorV2*)payload)->error_number;
+        return EAI_SYSTEM;
+    }
+    return EAI_FAIL;
+}
+
 #include "internal/netdb_database.h"
 
 static inline int _netdb_parse_service_port(const char* service,
@@ -825,11 +841,14 @@ static inline int _netdb_resolved_lookup_one(
     if (rc != 0) {
         return _netdb_resolved_gai_error(rc);
     }
-    if (!rin_resolved_getaddrinfo_status_valid(header.status) ||
-        (header.status != 0 && header.payload_len != 0u)) {
+    if (!rin_resolved_getaddrinfo_status_valid(header.status)) {
         return EAI_FAIL;
     }
-    if (header.status != 0) return header.status;
+    if (header.status == EAI_SYSTEM)
+        return _netdb_resolved_system_error_status(&header, outbuf);
+    if (header.status != 0) {
+        return header.payload_len == 0u ? header.status : EAI_FAIL;
+    }
     if (header.payload_len < sizeof(resp) ||
         header.payload_len > sizeof(outbuf)) {
         return EAI_FAIL;
@@ -931,11 +950,14 @@ static inline int _netdb_resolved_lookup_dual(
     if (rc != 0) {
         return _netdb_resolved_gai_error(rc);
     }
-    if (!rin_resolved_getaddrinfo_status_valid(header.status) ||
-        (header.status != 0 && header.payload_len != 0u)) {
+    if (!rin_resolved_getaddrinfo_status_valid(header.status)) {
         return EAI_FAIL;
     }
-    if (header.status != 0) return header.status;
+    if (header.status == EAI_SYSTEM)
+        return _netdb_resolved_system_error_status(&header, outbuf);
+    if (header.status != 0) {
+        return header.payload_len == 0u ? header.status : EAI_FAIL;
+    }
     if (header.payload_len < sizeof(resp) || header.payload_len > sizeof(outbuf))
         return EAI_FAIL;
     memcpy(&resp, outbuf, sizeof(resp));
@@ -1642,6 +1664,8 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
             return _netdb_resolved_gai_error(transact_status);
         }
     }
+    if (header.status == EAI_SYSTEM)
+        return _netdb_resolved_system_error_status(&header, outbuf);
     if (header.status != 0 && header.status != EAI_NONAME)
         return header.status < 0 ? header.status : EAI_FAIL;
     if (header.status == EAI_NONAME && host_requested &&
