@@ -76,6 +76,7 @@ _Static_assert(offsetof(struct dirent64, d_name) ==
 typedef struct {
     int fd;                         /* ディレクトリのファイルディスクリプタ */
     struct dirent entry;            /* 現在のエントリ */
+    struct dirent64 entry64;        /* readdir64() の現在のエントリ */
     int eof;                        /* 終端フラグ */
     unsigned int magic;             /* 有効なストリームか */
     volatile uint32_t lock;         /* 同じストリームの操作を直列化 */
@@ -156,7 +157,8 @@ static inline int _rin_dir_read_entry_locked(DIR* dirp,
         return -1;
     }
 
-    memcpy(output, &dirp->entry, sizeof(*output));
+    if (output != &dirp->entry)
+        memcpy(output, &dirp->entry, sizeof(*output));
     return 1;
 }
 
@@ -196,24 +198,6 @@ static inline int _rin_dir_read_entry64_locked(DIR* dirp,
         return -1;
     }
     return 1;
-}
-
-static inline struct dirent* _rin_readdir_thread_buffer(void) {
-#if defined(__cplusplus)
-    static thread_local struct dirent entry;
-#else
-    static _Thread_local struct dirent entry;
-#endif
-    return &entry;
-}
-
-static inline struct dirent64* _rin_readdir64_thread_buffer(void) {
-#if defined(__cplusplus)
-    static thread_local struct dirent64 entry;
-#else
-    static _Thread_local struct dirent64 entry;
-#endif
-    return &entry;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -317,7 +301,7 @@ static inline struct dirent* readdir(DIR* dirp) {
         errno = EBADF;
         return NULL;
     }
-    output = _rin_readdir_thread_buffer();
+    output = &dirp->entry;
     _rin_dir_lock(dirp);
     result = _rin_dir_read_entry_locked(dirp, output);
     _rin_dir_unlock(dirp);
@@ -331,7 +315,7 @@ static inline struct dirent64* readdir64(DIR* dirp) {
         errno = EBADF;
         return NULL;
     }
-    output = _rin_readdir64_thread_buffer();
+    output = &dirp->entry64;
     _rin_dir_lock(dirp);
     result = _rin_dir_read_entry64_locked(dirp, output);
     _rin_dir_unlock(dirp);
