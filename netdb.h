@@ -1254,8 +1254,7 @@ static inline int getaddrinfo(const char* node, const char* service,
     if (!resolved_locally) {
         int lookup_status;
         int wire_flags = flags & ~(AI_V4MAPPED | AI_ALL | AI_ADDRCONFIG);
-        int dual_lookup = unspec_dual ||
-            ((flags & AI_ALL) != 0 && ipv4_configured && ipv6_configured);
+        int dual_lookup = unspec_dual || (flags & AI_ALL) != 0;
         if (dual_lookup) {
             if (unspec_dual) {
                 uint8_t ipv6_addresses[RIN_RESOLVED_GAI_MAX_RESULTS]
@@ -1296,58 +1295,58 @@ static inline int getaddrinfo(const char* node, const char* service,
                     return EAI_FAIL;
                 }
             } else {
-            uint8_t ipv4_address[RIN_RESOLVED_IPV6_ADDRESS_BYTES];
-            int ipv4_family = AF_UNSPEC;
-            int ipv6_status;
-            int ipv4_status;
-            memset(ipv4_address, 0, sizeof(ipv4_address));
-            ipv6_status = _netdb_resolved_lookup_one(
-                node, node_length, port, service && *service,
-                AF_INET6, effective_socktype, effective_protocol, wire_flags,
-                address, &result_family, canon_buf, sizeof(canon_buf));
-            if (ipv6_status != 0 && ipv6_status != EAI_NONAME) {
-                return ipv6_status;
-            }
-            ipv4_status = _netdb_resolved_lookup_one(
-                node, node_length, port, service && *service,
-                AF_INET, effective_socktype, effective_protocol, wire_flags,
-                ipv4_address, &ipv4_family, secondary_canon,
-                sizeof(secondary_canon));
-            if (ipv4_status != 0 && ipv4_status != EAI_NONAME) {
-                return ipv4_status;
-            }
-            if (ipv6_status == 0 && result_family != AF_INET6) return EAI_FAIL;
-            if (ipv4_status == 0 && ipv4_family != AF_INET) return EAI_FAIL;
-            if (ipv6_status == 0 && ipv4_status == 0) {
-                if ((flags & AI_CANONNAME) != 0 &&
-                    !_netdb_ascii_name_equal(canon_buf, secondary_canon)) {
-                    return EAI_FAIL;
+                uint8_t ipv6_addresses[RIN_RESOLVED_GAI_MAX_RESULTS]
+                                      [RIN_RESOLVED_IPV6_ADDRESS_BYTES];
+                uint8_t ipv4_addresses[RIN_RESOLVED_GAI_MAX_RESULTS]
+                                      [RIN_RESOLVED_IPV4_ADDRESS_BYTES];
+                uint32_t ipv6_count = 0u;
+                uint32_t ipv4_count = 0u;
+                uint32_t index;
+
+                memset(ipv6_addresses, 0, sizeof(ipv6_addresses));
+                memset(ipv4_addresses, 0, sizeof(ipv4_addresses));
+                lookup_status = _netdb_resolved_lookup_dual(
+                    node, node_length, port, service && *service,
+                    effective_socktype, effective_protocol, wire_flags,
+                    ipv6_addresses, &ipv6_count, ipv4_addresses, &ipv4_count,
+                    canon_buf, sizeof(canon_buf));
+                if (lookup_status != 0) return lookup_status;
+
+                /* AI_ALL is an AF_INET6 contract.  Keep every admitted AAAA
+                 * result and append every admitted A result as an IPv4-mapped
+                 * IPv6 address.  The resolver may return both families even
+                 * with AI_ADDRCONFIG, so filter each family against the same
+                 * configuration snapshot used before the query. */
+                if (!ipv6_configured) ipv6_count = 0u;
+                if (!ipv4_configured) ipv4_count = 0u;
+                if (ipv6_count > 0u) {
+                    memcpy(address, ipv6_addresses,
+                           (size_t)ipv6_count *
+                               RIN_RESOLVED_IPV6_ADDRESS_BYTES);
+                    primary_address_count = ipv6_count;
                 }
-                if ((flags & AI_ALL) != 0) {
-                    _netdb_map_ipv4_address(secondary_address, ipv4_address);
+                if (ipv4_count > 0u) {
+                    for (index = 0u; index < ipv4_count; ++index) {
+                        _netdb_map_ipv4_address(
+                            secondary_address +
+                                (size_t)index *
+                                    RIN_RESOLVED_IPV6_ADDRESS_BYTES,
+                            ipv4_addresses[index]);
+                    }
+                    secondary_address_count = ipv4_count;
                     secondary_family = AF_INET6;
-                } else {
-                    memcpy(secondary_address, ipv4_address,
-                           RIN_RESOLVED_IPV4_ADDRESS_BYTES);
-                    secondary_family = AF_INET;
+                    have_secondary = ipv6_count > 0u;
                 }
-                have_secondary = 1;
-            } else if (ipv6_status == 0) {
-                have_secondary = 0;
-            } else if (ipv4_status == 0) {
-                if ((flags & AI_ALL) != 0) {
-                    _netdb_map_ipv4_address(address, ipv4_address);
-                    result_family = AF_INET6;
-                } else {
-                    memcpy(address, ipv4_address,
-                           RIN_RESOLVED_IPV4_ADDRESS_BYTES);
-                    result_family = AF_INET;
+                if (ipv6_count == 0u && ipv4_count > 0u) {
+                    memcpy(address, secondary_address,
+                           (size_t)ipv4_count *
+                               RIN_RESOLVED_IPV6_ADDRESS_BYTES);
+                    primary_address_count = ipv4_count;
+                    have_secondary = 0;
+                } else if (ipv6_count == 0u && ipv4_count == 0u) {
+                    return EAI_NONAME;
                 }
-                memcpy(canon_buf, secondary_canon, sizeof(canon_buf));
-            } else {
-                return EAI_NONAME;
-            }
-            lookup_status = 0;
+                result_family = AF_INET6;
             }
         } else {
             int lookup_family = family;
