@@ -101,9 +101,6 @@
 #ifndef _POSIX_SPAWN
 #define _POSIX_SPAWN 200809L
 #endif
-#ifndef _POSIX_REALTIME_SIGNALS
-#define _POSIX_REALTIME_SIGNALS 200809L
-#endif
 
 /* Preserve caller-provided syscall hooks before installing defaults.  A
  * hosted unit that supplies a hook is intentionally asking for the Rin
@@ -1857,7 +1854,6 @@ static inline long sysconf(int name) {
             return _POSIX_THREAD_SAFE_FUNCTIONS;
         case _SC_THREADS:
         case _SC_READER_WRITER_LOCKS:
-        case _SC_REALTIME_SIGNALS:
         case _SC_BARRIERS:
         case _SC_SPAWN:
             return 200809L;
@@ -1882,6 +1878,7 @@ static inline long sysconf(int name) {
 #endif
         case _SC_PRIORITIZED_IO:
         case _SC_PRIORITY_SCHEDULING:
+        case _SC_REALTIME_SIGNALS:
         case _SC_REGEXP:
         case _SC_SEMAPHORES:
         case _SC_CLOCK_SELECTION:
