@@ -6,6 +6,7 @@
 #include "fcntl.h"
 #include "limits.h"
 #include "pthread.h"
+#include "internal/pthread_cond_interrupt.h"
 #include "signal.h"
 #include "stdlib.h"
 #include "string.h"
@@ -822,11 +823,21 @@ int aio_suspend(const struct aiocb* const requests[], int count,
             break;
         }
         if (timeout)
-            wait_error = pthread_cond_timedwait(&g_rin_aio_changed,
-                                                &g_rin_aio_mutex, &deadline);
+            wait_error = __rin_pthread_cond_timedwait_interruptible(
+                &g_rin_aio_changed, &g_rin_aio_mutex, &deadline);
         else
-            wait_error = pthread_cond_wait(&g_rin_aio_changed,
-                                           &g_rin_aio_mutex);
+            wait_error = __rin_pthread_cond_wait_interruptible(
+                &g_rin_aio_changed, &g_rin_aio_mutex);
+        if (wait_error == EINTR) {
+            /* Completion and signal delivery may race while the condition
+             * wait reacquires the mutex. A completed request wins that race. */
+            if (rin_aio_list_has_completion_locked(requests, count)) {
+                wait_error = 0;
+                break;
+            }
+            errno = EINTR;
+            break;
+        }
         if (wait_error != 0 && wait_error != ETIMEDOUT) {
             errno = wait_error;
             break;
