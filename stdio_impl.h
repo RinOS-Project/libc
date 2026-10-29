@@ -1207,6 +1207,19 @@ static inline int _rin_stdio_output_is_buffered(const FILE* stream) {
     return _rin_stdio_output_buffer_enabled(stream);
 }
 
+static inline int _rin_stdio_stream_is_readable(FILE* stream) {
+    if (!stream) {
+        errno = EINVAL;
+        return 0;
+    }
+    if ((stream->mode & O_ACCMODE) == O_WRONLY) {
+        errno = EBADF;
+        stream->error = 1;
+        return 0;
+    }
+    return 1;
+}
+
 static inline size_t _rin_stdio_buffer_position(const FILE* stream) {
     return stream ? stream->buf_pos : 0u;
 }
@@ -1462,6 +1475,7 @@ _RIN_STDIO_INTERNAL intptr_t _rin_stdio_read_block(FILE* stream,
         return -1;
     }
     if (length == 0u) return 0;
+    if (!_rin_stdio_stream_is_readable(stream)) return -1;
     if (!_rin_stdio_input_buffer_enabled(stream)) {
         return _rin_stdio_read_backend(stream, output, length);
     }
@@ -1510,6 +1524,7 @@ static inline int _rin_fgetc_unlocked(FILE* stream) {
         errno = EINVAL;
         return EOF;
     }
+    if (!_rin_stdio_stream_is_readable(stream)) return EOF;
     if (!_rin_stdio_claim_byte_orientation(stream)) return EOF;
     if (_rin_stdio_flush_output_buffer(stream) != 0) return EOF;
     stream_index = _rin_stdio_stream_index(stream);
@@ -1757,6 +1772,10 @@ _RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* 
 static inline int _rin_ungetc_unlocked(int c, FILE* stream) {
     int idx;
     if (c == EOF || !stream) return EOF;
+    if ((stream->mode & O_ACCMODE) == O_WRONLY) {
+        errno = EBADF;
+        return EOF;
+    }
     idx = _rin_stdio_stream_index(stream);
     if (idx < 0 || !_rin_stdio_claim_byte_orientation(stream) ||
         !_rin_stdio_ungetc_push(idx, (unsigned char)c)) return EOF;
@@ -2229,6 +2248,7 @@ static inline size_t _rin_fread_unlocked(void* ptr, size_t size, size_t nmemb, F
         return 0;
     }
     if (size == 0 || nmemb == 0) return 0;
+    if (!_rin_stdio_stream_is_readable(stream)) return 0;
     if (!_rin_stdio_claim_byte_orientation(stream)) return 0;
     if (_rin_stdio_flush_output_buffer(stream) != 0) return 0;
     if (nmemb > (size_t)-1 / size) {
