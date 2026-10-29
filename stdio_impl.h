@@ -3057,7 +3057,10 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                             ftmp[fi++] = *ns++;
                     } else {
                         /* Normal number */
-                        if (val < 0) { ftmp[fi++] = '-'; val = -val; }
+                        if (__builtin_signbit(val)) {
+                            ftmp[fi++] = '-';
+                            val = -val;
+                        }
 
                         int scientific = (*fmt == 'e' || *fmt == 'E');
                         const int general = (*fmt == 'g' || *fmt == 'G');
