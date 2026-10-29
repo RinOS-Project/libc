@@ -22,6 +22,7 @@
 #include "errno.h"
 #include "limits.h"
 #include "sys/syscall.h"
+#include "fcntl.h"
 #include "fcntl_flags.h"
 #include "stdlib.h"
 #include "string.h"
@@ -403,6 +404,9 @@ static int _stdio_files_used[_STDIO_MAX_FILES] = {1, 1, 1, 0};
 #define _RIN_STDIO_API static inline
 #define _RIN_STDIO_INTERNAL static inline
 #endif
+
+/* 各翻訳単位のinline実装で共有するプロセス単位の連番。 */
+uint32_t _rin_stdio_tmpnam_next_sequence(void);
 
 /* FILE cannot grow without breaking the freestanding ABI, so explicit stream
  * locking lives in a bounded side table. The owner token is thread-local and
@@ -3908,17 +3912,43 @@ _RIN_STDIO_API char* tmpnam(char* s) {
 #else
     static _Thread_local char fallback[L_tmpnam];
 #endif
-    char generated[] = "/tmp/rinXXXXXX";
+    static const char hex[] = "0123456789abcdef";
+    static const char base36[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    char generated[L_tmpnam] = "/tmp/";
     char* destination = s != NULL ? s : fallback;
     size_t length = 0u;
-    int fd = mkstemp(generated);
+    int fd = -1;
     intptr_t result;
+    intptr_t process_id;
 
-    if (fd < 0) return NULL;
-    /* mkstemp gives us an exclusive reservation.  tmpnam returns only the
-     * name, so close and unlink the reservation before publishing it.  The
-     * caller still owns the standard tmpnam race; callers needing atomic
-     * creation must use mkstemp/tmpfile instead. */
+    process_id = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL0(SYS_GETPID));
+    if (process_id < 0) return NULL;
+    if ((uint64_t)process_id > UINT32_MAX) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    for (;;) {
+        uint32_t sequence = _rin_stdio_tmpnam_next_sequence();
+        uint32_t remaining = sequence;
+        if (sequence == UINT32_MAX) {
+            errno = EOVERFLOW;
+            return NULL;
+        }
+        for (size_t index = 0u; index < 8u; ++index) {
+            const unsigned int shift = (unsigned int)((7u - index) * 4u);
+            generated[5u + index] =
+                hex[((uint32_t)process_id >> shift) & 0x0fu];
+        }
+        for (size_t index = 0u; index < 6u; ++index) {
+            generated[18u - index] = base36[remaining % 36u];
+            remaining /= 36u;
+        }
+        generated[19] = '\0';
+        fd = open(generated, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+        if (fd >= 0) break;
+        if (errno != EEXIST) return NULL;
+    }
+    /* 排他的に予約してから解除し、同一プロセスでは連番を再利用しない。 */
     result = _rin_stdio_syscall_result(
         _RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)fd));
     if (result < 0) {
