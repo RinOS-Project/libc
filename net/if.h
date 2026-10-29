@@ -9,6 +9,11 @@ extern "C" {
 #define IF_NAMESIZE 16
 #define IFNAMSIZ IF_NAMESIZE
 
+struct if_nameindex {
+    unsigned int if_index;
+    char* if_name;
+};
+
 /* Product network interface flags used by the POSIX-shaped ifaddrs ABI.
  * Keep these values stable because System.Native consumes them without a
  * second product-specific translation layer. */
@@ -23,6 +28,8 @@ extern "C" {
 
 unsigned int if_nametoindex(const char* ifname);
 char* if_indextoname(unsigned int ifindex, char* ifname);
+struct if_nameindex* if_nameindex(void);
+void if_freenameindex(struct if_nameindex* list);
 
 #ifdef __cplusplus
 }

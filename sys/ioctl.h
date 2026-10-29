@@ -139,38 +139,8 @@ struct winsize {
 #define FIOGETOWN   0x8903
 #define SIOCGPGRP   0x8904
 
-/* ═══════════════════════════════════════════════════════════════
- * ソケットioctl
- * ═══════════════════════════════════════════════════════════════*/
-
-#define SIOCGIFNAME    0x8910  /* インターフェース名取得 */
-#define SIOCSIFLINK    0x8911
-#define SIOCGIFCONF    0x8912  /* インターフェース設定一覧 */
-#define SIOCGIFFLAGS   0x8913  /* インターフェースフラグ取得 */
-#define SIOCSIFFLAGS   0x8914  /* インターフェースフラグ設定 */
-#define SIOCGIFADDR    0x8915  /* IPアドレス取得 */
-#define SIOCSIFADDR    0x8916  /* IPアドレス設定 */
-#define SIOCGIFDSTADDR 0x8917  /* 宛先アドレス取得 */
-#define SIOCSIFDSTADDR 0x8918  /* 宛先アドレス設定 */
-#define SIOCGIFBRDADDR 0x8919  /* ブロードキャストアドレス取得 */
-#define SIOCSIFBRDADDR 0x891A  /* ブロードキャストアドレス設定 */
-#define SIOCGIFNETMASK 0x891B  /* ネットマスク取得 */
-#define SIOCSIFNETMASK 0x891C  /* ネットマスク設定 */
-#define SIOCGIFMETRIC  0x891D
-#define SIOCSIFMETRIC  0x891E
-#define SIOCGIFMEM     0x891F
-#define SIOCSIFMEM     0x8920
-#define SIOCGIFMTU     0x8921  /* MTU取得 */
-#define SIOCSIFMTU     0x8922  /* MTU設定 */
-#define SIOCSIFHWADDR  0x8924  /* MACアドレス設定 */
-#define SIOCGIFENCAP   0x8925
-#define SIOCSIFENCAP   0x8926
-#define SIOCGIFHWADDR  0x8927  /* MACアドレス取得 */
-#define SIOCGIFSLAVE   0x8929
-#define SIOCSIFSLAVE   0x8930
-#define SIOCADDMULTI   0x8931  /* マルチキャスト追加 */
-#define SIOCDELMULTI   0x8932  /* マルチキャスト削除 */
-#define SIOCGIFINDEX   0x8933  /* インターフェースインデックス取得 */
+/* ネットワークインターフェースioctlはkernel handler未実装のため公開しない。
+ * 列挙にはgetifaddrs()/if_nameindex()を使用する。 */
 
 /* ═══════════════════════════════════════════════════════════════
  * ioctl関数

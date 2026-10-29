@@ -19,8 +19,6 @@
 #include "unistd.h"
 #include <rin/net/resolved_protocol.h>
 #include <rin/net/ipv6_text.h>
-#include <rin/net/netif_abi.h>
-#include <rin/net/netif_addrconfig_policy.h>
 
 /* libc transport endpoint; the wire ABI intentionally does not carry this
  * deployment-specific socket path. */
@@ -103,9 +101,10 @@ struct addrinfo {
     (RIN_RESOLVED_GAI_SUPPORTED_FLAGS | AI_V4MAPPED | AI_ALL | \
      AI_ADDRCONFIG)
 
-#ifndef RIN_NETDB_PRIMARY_INFO
-extern int rin_net_get_primary_info(RinNetPrimaryInfo* out);
-#define RIN_NETDB_PRIMARY_INFO rin_net_get_primary_info
+#ifndef RIN_NETDB_ADDRCONFIG_SNAPSHOT
+extern int rin_net_addrconfig_snapshot(int* ipv4_configured,
+                                       int* ipv6_configured);
+#define RIN_NETDB_ADDRCONFIG_SNAPSHOT rin_net_addrconfig_snapshot
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -790,12 +789,9 @@ static inline void _netdb_map_ipv4_address(
 
 static inline int _netdb_addrconfig_snapshot(int* ipv4_configured,
                                              int* ipv6_configured) {
-    RinNetPrimaryInfo info;
     if (!ipv4_configured || !ipv6_configured) return -1;
-    memset(&info, 0, sizeof(info));
-    if (RIN_NETDB_PRIMARY_INFO(&info) != 0) return -1;
-    return rin_netif_addrconfig_decode(
-        &info, ipv4_configured, ipv6_configured);
+    return RIN_NETDB_ADDRCONFIG_SNAPSHOT(ipv4_configured,
+                                         ipv6_configured);
 }
 
 static inline int _netdb_resolved_lookup_one(

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <errno.h>
 #include <net/if.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/syscall.h>
 
 #include <rin/net/netif_abi.h>
-
-extern int rin_net_get_primary_info(RinNetPrimaryInfo* out);
+#include "rin_net_interface_snapshot.h"
 
 int rin_net_get_interface_statistics(RinNetInterfaceStatisticsV1* out)
 {
@@ -148,93 +149,143 @@ int rin_net_get_icmp_global_statistics_v2(
     return 0;
 }
 
-static int netif_snapshot(RinNetPrimaryInfo* info)
+static int netif_snapshot(RinNetIfaddrsSnapshotListV1* snapshot)
 {
-    int status;
-    unsigned int length = 0u;
-
-    if (!info) {
+    if (snapshot == NULL) {
         errno = EINVAL;
         return -1;
     }
-    status = rin_net_get_primary_info(info);
-    if (status != 0) {
-        errno = status < 0 ? -status : EIO;
+    memset(snapshot, 0, sizeof(*snapshot));
+    if (syscall(RIN_SYS_NETWORK_INTERFACE_IFADDRS_SNAPSHOT_V1,
+                snapshot) != 0)
         return -1;
-    }
-    if ((info->flags & ~RIN_NETINFO_KNOWN_FLAGS) != 0u) {
+    if (!rin_net_ifaddrs_snapshot_list_v1_valid(snapshot)) {
         errno = EPROTO;
         return -1;
     }
-    if ((info->flags & RIN_NETINFO_FLAG_DEVICE_READY) == 0u) {
-        if (info->flags != 0u || info->device_generation != 0u ||
-            info->ifname[0] != '\0') {
-            errno = EPROTO;
-            return -1;
-        }
-        errno = ENXIO;
-        return -1;
-    }
-    if (info->device_generation == 0u) {
-        errno = EPROTO;
-        return -1;
-    }
-    while (length < RIN_NETINFO_IFNAME_MAX && info->ifname[length] != '\0')
-        ++length;
-    if (length == 0u || length == RIN_NETINFO_IFNAME_MAX) {
-        errno = EPROTO;
-        return -1;
-    }
-    return (int)length;
+    return 0;
+}
+
+int rin_net_get_interface_ifaddrs_snapshot(
+    RinNetIfaddrsSnapshotListV1* output)
+{
+    return netif_snapshot(output);
 }
 
 unsigned int if_nametoindex(const char* ifname)
 {
-    RinNetPrimaryInfo info;
-    int length;
+    RinNetIfaddrsSnapshotListV1 snapshot;
     unsigned int index;
 
     if (!ifname) {
         errno = EINVAL;
         return 0u;
     }
-    length = netif_snapshot(&info);
-    if (length < 0)
-        return 0u;
-    for (index = 0u; index < (unsigned int)length; ++index) {
-        if (ifname[index] == '\0' || ifname[index] != info.ifname[index]) {
-            errno = ENXIO;
-            return 0u;
-        }
-    }
-    if (ifname[index] != '\0') {
+    if (ifname[0] == '\0') {
         errno = ENXIO;
         return 0u;
     }
-    /* libc currently publishes only the primary interface.  Its POSIX
-     * interface index is therefore a stable local ordinal, not the volatile
-     * device generation used to invalidate snapshots. */
-    return RIN_NET_PRIMARY_INTERFACE_INDEX;
+    if (netif_snapshot(&snapshot) != 0)
+        return 0u;
+    for (index = 0u; index < snapshot.count; ++index) {
+        const RinNetIfaddrsInterfaceV1* entry = &snapshot.interfaces[index];
+        if (strcmp(ifname, entry->ifname) == 0)
+            return (unsigned int)entry->interface_id;
+    }
+    errno = ENXIO;
+    return 0u;
 }
 
 char* if_indextoname(unsigned int ifindex, char* ifname)
 {
-    RinNetPrimaryInfo info;
-    int length;
-    int index;
+    RinNetIfaddrsSnapshotListV1 snapshot;
+    unsigned int index;
 
     if (!ifname || ifindex == 0u) {
         errno = EINVAL;
         return (char*)0;
     }
-    length = netif_snapshot(&info);
-    if (length < 0)
+    if (netif_snapshot(&snapshot) != 0)
         return (char*)0;
-    if (ifindex != 1u) {
-        errno = ENXIO;
-        return (char*)0;
+    for (index = 0u; index < snapshot.count; ++index) {
+        const RinNetIfaddrsInterfaceV1* entry = &snapshot.interfaces[index];
+        if (entry->interface_id == (uint64_t)ifindex) {
+            memcpy(ifname, entry->ifname, IF_NAMESIZE);
+            return ifname;
+        }
     }
-    for (index = 0; index <= length; ++index)
-        ifname[index] = info.ifname[index];
-    return ifname;
+    errno = ENXIO;
+    return (char*)0;
+}
+
+struct if_nameindex* if_nameindex(void)
+{
+    RinNetIfaddrsSnapshotListV1 snapshot;
+    struct if_nameindex* result;
+    char* next_name;
+    size_t names_size = 0u;
+    size_t entries_size;
+    unsigned int index;
+
+    if (netif_snapshot(&snapshot) != 0)
+        return (struct if_nameindex*)0;
+    for (index = 0u; index < snapshot.count; ++index) {
+        size_t length = strlen(snapshot.interfaces[index].ifname);
+        if (length == 0u || length >= IF_NAMESIZE ||
+            names_size > SIZE_MAX - length - 1u) {
+            errno = EPROTO;
+            return (struct if_nameindex*)0;
+        }
+        names_size += length + 1u;
+    }
+    entries_size = ((size_t)snapshot.count + 1u) * sizeof(*result);
+    if (entries_size > SIZE_MAX - names_size) {
+        errno = ENOMEM;
+        return (struct if_nameindex*)0;
+    }
+    result = (struct if_nameindex*)calloc(1u, entries_size + names_size);
+    if (result == NULL) {
+        errno = ENOMEM;
+        return (struct if_nameindex*)0;
+    }
+    next_name = (char*)result + entries_size;
+    for (index = 0u; index < snapshot.count; ++index) {
+        const RinNetIfaddrsInterfaceV1* entry = &snapshot.interfaces[index];
+        size_t length = strlen(entry->ifname) + 1u;
+        result[index].if_index = (unsigned int)entry->interface_id;
+        result[index].if_name = next_name;
+        memcpy(next_name, entry->ifname, length);
+        next_name += length;
+    }
+    result[snapshot.count].if_index = 0u;
+    result[snapshot.count].if_name = (char*)0;
+    return result;
+}
+
+void if_freenameindex(struct if_nameindex* list)
+{
+    free(list);
+}
+
+int rin_net_addrconfig_snapshot(int* ipv4_configured,
+                                int* ipv6_configured)
+{
+    RinNetIfaddrsSnapshotListV1 snapshot;
+    unsigned int index;
+    if (ipv4_configured == NULL || ipv6_configured == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    *ipv4_configured = 0;
+    *ipv6_configured = 0;
+    if (netif_snapshot(&snapshot) != 0)
+        return -1;
+    for (index = 0u; index < snapshot.count; ++index) {
+        const uint16_t flags = snapshot.interfaces[index].flags;
+        if ((flags & RIN_NET_IFADDRS_INTERFACE_FLAG_IPV4_CONFIGURED) != 0u)
+            *ipv4_configured = 1;
+        if ((flags & RIN_NET_IFADDRS_INTERFACE_FLAG_IPV6_CONFIGURED) != 0u)
+            *ipv6_configured = 1;
+    }
+    return 0;
 }
