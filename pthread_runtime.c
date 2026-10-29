@@ -213,6 +213,13 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
         }
         {
             long wait_result;
+            /* A negative CLOCK_REALTIME deadline is already expired. Retry
+             * the atomic acquisition check once before returning timeout,
+             * and never pass an invalid absolute time to the futex ABI. */
+            if (abstime && abstime->tv_sec < 0) {
+                timed_out = 1;
+                continue;
+            }
             if (abstime) {
                 wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
                     &mutex->locked,
@@ -324,6 +331,8 @@ void rin_log(const char* msg);
 typedef struct {
     void* (*start_routine)(void*);
     void* arg;
+    volatile int start_release;
+    int start_error;
 } rin_thread_start_record_t;
 
 static uintptr_t rin_align_up_word(uintptr_t value, uintptr_t align) {
@@ -542,19 +551,28 @@ static void __attribute__((naked, used)) __thread_exit_trampoline(void) {
 }
 
 static void* __attribute__((used)) __pthread_thread_bootstrap(void* raw_arg) {
-    rin_thread_start_record_t record;
     rin_thread_start_record_t* start = (rin_thread_start_record_t*)raw_arg;
+    void* (*start_routine)(void*) = NULL;
+    void* start_arg = NULL;
     void* result = NULL;
-
-    memset(&record, 0, sizeof(record));
-    if (start) {
-        record = *start;
-    }
 
     (void)rin_pthread_cancel_register(_RIN_PTHREAD_RUNTIME_SELF());
 
-    if (record.start_routine) {
-        result = record.start_routine(record.arg);
+    if (start) {
+        while (__atomic_load_n(&start->start_release, __ATOMIC_ACQUIRE) == 0) {
+            (void)_RIN_PTHREAD_RUNTIME_FUTEX(
+                &start->start_release, FUTEX_WAIT_PRIVATE, 0, NULL);
+        }
+        if (__atomic_load_n(&start->start_error, __ATOMIC_ACQUIRE) != 0) {
+            __thread_exit_wrapper(NULL);
+            __builtin_unreachable();
+        }
+        start_routine = start->start_routine;
+        start_arg = start->arg;
+    }
+
+    if (start_routine) {
+        result = start_routine(start_arg);
     }
 
     __thread_exit_wrapper(result);
@@ -563,6 +581,28 @@ static void* __attribute__((used)) __pthread_thread_bootstrap(void* raw_arg) {
 
 static void __attribute__((used)) __thread_exit_wrapper(void* retval) {
     pthread_exit(retval);
+}
+
+static int rin_pthread_detach_created(pthread_t thread) {
+    intptr_t detach_result = _RIN_PTHREAD_RUNTIME_DETACH(thread);
+    enum rin_thread_detach_outcome detach_outcome =
+        rin_thread_detach_classify(detach_result);
+    if (detach_outcome == RIN_THREAD_DETACH_INVALID)
+        return rin_pthread_syscall_error(detach_result);
+
+    /* Detached stack VMAs become kernel-owned.  Drop userspace bookkeeping
+     * before allowing the child to leave its start gate. */
+    rin_pthread_cancel_set_detached(thread);
+    (void)rin_thread_stack_take(thread, NULL, NULL, NULL, NULL);
+    return 0;
+}
+
+static void rin_pthread_start_release(rin_thread_start_record_t* record,
+                                      int start_error) {
+    __atomic_store_n(&record->start_error, start_error, __ATOMIC_RELAXED);
+    __atomic_store_n(&record->start_release, 1, __ATOMIC_RELEASE);
+    (void)_RIN_PTHREAD_RUNTIME_FUTEX(
+        &record->start_release, FUTEX_WAKE_PRIVATE, 1, NULL);
 }
 
 int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
@@ -574,9 +614,48 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
     uintptr_t alloc_size = 0;
     int alloc_kind = RIN_THREAD_ALLOC_NONE;
     int caller_stack = attr && attr->stackaddr != NULL;
+    int schedule_policy = SCHED_OTHER;
+    struct sched_param schedule_param = {0};
     uintptr_t requested_stack = THREAD_STACK_DEFAULT;
 
     if (!thread || !start_routine) return EINVAL;
+
+    if (attr) {
+        if (attr->detachstate != PTHREAD_CREATE_JOINABLE &&
+            attr->detachstate != PTHREAD_CREATE_DETACHED)
+            return EINVAL;
+        if (attr->scope != PTHREAD_SCOPE_SYSTEM) return ENOTSUP;
+        if (attr->inheritsched == PTHREAD_EXPLICIT_SCHED) {
+            if (!_rin_pthread_sched_policy_supported(attr->schedpolicy))
+                return attr->schedpolicy == SCHED_DEADLINE ? ENOTSUP : EINVAL;
+            if (!_rin_sched_policy_priority_valid(attr->schedpolicy,
+                                                  attr->sched_priority))
+                return EINVAL;
+            schedule_policy = attr->schedpolicy;
+            schedule_param.sched_priority = attr->sched_priority;
+        } else if (attr->inheritsched == PTHREAD_INHERIT_SCHED) {
+            int schedule_result = pthread_getschedparam(
+                _RIN_PTHREAD_RUNTIME_SELF(), &schedule_policy,
+                &schedule_param);
+            if (schedule_result != 0) return schedule_result;
+            if (!_rin_pthread_sched_policy_supported(schedule_policy))
+                return schedule_policy == SCHED_DEADLINE ? ENOTSUP : EINVAL;
+            if (!_rin_sched_policy_priority_valid(
+                    schedule_policy, schedule_param.sched_priority))
+                return EINVAL;
+        } else {
+            return EINVAL;
+        }
+    } else {
+        int schedule_result = pthread_getschedparam(
+            _RIN_PTHREAD_RUNTIME_SELF(), &schedule_policy, &schedule_param);
+        if (schedule_result != 0) return schedule_result;
+        if (!_rin_pthread_sched_policy_supported(schedule_policy))
+            return schedule_policy == SCHED_DEADLINE ? ENOTSUP : EINVAL;
+        if (!_rin_sched_policy_priority_valid(
+                schedule_policy, schedule_param.sched_priority))
+            return EINVAL;
+    }
 
     if (caller_stack) {
         /* A caller-provided stack is a bounded object: never enlarge its
@@ -754,6 +833,8 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
         record = (rin_thread_start_record_t*)(uintptr_t)record_addr;
         record->start_routine = start_routine;
         record->arg = arg;
+        record->start_release = 0;
+        record->start_error = 0;
         *(uintptr_t*)(uintptr_t)(stack_top - sizeof(uintptr_t)) =
             (uintptr_t)__thread_exit_trampoline;
 
@@ -776,29 +857,34 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
             return err;
         }
 
-        *thread = (pthread_t)ret;
-        (void)rin_pthread_cancel_register_created(*thread);
+        pthread_t created_thread = (pthread_t)ret;
+        (void)rin_pthread_cancel_register_created(created_thread);
         if (alloc_kind != RIN_THREAD_ALLOC_NONE) {
-            rin_thread_stack_register(*thread, alloc_base, alloc_size,
+            rin_thread_stack_register(created_thread, alloc_base, alloc_size,
                                       alloc_kind, 0);
         }
-        if (attr && attr->detachstate == PTHREAD_CREATE_DETACHED) {
-            intptr_t detach_result = _RIN_PTHREAD_RUNTIME_DETACH(*thread);
-            enum rin_thread_detach_outcome detach_outcome =
-                rin_thread_detach_classify(detach_result);
-            if (detach_outcome == RIN_THREAD_DETACH_INVALID) {
-                return rin_pthread_syscall_error(detach_result);
-            }
-
-            /* MAP_STACK is a kernel-owned VMA.  Detach transfers its
-             * lifetime to the kernel, including the already-terminated
-             * (REAPED) case.  The user-side record is bookkeeping only; if
-             * it is retained until thread exit, every detached worker leaks a
-             * record and eventually prevents further pthread_create calls. */
-            rin_pthread_cancel_set_detached(*thread);
-            (void)detach_outcome;
-            (void)rin_thread_stack_take(*thread, NULL, NULL, NULL, NULL);
+        int create_error = 0;
+        create_error = pthread_setschedparam(created_thread, schedule_policy,
+                                              &schedule_param);
+        if (create_error == 0 && attr &&
+            attr->detachstate == PTHREAD_CREATE_DETACHED) {
+            create_error = rin_pthread_detach_created(created_thread);
         }
+        if (create_error != 0) {
+            /* Do not run application code after a failed scheduler setup or
+             * detach operation.  Detach internally when possible; otherwise
+             * release the child into its error exit and reap it here. */
+            if (rin_pthread_detach_created(created_thread) == 0) {
+                rin_pthread_start_release(record, create_error);
+            } else {
+                rin_pthread_start_release(record, create_error);
+                (void)pthread_join(created_thread, NULL);
+            }
+            return create_error;
+        }
+
+        *thread = created_thread;
+        rin_pthread_start_release(record, 0);
         return 0;
     }
 }
@@ -1004,8 +1090,7 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
 int pthread_mutex_timedlock(pthread_mutex_t* mutex,
                             const struct timespec* abstime) {
     if (!mutex || !abstime) return EINVAL;
-    if (abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
-        abstime->tv_nsec >= 1000000000L)
+    if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
         return EINVAL;
 
     pthread_t self = _RIN_PTHREAD_RUNTIME_SELF();
@@ -1035,6 +1120,14 @@ int pthread_mutex_timedlock(pthread_mutex_t* mutex,
             if (c != 2)
                 c = __atomic_exchange_n(&mutex->locked, 2, __ATOMIC_ACQUIRE);
             while (c != 0) {
+                if (abstime->tv_sec < 0) {
+                    int unlocked = 0;
+                    if (__atomic_compare_exchange_n(
+                            &mutex->locked, &unlocked, 2, 0,
+                            __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+                        break;
+                    return ETIMEDOUT;
+                }
                 long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
                     &mutex->locked,
                     rin_pthread_mutex_futex_operation(

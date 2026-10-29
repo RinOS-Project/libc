@@ -16,6 +16,7 @@
 #include "limits.h"
 #include "errno.h"
 #include "time.h"
+#include "sched.h"
 #include "signal.h"
 #include "sys/syscall.h"
 #include "linux/futex.h"
@@ -103,6 +104,9 @@ typedef struct {
     int scope;
     size_t stacksize;
     void* stackaddr;
+    int inheritsched;
+    int schedpolicy;
+    int sched_priority;
 } pthread_attr_t;
 
 typedef struct {
@@ -231,6 +235,9 @@ extern void* platform_thread_create_result(void* (*entry)(void*), void* arg);
 extern void* platform_thread_create_result_with_stack(
     void* (*entry)(void*), void* arg, void* stack, size_t stack_size,
     int detached);
+extern void* platform_thread_create_result_with_stack_sched(
+    void* (*entry)(void*), void* arg, void* stack, size_t stack_size,
+    int detached, int policy, int priority);
 extern void  platform_thread_join(void* thread);
 extern int   platform_thread_join_result(void* thread, void** result_out);
 extern int   platform_thread_detach(void* thread);
@@ -271,6 +278,17 @@ extern void  platform_mutex_destroy(void* mutex);
 #ifndef PTHREAD_SCOPE_PROCESS
 #define PTHREAD_SCOPE_PROCESS 1
 #endif
+#ifndef PTHREAD_INHERIT_SCHED
+#define PTHREAD_INHERIT_SCHED 0
+#endif
+#ifndef PTHREAD_EXPLICIT_SCHED
+#define PTHREAD_EXPLICIT_SCHED 1
+#endif
+
+static inline int pthread_getschedparam(pthread_t thread, int* policy,
+                                        struct sched_param* param);
+static inline int pthread_setschedparam(pthread_t thread, int policy,
+                                        const struct sched_param* param);
 
 static inline int pthread_attr_init(pthread_attr_t* attr) {
     if (!attr) return EINVAL;
@@ -278,6 +296,9 @@ static inline int pthread_attr_init(pthread_attr_t* attr) {
     attr->scope = PTHREAD_SCOPE_SYSTEM;
     attr->stacksize = 8 * 1024 * 1024;  /* 8 MiB default worker stack */
     attr->stackaddr = NULL;
+    attr->inheritsched = PTHREAD_INHERIT_SCHED;
+    attr->schedpolicy = SCHED_OTHER;
+    attr->sched_priority = 0;
     return 0;
 }
 
@@ -287,6 +308,9 @@ static inline int pthread_attr_destroy(pthread_attr_t* attr) {
     attr->scope = PTHREAD_SCOPE_SYSTEM;
     attr->stacksize = 0;
     attr->stackaddr = NULL;
+    attr->inheritsched = PTHREAD_INHERIT_SCHED;
+    attr->schedpolicy = SCHED_OTHER;
+    attr->sched_priority = 0;
     return 0;
 }
 
@@ -345,6 +369,72 @@ static inline int pthread_attr_setstack(pthread_attr_t* attr, void* stackaddr, s
     return 0;
 }
 
+static inline int _rin_pthread_sched_policy_supported(int policy) {
+    switch (policy) {
+        case SCHED_OTHER:
+        case SCHED_FIFO:
+        case SCHED_RR:
+        case SCHED_BATCH:
+        case SCHED_IDLE:
+            return 1;
+        case SCHED_DEADLINE:
+            return 0;
+        default:
+            return 0;
+    }
+}
+
+static inline int pthread_attr_setinheritsched(pthread_attr_t* attr,
+                                                int inheritsched) {
+    if (!attr || (inheritsched != PTHREAD_INHERIT_SCHED &&
+                  inheritsched != PTHREAD_EXPLICIT_SCHED))
+        return EINVAL;
+    attr->inheritsched = inheritsched;
+    return 0;
+}
+
+static inline int pthread_attr_getinheritsched(const pthread_attr_t* attr,
+                                                int* inheritsched) {
+    if (!attr || !inheritsched) return EINVAL;
+    *inheritsched = attr->inheritsched;
+    return 0;
+}
+
+static inline int pthread_attr_setschedpolicy(pthread_attr_t* attr,
+                                               int policy) {
+    if (!attr) return EINVAL;
+    if (!_rin_pthread_sched_policy_supported(policy))
+        return policy == SCHED_DEADLINE ? ENOTSUP : EINVAL;
+    attr->schedpolicy = policy;
+    return 0;
+}
+
+static inline int pthread_attr_getschedpolicy(const pthread_attr_t* attr,
+                                               int* policy) {
+    if (!attr || !policy) return EINVAL;
+    *policy = attr->schedpolicy;
+    return 0;
+}
+
+static inline int pthread_attr_setschedparam(pthread_attr_t* attr,
+                                              const struct sched_param* param) {
+    if (!attr || !param) return EINVAL;
+    if (!_rin_pthread_sched_policy_supported(attr->schedpolicy))
+        return attr->schedpolicy == SCHED_DEADLINE ? ENOTSUP : EINVAL;
+    if (!_rin_sched_policy_priority_valid(attr->schedpolicy,
+                                          param->sched_priority))
+        return EINVAL;
+    attr->sched_priority = param->sched_priority;
+    return 0;
+}
+
+static inline int pthread_attr_getschedparam(const pthread_attr_t* attr,
+                                              struct sched_param* param) {
+    if (!attr || !param) return EINVAL;
+    param->sched_priority = attr->sched_priority;
+    return 0;
+}
+
 /* GNU extension: get attributes of running thread */
 static inline int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr) {
     const unsigned int known_flags =
@@ -379,12 +469,20 @@ static inline int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr) {
         return EIO;
     }
 
+    int policy = SCHED_OTHER;
+    struct sched_param schedparam = {0};
+    int sched_result = pthread_getschedparam(thread, &policy, &schedparam);
+    if (sched_result != 0) return sched_result;
+
     attr->detachstate =
         (info.flags & RIN_THREAD_STACK_INFO_FLAG_DETACHED) != 0u
             ? PTHREAD_CREATE_DETACHED : PTHREAD_CREATE_JOINABLE;
     attr->scope = PTHREAD_SCOPE_SYSTEM;
     attr->stackaddr = (void*)(uintptr_t)info.stack_base;
     attr->stacksize = (size_t)info.stack_size;
+    attr->inheritsched = PTHREAD_EXPLICIT_SCHED;
+    attr->schedpolicy = policy;
+    attr->sched_priority = schedparam.sched_priority;
     return 0;
 }
 
@@ -430,6 +528,8 @@ static inline int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
     size_t stack_size = 8u * 1024u * 1024u;
     void* stack = NULL;
     int detached = 0;
+    int policy = SCHED_OTHER;
+    struct sched_param schedparam = {0};
     if (!thread || !start_routine) return EINVAL;
     if (attr) {
         if (attr->detachstate != PTHREAD_CREATE_JOINABLE &&
@@ -437,16 +537,40 @@ static inline int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
             return EINVAL;
         if (attr->scope == PTHREAD_SCOPE_PROCESS) return ENOTSUP;
         if (attr->scope != PTHREAD_SCOPE_SYSTEM) return EINVAL;
+        if (attr->inheritsched == PTHREAD_EXPLICIT_SCHED) {
+            if (!_rin_pthread_sched_policy_supported(attr->schedpolicy))
+                return attr->schedpolicy == SCHED_DEADLINE ? ENOTSUP : EINVAL;
+            if (!_rin_sched_policy_priority_valid(attr->schedpolicy,
+                                                  attr->sched_priority))
+                return EINVAL;
+            policy = attr->schedpolicy;
+            schedparam.sched_priority = attr->sched_priority;
+        } else if (attr->inheritsched != PTHREAD_INHERIT_SCHED) {
+            return EINVAL;
+        } else {
+            int result = pthread_getschedparam(pthread_self(), &policy,
+                                               &schedparam);
+            if (result != 0) return result;
+        }
         stack_size = attr->stacksize;
         stack = attr->stackaddr;
         detached = attr->detachstate == PTHREAD_CREATE_DETACHED;
+    } else {
+        int result = pthread_getschedparam(pthread_self(), &policy,
+                                           &schedparam);
+        if (result != 0) return result;
     }
+    if (!_rin_pthread_sched_policy_supported(policy))
+        return policy == SCHED_DEADLINE ? ENOTSUP : EINVAL;
+    if (!_rin_sched_policy_priority_valid(policy, schedparam.sched_priority))
+        return EINVAL;
     if (stack_size < PTHREAD_STACK_MIN || stack_size > UINT32_MAX)
         return EINVAL;
     if (stack && stack_size > UINTPTR_MAX - (uintptr_t)stack)
         return EINVAL;
-    void* kthread = platform_thread_create_result_with_stack(
-        start_routine, arg, stack, stack_size, detached);
+    void* kthread = platform_thread_create_result_with_stack_sched(
+        start_routine, arg, stack, stack_size, detached, policy,
+        schedparam.sched_priority);
     if (!kthread) return EAGAIN;
     *thread = (pthread_t)(uintptr_t)kthread;
     return 0;
@@ -1530,8 +1654,6 @@ void rin_pthread_cancel_take_exit(pthread_t thread, void** value);
 /* ═══════════════════════════════════════════════════════════════
  * スケジューリング
  * ═══════════════════════════════════════════════════════════════*/
-
-#include "sched.h"
 
 static inline int pthread_getschedparam(pthread_t thread, int* policy, struct sched_param* param) {
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
