@@ -643,6 +643,11 @@ static inline int _rin_glob_commit(glob_t* pglob, int flags,
 static inline int _rin_glob_no_match(glob_t* pglob, int flags)
 {
     if (!(flags & GLOB_APPEND)) {
+        if (pglob->gl_pathv) {
+            for (size_t index = 0u; index < pglob->gl_pathc; ++index)
+                free(pglob->gl_pathv[pglob->gl_offs + index]);
+            free(pglob->gl_pathv);
+        }
         pglob->gl_pathc = 0u;
         pglob->gl_pathv = NULL;
         pglob->gl_flags = flags;
