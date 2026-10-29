@@ -52,6 +52,8 @@ extern "C" {
 #define _RIN_GLOB_MAX_PATH        4096u
 #define _RIN_GLOB_MAX_BRACE_RECURSION 8u
 #define _RIN_GLOB_MAX_BRACE_NESTING 64u
+#define _RIN_GLOB_MATCH_OPERATION_BUDGET 65536u
+#define _RIN_GLOB_MATCH_RECURSION_LIMIT 128u
 
 /* ═══════════════════════════════════════════════════════════════
  * glob_t構造体
@@ -430,24 +432,49 @@ static inline int _rin_glob_component_allows_period(const char* pattern,
     return class_result > 0;
 }
 
-static inline int _rin_glob_component_match(const char* pattern,
-                                            const char* value, int flags)
+static inline int _rin_glob_component_match_bounded(
+    const char* pattern, const char* value, int flags, unsigned depth,
+    unsigned* budget)
 {
     const char* left = pattern;
     const char* right = value;
+    if (!left || !right || !budget || *budget == 0u ||
+        depth > _RIN_GLOB_MATCH_RECURSION_LIMIT)
+        return -1;
+    --*budget;
     while (*left != '\0') {
         if (*left == '*') {
+            int recursive_result;
             ++left;
             while (*left == '*') ++left;
             if (*left == '\0') return 1;
-            for (const char* probe = right; *probe != '\0'; ++probe)
-                if (_rin_glob_component_match(left, probe, flags)) return 1;
-            return _rin_glob_component_match(left, right, flags);
+            recursive_result = _rin_glob_component_match_bounded(
+                left, right, flags, depth + 1u, budget);
+            if (recursive_result != 0) return recursive_result;
+            for (const char* probe = right; *probe != '\0';) {
+                const char* next_probe;
+                char encoded[5];
+                wchar_t ignored;
+                if (_rin_glob_decode_character(probe, &next_probe, encoded,
+                                               &ignored) != 0)
+                    return 0;
+                recursive_result = _rin_glob_component_match_bounded(
+                    left, next_probe, flags, depth + 1u, budget);
+                if (recursive_result != 0) return recursive_result;
+                probe = next_probe;
+            }
+            return 0;
         }
         if (*right == '\0') return 0;
         if (*left == '?') {
+            const char* next_right;
+            char encoded[5];
+            wchar_t ignored;
+            if (_rin_glob_decode_character(right, &next_right, encoded,
+                                           &ignored) != 0)
+                return 0;
             ++left;
-            ++right;
+            right = next_right;
             continue;
         }
         if (*left == '[') {
@@ -475,6 +502,28 @@ static inline int _rin_glob_component_match(const char* pattern,
         if (*left++ != *right++) return 0;
     }
     return *right == '\0';
+}
+
+static inline int _rin_glob_component_match(const char* pattern,
+                                            const char* value, int flags)
+{
+    const char* cursor;
+    unsigned budget = _RIN_GLOB_MATCH_OPERATION_BUDGET;
+    int result;
+    if (!pattern || !value) return 0;
+    /* Reject an invalid or incomplete multibyte filename consistently, even
+     * when a leading '*' could otherwise accept it without decoding. */
+    for (cursor = value; *cursor != '\0';) {
+        const char* next;
+        char encoded[5];
+        wchar_t ignored;
+        if (_rin_glob_decode_character(cursor, &next, encoded, &ignored) != 0)
+            return 0;
+        cursor = next;
+    }
+    result = _rin_glob_component_match_bounded(
+        pattern, value, flags, 0u, &budget);
+    return result;
 }
 
 static inline int _rin_glob_path_join(const char* prefix, const char* name,
@@ -648,10 +697,17 @@ static inline int _rin_glob_expand_body(
                 (entry->d_name[0] == '.' &&
                  (entry->d_name[1] == '\0' ||
                   (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) ||
-                (!dot_allowed && entry->d_name[0] == '.') ||
-                !_rin_glob_component_match(raw_component, entry->d_name,
-                                            context->flags))
+                (!dot_allowed && entry->d_name[0] == '.'))
                 continue;
+            {
+                int component_match = _rin_glob_component_match(
+                    raw_component, entry->d_name, context->flags);
+                if (component_match < 0) {
+                    result = GLOB_NOSYS;
+                    break;
+                }
+                if (component_match == 0) continue;
+            }
             result = _rin_glob_path_join(prefix, entry->d_name, child,
                                          _RIN_GLOB_MAX_PATH);
             if (result != 0) break;
@@ -743,6 +799,8 @@ static inline int _rin_glob_commit(glob_t* pglob, int flags,
     size_t offsets;
     size_t old_count;
     size_t total;
+    size_t previous_pathc = pglob->gl_pathc;
+    size_t previous_offsets = pglob->gl_offs;
     char** paths;
     int append = (flags & GLOB_APPEND) != 0;
     size_t old_pathc = append ? pglob->gl_pathc : 0u;
@@ -750,6 +808,10 @@ static inline int _rin_glob_commit(glob_t* pglob, int flags,
     size_t old_offsets = (append || (flags & GLOB_DOOFFS) != 0) ?
                          pglob->gl_offs : 0u;
     if (append && old_pathc != 0u && !old_paths) {
+        errno = EINVAL;
+        return GLOB_ABORTED;
+    }
+    if (!append && previous_pathc != 0u && !pglob->gl_pathv) {
         errno = EINVAL;
         return GLOB_ABORTED;
     }
@@ -768,9 +830,10 @@ static inline int _rin_glob_commit(glob_t* pglob, int flags,
     for (size_t index = 0; index < matches->count; ++index)
         paths[offsets + old_count + index] = matches->items[index];
     paths[offsets + old_count + matches->count] = NULL;
-    if (!append && old_paths) {
-        for (size_t index = 0; index < old_pathc; ++index)
-            free(old_paths[old_offsets + index]);
+    if (!append && pglob->gl_pathv) {
+        for (size_t index = 0; index < previous_pathc; ++index)
+            free(pglob->gl_pathv[previous_offsets + index]);
+        free(pglob->gl_pathv);
     }
     if (old_paths) free(old_paths);
     free(matches->items);
