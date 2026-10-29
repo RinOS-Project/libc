@@ -130,6 +130,10 @@ extern int rin_net_addrconfig_snapshot(int* ipv4_configured,
 #define RIN_NETDB_THREAD_LOCAL _Thread_local
 #endif
 
+#define RIN_NETDB_DATABASE_NAME_MAX 128u
+#define RIN_NETDB_DATABASE_MAX_ALIASES 16u
+#define RIN_NETDB_DATABASE_LINE_MAX 4096u
+
 typedef struct __rin_netdb_runtime_state_v1 {
     int h_errno_value;
     struct in_addr addr;
@@ -138,14 +142,22 @@ typedef struct __rin_netdb_runtime_state_v1 {
     struct hostent hostent;
     char hostname[256];
     struct servent service_result;
-    char service_name[16];
-    char service_protocol[8];
-    char service_alias_storage[2][16];
-    char* service_aliases[3];
+    char service_name[RIN_NETDB_DATABASE_NAME_MAX];
+    char service_protocol[RIN_NETDB_DATABASE_NAME_MAX];
+    char service_alias_storage[RIN_NETDB_DATABASE_MAX_ALIASES]
+                              [RIN_NETDB_DATABASE_NAME_MAX];
+    char* service_aliases[RIN_NETDB_DATABASE_MAX_ALIASES + 1u];
+    FILE* service_file;
+    long service_file_offset;
+    int service_stayopen;
     struct protoent protocol_result;
-    char protocol_name[16];
-    char protocol_alias_storage[2][16];
-    char* protocol_aliases[3];
+    char protocol_name[RIN_NETDB_DATABASE_NAME_MAX];
+    char protocol_alias_storage[RIN_NETDB_DATABASE_MAX_ALIASES]
+                               [RIN_NETDB_DATABASE_NAME_MAX];
+    char* protocol_aliases[RIN_NETDB_DATABASE_MAX_ALIASES + 1u];
+    FILE* protocol_file;
+    long protocol_file_offset;
+    int protocol_stayopen;
 } __rin_netdb_runtime_state_v1;
 
 extern RIN_NETDB_THREAD_LOCAL __rin_netdb_runtime_state_v1
@@ -346,222 +358,15 @@ static inline int _netdb_resolved_transact(uint32_t command,
 #define RIN_NETDB_RESOLVED_TRANSACT _netdb_resolved_transact
 #endif
 
-typedef struct _NetdbServiceRecord {
-    const char* name;
-    const char* aliases[2];
-    uint16_t port;
-    const char* protocol;
-    int socket_type;
-} _NetdbServiceRecord;
-
-typedef struct _NetdbProtocolRecord {
-    const char* name;
-    const char* aliases[2];
-    int number;
-} _NetdbProtocolRecord;
-
-static const _NetdbServiceRecord _netdb_services[] = {
-    { "ftp",  { NULL, NULL }, 21u,  "tcp", SOCK_STREAM },
-    { "ssh",  { NULL, NULL }, 22u,  "tcp", SOCK_STREAM },
-    { "smtp", { NULL, NULL }, 25u,  "tcp", SOCK_STREAM },
-    { "domain", { "dns", NULL }, 53u, "tcp", SOCK_STREAM },
-    { "domain", { "dns", NULL }, 53u, "udp", SOCK_DGRAM },
-    { "http", { "www", NULL }, 80u, "tcp", SOCK_STREAM },
-    { "https", { NULL, NULL }, 443u, "tcp", SOCK_STREAM }
-};
-
-static const _NetdbProtocolRecord _netdb_protocols[] = {
-    { "ip", { NULL, NULL }, IPPROTO_IP },
-    { "icmp", { NULL, NULL }, IPPROTO_ICMP },
-    { "igmp", { NULL, NULL }, IPPROTO_IGMP },
-    { "tcp", { NULL, NULL }, IPPROTO_TCP },
-    { "udp", { NULL, NULL }, IPPROTO_UDP },
-    { "ipv6", { NULL, NULL }, IPPROTO_IPV6 },
-    { "icmpv6", { "ipv6-icmp", "icmp6" }, IPPROTO_ICMPV6 },
-    { "raw", { NULL, NULL }, IPPROTO_RAW }
-};
-
-static inline int _netdb_ascii_name_equal(const char* left,
-                                           const char* right) {
-    size_t index = 0u;
-    if (!left || !right) return 0;
-    for (;;) {
-        unsigned char l = (unsigned char)left[index];
-        unsigned char r = (unsigned char)right[index];
-        if (l >= (unsigned char)'A' && l <= (unsigned char)'Z') {
-            l = (unsigned char)(l + ((unsigned char)'a' - (unsigned char)'A'));
-        }
-        if (r >= (unsigned char)'A' && r <= (unsigned char)'Z') {
-            r = (unsigned char)(r + ((unsigned char)'a' - (unsigned char)'A'));
-        }
-        if (l != r) return 0;
-        if (l == 0u) return 1;
-        ++index;
-    }
-}
-
-static inline int _netdb_record_name_matches(const char* name,
-                                              const char* canonical,
-                                              const char* const aliases[2]) {
-    size_t index;
-    if (_netdb_ascii_name_equal(name, canonical)) return 1;
-    for (index = 0u; index < 2u; ++index) {
-        if (aliases[index] && _netdb_ascii_name_equal(name, aliases[index])) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static inline const _NetdbServiceRecord* _netdb_find_service_by_name(
-    const char* name, const char* protocol, int socket_type) {
-    size_t index;
-    if (!name) return NULL;
-    for (index = 0u;
-         index < sizeof(_netdb_services) / sizeof(_netdb_services[0]);
-         ++index) {
-        const _NetdbServiceRecord* record = &_netdb_services[index];
-        if (!_netdb_record_name_matches(name, record->name,
-                                        record->aliases) ||
-            (protocol && !_netdb_ascii_name_equal(protocol,
-                                                   record->protocol)) ||
-            (socket_type != 0 && socket_type != record->socket_type)) {
-            continue;
-        }
-        return record;
-    }
-    return NULL;
-}
-
-static inline const _NetdbServiceRecord* _netdb_find_service_by_port(
-    uint16_t port, const char* protocol) {
-    size_t index;
-    for (index = 0u;
-         index < sizeof(_netdb_services) / sizeof(_netdb_services[0]);
-         ++index) {
-        const _NetdbServiceRecord* record = &_netdb_services[index];
-        if (record->port == port &&
-            (!protocol || _netdb_ascii_name_equal(protocol,
-                                                   record->protocol))) {
-            return record;
-        }
-    }
-    return NULL;
-}
-
-static inline const _NetdbProtocolRecord* _netdb_find_protocol_by_name(
-    const char* name) {
-    size_t index;
-    if (!name) return NULL;
-    for (index = 0u;
-         index < sizeof(_netdb_protocols) / sizeof(_netdb_protocols[0]);
-         ++index) {
-        const _NetdbProtocolRecord* record = &_netdb_protocols[index];
-        if (_netdb_record_name_matches(name, record->name,
-                                       record->aliases)) {
-            return record;
-        }
-    }
-    return NULL;
-}
-
-static inline const _NetdbProtocolRecord* _netdb_find_protocol_by_number(
-    int number) {
-    size_t index;
-    for (index = 0u;
-         index < sizeof(_netdb_protocols) / sizeof(_netdb_protocols[0]);
-         ++index) {
-        if (_netdb_protocols[index].number == number) {
-            return &_netdb_protocols[index];
-        }
-    }
-    return NULL;
-}
-
-static inline int _netdb_copy_database_name(char* output,
-                                             size_t capacity,
-                                             const char* input) {
-    size_t length = 0u;
-    if (!output || capacity == 0u || !input) return -1;
-    while (input[length] != '\0') {
-        if (length + 1u >= capacity) return -1;
-        output[length] = input[length];
-        ++length;
-    }
-    output[length] = '\0';
-    return 0;
-}
-
-static inline struct servent* _netdb_publish_service(
-    const _NetdbServiceRecord* record) {
-    struct servent* result = &__rin_netdb_runtime_state.service_result;
-    char* name = __rin_netdb_runtime_state.service_name;
-    char* protocol = __rin_netdb_runtime_state.service_protocol;
-    char (*alias_storage)[16] =
-        __rin_netdb_runtime_state.service_alias_storage;
-    char** aliases = __rin_netdb_runtime_state.service_aliases;
-    size_t index;
-    if (!record ||
-        _netdb_copy_database_name(name, sizeof(name), record->name) != 0 ||
-        _netdb_copy_database_name(protocol, sizeof(protocol),
-                                  record->protocol) != 0) {
-        return NULL;
-    }
-    for (index = 0u; index < 2u; ++index) {
-        aliases[index] = NULL;
-        if (record->aliases[index]) {
-            if (_netdb_copy_database_name(alias_storage[index],
-                                           sizeof(alias_storage[index]),
-                                           record->aliases[index]) != 0) {
-                return NULL;
-            }
-            aliases[index] = alias_storage[index];
-        }
-    }
-    aliases[2] = NULL;
-    result->s_name = name;
-    result->s_aliases = aliases;
-    result->s_port = (int)htons(record->port);
-    result->s_proto = protocol;
-    return result;
-}
-
-static inline struct protoent* _netdb_publish_protocol(
-    const _NetdbProtocolRecord* record) {
-    struct protoent* result = &__rin_netdb_runtime_state.protocol_result;
-    char* name = __rin_netdb_runtime_state.protocol_name;
-    char (*alias_storage)[16] =
-        __rin_netdb_runtime_state.protocol_alias_storage;
-    char** aliases = __rin_netdb_runtime_state.protocol_aliases;
-    size_t index;
-    if (!record ||
-        _netdb_copy_database_name(name, sizeof(name), record->name) != 0) {
-        return NULL;
-    }
-    for (index = 0u; index < 2u; ++index) {
-        aliases[index] = NULL;
-        if (record->aliases[index]) {
-            if (_netdb_copy_database_name(alias_storage[index],
-                                           sizeof(alias_storage[index]),
-                                           record->aliases[index]) != 0) {
-                return NULL;
-            }
-            aliases[index] = alias_storage[index];
-        }
-    }
-    aliases[2] = NULL;
-    result->p_name = name;
-    result->p_aliases = aliases;
-    result->p_proto = record->number;
-    return result;
-}
+#include "internal/netdb_database.h"
 
 static inline int _netdb_parse_service_port(const char* service,
                                              int socket_type,
                                              uint16_t* port_out) {
-    const _NetdbServiceRecord* record;
+    _NetdbServiceRecord record;
     uint32_t port = 0u;
     const char* cursor;
+    int lookup_status;
     if (!port_out) return -1;
     if (!service || !*service) {
         *port_out = 0u;
@@ -578,12 +383,12 @@ static inline int _netdb_parse_service_port(const char* service,
         *port_out = (uint16_t)port;
         return 0;
     }
-    record = _netdb_find_service_by_name(service, NULL, socket_type);
-    if (!record) return -1;
-    *port_out = record->port;
+    lookup_status = _netdb_find_service_by_name(
+        service, NULL, socket_type, &record);
+    if (lookup_status != 1) return -1;
+    *port_out = record.port;
     return 0;
 }
-
 static inline uint32_t _netdb_format_service_port(uint16_t port,
                                                    char output[6]) {
     char reversed[5];
@@ -1525,7 +1330,7 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
                               int flags) {
     const struct sockaddr_in* sin;
     const struct sockaddr_in6* sin6;
-    const _NetdbServiceRecord* service_record;
+    _NetdbServiceRecord service_record;
     char numeric_host[RIN_IPV6_TEXT_MAX];
     char numeric_service[NI_MAXSERV];
     char service_text[NI_MAXSERV];
@@ -1538,6 +1343,8 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     int lookup_family;
     uint16_t port;
     const char* service_protocol;
+    int service_lookup_status;
+    int saved_errno;
     int formatted;
     int host_requested;
     int service_requested;
@@ -1604,11 +1411,14 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     memcpy(service_text, numeric_service, service_text_length + 1u);
     if ((flags & NI_NUMERICSERV) == 0) {
         service_protocol = (flags & NI_DGRAM) != 0 ? "udp" : "tcp";
-        service_record = _netdb_find_service_by_port(port, service_protocol);
-        if (service_record) {
-            service_text_length = strlen(service_record->name);
+        saved_errno = errno;
+        service_lookup_status = _netdb_find_service_by_port(
+            port, service_protocol, &service_record);
+        errno = saved_errno;
+        if (service_lookup_status == 1) {
+            service_text_length = strlen(service_record.name);
             if (service_text_length >= sizeof(service_text)) return EAI_FAIL;
-            memcpy(service_text, service_record->name,
+            memcpy(service_text, service_record.name,
                    service_text_length + 1u);
         }
     }
@@ -1701,55 +1511,76 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
  * ═══════════════════════════════════════════════════════════════*/
 
 static inline struct servent* getservbyname(const char* name, const char* proto) {
-    const _NetdbServiceRecord* record;
+    _NetdbServiceRecord record;
+    int saved_errno = errno;
+    int status;
     if (!name) {
         errno = EINVAL;
         return NULL;
     }
-    record = _netdb_find_service_by_name(name, proto, 0);
-    if (!record) {
-        errno = ENOENT;
+    status = _netdb_find_service_by_name(name, proto, 0, &record);
+    if (status <= 0) {
+        if (status == 0) errno = ENOENT;
         return NULL;
     }
-    return _netdb_publish_service(record);
+    {
+        struct servent* result = _netdb_publish_service(&record);
+        errno = saved_errno;
+        return result;
+    }
 }
 
 static inline struct servent* getservbyport(int port, const char* proto) {
-    const _NetdbServiceRecord* record;
+    _NetdbServiceRecord record;
+    struct servent* result;
+    int saved_errno = errno;
+    int status;
     if (port < 0 || port > 65535) {
         errno = EINVAL;
         return NULL;
     }
-    record = _netdb_find_service_by_port(ntohs((uint16_t)port), proto);
-    if (!record) {
-        errno = ENOENT;
+    status = _netdb_find_service_by_port(ntohs((uint16_t)port), proto,
+                                         &record);
+    if (status <= 0) {
+        if (status == 0) errno = ENOENT;
         return NULL;
     }
-    return _netdb_publish_service(record);
+    result = _netdb_publish_service(&record);
+    errno = saved_errno;
+    return result;
 }
 
 static inline struct protoent* getprotobyname(const char* name) {
-    const _NetdbProtocolRecord* record;
+    _NetdbProtocolRecord record;
+    struct protoent* result;
+    int saved_errno = errno;
+    int status;
     if (!name) {
         errno = EINVAL;
         return NULL;
     }
-    record = _netdb_find_protocol_by_name(name);
-    if (!record) {
-        errno = ENOENT;
+    status = _netdb_find_protocol_by_name(name, &record);
+    if (status <= 0) {
+        if (status == 0) errno = ENOENT;
         return NULL;
     }
-    return _netdb_publish_protocol(record);
+    result = _netdb_publish_protocol(&record);
+    errno = saved_errno;
+    return result;
 }
 
 static inline struct protoent* getprotobynumber(int proto) {
-    const _NetdbProtocolRecord* record =
-        _netdb_find_protocol_by_number(proto);
-    if (!record) {
-        errno = ENOENT;
+    _NetdbProtocolRecord record;
+    struct protoent* result;
+    int saved_errno = errno;
+    int status = _netdb_find_protocol_by_number(proto, &record);
+    if (status <= 0) {
+        if (status == 0) errno = ENOENT;
         return NULL;
     }
-    return _netdb_publish_protocol(record);
+    result = _netdb_publish_protocol(&record);
+    errno = saved_errno;
+    return result;
 }
 
 static inline const char* hstrerror(int err) {

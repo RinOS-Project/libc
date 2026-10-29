@@ -117,9 +117,14 @@ typedef int key_t;
  * fd_set (select用)
  * ═══════════════════════════════════════════════════════════════*/
 
-#if !defined(RIN_SYS_TYPES_HOST_OWNER)
+#if !defined(RIN_SYS_TYPES_HOST_OWNER) || \
+    (!defined(_WINSOCK2API_) && !defined(_WINSOCKAPI_))
+#ifndef FD_SETSIZE
 #define FD_SETSIZE 1024
+#endif
 
+#ifndef RIN_FD_SET_DEFINED
+#define RIN_FD_SET_DEFINED 1
 typedef struct {
     unsigned long fds_bits[FD_SETSIZE / (8 * sizeof(unsigned long))];
 } fd_set;
@@ -137,7 +142,8 @@ typedef struct {
 
 #define FD_ISSET(fd, set) ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] & \
                           (1UL << ((fd) % (8 * sizeof(unsigned long)))))
-#endif /* !RIN_SYS_TYPES_HOST_OWNER */
+#endif /* RIN_FD_SET_DEFINED */
+#endif /* !RIN_SYS_TYPES_HOST_OWNER || host has no fd_set */
 
 #ifdef __cplusplus
 }

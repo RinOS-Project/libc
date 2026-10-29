@@ -73,7 +73,9 @@ struct timespec;
 #define SIGQUIT     3   /* 終了 (Ctrl+\) */
 #define SIGILL      4   /* 不正命令 */
 #define SIGTRAP     5   /* トレース/ブレークポイント */
+#ifndef SIGABRT
 #define SIGABRT     6   /* 異常終了 */
+#endif
 #define SIGBUS      7   /* バスエラー */
 #define SIGFPE      8   /* 浮動小数点例外 */
 #define SIGKILL     9   /* 強制終了 */
@@ -103,16 +105,24 @@ struct timespec;
 
 #define SIGRTMIN    32
 #define SIGRTMAX    62
+#ifndef NSIG
 #define NSIG        64  /* 63 is reserved by RinOS for pthread cancellation */
+#endif
 #define __RIN_SIGCANCEL 63
 
 /* ═══════════════════════════════════════════════════════════════
  * シグナルハンドラ定数
  * ═══════════════════════════════════════════════════════════════*/
 
+#ifndef SIG_DFL
 #define SIG_DFL     ((sighandler_t)0)   /* デフォルト動作 */
+#endif
+#ifndef SIG_IGN
 #define SIG_IGN     ((sighandler_t)1)   /* 無視 */
+#endif
+#ifndef SIG_ERR
 #define SIG_ERR     ((sighandler_t)-1)  /* エラー */
+#endif
 
 /* sigprocmask how argument */
 #define SIG_BLOCK   0   /* Block signals */
@@ -454,6 +464,7 @@ static void __restore_rt(void) {
  * シグナル関数
  * ═══════════════════════════════════════════════════════════════*/
 
+#if !defined(_INC_SIGNAL)
 static inline sighandler_t signal(int signum, sighandler_t handler) {
     intptr_t result;
     struct sigaction oldact;
@@ -482,6 +493,7 @@ static inline sighandler_t signal(int signum, sighandler_t handler) {
     if (__rin_signal_status_result(result) != 0) return SIG_ERR;
     return oldact.sa_handler;
 }
+#endif /* !_INC_SIGNAL */
 
 static inline int sigaction(int signum, const struct sigaction* act,
                             struct sigaction* oldact) {
@@ -537,6 +549,7 @@ static inline int sigqueue(int pid, int signum, union sigval value) {
     return __rin_signal_status_result(result);
 }
 
+#if !defined(_INC_SIGNAL)
 static inline int raise(int sig) {
     intptr_t tid;
     intptr_t result;
@@ -549,6 +562,7 @@ static inline int raise(int sig) {
     result = _RIN_SIGNAL_SYSCALL2(SYS_TKILL, tid, sig);
     return __rin_signal_status_result(result);
 }
+#endif /* !_INC_SIGNAL */
 
 static inline int sigprocmask(int how, const sigset_t* set, sigset_t* oldset) {
     if (set && how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK) {
