@@ -186,7 +186,10 @@ int pthread_setcancelstate(int state, int* oldstate) {
 int pthread_setcanceltype(int type, int* oldtype) {
     pthread_t self = _RIN_PTHREAD_CANCEL_SELF();
     RinPthreadCancelRecord* record;
-    if (type != PTHREAD_CANCEL_DEFERRED) return ENOTSUP;
+    if (type != PTHREAD_CANCEL_DEFERRED &&
+        type != PTHREAD_CANCEL_ASYNCHRONOUS)
+        return EINVAL;
+    if (type == PTHREAD_CANCEL_ASYNCHRONOUS) return ENOTSUP;
     if (rin_pthread_cancel_register(self) != 0) return EAGAIN;
     rin_pthread_cancel_lock();
     record = rin_pthread_cancel_find_locked(self);
