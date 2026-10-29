@@ -288,34 +288,25 @@ static inline int prctl(int option, ...) {
     uintptr_t arg5 = 0;
     if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
         option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE ||
-        option == PR_SET_NAME || option == PR_GET_NAME) {
+        option == PR_SET_NAME || option == PR_GET_NAME ||
+        option == PR_SET_TSC || option == PR_SET_PDEATHSIG ||
+        option == PR_SET_DUMPABLE || option == PR_SET_NO_NEW_PRIVS ||
+        option == PR_SET_SECCOMP) {
         __builtin_va_list args;
         __builtin_va_start(args, option);
         if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
-            option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE)
+            option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE) {
             arg2 = (uintptr_t)__builtin_va_arg(args, int*);
-        else
-            arg2 = __builtin_va_arg(args, uintptr_t);
-        __builtin_va_end(args);
-    } else if (option == PR_SET_TSC) {
-        __builtin_va_list args;
-        __builtin_va_start(args, option);
-        arg2 = __builtin_va_arg(args, uintptr_t);
-        __builtin_va_end(args);
-    } else if (option == PR_SET_PDEATHSIG ||
-               option == PR_SET_DUMPABLE) {
-        __builtin_va_list args;
-        __builtin_va_start(args, option);
-        arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
-        __builtin_va_end(args);
-    } else if (option == PR_SET_NO_NEW_PRIVS ||
-               option == PR_SET_SECCOMP) {
-        __builtin_va_list args;
-        __builtin_va_start(args, option);
-        arg2 = __builtin_va_arg(args, uintptr_t);
-        arg3 = __builtin_va_arg(args, uintptr_t);
-        arg4 = __builtin_va_arg(args, uintptr_t);
-        arg5 = __builtin_va_arg(args, uintptr_t);
+        } else if (option == PR_SET_NAME) {
+            arg2 = (uintptr_t)__builtin_va_arg(args, const char*);
+        } else if (option == PR_GET_NAME) {
+            arg2 = (uintptr_t)__builtin_va_arg(args, char*);
+        } else if (option == PR_SET_SECCOMP) {
+            arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+            arg3 = (uintptr_t)__builtin_va_arg(args, struct sock_fprog*);
+        } else {
+            arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+        }
         __builtin_va_end(args);
     }
     return _prctl_impl(option, arg2, arg3, arg4, arg5);
