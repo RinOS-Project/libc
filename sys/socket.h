@@ -868,8 +868,7 @@ static inline int recvmmsg(int sockfd, struct mmsghdr* messages,
             count - (unsigned int)completed, batch_flags);
         if (raw < 0) {
             int error_number = (int)-raw;
-            if (error_number == EAGAIN && completed == 0 &&
-                !caller_dontwait && !nonblocking)
+            if (error_number == EAGAIN && !caller_dontwait && !nonblocking)
                 continue;
             if (has_timeout &&
                 __rin_socket_mmsg_timeout_update(
