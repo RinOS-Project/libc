@@ -68,6 +68,8 @@ static inline int setitimer(int which, const struct itimerval* new_value,
                             struct itimerval* old_value) {
     RinItimerV1 request;
     RinItimerV1 previous;
+    struct timeval converted_value;
+    struct timeval converted_interval;
     uint64_t value_us;
     uint64_t interval_us;
     int error;
@@ -116,17 +118,19 @@ static inline int setitimer(int which, const struct itimerval* new_value,
 #endif
     if (old_value) {
         error = _rin_itimer_us_to_timeval(previous.value_us,
-                                           &old_value->it_value);
+                                           &converted_value);
         if (error != 0) {
             errno = error;
             return -1;
         }
         error = _rin_itimer_us_to_timeval(previous.interval_us,
-                                           &old_value->it_interval);
+                                           &converted_interval);
         if (error != 0) {
             errno = error;
             return -1;
         }
+        old_value->it_value = converted_value;
+        old_value->it_interval = converted_interval;
     }
     return 0;
 }
