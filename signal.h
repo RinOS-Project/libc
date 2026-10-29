@@ -575,17 +575,12 @@ static inline int sigprocmask(int how, const sigset_t* set, sigset_t* oldset) {
 }
 
 static inline int sigpending(sigset_t* set) {
-    sigset_t snapshot = 0;
-    intptr_t result;
     if (!set) {
         errno = EFAULT;
         return -1;
     }
-    result = _RIN_SIGNAL_SYSCALL2(
-        SYS_rt_sigpending, &snapshot, sizeof(snapshot));
-    if (__rin_signal_status_result(result) != 0) return -1;
-    *set = snapshot;
-    return 0;
+    return __rin_signal_status_result(_RIN_SIGNAL_SYSCALL2(
+        SYS_rt_sigpending, set, sizeof(*set)));
 }
 
 static inline int sigsuspend(const sigset_t* mask) {
