@@ -691,16 +691,20 @@ static inline void* _rin_aligned_alloc_internal(size_t alignment, size_t size,
     size_t total;
     size_t aligned_addr;
     size_t addr;
+    size_t storage_alignment;
     size_t max_value = (size_t)-1;
     size_t meta_bytes = rin_aligned_allocation_meta_size();
     void* raw;
 
-    if (alignment < sizeof(void*)) return NULL;
     if (!_rin_is_power_of_two_size(alignment)) return NULL;
     if (require_size_multiple && ((size & (alignment - 1)) != 0)) return NULL;
 
-    if (size > (max_value - alignment)) return NULL;
-    total = size + alignment;
+    /* Keep the metadata naturally aligned even when aligned_alloc() is asked
+     * for a valid fundamental alignment smaller than a pointer. Returning a
+     * pointer aligned more strongly than requested is permitted. */
+    storage_alignment = alignment < sizeof(void*) ? sizeof(void*) : alignment;
+    if (size > (max_value - storage_alignment)) return NULL;
+    total = size + storage_alignment;
     if (total > (max_value - meta_bytes)) return NULL;
     total += meta_bytes;
 
@@ -708,12 +712,11 @@ static inline void* _rin_aligned_alloc_internal(size_t alignment, size_t size,
     if (!raw) return NULL;
 
     addr = (size_t)raw + meta_bytes;
-    if (addr > (max_value - (alignment - 1))) {
+    if (addr > (max_value - (storage_alignment - 1))) {
         free(raw);
         return NULL;
     }
-
-    aligned_addr = (addr + alignment - 1) & ~(alignment - 1);
+    aligned_addr = (addr + storage_alignment - 1) & ~(storage_alignment - 1);
     rin_store_aligned_allocation_metadata((void*)aligned_addr, raw);
     return (void*)aligned_addr;
 }
