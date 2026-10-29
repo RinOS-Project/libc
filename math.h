@@ -1904,7 +1904,7 @@ static inline unsigned long long __rin_fma_finite_bits(
     unsigned long long addend[__RIN_FMA_LIMBS] = {0};
     unsigned long long magnitude[__RIN_FMA_LIMBS] = {0};
     unsigned long long limit[__RIN_FMA_LIMBS] = {0};
-    unsigned long long product_mantissa, addend_mantissa;
+    unsigned long long mantissa_x, mantissa_y, mantissa_z;
     unsigned long long product_high, product_low;
     unsigned int exponent_x, exponent_y, exponent_z;
     unsigned long long fraction_x, fraction_y, fraction_z;
@@ -1972,25 +1972,19 @@ static inline unsigned long long __rin_fma_finite_bits(
     if (z_inf)
         return encoded_result | ((unsigned long long)sign_z << sign_shift);
 
-    product_mantissa = exponent_x == 0u ? fraction_x
+    mantissa_x = exponent_x == 0u ? fraction_x
         : (1ULL << 52) | fraction_x;
-    product_mantissa = product_mantissa;
-    addend_mantissa = exponent_y == 0u ? fraction_y
+    mantissa_y = exponent_y == 0u ? fraction_y
         : (1ULL << 52) | fraction_y;
-    {
-        unsigned long long x_mantissa = product_mantissa;
-        int x_exponent = exponent_x == 0u ? -1074 : (int)exponent_x - 1075;
-        int y_exponent = exponent_y == 0u ? -1074 : (int)exponent_y - 1075;
-        product_mantissa = addend_mantissa;
-        addend_mantissa = exponent_z == 0u ? fraction_z
-            : (1ULL << 52) | fraction_z;
-        product_exponent = x_exponent + y_exponent;
-        addend_exponent = exponent_z == 0u ? -1074 : (int)exponent_z - 1075;
-        __rin_fma_multiply_53(x_mantissa, product_mantissa,
-                              &product_high, &product_low);
-    }
+    mantissa_z = exponent_z == 0u ? fraction_z
+        : (1ULL << 52) | fraction_z;
+    product_exponent = (exponent_x == 0u ? -1074 : (int)exponent_x - 1075) +
+                       (exponent_y == 0u ? -1074 : (int)exponent_y - 1075);
+    addend_exponent = exponent_z == 0u ? -1074 : (int)exponent_z - 1075;
+    __rin_fma_multiply_53(mantissa_x, mantissa_y,
+                          &product_high, &product_low);
     product_zero = product_low == 0ULL && product_high == 0ULL;
-    addend_zero = addend_mantissa == 0ULL;
+    addend_zero = mantissa_z == 0ULL;
     if (!product_zero) {
         unsigned int shift = (unsigned int)(product_exponent + 2148);
         __rin_fma_big_add_shifted_word(product, shift, product_low);
@@ -1998,7 +1992,7 @@ static inline unsigned long long __rin_fma_finite_bits(
     }
     if (!addend_zero) {
         unsigned int shift = (unsigned int)(addend_exponent + 2148);
-        __rin_fma_big_add_shifted_word(addend, shift, addend_mantissa);
+        __rin_fma_big_add_shifted_word(addend, shift, mantissa_z);
     }
 
     if (product_sign == sign_z) {
@@ -2048,7 +2042,7 @@ static inline unsigned long long __rin_fma_finite_bits(
         {
             unsigned int low = (unsigned int)(maximum_exponent -
                 (int)precision + 2148);
-            unsigned int high = (unsigned int)(maximum_exponent + 2148);
+            unsigned int high = (unsigned int)(maximum_exponent + 1 + 2148);
             for (i = low; i < high; ++i) __rin_fma_big_set_bit(limit, i);
         }
         round_mode = fegetround();
