@@ -789,7 +789,8 @@ static inline void* _rin_aligned_alloc_internal(size_t alignment, size_t size,
         return NULL;
     }
     aligned_addr = (addr + storage_alignment - 1) & ~(storage_alignment - 1);
-    rin_store_aligned_allocation_metadata((void*)aligned_addr, raw);
+    rin_store_aligned_allocation_metadata_ex((void*)aligned_addr, raw,
+                                              storage_alignment, size);
     return (void*)aligned_addr;
 }
 
