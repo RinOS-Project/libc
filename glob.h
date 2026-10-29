@@ -309,6 +309,7 @@ static inline int _rin_glob_component_allows_period(const char* pattern,
     if (pattern[0] == '\\' && !(flags & GLOB_NOESCAPE) &&
         pattern[1] == '.') return 1;
     if (pattern[0] != '[') return 0;
+    if (pattern[1] == '!' || pattern[1] == '^') return 0;
     class_end = pattern + 1u;
     class_result = _rin_glob_class_match(&class_end, '.', flags);
     return class_result > 0;
