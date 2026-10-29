@@ -1648,6 +1648,11 @@ static inline int __rin_unistd_monotonic_ns(uint64_t* output) {
 static inline unsigned int sleep(unsigned int seconds) {
     uint64_t remaining_ns = (uint64_t)seconds * UINT64_C(1000000000);
 
+    if (remaining_ns == 0u) {
+        __rin_pthread_cancel_point_if_linked();
+        return 0u;
+    }
+
     while (remaining_ns != 0u) {
         uint64_t chunk_ms64;
         uint64_t chunk_ns;
@@ -1703,7 +1708,10 @@ static inline int usleep(useconds_t usec) {
         errno = EINVAL;
         return -1;
     }
-    if (usec == 0) return 0;
+    if (usec == 0) {
+        __rin_pthread_cancel_point_if_linked();
+        return 0;
+    }
     /* SYS_SLEEP has millisecond granularity; round up so it never returns
      * before the requested microsecond interval has elapsed. */
     uintptr_t ms = ((uintptr_t)usec + 999u) / 1000u;
