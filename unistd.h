@@ -29,6 +29,7 @@
 #include "rin_account_compat.h"
 #endif
 #include <rin/fs/path_at_abi.h>
+#include <rin/fd_range_abi.h>
 #include <rin/utsname_abi.h>
 #include <rin/process/process_group_abi.h>
 #include <rin/process/namespace_abi.h>
@@ -611,6 +612,29 @@ static inline int close(int fd) {
     }
     __rin_pthread_cancel_point_if_linked();
     return rc;
+}
+
+#ifndef CLOSE_RANGE_CLOEXEC
+#define CLOSE_RANGE_CLOEXEC RIN_CLOSE_RANGE_FLAG_CLOEXEC
+#endif
+
+static inline int close_range(unsigned int first, unsigned int last,
+                              int flags) {
+    int result = _rin_unistd_status(_RIN_UNISTD_SYSCALL3(
+        SYS_CLOSE_RANGE, (uintptr_t)first, (uintptr_t)last,
+        (uintptr_t)(unsigned int)flags));
+    if (result == 0 && first < _FCNTL_MAX_FDS) {
+        unsigned int end = last < _FCNTL_MAX_FDS
+            ? last : _FCNTL_MAX_FDS - 1u;
+        _fcntl_init();
+        for (unsigned int fd = first; fd <= end; ++fd) {
+            if (((unsigned int)flags & RIN_CLOSE_RANGE_FLAG_CLOEXEC) != 0u)
+                _fcntl_fd_flags[fd] |= FD_CLOEXEC;
+            else
+                _fcntl_track_close_fd((int)fd);
+        }
+    }
+    return result;
 }
 
 static inline off_t lseek(int fd, off_t offset, int whence) {
@@ -1795,8 +1819,10 @@ static inline int lockf(int fd, int function, off_t size) {
 
     if (size < 0) {
         /* A signed minimum cannot be negated to form flock.l_len. */
-        if ((uint64_t)size ==
-            (UINT64_C(1) << (sizeof(off_t) * CHAR_BIT - 1u))) {
+        const off_t minimum = (off_t)(
+            -(off_t)((UINT64_C(1) << (sizeof(off_t) * CHAR_BIT - 1u)) - 1u) -
+            1);
+        if (size == minimum) {
             errno = EOVERFLOW;
             return -1;
         }
