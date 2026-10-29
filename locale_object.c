@@ -44,7 +44,7 @@ struct RinLocaleObject {
 _Static_assert(sizeof(struct RinLocaleObject) == 24u,
                "locale object layout drift");
 
-static __thread locale_t locale_thread_current = LC_GLOBAL_LOCALE;
+static _Thread_local locale_t locale_thread_current = LC_GLOBAL_LOCALE;
 
 static void locale_zero(void* pointer, size_t size) {
     volatile uint8_t* output = (volatile uint8_t*)pointer;
@@ -475,34 +475,34 @@ int rin_locale_current_ctype_map(int character, uint32_t operation) {
     return rin_locale_ctype_map(locale_thread_current, character, operation);
 }
 
-static __thread rin_unicode_mbstate_t locale_mbrtowc_private_state = {
+static _Thread_local rin_unicode_mbstate_t locale_mbrtowc_private_state = {
     0u, 0u
 };
-static __thread rin_unicode_mbstate_t locale_mbrlen_private_state = {
+static _Thread_local rin_unicode_mbstate_t locale_mbrlen_private_state = {
     0u, 0u
 };
-static __thread rin_unicode_mbstate_t locale_wcrtomb_private_state = {
+static _Thread_local rin_unicode_mbstate_t locale_wcrtomb_private_state = {
     0u, 0u
 };
-static __thread rin_unicode_mbstate_t locale_mbsrtowcs_private_state = {
+static _Thread_local rin_unicode_mbstate_t locale_mbsrtowcs_private_state = {
     0u, 0u
 };
-static __thread rin_unicode_mbstate_t locale_wcsrtombs_private_state = {
+static _Thread_local rin_unicode_mbstate_t locale_wcsrtombs_private_state = {
     0u, 0u
 };
-static __thread rin_unicode_mbstate_t locale_mblen_private_state = {
+static _Thread_local rin_unicode_mbstate_t locale_mblen_private_state = {
     0u, 0u
 };
-static __thread rin_unicode_mbstate_t locale_mbtowc_private_state = {
+static _Thread_local rin_unicode_mbstate_t locale_mbtowc_private_state = {
     0u, 0u
 };
-static __thread rin_unicode_mbstate_t locale_mbstowcs_private_state = {
+static _Thread_local rin_unicode_mbstate_t locale_mbstowcs_private_state = {
     0u, 0u
 };
-static __thread rin_unicode_mbstate_t locale_wcstombs_private_state = {
+static _Thread_local rin_unicode_mbstate_t locale_wcstombs_private_state = {
     0u, 0u
 };
-static __thread rin_unicode_mbstate_t locale_wctomb_private_state = {
+static _Thread_local rin_unicode_mbstate_t locale_wctomb_private_state = {
     0u, 0u
 };
 
