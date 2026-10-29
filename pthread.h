@@ -78,6 +78,10 @@ extern "C" {
 #define PTHREAD_STACK_MIN 16384  /* Minimum stack size */
 #endif
 
+#ifndef _RIN_PTHREAD_DEFAULT_GUARDSIZE
+#define _RIN_PTHREAD_DEFAULT_GUARDSIZE ((size_t)4096u)
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * 型定義
  * ═══════════════════════════════════════════════════════════════*/
@@ -107,6 +111,7 @@ typedef struct {
     int inheritsched;
     int schedpolicy;
     int sched_priority;
+    size_t guardsize;
 } pthread_attr_t;
 
 typedef struct {
@@ -299,6 +304,7 @@ static inline int pthread_attr_init(pthread_attr_t* attr) {
     attr->inheritsched = PTHREAD_INHERIT_SCHED;
     attr->schedpolicy = SCHED_OTHER;
     attr->sched_priority = 0;
+    attr->guardsize = _RIN_PTHREAD_DEFAULT_GUARDSIZE;
     return 0;
 }
 
@@ -311,6 +317,21 @@ static inline int pthread_attr_destroy(pthread_attr_t* attr) {
     attr->inheritsched = PTHREAD_INHERIT_SCHED;
     attr->schedpolicy = SCHED_OTHER;
     attr->sched_priority = 0;
+    attr->guardsize = 0;
+    return 0;
+}
+
+static inline int pthread_attr_getguardsize(const pthread_attr_t* attr,
+                                             size_t* guardsize) {
+    if (!attr || !guardsize) return EINVAL;
+    *guardsize = attr->guardsize;
+    return 0;
+}
+
+static inline int pthread_attr_setguardsize(pthread_attr_t* attr,
+                                             size_t guardsize) {
+    if (!attr || guardsize > SIZE_MAX - (size_t)0xfffu) return EINVAL;
+    attr->guardsize = guardsize;
     return 0;
 }
 
@@ -483,6 +504,7 @@ static inline int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr) {
     attr->inheritsched = PTHREAD_EXPLICIT_SCHED;
     attr->schedpolicy = policy;
     attr->sched_priority = schedparam.sched_priority;
+    attr->guardsize = (size_t)info.guard_size;
     return 0;
 }
 

@@ -21,7 +21,6 @@
 #define CLONE_SIGHAND   0x00000800UL
 
 #define THREAD_STACK_DEFAULT (8UL * 1024UL * 1024UL)
-#define THREAD_STACK_MIN     (2UL * 1024UL * 1024UL)
 #define THREAD_STACK_GUARD   0x1000UL
 #define THREAD_PAGE_SIZE     0x1000UL
 
@@ -617,6 +616,7 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
     int schedule_policy = SCHED_OTHER;
     struct sched_param schedule_param = {0};
     uintptr_t requested_stack = THREAD_STACK_DEFAULT;
+    uintptr_t requested_guard = THREAD_STACK_GUARD;
 
     if (!thread || !start_routine) return EINVAL;
 
@@ -625,6 +625,10 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
             attr->detachstate != PTHREAD_CREATE_DETACHED)
             return EINVAL;
         if (attr->scope != PTHREAD_SCOPE_SYSTEM) return ENOTSUP;
+        if (attr->guardsize >
+            SIZE_MAX - (size_t)(THREAD_PAGE_SIZE - 1UL))
+            return EINVAL;
+        requested_guard = (uintptr_t)attr->guardsize;
         if (attr->inheritsched == PTHREAD_EXPLICIT_SCHED) {
             if (!_rin_pthread_sched_policy_supported(attr->schedpolicy))
                 return attr->schedpolicy == SCHED_DEADLINE ? ENOTSUP : EINVAL;
@@ -670,13 +674,18 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
         requested_stack = (uintptr_t)attr->stacksize;
     }
     if (!caller_stack) {
-        if (requested_stack < THREAD_STACK_MIN) {
-            requested_stack = THREAD_STACK_MIN;
-        }
-        if (requested_stack > (UINTPTR_MAX - (THREAD_PAGE_SIZE - 1UL))) {
+        if (requested_stack < PTHREAD_STACK_MIN ||
+            requested_stack > (UINTPTR_MAX - (THREAD_PAGE_SIZE - 1UL)) ||
+            requested_guard > (UINTPTR_MAX - (THREAD_PAGE_SIZE - 1UL))) {
             return EINVAL;
         }
         requested_stack = rin_align_up_word(requested_stack, THREAD_PAGE_SIZE);
+        stack_guard_size = rin_align_up_word(requested_guard,
+                                              THREAD_PAGE_SIZE);
+    } else {
+        /* A caller-provided stack is already a bounded mapping owned by the
+         * caller; the pthread runtime must not reserve or protect its prefix. */
+        stack_guard_size = 0u;
     }
 
     if (caller_stack) {
@@ -699,24 +708,24 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
          * Physical backing still comes from the kernel page allocator, but
          * the logical owner remains the thread stack, never malloc/free. */
         uintptr_t total_map;
-        if (requested_stack > (UINTPTR_MAX - THREAD_STACK_GUARD)) {
+        if (requested_stack > (UINTPTR_MAX - stack_guard_size)) {
             return EINVAL;
         }
-        total_map = requested_stack + THREAD_STACK_GUARD;
+        total_map = requested_stack + stack_guard_size;
         intptr_t map_result = _RIN_PTHREAD_RUNTIME_MMAP(
             0, total_map, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK);
         if (map_result >= 0 && map_result != 0) {
             void* map_base = (void*)(uintptr_t)map_result;
             intptr_t protection_result = _RIN_PTHREAD_RUNTIME_MPROTECT(
-                (uintptr_t)((unsigned char*)map_base + THREAD_STACK_GUARD),
+                (uintptr_t)((unsigned char*)map_base + stack_guard_size),
                 requested_stack, PROT_READ | PROT_WRITE);
             if (protection_result >= 0) {
                 alloc_base = map_base;
                 alloc_size = total_map;
                 alloc_kind = RIN_THREAD_ALLOC_MMAP;
-                stack_usable_base = (void*)((unsigned char*)map_base + THREAD_STACK_GUARD);
+                stack_usable_base = (void*)((unsigned char*)map_base +
+                                            stack_guard_size);
                 stack_usable_size = requested_stack;
-                stack_guard_size = THREAD_STACK_GUARD;
 
 #if defined(__x86_64__) || defined(_M_X64)
                 {
