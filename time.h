@@ -1642,43 +1642,6 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
             return 0;
         }
 
-#if defined(RIN_TIME_ABI64)
-        /* The absolute futex wire format uses unsigned nanoseconds. While
-         * realtime is before the epoch, preserve the signed deadline by
-         * waiting for its checked relative interval on the monotonic clock. */
-        if (clock_id == CLOCK_REALTIME && now.tv_sec < 0) {
-            struct timespec relative;
-            if (now.tv_sec < 0 && request->tv_sec >= 0 &&
-                (int64_t)request->tv_sec > INT64_MAX +
-                    (int64_t)now.tv_sec) {
-                errno = entry_errno;
-                return EOVERFLOW;
-            }
-            int64_t seconds = (int64_t)request->tv_sec -
-                              (int64_t)now.tv_sec;
-            int64_t nanoseconds = (int64_t)request->tv_nsec -
-                                  (int64_t)now.tv_nsec;
-            if (nanoseconds < 0) {
-                if (seconds <= 0) {
-                    errno = entry_errno;
-                    return EOVERFLOW;
-                }
-                --seconds;
-                nanoseconds += INT64_C(1000000000);
-            }
-            relative.tv_sec = (time_t)seconds;
-            relative.tv_nsec = (long)nanoseconds;
-            result = nanosleep(&relative, remain);
-            if (result == 0) {
-                errno = entry_errno;
-                return 0;
-            }
-            saved_errno = errno;
-            errno = entry_errno;
-            return saved_errno != 0 ? saved_errno : EIO;
-        }
-#endif
-
         for (;;) {
             intptr_t wait_result;
             errno = 0;
@@ -1705,8 +1668,8 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
                 errno = entry_errno;
                 return saved_errno != 0 ? saved_errno : EIO;
             }
-            if (now.tv_sec < 0 || now.tv_nsec < 0 ||
-                now.tv_nsec >= 1000000000L) {
+            if (((clock_id == CLOCK_MONOTONIC) && now.tv_sec < 0) ||
+                now.tv_nsec < 0 || now.tv_nsec >= 1000000000L) {
                 errno = entry_errno;
                 return EIO;
             }
