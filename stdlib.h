@@ -1095,6 +1095,7 @@ static inline int _rin_temp_random_suffix(char suffix[6]) {
             __NR_getrandom, (uintptr_t)random_bytes,
             (uintptr_t)sizeof(random_bytes), (uintptr_t)0u);
         if (received < 0 && received >= -4095) {
+            if (received == -(intptr_t)EINTR) continue;
             for (size_t index = 0; index < sizeof(random_bytes); ++index)
                 random_bytes[index] = 0;
             errno = (int)-received;
