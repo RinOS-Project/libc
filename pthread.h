@@ -169,6 +169,11 @@ typedef struct {
     int pshared;
 } pthread_rwlockattr_t;
 
+/* Shared-memory ticket word; active owners and waiters stay visible to destroy. */
+typedef struct {
+    volatile uint32_t state;
+} pthread_spinlock_t;
+
 #define RIN_PTHREAD_RWLOCK_WRITER_ACTIVE 0x1
 #define RIN_PTHREAD_RWLOCK_PROCESS_SHARED 0x2
 
@@ -992,6 +997,11 @@ extern int pthread_mutex_timedlock(pthread_mutex_t* mutex,
 extern int pthread_mutex_trylock(pthread_mutex_t* mutex);
 extern int pthread_mutex_unlock(pthread_mutex_t* mutex);
 extern int pthread_mutex_consistent(pthread_mutex_t* mutex);
+extern int pthread_spin_init(pthread_spinlock_t* lock, int pshared);
+extern int pthread_spin_destroy(pthread_spinlock_t* lock);
+extern int pthread_spin_lock(pthread_spinlock_t* lock);
+extern int pthread_spin_trylock(pthread_spinlock_t* lock);
+extern int pthread_spin_unlock(pthread_spinlock_t* lock);
 #endif
 
 /* ═══════════════════════════════════════════════════════════════

@@ -89,6 +89,13 @@
 #ifndef _POSIX_READER_WRITER_LOCKS
 #define _POSIX_READER_WRITER_LOCKS 200809L
 #endif
+#if defined(RIN_USERSPACE) && \
+    (defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || \
+     defined(_M_X64))
+#ifndef _POSIX_SPIN_LOCKS
+#define _POSIX_SPIN_LOCKS 200809L
+#endif
+#endif
 #ifndef _POSIX_THREAD_SAFE_FUNCTIONS
 #define _POSIX_THREAD_SAFE_FUNCTIONS -1
 #endif
@@ -2026,6 +2033,10 @@ static inline long sysconf(int name) {
 #endif
         case _SC_THREAD_SAFE_FUNCTIONS:
             return _POSIX_THREAD_SAFE_FUNCTIONS;
+#ifdef _POSIX_SPIN_LOCKS
+        case _SC_SPIN_LOCKS:
+            return _POSIX_SPIN_LOCKS;
+#endif
         case _SC_THREADS:
         case _SC_READER_WRITER_LOCKS:
         case _SC_BARRIERS:
@@ -2086,7 +2097,9 @@ static inline long sysconf(int name) {
         case _SC_GETPW_R_SIZE_MAX:
 #endif
         case _SC_SHELL:
+#ifndef _POSIX_SPIN_LOCKS
         case _SC_SPIN_LOCKS:
+#endif
         case _SC_SPORADIC_SERVER:
         case _SC_SS_REPL_MAX:
         case _SC_THREAD_ATTR_STACKADDR:
