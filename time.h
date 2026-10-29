@@ -1316,7 +1316,7 @@ static inline int timer_settime(timer_t timer_id, int flags,
                                 const struct itimerspec* value,
                                 struct itimerspec* old_value) {
     RinTimerSpecV1 request;
-    RinTimerSpecV1 previous;
+    RinTimerSpecV1 previous = {0};
     struct itimerspec converted;
     uint64_t value_ns;
     uint64_t interval_ns;
@@ -1357,6 +1357,10 @@ static inline int timer_settime(timer_t timer_id, int flags,
         return -1;
     }
     if (old_value) {
+        if (!rin_timer_spec_v1_valid(&previous)) {
+            errno = EIO;
+            return -1;
+        }
         error = _rin_time_ns_to_timespec(previous.value_ns, &converted.it_value);
         if (error == 0)
             error = _rin_time_ns_to_timespec(previous.interval_ns,
