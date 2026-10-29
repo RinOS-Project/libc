@@ -9,6 +9,8 @@
 #include "stddef.h"
 #include "errno.h"
 #include "stdlib.h"
+#include "string.h"
+#include "wchar.h"
 #include "sys/stat.h"
 #include "dirent.h"
 
@@ -232,47 +234,158 @@ static inline int _rin_glob_component_copy(const char* pattern,
     return 0;
 }
 
-static inline int _rin_glob_class_match(const char** pattern, char value,
-                                        int flags)
+static inline int _rin_glob_decode_character(const char* input,
+                                             const char** next,
+                                             char encoded[5],
+                                             wchar_t* value)
+{
+    mbstate_t state = {0};
+    size_t available = 0u;
+    size_t consumed;
+    if (!input || !next || !encoded || !value || *input == '\0') return -1;
+    while (available < 4u && input[available] != '\0') ++available;
+    consumed = mbrtowc(value, input, available, &state);
+    if (consumed == (size_t)-1 || consumed == (size_t)-2 || consumed > 4u)
+        return -1;
+    if (consumed == 0u) consumed = 1u;
+    for (size_t index = 0u; index < consumed; ++index)
+        encoded[index] = input[index];
+    encoded[consumed] = '\0';
+    *next = input + consumed;
+    return 0;
+}
+
+static inline int _rin_glob_wide_class(const char* name, size_t length,
+                                       wchar_t value)
+{
+    char property[16];
+    wctype_t descriptor;
+    if (length == 0u || length >= sizeof(property)) return -1;
+    for (size_t index = 0u; index < length; ++index)
+        property[index] = name[index];
+    property[length] = '\0';
+    descriptor = wctype(property);
+    if (descriptor == (wctype_t)0u) return -1;
+    return iswctype((wint_t)value, descriptor) != 0;
+}
+
+/* Return -2 when the active locale has a multi-character collating element
+ * that this bounded matcher cannot represent as one filename character. */
+static inline int _rin_glob_class_symbol(const char* start,
+                                         const char* end,
+                                         char encoded[5],
+                                         wchar_t* value)
+{
+    const char* after;
+    size_t length = (size_t)(end - start);
+    if (length == 0u) return -1;
+    if (length > 4u) return -2;
+    if (_rin_glob_decode_character(start, &after, encoded, value) != 0)
+        return -1;
+    if (after != end) return -2;
+    return 0;
+}
+
+static inline int _rin_glob_class_match(const char** pattern,
+                                        wchar_t value, int flags,
+                                        const char* value_bytes,
+                                        size_t value_length,
+                                        size_t* value_consumed)
 {
     const char* cursor = *pattern;
     int negate = 0;
     int matched = 0;
     int have_item = 0;
+    if (value_consumed) *value_consumed = value_length;
     if (*cursor == '^' || *cursor == '!') {
         negate = 1;
         ++cursor;
     }
-    if (*cursor == ']') {
-        have_item = 1;
-        if (value == ']') matched = 1;
-        ++cursor;
-    }
-    while (*cursor != '\0' && *cursor != ']') {
-        unsigned char first;
-        unsigned char last;
-        if (*cursor == '\\' && !(flags & GLOB_NOESCAPE)) {
-            if (cursor[1] == '\0') return -1;
-            first = (unsigned char)cursor[1];
-            cursor += 2;
-        } else {
-            first = (unsigned char)*cursor++;
-        }
-        have_item = 1;
-        last = first;
-        if (*cursor == '-' && cursor[1] != '\0' && cursor[1] != ']') {
+    while (*cursor != '\0' && (*cursor != ']' || !have_item)) {
+        char first[5];
+        wchar_t first_value;
+        const char* after_first;
+
+        if (*cursor == ']' && !have_item) {
+            first[0] = ']';
+            first[1] = '\0';
+            first_value = L']';
             ++cursor;
+        } else if (cursor[0] == '[' &&
+            (cursor[1] == ':' || cursor[1] == '.' || cursor[1] == '=')) {
+            char delimiter = cursor[1];
+            const char* item_start = cursor + 2u;
+            const char* item_end = item_start;
+            while (*item_end != '\0' &&
+                   !(item_end[0] == delimiter && item_end[1] == ']'))
+                ++item_end;
+            if (*item_end == '\0' || item_end == item_start) return -1;
+            if (delimiter == ':') {
+                int class_result = _rin_glob_wide_class(
+                    item_start, (size_t)(item_end - item_start), value);
+                if (class_result < 0) return -1;
+                if (value_bytes && class_result) matched = 1;
+                cursor = item_end + 2u;
+                have_item = 1;
+                continue;
+            }
+            {
+                int symbol_result = _rin_glob_class_symbol(
+                    item_start, item_end, first, &first_value);
+                if (symbol_result != 0) return symbol_result;
+                cursor = item_end + 2u;
+            }
+        } else {
+            const char* character = cursor;
             if (*cursor == '\\' && !(flags & GLOB_NOESCAPE)) {
                 if (cursor[1] == '\0') return -1;
-                last = (unsigned char)cursor[1];
-                cursor += 2;
-            } else {
-                last = (unsigned char)*cursor++;
+                character = cursor + 1u;
             }
-            if (first > last) return -1;
+            if (_rin_glob_decode_character(character, &after_first,
+                                           first, &first_value) != 0)
+                return -1;
+            cursor = after_first;
         }
-        if ((unsigned char)value >= first && (unsigned char)value <= last)
+        have_item = 1;
+        if (*cursor == '-' && cursor[1] != '\0' && cursor[1] != ']') {
+            char last[5];
+            wchar_t last_value;
+            const char* character;
+            const char* after_last;
+            ++cursor;
+            if (cursor[0] == '[' &&
+                (cursor[1] == '.' || cursor[1] == '=')) {
+                char delimiter = cursor[1];
+                const char* item_start = cursor + 2u;
+                const char* item_end = item_start;
+                while (*item_end != '\0' &&
+                       !(item_end[0] == delimiter && item_end[1] == ']'))
+                    ++item_end;
+                if (*item_end == '\0' || item_end == item_start) return -1;
+                {
+                    int symbol_result = _rin_glob_class_symbol(
+                        item_start, item_end, last, &last_value);
+                    if (symbol_result != 0) return symbol_result;
+                }
+                cursor = item_end + 2u;
+            } else {
+                character = cursor;
+                if (*cursor == '\\' && !(flags & GLOB_NOESCAPE)) {
+                    if (cursor[1] == '\0') return -1;
+                    character = cursor + 1u;
+                }
+                if (_rin_glob_decode_character(character, &after_last,
+                                               last, &last_value) != 0)
+                    return -1;
+                cursor = after_last;
+            }
+            if (strcoll(first, last) > 0) return -1;
+            if (value_bytes && strcoll(first, value_bytes) <= 0 &&
+                strcoll(value_bytes, last) <= 0)
+                matched = 1;
+        } else if (value_bytes && strcoll(first, value_bytes) == 0) {
             matched = 1;
+        }
     }
     if (*cursor != ']' || !have_item) return -1;
     *pattern = cursor + 1u;
@@ -290,7 +403,8 @@ static inline int _rin_glob_component_validate(const char* pattern, int flags)
         }
         if (pattern[index] == '[') {
             const char* class_end = pattern + index + 1u;
-            if (_rin_glob_class_match(&class_end, '\0', flags) < 0)
+            if (_rin_glob_class_match(&class_end, 0, flags, NULL, 0u,
+                                     NULL) < 0)
                 return -1;
             index = (size_t)(class_end - pattern) - 1u;
         }
@@ -311,7 +425,8 @@ static inline int _rin_glob_component_allows_period(const char* pattern,
     if (pattern[0] != '[') return 0;
     if (pattern[1] == '!' || pattern[1] == '^') return 0;
     class_end = pattern + 1u;
-    class_result = _rin_glob_class_match(&class_end, '.', flags);
+    class_result = _rin_glob_class_match(
+        &class_end, L'.', flags, ".", 1u, NULL);
     return class_result > 0;
 }
 
@@ -338,11 +453,19 @@ static inline int _rin_glob_component_match(const char* pattern,
         if (*left == '[') {
             int class_result;
             const char* class_end = left + 1u;
-            class_result = _rin_glob_class_match(&class_end, *right, flags);
-            if (class_result < 0) return 0;
-            if (!class_result) return 0;
+            const char* next_right;
+            char encoded[5];
+            wchar_t wide_value;
+            size_t consumed = 0u;
+            if (_rin_glob_decode_character(right, &next_right, encoded,
+                                           &wide_value) != 0)
+                return 0;
+            class_result = _rin_glob_class_match(
+                &class_end, wide_value, flags, encoded,
+                (size_t)(next_right - right), &consumed);
+            if (class_result <= 0) return 0;
             left = class_end;
-            ++right;
+            right += consumed;
             continue;
         }
         if (*left == '\\' && !(flags & GLOB_NOESCAPE)) {
