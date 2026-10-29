@@ -69,6 +69,20 @@ typedef long double double_t;
 #ifndef FP_ILOGBNAN
 #define FP_ILOGBNAN INT_MAX
 #endif
+#ifndef FP_LLOGB0
+#if FP_ILOGB0 == INT_MIN
+#define FP_LLOGB0 LONG_MIN
+#else
+#define FP_LLOGB0 (-LONG_MAX)
+#endif
+#endif
+#ifndef FP_LLOGBNAN
+#if FP_ILOGBNAN == INT_MAX
+#define FP_LLOGBNAN LONG_MAX
+#else
+#define FP_LLOGBNAN LONG_MIN
+#endif
+#endif
 
 #ifndef MIDL_PASS
 /* IEEE 754特殊値 - ビット操作による完全実装 */
@@ -1367,6 +1381,30 @@ static inline int ilogb(double x) {
 
 static inline int ilogbl(long double x) {
     return ilogb((double)x);
+}
+
+static inline long llogb(double x) {
+    if (x == 0.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return FP_LLOGB0;
+    }
+    if (__builtin_isinf(x)) {
+        (void)feraiseexcept(FE_INVALID);
+        return LONG_MAX;
+    }
+    if (__builtin_isnan(x)) {
+        (void)feraiseexcept(FE_INVALID);
+        return FP_LLOGBNAN;
+    }
+    return (long)ilogb(x);
+}
+
+static inline long llogbf(float x) {
+    return llogb((double)x);
+}
+
+static inline long llogbl(long double x) {
+    return llogb((double)x);
 }
 
 static inline double logb(double x) {
