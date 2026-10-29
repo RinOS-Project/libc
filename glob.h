@@ -53,8 +53,8 @@ extern "C" {
 #define _RIN_GLOB_MAX_PATH        4096u
 #define _RIN_GLOB_MAX_BRACE_RECURSION 8u
 #define _RIN_GLOB_MAX_BRACE_NESTING 64u
-#define _RIN_GLOB_MATCH_OPERATION_BUDGET 65536u
-#define _RIN_GLOB_MATCH_RECURSION_LIMIT 128u
+#define _RIN_GLOB_MATCH_OPERATION_BUDGET 131072u
+#define _RIN_GLOB_MATCH_BUDGET_EXHAUSTED (-3)
 
 /* ═══════════════════════════════════════════════════════════════
  * glob_t構造体
@@ -68,10 +68,10 @@ typedef struct {
 
     /* GNU拡張 */
     void (*gl_closedir)(void*);
-    void* (*gl_readdir)(void*);
+    struct dirent* (*gl_readdir)(void*);
     void* (*gl_opendir)(const char*);
-    int (*gl_lstat)(const char*, void*);
-    int (*gl_stat)(const char*, void*);
+    int (*gl_lstat)(const char*, struct stat*);
+    int (*gl_stat)(const char*, struct stat*);
 } glob_t;
 
 static inline int glob(const char* pattern, int flags,
@@ -434,83 +434,130 @@ static inline int _rin_glob_component_allows_period(const char* pattern,
     return class_result > 0;
 }
 
-static inline int _rin_glob_component_match_bounded(
-    const char* pattern, const char* value, int flags, unsigned depth,
-    unsigned* budget)
+static inline void _rin_glob_match_epsilon_closure(
+    const char* pattern, size_t pattern_length, unsigned char* states,
+    size_t* operations)
 {
-    const char* left = pattern;
-    const char* right = value;
-    if (!left || !right || !budget || *budget == 0u ||
-        depth > _RIN_GLOB_MATCH_RECURSION_LIMIT)
-        return -1;
-    --*budget;
-    while (*left != '\0') {
-        if (*left == '*') {
-            int recursive_result;
-            ++left;
-            while (*left == '*') ++left;
-            if (*left == '\0') return 1;
-            recursive_result = _rin_glob_component_match_bounded(
-                left, right, flags, depth + 1u, budget);
-            if (recursive_result != 0) return recursive_result;
-            for (const char* probe = right; *probe != '\0';) {
-                const char* next_probe;
-                char encoded[5];
-                wchar_t ignored;
-                if (_rin_glob_decode_character(probe, &next_probe, encoded,
-                                               &ignored) != 0)
-                    return 0;
-                recursive_result = _rin_glob_component_match_bounded(
-                    left, next_probe, flags, depth + 1u, budget);
-                if (recursive_result != 0) return recursive_result;
-                probe = next_probe;
-            }
-            return 0;
-        }
-        if (*right == '\0') return 0;
-        if (*left == '?') {
-            const char* next_right;
-            char encoded[5];
-            wchar_t ignored;
-            if (_rin_glob_decode_character(right, &next_right, encoded,
-                                           &ignored) != 0)
-                return 0;
-            ++left;
-            right = next_right;
-            continue;
-        }
-        if (*left == '[') {
-            int class_result;
-            const char* class_end = left + 1u;
-            const char* next_right;
-            char encoded[5];
-            wchar_t wide_value;
-            size_t consumed = 0u;
-            if (_rin_glob_decode_character(right, &next_right, encoded,
-                                           &wide_value) != 0)
-                return 0;
-            class_result = _rin_glob_class_match(
-                &class_end, wide_value, flags, encoded,
-                (size_t)(next_right - right), &consumed);
-            if (class_result <= 0) return 0;
-            left = class_end;
-            right += consumed;
-            continue;
-        }
-        if (*left == '\\' && !(flags & GLOB_NOESCAPE)) {
-            if (left[1] == '\0') return 0;
-            ++left;
-        }
-        if (*left++ != *right++) return 0;
+    for (size_t index = 0u; index < pattern_length; ++index) {
+        if (*operations == 0u) return;
+        --*operations;
+        if (!states[index] || pattern[index] != '*') continue;
+        while (index + 1u < pattern_length &&
+               pattern[index + 1u] == '*')
+            ++index;
+        states[index + 1u] = 1u;
     }
-    return *right == '\0';
+}
+
+/* Match one path component with a bounded NFA/DP. The two state rows are
+ * indexed by pattern byte offsets; input transitions advance by one active
+ * locale character, so '?' and bracket expressions keep their multibyte
+ * semantics while '*' never recursively explores every suffix. */
+static inline int _rin_glob_component_match_bounded(
+    const char* pattern, const char* value, int flags)
+{
+    unsigned char current[NAME_MAX + 2u] = {0};
+    unsigned char next[NAME_MAX + 2u] = {0};
+    size_t pattern_length;
+    size_t value_length;
+    size_t operations = _RIN_GLOB_MATCH_OPERATION_BUDGET;
+    const char* value_cursor;
+
+    if (!pattern || !value) return -1;
+    pattern_length = _rin_glob_strlen(pattern);
+    value_length = _rin_glob_strlen(value);
+    if (pattern_length > NAME_MAX || value_length > NAME_MAX) return -1;
+
+    current[0] = 1u;
+    _rin_glob_match_epsilon_closure(pattern, pattern_length, current,
+                                    &operations);
+    if (operations == 0u) return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+    value_cursor = value;
+    while (*value_cursor != '\0') {
+        const char* next_value;
+        char encoded[5];
+        wchar_t wide_value;
+        size_t value_character_length;
+        if (_rin_glob_decode_character(value_cursor, &next_value, encoded,
+                                       &wide_value) != 0)
+            return 0;
+        value_character_length = (size_t)(next_value - value_cursor);
+        memset(next, 0, sizeof(next));
+
+        for (size_t pattern_index = 0u;
+             pattern_index < pattern_length; ++pattern_index) {
+            size_t atom_end;
+            size_t state_cost = 1u;
+            int atom_matches = 0;
+            if (!current[pattern_index]) continue;
+            if (operations == 0u)
+                return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+            --operations;
+
+            if (pattern[pattern_index] == '*') {
+                next[pattern_index] = 1u;
+                continue;
+            }
+            atom_end = pattern_index;
+            if (pattern[pattern_index] == '?') {
+                atom_end = pattern_index + 1u;
+                atom_matches = 1;
+            } else if (pattern[pattern_index] == '[') {
+                const char* class_end = pattern + pattern_index + 1u;
+                size_t consumed = 0u;
+                int class_result = _rin_glob_class_match(
+                    &class_end, wide_value, flags, encoded,
+                    value_character_length, &consumed);
+                atom_end = (size_t)(class_end - pattern);
+                state_cost += atom_end - pattern_index;
+                atom_matches = class_result > 0 &&
+                               consumed == value_character_length;
+                if (class_result < 0)
+                    return class_result == -2 ? -2 : -1;
+            } else {
+                const char* literal = pattern + pattern_index;
+                const char* after_literal;
+                char literal_encoded[5];
+                wchar_t ignored;
+                if (pattern[pattern_index] == '\\' &&
+                    !(flags & GLOB_NOESCAPE)) {
+                    if (pattern_index + 1u >= pattern_length) return -1;
+                    literal = pattern + pattern_index + 1u;
+                }
+                if (_rin_glob_decode_character(literal, &after_literal,
+                                               literal_encoded,
+                                               &ignored) != 0)
+                    return -1;
+                atom_end = (size_t)(after_literal - pattern);
+                if (literal != pattern + pattern_index)
+                    atom_end = (size_t)(after_literal - pattern);
+                state_cost += atom_end - pattern_index;
+                atom_matches = atom_end - (size_t)(literal - pattern) ==
+                                   value_character_length &&
+                               memcmp(literal, value_cursor,
+                                      value_character_length) == 0;
+            }
+
+            if (state_cost > operations)
+                return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+            operations -= state_cost;
+            if (atom_matches) next[atom_end] = 1u;
+        }
+        _rin_glob_match_epsilon_closure(pattern, pattern_length, next,
+                                        &operations);
+        if (operations == 0u)
+            return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+        memcpy(current, next, pattern_length + 1u);
+        value_cursor = next_value;
+    }
+
+    return current[pattern_length] ? 1 : 0;
 }
 
 static inline int _rin_glob_component_match(const char* pattern,
                                             const char* value, int flags)
 {
     const char* cursor;
-    unsigned budget = _RIN_GLOB_MATCH_OPERATION_BUDGET;
     int result;
     if (!pattern || !value) return 0;
     /* Reject an invalid or incomplete multibyte filename consistently, even
@@ -523,8 +570,7 @@ static inline int _rin_glob_component_match(const char* pattern,
             return 0;
         cursor = next;
     }
-    result = _rin_glob_component_match_bounded(
-        pattern, value, flags, 0u, &budget);
+    result = _rin_glob_component_match_bounded(pattern, value, flags);
     return result;
 }
 
@@ -603,7 +649,7 @@ static inline struct dirent* _rin_glob_readdir(_RinGlobContext* context,
                                                void* directory)
 {
     if (context->flags & GLOB_ALTDIRFUNC)
-        return (struct dirent*)context->pglob->gl_readdir(directory);
+        return context->pglob->gl_readdir(directory);
     return _RIN_GLOB_READDIR((DIR*)directory);
 }
 
@@ -622,7 +668,7 @@ static inline int _rin_glob_path_stat(_RinGlobContext* context,
                                       int no_follow)
 {
     if (context->flags & GLOB_ALTDIRFUNC) {
-        int (*callback)(const char*, void*) = no_follow
+        int (*callback)(const char*, struct stat*) = no_follow
             ? context->pglob->gl_lstat : context->pglob->gl_stat;
         return callback(path, status);
     }
@@ -764,6 +810,11 @@ static inline int _rin_glob_expand_body(
             {
                 int component_match = _rin_glob_component_match(
                     raw_component, entry->d_name, context->flags);
+                if (component_match == _RIN_GLOB_MATCH_BUDGET_EXHAUSTED) {
+                    errno = EOVERFLOW;
+                    result = GLOB_NOSPACE;
+                    break;
+                }
                 if (component_match < 0) {
                     result = GLOB_NOSYS;
                     break;
