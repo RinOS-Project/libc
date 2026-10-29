@@ -4,24 +4,9 @@
  * POSIX Threads API
  */
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
-    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
-    (defined(__unix__) || defined(__APPLE__)) && \
-    (defined(__GNUC__) || defined(__clang__)) && \
-    !defined(_RIN_PTHREAD_SYSCALL0) && \
-    !defined(_RIN_PTHREAD_SELF_SYSCALL0) && \
-    !defined(_RIN_PTHREAD_STACK_INFO_SYSCALL3) && \
-    !defined(_RIN_PTHREAD_SIGMASK_SYSCALL4) && \
-    !defined(_RIN_PTHREAD_NAME_SYSCALL1) && \
-    !defined(_RIN_SCHED_SYSCALL0) && \
-    !defined(_RIN_SCHED_SYSCALL1) && \
-    !defined(_RIN_SCHED_SYSCALL2) && \
-    !defined(_RIN_SCHED_SYSCALL3)
-#include_next <pthread.h>
-#else
-
 #ifndef _PTHREAD_H
 #define _PTHREAD_H
+
 /* Let C++ wrappers distinguish this ABI from a hosted provider even when
  * both headers use the conventional `_PTHREAD_H` include guard. */
 #define RIN_LIBC_PTHREAD_HEADER 1
@@ -1770,5 +1755,3 @@ static inline int pthread_setschedprio(pthread_t thread, int prio) {
 #endif
 
 #endif /* _PTHREAD_H */
-
-#endif /* hosted POSIX pthread delegation */

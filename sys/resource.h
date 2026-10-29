@@ -3,18 +3,6 @@
  * リソース制限
  */
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
-    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
-    (defined(__unix__) || defined(__APPLE__)) && \
-    (defined(__GNUC__) || defined(__clang__)) && \
-    !defined(RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL) && \
-    !defined(RIN_PROCESS_PRIORITY_PRODUCT_SYSCALL) && \
-    !defined(_RIN_RESOURCE_LIMIT_SYSCALL2) && \
-    !defined(_RIN_PRIORITY_SYSCALL2) && \
-    !defined(_RIN_PRIORITY_SYSCALL3)
-#include_next <sys/resource.h>
-#else
-
 #ifndef _SYS_RESOURCE_H
 #define _SYS_RESOURCE_H
 
@@ -540,5 +528,3 @@ static inline int setpriority(int which, id_t who, int prio) {
 #endif
 
 #endif /* _SYS_RESOURCE_H */
-
-#endif /* hosted POSIX resource delegation */

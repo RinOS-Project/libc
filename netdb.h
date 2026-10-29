@@ -15,8 +15,11 @@
 #include "string.h"
 #include "stdlib.h"
 #include "stdio.h"
-#include "sched.h"
 #include "unistd.h"
+#include "fcntl.h"
+#include "limits.h"
+#include "poll.h"
+#include "time.h"
 #include <rin/net/resolved_protocol.h>
 #include <rin/net/ipv6_text.h>
 
@@ -30,9 +33,12 @@
 #ifndef RIN_NETDB_RELEASE
 #define RIN_NETDB_RELEASE(pointer) free(pointer)
 #endif
-#ifndef RIN_NETDB_IO_RETRY_LIMIT
-#define RIN_NETDB_IO_RETRY_LIMIT 5000u
+#ifndef RIN_NETDB_IO_TIMEOUT_NS
+#define RIN_NETDB_IO_TIMEOUT_NS UINT64_C(30000000000)
 #endif
+#define RIN_NETDB_TRANSACT_SYSTEM_ERROR (-1)
+#define RIN_NETDB_TRANSACT_PROTOCOL_ERROR (-2)
+#define RIN_NETDB_TRANSACT_TIMEOUT_ERROR (-3)
 
 #ifdef __cplusplus
 extern "C" {
@@ -255,51 +261,132 @@ static inline int _netdb_is_localhost(const char* name) {
     return name[sizeof(localhost_name) - 1u] == '\0';
 }
 
-static inline int _netdb_resolved_send_all(int fd, const void* buf, size_t len) {
+static inline int _netdb_resolved_now_ns(uint64_t* now_ns_out) {
+    struct timespec now;
+    uint64_t seconds;
+    if (!now_ns_out || clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    if (now.tv_sec < 0 || now.tv_nsec < 0 || now.tv_nsec >= 1000000000L) {
+        errno = EIO;
+        return -1;
+    }
+    seconds = (uint64_t)now.tv_sec;
+    if (seconds >
+        (UINT64_MAX - (uint64_t)now.tv_nsec) / UINT64_C(1000000000)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    *now_ns_out = seconds * UINT64_C(1000000000) +
+                  (uint64_t)now.tv_nsec;
+    return 0;
+}
+
+/* Return 0 when ready, 1 when the shared transaction deadline expires, and
+ * -1 for a clock or poll failure.  EINTR is retried against the same deadline. */
+static inline int _netdb_resolved_wait(int fd, short events,
+                                       uint64_t deadline_ns) {
+    for (;;) {
+        struct pollfd descriptor;
+        uint64_t now_ns;
+        uint64_t remaining_ns;
+        uint64_t timeout_ms;
+        int poll_timeout;
+        int rc;
+        if (_netdb_resolved_now_ns(&now_ns) != 0) return -1;
+        if (now_ns >= deadline_ns) {
+            errno = ETIMEDOUT;
+            return 1;
+        }
+        remaining_ns = deadline_ns - now_ns;
+        timeout_ms = remaining_ns / UINT64_C(1000000);
+        if (remaining_ns % UINT64_C(1000000) != 0u) ++timeout_ms;
+        poll_timeout = timeout_ms > (uint64_t)INT_MAX
+            ? INT_MAX : (int)timeout_ms;
+        descriptor.fd = fd;
+        descriptor.events = events;
+        descriptor.revents = 0;
+        rc = poll(&descriptor, 1u, poll_timeout);
+        if (rc > 0) return 0;
+        if (rc == 0) continue;
+        if (errno == EINTR) continue;
+        return -1;
+    }
+}
+
+static inline int _netdb_resolved_deadline_check(uint64_t deadline_ns) {
+    uint64_t now_ns;
+    if (_netdb_resolved_now_ns(&now_ns) != 0) return -1;
+    if (now_ns >= deadline_ns) {
+        errno = ETIMEDOUT;
+        return 1;
+    }
+    return 0;
+}
+
+static inline int _netdb_resolved_send_all(int fd, const void* buf, size_t len,
+                                           uint64_t deadline_ns) {
     const uint8_t* ptr = (const uint8_t*)buf;
     size_t off = 0;
-    unsigned int retries = 0u;
     while (off < len) {
+        int deadline_status = _netdb_resolved_deadline_check(deadline_ns);
+        if (deadline_status != 0) return deadline_status;
         ssize_t rc = send(fd, ptr + off, len - off, 0);
         if (rc < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-                if (++retries > RIN_NETDB_IO_RETRY_LIMIT) return -1;
-                sched_yield();
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                int wait_status = _netdb_resolved_wait(
+                    fd, POLLOUT, deadline_ns);
+                if (wait_status != 0) return wait_status;
                 continue;
             }
-            return -1;
+            return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
         }
-        if (rc == 0) return -1;
-        retries = 0u;
+        if (rc == 0) {
+            errno = EPIPE;
+            return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
+        }
         off += (size_t)rc;
     }
     return 0;
 }
 
-static inline int _netdb_resolved_recv_all(int fd, void* buf, size_t len) {
+static inline int _netdb_resolved_recv_all(int fd, void* buf, size_t len,
+                                           uint64_t deadline_ns) {
     uint8_t* ptr = (uint8_t*)buf;
     size_t off = 0;
-    unsigned int retries = 0u;
     while (off < len) {
+        int deadline_status = _netdb_resolved_deadline_check(deadline_ns);
+        if (deadline_status != 0) return deadline_status;
         ssize_t rc = recv(fd, ptr + off, len - off, 0);
         if (rc < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-                if (++retries > RIN_NETDB_IO_RETRY_LIMIT) return -1;
-                sched_yield();
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                int wait_status = _netdb_resolved_wait(
+                    fd, POLLIN, deadline_ns);
+                if (wait_status != 0) return wait_status;
                 continue;
             }
-            return -1;
+            return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
         }
-        if (rc == 0) return -1;
-        retries = 0u;
+        if (rc == 0) {
+            errno = ECONNRESET;
+            return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
+        }
         off += (size_t)rc;
     }
     return 0;
 }
 
-static inline int _netdb_resolved_connect(void) {
+static inline int _netdb_resolved_connect(uint64_t deadline_ns) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
+
+    int file_flags = fcntl(fd, F_GETFL);
+    if (file_flags < 0 || fcntl(fd, F_SETFL, file_flags | O_NONBLOCK) < 0) {
+        int saved_errno = errno;
+        close(fd);
+        errno = saved_errno;
+        return -1;
+    }
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
@@ -308,15 +395,45 @@ static inline int _netdb_resolved_connect(void) {
             sizeof(addr.sun_path) - 1);
     if (connect(fd, (const struct sockaddr*)&addr, (socklen_t)sizeof(addr)) < 0) {
         int saved_errno = errno;
-        close(fd);
-        errno = saved_errno;
-        return -1;
+        if (saved_errno != EINPROGRESS && saved_errno != EALREADY &&
+            saved_errno != EAGAIN && saved_errno != EWOULDBLOCK &&
+            saved_errno != EINTR) {
+            close(fd);
+            errno = saved_errno;
+            return -1;
+        }
+        {
+            int wait_status = _netdb_resolved_wait(fd, POLLOUT, deadline_ns);
+            int connect_error = 0;
+            socklen_t error_size = (socklen_t)sizeof(connect_error);
+            if (wait_status != 0) {
+                saved_errno = errno;
+                close(fd);
+                errno = saved_errno;
+                return wait_status == 1
+                    ? RIN_NETDB_TRANSACT_TIMEOUT_ERROR : -1;
+            }
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &connect_error,
+                           &error_size) != 0) {
+                saved_errno = errno;
+                close(fd);
+                errno = saved_errno;
+                return -1;
+            }
+            if (error_size != (socklen_t)sizeof(connect_error)) {
+                close(fd);
+                errno = EIO;
+                return -1;
+            }
+            if (connect_error != 0) {
+                close(fd);
+                errno = connect_error;
+                return -1;
+            }
+        }
     }
     return fd;
 }
-
-#define RIN_NETDB_TRANSACT_SYSTEM_ERROR (-1)
-#define RIN_NETDB_TRANSACT_PROTOCOL_ERROR (-2)
 
 static inline int _netdb_resolved_transact(uint32_t command,
                                            const void* payload,
@@ -324,8 +441,19 @@ static inline int _netdb_resolved_transact(uint32_t command,
                                            RinResolvedMsgHeader* out_header,
                                            void* out_payload,
                                            uint32_t out_payload_cap) {
-    int fd = _netdb_resolved_connect();
-    if (fd < 0) return -1;
+    uint64_t now_ns;
+    uint64_t deadline_ns;
+    int fd;
+    int io_status;
+    if (_netdb_resolved_now_ns(&now_ns) != 0) return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
+    if (RIN_NETDB_IO_TIMEOUT_NS > UINT64_MAX - now_ns) {
+        errno = EOVERFLOW;
+        return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
+    }
+    deadline_ns = now_ns + RIN_NETDB_IO_TIMEOUT_NS;
+    fd = _netdb_resolved_connect(deadline_ns);
+    if (fd < 0) return fd == RIN_NETDB_TRANSACT_TIMEOUT_ERROR
+        ? fd : RIN_NETDB_TRANSACT_SYSTEM_ERROR;
 
     RinResolvedMsgHeader header;
     memset(&header, 0, sizeof(header));
@@ -334,19 +462,28 @@ static inline int _netdb_resolved_transact(uint32_t command,
     header.command = command;
     header.payload_len = payload_len;
 
-    if (_netdb_resolved_send_all(fd, &header, sizeof(header)) != 0 ||
-        (payload_len > 0 && _netdb_resolved_send_all(fd, payload, payload_len) != 0)) {
+    io_status = _netdb_resolved_send_all(fd, &header, sizeof(header),
+                                         deadline_ns);
+    if (io_status == 0 && payload_len > 0) {
+        io_status = _netdb_resolved_send_all(fd, payload, payload_len,
+                                             deadline_ns);
+    }
+    if (io_status != 0) {
         int saved_errno = errno;
         close(fd);
         errno = saved_errno;
-        return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
+        return io_status == 1 ? RIN_NETDB_TRANSACT_TIMEOUT_ERROR
+            : RIN_NETDB_TRANSACT_SYSTEM_ERROR;
     }
 
-    if (_netdb_resolved_recv_all(fd, &header, sizeof(header)) != 0) {
+    io_status = _netdb_resolved_recv_all(fd, &header, sizeof(header),
+                                         deadline_ns);
+    if (io_status != 0) {
         int saved_errno = errno;
         close(fd);
         errno = saved_errno;
-        return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
+        return io_status == 1 ? RIN_NETDB_TRANSACT_TIMEOUT_ERROR
+            : RIN_NETDB_TRANSACT_SYSTEM_ERROR;
     }
     if (!rin_resolved_response_header_valid(
             &header, command, out_payload_cap)) {
@@ -363,12 +500,14 @@ static inline int _netdb_resolved_transact(uint32_t command,
             errno = saved_errno;
             return RIN_NETDB_TRANSACT_PROTOCOL_ERROR;
         }
-        if (_netdb_resolved_recv_all(
-                fd, out_payload, header.payload_len) != 0) {
+        io_status = _netdb_resolved_recv_all(
+            fd, out_payload, header.payload_len, deadline_ns);
+        if (io_status != 0) {
             int saved_errno = errno;
             close(fd);
             errno = saved_errno;
-            return RIN_NETDB_TRANSACT_SYSTEM_ERROR;
+            return io_status == 1 ? RIN_NETDB_TRANSACT_TIMEOUT_ERROR
+                : RIN_NETDB_TRANSACT_SYSTEM_ERROR;
         }
     }
 
@@ -380,6 +519,12 @@ static inline int _netdb_resolved_transact(uint32_t command,
 #ifndef RIN_NETDB_RESOLVED_TRANSACT
 #define RIN_NETDB_RESOLVED_TRANSACT _netdb_resolved_transact
 #endif
+
+static inline int _netdb_resolved_gai_error(int transact_status) {
+    if (transact_status == RIN_NETDB_TRANSACT_SYSTEM_ERROR) return EAI_SYSTEM;
+    if (transact_status == RIN_NETDB_TRANSACT_TIMEOUT_ERROR) return EAI_AGAIN;
+    return EAI_FAIL;
+}
 
 #include "internal/netdb_database.h"
 
@@ -678,7 +823,7 @@ static inline int _netdb_resolved_lookup_one(
         &header, outbuf, (uint32_t)sizeof(outbuf));
     RIN_NETDB_RELEASE(payload);
     if (rc != 0) {
-        return rc == RIN_NETDB_TRANSACT_SYSTEM_ERROR ? EAI_SYSTEM : EAI_FAIL;
+        return _netdb_resolved_gai_error(rc);
     }
     if (!rin_resolved_getaddrinfo_status_valid(header.status) ||
         (header.status != 0 && header.payload_len != 0u)) {
@@ -784,7 +929,7 @@ static inline int _netdb_resolved_lookup_dual(
         &header, outbuf, (uint32_t)sizeof(outbuf));
     RIN_NETDB_RELEASE(payload);
     if (rc != 0) {
-        return rc == RIN_NETDB_TRANSACT_SYSTEM_ERROR ? EAI_SYSTEM : EAI_FAIL;
+        return _netdb_resolved_gai_error(rc);
     }
     if (!rin_resolved_getaddrinfo_status_valid(header.status) ||
         (header.status != 0 && header.payload_len != 0u)) {
@@ -1494,8 +1639,7 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
             (uint32_t)sizeof(req), &header, outbuf,
             (uint32_t)sizeof(outbuf));
         if (transact_status != 0) {
-            return transact_status == RIN_NETDB_TRANSACT_SYSTEM_ERROR
-                ? EAI_SYSTEM : EAI_FAIL;
+            return _netdb_resolved_gai_error(transact_status);
         }
     }
     if (header.status != 0 && header.status != EAI_NONAME)

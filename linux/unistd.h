@@ -325,8 +325,36 @@
 
 #endif /* x86 32-bit */
 
-/* __NR_* dispatch aliases are defined once by sys/syscall.h.  Linux numeric
- * source references remain available separately as LINUX_NR_* above. */
+/* These few Linux spellings need explicit RinOS aliases where sys/syscall.h
+ * does not already define them.  All direct __NR_* calls use RinOS numbers. */
+#undef __NR_clone
+#define __NR_clone          SYS_CLONE
+#undef __NR_gettid
+#define __NR_gettid         SYS_gettid
+#undef __NR_futex
+#define __NR_futex          SYS_futex
+#undef __NR_sched_yield
+#define __NR_sched_yield    SYS_SCHED_YIELD
+#undef __NR_rt_sigaction
+#define __NR_rt_sigaction   SYS_rt_sigaction
+#undef __NR_rt_sigprocmask
+#define __NR_rt_sigprocmask SYS_rt_sigprocmask
+#undef __NR_rt_sigpending
+#define __NR_rt_sigpending  SYS_rt_sigpending
+#undef __NR_rt_sigreturn
+#define __NR_rt_sigreturn   SYS_rt_sigreturn
+#undef __NR_sigaltstack
+#define __NR_sigaltstack    SYS_sigaltstack
+#undef __NR_rt_sigsuspend
+#define __NR_rt_sigsuspend  SYS_rt_sigsuspend
+#undef __NR_umask
+#define __NR_umask          SYS_umask
+#undef __NR_tkill
+#define __NR_tkill          SYS_TKILL
+#undef __NR_tgkill
+#define __NR_tgkill         SYS_TGKILL
+#undef __NR_set_tid_address
+#define __NR_set_tid_address SYS_SET_TID_ADDRESS
 
 /* syscall function is defined in sys/syscall.h */
 
