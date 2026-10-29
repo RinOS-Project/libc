@@ -9,7 +9,11 @@
 #include "stddef.h"
 #include "stdint.h"
 #include "stdbool.h"
+/* The RinOS wait/notify extension adds time, signal, errno and syscall
+ * dependencies to this header, so consumers must opt in explicitly. */
+#if defined(RIN_ENABLE_ATOMIC_WAIT)
 #include "rin_atomic_wait.h"
+#endif
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
 #define __STDC_VERSION_STDATOMIC_H__ 202311L
