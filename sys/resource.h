@@ -3,6 +3,18 @@
  * リソース制限
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__unix__) || defined(__APPLE__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL) && \
+    !defined(RIN_PROCESS_PRIORITY_PRODUCT_SYSCALL) && \
+    !defined(_RIN_RESOURCE_LIMIT_SYSCALL2) && \
+    !defined(_RIN_PRIORITY_SYSCALL2) && \
+    !defined(_RIN_PRIORITY_SYSCALL3)
+#include_next <sys/resource.h>
+#else
+
 #ifndef _SYS_RESOURCE_H
 #define _SYS_RESOURCE_H
 
@@ -474,13 +486,13 @@ static inline int getpriority(int which, id_t who) {
 #if RIN_PROCESS_PRIORITY_PRODUCT_SYSCALL
     intptr_t raw;
     if ((which != PRIO_PROCESS && which != PRIO_PGRP &&
-         which != PRIO_USER) || (int)who < 0) {
+         which != PRIO_USER)) {
         errno = EINVAL;
         return -1;
     }
     raw = __rin_syscall_posixize(_RIN_PRIORITY_SYSCALL2(
         (uintptr_t)SYS_GETPRIORITY, (uintptr_t)(intptr_t)which,
-        (uintptr_t)(intptr_t)(int)who));
+        (uintptr_t)who));
     if (raw == -1) return -1;
     if (raw < 0 || raw > 40) {
         errno = EIO;
@@ -500,14 +512,14 @@ static inline int setpriority(int which, id_t who, int prio) {
 #if RIN_PROCESS_PRIORITY_PRODUCT_SYSCALL
     intptr_t raw;
     if ((which != PRIO_PROCESS && which != PRIO_PGRP &&
-         which != PRIO_USER) || (int)who < 0 ||
+         which != PRIO_USER) ||
         prio < PRIO_MIN || prio > PRIO_MAX) {
         errno = EINVAL;
         return -1;
     }
     raw = __rin_syscall_posixize(_RIN_PRIORITY_SYSCALL3(
         (uintptr_t)SYS_SETPRIORITY, (uintptr_t)(intptr_t)which,
-        (uintptr_t)(intptr_t)(int)who, (uintptr_t)(intptr_t)prio));
+        (uintptr_t)who, (uintptr_t)(intptr_t)prio));
     if (raw == -1) return -1;
     if (raw != 0) {
         errno = EIO;
@@ -528,3 +540,5 @@ static inline int setpriority(int which, id_t who, int prio) {
 #endif
 
 #endif /* _SYS_RESOURCE_H */
+
+#endif /* hosted POSIX resource delegation */
