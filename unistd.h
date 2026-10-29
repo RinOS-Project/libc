@@ -89,11 +89,15 @@
 #ifndef _POSIX_READER_WRITER_LOCKS
 #define _POSIX_READER_WRITER_LOCKS 200809L
 #endif
-#ifndef _POSIX_TIMEOUTS
-#define _POSIX_TIMEOUTS 200809L
+#if defined(RIN_USERSPACE) && \
+    (defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || \
+     defined(_M_X64))
+#ifndef _POSIX_SPIN_LOCKS
+#define _POSIX_SPIN_LOCKS 200809L
+#endif
 #endif
 #ifndef _POSIX_THREAD_SAFE_FUNCTIONS
-#define _POSIX_THREAD_SAFE_FUNCTIONS -1
+#define _POSIX_THREAD_SAFE_FUNCTIONS 200809L
 #endif
 #ifndef _POSIX_THREAD_ATTR_STACKSIZE
 #define _POSIX_THREAD_ATTR_STACKSIZE 200809L
@@ -2029,6 +2033,10 @@ static inline long sysconf(int name) {
 #endif
         case _SC_THREAD_SAFE_FUNCTIONS:
             return _POSIX_THREAD_SAFE_FUNCTIONS;
+#ifdef _POSIX_SPIN_LOCKS
+        case _SC_SPIN_LOCKS:
+            return _POSIX_SPIN_LOCKS;
+#endif
         case _SC_THREADS:
         case _SC_READER_WRITER_LOCKS:
         case _SC_BARRIERS:
@@ -2089,7 +2097,9 @@ static inline long sysconf(int name) {
         case _SC_GETPW_R_SIZE_MAX:
 #endif
         case _SC_SHELL:
+#ifndef _POSIX_SPIN_LOCKS
         case _SC_SPIN_LOCKS:
+#endif
         case _SC_SPORADIC_SERVER:
         case _SC_SS_REPL_MAX:
         case _SC_THREAD_ATTR_STACKADDR:
@@ -2103,6 +2113,7 @@ static inline long sysconf(int name) {
 #endif
         case _SC_THREAD_ROBUST_PRIO_PROTECT:
         case _SC_THREAD_SPORADIC_SERVER:
+        case _SC_TIMEOUTS:
         case _SC_TYPED_MEMORY_OBJECTS:
         case _SC_V7_ILP32_OFF32:
         case _SC_V7_ILP32_OFFBIG:
@@ -2122,7 +2133,6 @@ static inline long sysconf(int name) {
              * unsupported option returns -1 without changing errno. */
             return -1;
         case _SC_THREAD_ROBUST_PRIO_INHERIT:
-        case _SC_TIMEOUTS:
             return 200809L;
         case _SC_SYNCHRONIZED_IO:
         case _SC_FSYNC:
@@ -2593,6 +2603,41 @@ static inline int ttyname_r(int fd, char* buf, size_t buflen) {
     error = _rin_ttyname_resolve(fd, buf, buflen);
     errno = saved_errno;
     return error;
+}
+
+static inline int getlogin_r(char* name, size_t namesize) {
+    int saved_errno = errno;
+    intptr_t result;
+    int error;
+    if (!name) return EINVAL;
+    if (namesize == 0u) return ERANGE;
+    result = __rin_syscall_posixize(_RIN_UNISTD_SYSCALL2(
+        RIN_SYS_GETLOGIN_R, (uintptr_t)name, (uintptr_t)namesize));
+    if (result < 0) {
+        error = errno;
+        errno = saved_errno;
+        return error != 0 ? error : EIO;
+    }
+    errno = saved_errno;
+    return result == 0 ? 0 : EIO;
+}
+
+static inline char* getlogin(void) {
+#if defined(__cplusplus)
+    static thread_local char buffer[LOGIN_NAME_MAX];
+#else
+    static _Thread_local char buffer[LOGIN_NAME_MAX];
+#endif
+    int saved_errno = errno;
+    int error;
+    buffer[0] = '\0';
+    error = getlogin_r(buffer, sizeof(buffer));
+    if (error != 0) {
+        errno = error;
+        return NULL;
+    }
+    errno = saved_errno;
+    return buffer;
 }
 
 /* alarm - アラーム設定 */
