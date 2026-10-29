@@ -311,7 +311,8 @@ static inline int getopt(int argc, char* const argv[], const char* optstring) {
 
     /* オプションが見つからない */
     optopt = c;
-    _rin_getopt_diagnostic(argv, "invalid option", c);
+    if (!_rin_getopt_has_missing_argument_colon(optstring))
+        _rin_getopt_diagnostic(argv, "invalid option", c);
     return '?';
 }
 
