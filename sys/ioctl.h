@@ -204,6 +204,8 @@ _rin_ioctl_get_argument_kind(unsigned long request) {
         case TIOCCBRK:
         case FIOCLEX:
         case FIONCLEX:
+        case FIOGETOWN:
+        case SIOCGPGRP:
             return _RIN_IOCTL_ARGUMENT_NONE;
 
         /* These legacy terminal requests carry an int value by value. */
@@ -212,14 +214,44 @@ _rin_ioctl_get_argument_kind(unsigned long request) {
         case TCFLSH:
         case TCSBRKP:
         case TIOCSCTTY:
+        case FIOSETOWN:
+        case SIOCSPGRP:
             return _RIN_IOCTL_ARGUMENT_SCALAR_INT;
 
+        /* Legacy pointer requests have no _IOC size/direction metadata. */
+        case TCGETS:
+        case TCSETS:
+        case TCSETSW:
+        case TCSETSF:
+        case TCGETA:
+        case TCSETA:
+        case TCSETAW:
+        case TCSETAF:
+        case TIOCGPGRP:
+        case TIOCSPGRP:
+        case TIOCOUTQ:
+        case TIOCSTI:
+        case TIOCGWINSZ:
+        case TIOCSWINSZ:
+        case TIOCMGET:
+        case TIOCMBIS:
+        case TIOCMBIC:
+        case TIOCMSET:
+        case TIOCGSOFTCAR:
+        case TIOCSSOFTCAR:
+        case FIONREAD:
+        case FIONBIO:
+        case TIOCSETD:
+        case TIOCGETD:
+        case TIOCGSID:
+        case FIOASYNC:
+            return _RIN_IOCTL_ARGUMENT_POINTER;
+
         default:
-            /* Encoded _IO requests declare no payload. Legacy low-valued
+            /* Encoded _IO requests declare no payload. Legacy pointer
              * requests are classified explicitly above because their
              * direction/size bits do not describe their argument. */
-            if (request > 0xffffUL && _IOC_DIR(request) == _IOC_NONE &&
-                _IOC_SIZE(request) == 0u)
+            if (_IOC_DIR(request) == _IOC_NONE && _IOC_SIZE(request) == 0u)
                 return _RIN_IOCTL_ARGUMENT_NONE;
             return _RIN_IOCTL_ARGUMENT_POINTER;
     }
