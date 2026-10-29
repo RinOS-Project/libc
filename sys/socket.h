@@ -11,6 +11,7 @@
 #include "syscall.h"
 #include "../stdint.h"
 #include "../time.h"
+#include "../poll.h"
 #include "../internal/pthread_cancel_point.h"
 #include "../limits.h"
 #define RIN_SOCKET_ABI_TYPES_PROVIDED 1
@@ -332,6 +333,7 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define MSG_NOSIGNAL    0x4000  /* SIGPIPEを送らない */
 #define MSG_CTRUNC      0x08    /* 補助データが制御バッファで切り詰められた */
 #define MSG_CMSG_CLOEXEC 0x40000000 /* SCM_RIGHTS descriptors use FD_CLOEXEC */
+#define MSG_WAITFORONE  0x10000 /* 最初のmessage受信後は待たない */
 
 /* ═══════════════════════════════════════════════════════════════
  * shutdownフラグ
@@ -371,6 +373,16 @@ struct msghdr {
     size_t        msg_controllen; /* 補助データ長 */
     int           msg_flags;      /* フラグ */
 };
+
+/* Linux互換のdatagram batch record。32-bitでは32 byte、native 64-bitでは
+ * 64 byteとなり、msg_lenの位置は対応するmsghdr直後に固定する。 */
+#ifndef _MMSGHDR_DEFINED
+#define _MMSGHDR_DEFINED 1
+struct mmsghdr {
+    struct msghdr msg_hdr;
+    unsigned int msg_len;
+};
+#endif
 
 struct cmsghdr {
     size_t cmsg_len;   /* データ長 (ヘッダ含む) */
@@ -413,13 +425,19 @@ static inline int __rin_socket_message_length(const struct msghdr* message,
 
 #define SCM_RIGHTS 0x01
 
-static inline size_t __rin_cmsg_align_size(size_t length) {
+#ifdef __cplusplus
+#define __RIN_CMSG_CONSTEXPR constexpr
+#else
+#define __RIN_CMSG_CONSTEXPR
+#endif
+
+static inline __RIN_CMSG_CONSTEXPR size_t __rin_cmsg_align_size(size_t length) {
     const size_t mask = sizeof(size_t) - 1u;
     if (length > SIZE_MAX - mask) return SIZE_MAX;
     return (length + mask) & ~mask;
 }
 
-static inline size_t __rin_cmsg_space_size(size_t payload_length) {
+static inline __RIN_CMSG_CONSTEXPR size_t __rin_cmsg_space_size(size_t payload_length) {
     const size_t header_length =
         __rin_cmsg_align_size(sizeof(struct cmsghdr));
     const size_t aligned_payload = __rin_cmsg_align_size(payload_length);
@@ -427,12 +445,14 @@ static inline size_t __rin_cmsg_space_size(size_t payload_length) {
     return header_length + aligned_payload;
 }
 
-static inline size_t __rin_cmsg_len_size(size_t payload_length) {
+static inline __RIN_CMSG_CONSTEXPR size_t __rin_cmsg_len_size(size_t payload_length) {
     const size_t header_length =
         __rin_cmsg_align_size(sizeof(struct cmsghdr));
     if (payload_length > SIZE_MAX - header_length) return SIZE_MAX;
     return header_length + payload_length;
 }
+
+#undef __RIN_CMSG_CONSTEXPR
 
 static inline struct cmsghdr* __rin_cmsg_nxthdr(
     const struct msghdr* message, const struct cmsghdr* current) {
@@ -691,6 +711,223 @@ static inline ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags) {
         _RIN_SOCKET_SYSCALL3(SYS_RECVMSG, sockfd, msg, flags), requested);
     __rin_pthread_cancel_point_if_linked();
     return result;
+}
+
+#define RIN_SOCKET_MMSG_MAX_MESSAGES 64u
+#define RIN_SOCKET_MMSG_MAX_MESSAGE_BYTES 16777216u
+#define RIN_SOCKET_MMSG_MAX_TOTAL_BYTES \
+    ((uint64_t)RIN_SOCKET_MMSG_MAX_MESSAGES * \
+     (uint64_t)RIN_SOCKET_MMSG_MAX_MESSAGE_BYTES)
+
+static inline intptr_t __rin_socket_mmsg_call(
+    int receive, int sockfd, struct mmsghdr* messages,
+    unsigned int count, unsigned int flags) {
+    return _RIN_SOCKET_SYSCALL4(
+        receive ? SYS_RECVMMSG : SYS_SENDMMSG,
+        sockfd, messages, count, flags);
+}
+
+static inline int __rin_socket_mmsg_nonblocking(int sockfd) {
+    /* F_GETFL/O_NONBLOCK values are part of the public fcntl ABI. */
+    intptr_t result = _syscall3((uintptr_t)SYS_FCNTL,
+                                (uintptr_t)sockfd, 3u, 0u);
+    if (__rin_socket_raw_error(result) != 0) return -1;
+    return (((unsigned int)result & 0x0040u) != 0u);
+}
+
+static inline int __rin_socket_mmsg_now_ns(uint64_t* value_out) {
+    struct timespec now;
+    uint64_t seconds;
+    if (!value_out || clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    if (now.tv_sec < 0 || now.tv_nsec < 0 || now.tv_nsec >= 1000000000L) {
+        errno = EIO;
+        return -1;
+    }
+    seconds = (uint64_t)now.tv_sec;
+    if (seconds > (UINT64_MAX - (uint64_t)now.tv_nsec) / UINT64_C(1000000000)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    *value_out = seconds * UINT64_C(1000000000) +
+                 (uint64_t)now.tv_nsec;
+    return 0;
+}
+
+static inline int __rin_socket_mmsg_timeout_update(
+    struct timespec* timeout, uint64_t deadline_ns, int* poll_ms_out) {
+    uint64_t now_ns;
+    uint64_t remaining_ns;
+    uint64_t rounded_ms;
+    if (!timeout || !poll_ms_out ||
+        __rin_socket_mmsg_now_ns(&now_ns) != 0)
+        return -1;
+    remaining_ns = now_ns >= deadline_ns ? 0u : deadline_ns - now_ns;
+    timeout->tv_sec = (time_t)(remaining_ns / UINT64_C(1000000000));
+    timeout->tv_nsec = (long)(remaining_ns % UINT64_C(1000000000));
+    rounded_ms = remaining_ns / UINT64_C(1000000);
+    if ((remaining_ns % UINT64_C(1000000)) != 0u) rounded_ms++;
+    *poll_ms_out = rounded_ms > (uint64_t)INT_MAX
+                       ? INT_MAX : (int)rounded_ms;
+    return 0;
+}
+
+static inline int sendmmsg(int sockfd, struct mmsghdr* messages,
+                           unsigned int count, int flags) {
+    intptr_t result;
+    __rin_pthread_cancel_point_if_linked();
+    if (count > RIN_SOCKET_MMSG_MAX_MESSAGES ||
+        (count != 0u && messages == NULL)) {
+        errno = count != 0u && messages == NULL ? EFAULT : EINVAL;
+        return -1;
+    }
+    if (count == 0u) return 0;
+    if (((unsigned int)flags & MSG_WAITFORONE) != 0u) {
+        errno = EINVAL;
+        return -1;
+    }
+    result = __rin_socket_mmsg_call(0, sockfd, messages, count, flags);
+    if (__rin_socket_raw_error(result) != 0) {
+        result = -1;
+    } else if ((uintptr_t)result > (uintptr_t)count) {
+        errno = EIO;
+        result = -1;
+    }
+    __rin_pthread_cancel_point_if_linked();
+    return (int)result;
+}
+
+static inline int recvmmsg(int sockfd, struct mmsghdr* messages,
+                           unsigned int count, int flags,
+                           struct timespec* timeout) {
+    struct timespec timeout_snapshot = {0, 0};
+    uint64_t deadline_ns = 0u;
+    int has_timeout = timeout != NULL;
+    int nonblocking;
+    int completed = 0;
+    int wait_for_one = ((unsigned int)flags & MSG_WAITFORONE) != 0u;
+    int caller_dontwait = ((unsigned int)flags & MSG_DONTWAIT) != 0u;
+    unsigned int batch_flags = (unsigned int)flags &
+                               ~(unsigned int)MSG_WAITFORONE;
+    __rin_pthread_cancel_point_if_linked();
+    if (count > RIN_SOCKET_MMSG_MAX_MESSAGES ||
+        (count != 0u && messages == NULL)) {
+        errno = count != 0u && messages == NULL ? EFAULT : EINVAL;
+        return -1;
+    }
+    if (count == 0u) return 0;
+    if (has_timeout) {
+        uint64_t duration_ns;
+        uint64_t now_ns;
+        timeout_snapshot = *timeout;
+        if (timeout_snapshot.tv_sec < 0 || timeout_snapshot.tv_nsec < 0 ||
+            timeout_snapshot.tv_nsec >= 1000000000L) {
+            errno = EINVAL;
+            return -1;
+        }
+        if ((uint64_t)timeout_snapshot.tv_sec >
+            (UINT64_MAX - (uint64_t)timeout_snapshot.tv_nsec) /
+                UINT64_C(1000000000)) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        duration_ns = (uint64_t)timeout_snapshot.tv_sec *
+                          UINT64_C(1000000000) +
+                      (uint64_t)timeout_snapshot.tv_nsec;
+        if (__rin_socket_mmsg_now_ns(&now_ns) != 0) return -1;
+        if (duration_ns > UINT64_MAX - now_ns) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        deadline_ns = now_ns + duration_ns;
+    }
+    nonblocking = caller_dontwait ? 1 : __rin_socket_mmsg_nonblocking(sockfd);
+    if (nonblocking < 0) return -1;
+    batch_flags |= MSG_DONTWAIT;
+
+    for (;;) {
+        intptr_t raw;
+        int wait_result;
+        short poll_events = 0;
+        if (!caller_dontwait && !nonblocking) {
+            struct pollfd descriptor;
+            int poll_timeout = -1;
+            descriptor.fd = sockfd;
+            descriptor.events = POLLIN;
+            descriptor.revents = 0;
+            if (has_timeout &&
+                __rin_socket_mmsg_timeout_update(
+                    &timeout_snapshot, deadline_ns, &poll_timeout) != 0)
+                goto failed;
+            wait_result = poll(&descriptor, 1u, poll_timeout);
+            if (wait_result < 0) {
+                int saved_errno = errno;
+                if (has_timeout &&
+                    __rin_socket_mmsg_timeout_update(
+                        &timeout_snapshot, deadline_ns, &poll_timeout) == 0)
+                    *timeout = timeout_snapshot;
+                errno = saved_errno;
+                if (completed != 0) return completed;
+                return -1;
+            }
+            if (wait_result == 0) {
+                if (has_timeout &&
+                    __rin_socket_mmsg_timeout_update(
+                        &timeout_snapshot, deadline_ns, &poll_timeout) != 0)
+                    goto failed;
+                if (has_timeout) *timeout = timeout_snapshot;
+                if (completed != 0) return completed;
+                errno = EAGAIN;
+                return -1;
+            }
+            poll_events = descriptor.revents;
+        }
+
+        raw = __rin_socket_mmsg_call(
+            1, sockfd, messages + completed,
+            count - (unsigned int)completed, batch_flags);
+        if (raw >= 0 &&
+            (uintptr_t)raw > (uintptr_t)(count - (unsigned int)completed))
+            raw = -EIO;
+        if (raw < 0) {
+            int error_number = (int)-raw;
+            if (error_number == EAGAIN && !caller_dontwait && !nonblocking &&
+                (poll_events & (POLLERR | POLLHUP | POLLNVAL)) == 0)
+                continue;
+            if (has_timeout &&
+                __rin_socket_mmsg_timeout_update(
+                    &timeout_snapshot, deadline_ns, &wait_result) != 0)
+                goto failed;
+            if (has_timeout) *timeout = timeout_snapshot;
+            if (completed != 0) return completed;
+            errno = error_number;
+            return -1;
+        }
+        if (raw == 0) {
+            if (has_timeout &&
+                __rin_socket_mmsg_timeout_update(
+                    &timeout_snapshot, deadline_ns, &wait_result) != 0)
+                goto failed;
+            if (has_timeout) *timeout = timeout_snapshot;
+            return completed;
+        }
+        completed += (int)raw;
+        if (completed >= (int)count || wait_for_one || caller_dontwait ||
+            nonblocking) {
+            if (has_timeout &&
+                __rin_socket_mmsg_timeout_update(
+                    &timeout_snapshot, deadline_ns, &wait_result) != 0)
+                goto failed;
+            if (has_timeout) *timeout = timeout_snapshot;
+            return completed;
+        }
+        /* Blocking mode without MSG_WAITFORONE waits until the vector fills
+         * or its deadline expires; poll prevents recvmsg from consuming a
+         * message before a later output-copy fault is reported. */
+    }
+
+failed:
+    if (has_timeout) *timeout = timeout_snapshot;
+    return completed != 0 ? completed : -1;
 }
 
 /* ═══════════════════════════════════════════════════════════════
