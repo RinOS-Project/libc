@@ -35,7 +35,18 @@
 #define RIN_PTHREAD_ROBUST_OWNER_DIED UINT32_C(0x40000000)
 #define RIN_PTHREAD_ROBUST_WAITERS UINT32_C(0x80000000)
 
+/* The Windows host-test toolchain emulates __thread through a
+ * pthread_once call, which would re-enter RinOS's own pthread_once in
+ * TUs that link this runtime (and pollute futex-call accounting with its
+ * one-time init wake).  A plain cell is safe on that host-only path:
+ * host-test waits are single-threaded and scripted, so no second thread
+ * can bump the epoch mid-wait.  Production (ELF) toolchains use real
+ * TLS. */
+#if defined(_WIN32)
+static uint64_t g_rin_pthread_cond_signal_interrupt_epoch;
+#else
 static __thread uint64_t g_rin_pthread_cond_signal_interrupt_epoch;
+#endif
 
 #ifndef _RIN_PTHREAD_RUNTIME_FUTEX
 #define _RIN_PTHREAD_RUNTIME_FUTEX(address, operation, value, timeout) \

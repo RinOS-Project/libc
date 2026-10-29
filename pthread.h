@@ -61,6 +61,11 @@
 #define _RIN_PTHREAD_NAME_SYSCALL1(number, argument) \
     _syscall1((uintptr_t)(number), (uintptr_t)(argument))
 #endif
+#ifndef _RIN_PTHREAD_SCHED_SYSCALL2
+#define _RIN_PTHREAD_SCHED_SYSCALL2(number, argument1, argument2) \
+    _syscall2((uintptr_t)(number), (uintptr_t)(argument1), \
+              (uintptr_t)(argument2))
+#endif
 
 /* Pthread entry points return either a POSIX error number directly or a
  * syscall-style 0/-1 status.  Keep the raw target-width word until the
@@ -1804,8 +1809,9 @@ static inline int pthread_getschedparam(pthread_t thread, int* policy, struct sc
     intptr_t result;
     if (!policy || !param) return EINVAL;
     if (thread == 0) return ESRCH;
-    result = _syscall2((uintptr_t)SYS_THREAD_SCHED_GET,
-                       (uintptr_t)thread, (uintptr_t)&parameters);
+    result = _RIN_PTHREAD_SCHED_SYSCALL2(
+        (uintptr_t)SYS_THREAD_SCHED_GET, (uintptr_t)thread,
+        (uintptr_t)&parameters);
     if (result < 0)
         return _rin_pthread_error_from_result(result);
     if (result != 0 || parameters.struct_size != sizeof(parameters) ||
@@ -1839,8 +1845,9 @@ static inline int pthread_setschedparam(pthread_t thread, int policy, const stru
     parameters.policy = policy;
     parameters.priority = param->sched_priority;
     parameters.reserved1 = 0u;
-    result = _syscall2((uintptr_t)SYS_THREAD_SCHED_SET,
-                       (uintptr_t)thread, (uintptr_t)&parameters);
+    result = _RIN_PTHREAD_SCHED_SYSCALL2(
+        (uintptr_t)SYS_THREAD_SCHED_SET, (uintptr_t)thread,
+        (uintptr_t)&parameters);
     if (result < 0) return _rin_pthread_error_from_result(result);
     return result == 0 ? 0 : EIO;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
