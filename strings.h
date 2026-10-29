@@ -7,6 +7,7 @@
 #define _STRINGS_H
 
 #include "stddef.h"
+#include "stdint.h"
 
 #ifndef MIDL_PASS
 #ifdef __cplusplus
@@ -67,7 +68,7 @@ static inline void bcopy(const void* src, void* dest, size_t n) {
     const unsigned char* s = (const unsigned char*)src;
     unsigned char* d = (unsigned char*)dest;
 
-    if (d < s) {
+    if ((uintptr_t)d < (uintptr_t)s) {
         while (n--) *d++ = *s++;
     } else {
         s += n;
