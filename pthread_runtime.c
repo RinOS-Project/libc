@@ -151,7 +151,8 @@ static void rin_pthread_mutex_robust_owner_release(pthread_mutex_t* mutex,
 static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                                         pthread_t owner, int type,
                                         int try_only,
-                                        const struct timespec* abstime) {
+                                        const struct timespec* abstime,
+                                        clockid_t clock_id) {
     uint32_t owner_id;
     int timed_out = 0;
     int register_error = rin_pthread_mutex_robust_owner_id(
@@ -212,7 +213,7 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
         }
         {
             long wait_result;
-            /* A negative CLOCK_REALTIME deadline is already expired. Retry
+            /* A negative absolute clock deadline is already expired. Retry
              * the atomic acquisition check once before returning timeout,
              * and never pass an invalid absolute time to the futex ABI. */
             if (abstime && abstime->tv_sec < 0) {
@@ -223,7 +224,9 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                 wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
                     &mutex->locked,
                     rin_pthread_mutex_futex_operation(
-                        mutex, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME),
+                        mutex, FUTEX_WAIT_BITSET |
+                            (clock_id == CLOCK_REALTIME
+                                 ? FUTEX_CLOCK_REALTIME : 0)),
                     (int)state, abstime, FUTEX_BITSET_MATCH_ANY);
             } else {
                 wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
@@ -1089,7 +1092,8 @@ static int rin_pthread_mutex_lock_impl(pthread_mutex_t* mutex) {
 
     if (rin_pthread_mutex_is_robust(mutex) ||
         rin_pthread_mutex_is_prio_inherit(mutex)) {
-        return rin_pthread_mutex_robust_lock(mutex, owner, type, 0, NULL);
+        return rin_pthread_mutex_robust_lock(mutex, owner, type, 0, NULL,
+                                             CLOCK_REALTIME);
     }
 
     if (type == PTHREAD_MUTEX_RECURSIVE &&
@@ -1142,8 +1146,11 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
 }
 
 static int rin_pthread_mutex_timedlock_impl(
-    pthread_mutex_t* mutex, const struct timespec* abstime) {
+    pthread_mutex_t* mutex, const struct timespec* abstime,
+    clockid_t clock_id) {
     if (!mutex || !abstime) return EINVAL;
+    if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
+        return EINVAL;
     if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
         return EINVAL;
 
@@ -1153,7 +1160,8 @@ static int rin_pthread_mutex_timedlock_impl(
 
     if (rin_pthread_mutex_is_robust(mutex) ||
         rin_pthread_mutex_is_prio_inherit(mutex)) {
-        return rin_pthread_mutex_robust_lock(mutex, owner, type, 0, abstime);
+        return rin_pthread_mutex_robust_lock(mutex, owner, type, 0, abstime,
+                                             clock_id);
     }
 
     if (type == PTHREAD_MUTEX_RECURSIVE &&
@@ -1185,7 +1193,9 @@ static int rin_pthread_mutex_timedlock_impl(
                 long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
                     &mutex->locked,
                     rin_pthread_mutex_futex_operation(
-                        mutex, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME),
+                        mutex, FUTEX_WAIT_BITSET |
+                            (clock_id == CLOCK_REALTIME
+                                 ? FUTEX_CLOCK_REALTIME : 0)),
                     2, abstime, FUTEX_BITSET_MATCH_ANY);
                 int wait_error = rin_pthread_futex_wait_error(wait_result,
                                                                errno);
@@ -1215,7 +1225,17 @@ static int rin_pthread_mutex_timedlock_impl(
 int pthread_mutex_timedlock(pthread_mutex_t* mutex,
                             const struct timespec* abstime) {
     int saved_errno = errno;
-    int result = rin_pthread_mutex_timedlock_impl(mutex, abstime);
+    int result = rin_pthread_mutex_timedlock_impl(
+        mutex, abstime, CLOCK_REALTIME);
+    errno = saved_errno;
+    return result;
+}
+
+int pthread_mutex_clocklock(pthread_mutex_t* mutex, clockid_t clock_id,
+                            const struct timespec* abstime) {
+    int saved_errno = errno;
+    int result = rin_pthread_mutex_timedlock_impl(
+        mutex, abstime, clock_id);
     errno = saved_errno;
     return result;
 }
@@ -1229,7 +1249,8 @@ static int rin_pthread_mutex_trylock_impl(pthread_mutex_t* mutex) {
 
     if (rin_pthread_mutex_is_robust(mutex) ||
         rin_pthread_mutex_is_prio_inherit(mutex)) {
-        return rin_pthread_mutex_robust_lock(mutex, owner, type, 1, NULL);
+        return rin_pthread_mutex_robust_lock(mutex, owner, type, 1, NULL,
+                                             CLOCK_REALTIME);
     }
 
     if (type == PTHREAD_MUTEX_RECURSIVE &&
@@ -1921,4 +1942,187 @@ int pthread_rwlock_unlock(pthread_rwlock_t* rwlock) {
     notify_result = rin_pthread_rwlock_notify_waiters_locked(rwlock);
     unlock_result = pthread_mutex_unlock(&rwlock->mutex);
     return notify_result != 0 ? notify_result : unlock_result;
+}
+
+/* 初期化印の後ろに12 bitのnext/serving ticketを持ち、待機数を上限化する。 */
+#define RIN_PTHREAD_SPIN_SIGNATURE UINT32_C(0xa5000000)
+#define RIN_PTHREAD_SPIN_SIGNATURE_MASK UINT32_C(0xff000000)
+#define RIN_PTHREAD_SPIN_NEXT_SHIFT 12u
+#define RIN_PTHREAD_SPIN_TICKET_MASK UINT32_C(0x00000fff)
+#define RIN_PTHREAD_SPIN_NEXT_MASK UINT32_C(0x00fff000)
+#define RIN_PTHREAD_SPIN_YIELD_INTERVAL 4096u
+
+static uint32_t rin_pthread_spin_next(uint32_t state)
+{
+    return (state >> RIN_PTHREAD_SPIN_NEXT_SHIFT) &
+        RIN_PTHREAD_SPIN_TICKET_MASK;
+}
+
+static uint32_t rin_pthread_spin_serving(uint32_t state)
+{
+    return state & RIN_PTHREAD_SPIN_TICKET_MASK;
+}
+
+static uint32_t rin_pthread_spin_outstanding(uint32_t state)
+{
+    return (rin_pthread_spin_next(state) -
+            rin_pthread_spin_serving(state)) &
+        RIN_PTHREAD_SPIN_TICKET_MASK;
+}
+
+static int rin_pthread_spin_state_valid(uint32_t state)
+{
+    return (state & RIN_PTHREAD_SPIN_SIGNATURE_MASK) ==
+        RIN_PTHREAD_SPIN_SIGNATURE;
+}
+
+static void rin_pthread_spin_relax(void)
+{
+#if defined(__i386__) || defined(__x86_64__)
+    __asm__ volatile("pause" ::: "memory");
+#else
+    __asm__ volatile("" ::: "memory");
+#endif
+}
+
+static int rin_pthread_spin_init_impl(pthread_spinlock_t* lock, int pshared)
+{
+    if (lock == NULL || (pshared != PTHREAD_PROCESS_PRIVATE &&
+                         pshared != PTHREAD_PROCESS_SHARED))
+        return EINVAL;
+    /* Process-shared locks use the same lock-free word in shared mappings. */
+    __atomic_store_n(&lock->state, RIN_PTHREAD_SPIN_SIGNATURE,
+                     __ATOMIC_RELEASE);
+    return 0;
+}
+
+int pthread_spin_init(pthread_spinlock_t* lock, int pshared)
+{
+    int saved_errno = errno;
+    int result = rin_pthread_spin_init_impl(lock, pshared);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_spin_destroy_impl(pthread_spinlock_t* lock)
+{
+    uint32_t state;
+    if (lock == NULL) return EINVAL;
+    state = __atomic_load_n(&lock->state, __ATOMIC_ACQUIRE);
+    for (;;) {
+        if (!rin_pthread_spin_state_valid(state)) return EINVAL;
+        if (rin_pthread_spin_outstanding(state) != 0u) return EBUSY;
+        if (__atomic_compare_exchange_n(&lock->state, &state, 0u, 0,
+                                        __ATOMIC_ACQ_REL,
+                                        __ATOMIC_ACQUIRE))
+            return 0;
+    }
+}
+
+int pthread_spin_destroy(pthread_spinlock_t* lock)
+{
+    int saved_errno = errno;
+    int result = rin_pthread_spin_destroy_impl(lock);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_spin_trylock_impl(pthread_spinlock_t* lock)
+{
+    uint32_t state;
+    if (lock == NULL) return EINVAL;
+    state = __atomic_load_n(&lock->state, __ATOMIC_ACQUIRE);
+    for (;;) {
+        uint32_t next;
+        if (!rin_pthread_spin_state_valid(state)) return EINVAL;
+        if (rin_pthread_spin_outstanding(state) != 0u) return EBUSY;
+        next = (rin_pthread_spin_next(state) + 1u) &
+            RIN_PTHREAD_SPIN_TICKET_MASK;
+        if (__atomic_compare_exchange_n(
+                &lock->state, &state,
+                (state & ~RIN_PTHREAD_SPIN_NEXT_MASK) |
+                    (next << RIN_PTHREAD_SPIN_NEXT_SHIFT),
+                0, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
+            return 0;
+    }
+}
+
+int pthread_spin_trylock(pthread_spinlock_t* lock)
+{
+    int saved_errno = errno;
+    int result = rin_pthread_spin_trylock_impl(lock);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_spin_lock_impl(pthread_spinlock_t* lock)
+{
+    uint32_t state;
+    uint32_t ticket;
+    uint32_t spins = 0u;
+    if (lock == NULL) return EINVAL;
+    state = __atomic_load_n(&lock->state, __ATOMIC_ACQUIRE);
+    for (;;) {
+        uint32_t next;
+        uint32_t outstanding;
+        if (!rin_pthread_spin_state_valid(state)) return EINVAL;
+        outstanding = rin_pthread_spin_outstanding(state);
+        if (outstanding == RIN_PTHREAD_SPIN_TICKET_MASK) return EAGAIN;
+        ticket = rin_pthread_spin_next(state);
+        next = (ticket + 1u) & RIN_PTHREAD_SPIN_TICKET_MASK;
+        if (__atomic_compare_exchange_n(
+                &lock->state, &state,
+                (state & ~RIN_PTHREAD_SPIN_NEXT_MASK) |
+                    (next << RIN_PTHREAD_SPIN_NEXT_SHIFT),
+                0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            break;
+    }
+
+    for (;;) {
+        if (!rin_pthread_spin_state_valid(state)) return EINVAL;
+        if (rin_pthread_spin_serving(state) == ticket) return 0;
+        if (++spins >= RIN_PTHREAD_SPIN_YIELD_INTERVAL) {
+            (void)sched_yield();
+            spins = 0u;
+        } else {
+            rin_pthread_spin_relax();
+        }
+        state = __atomic_load_n(&lock->state, __ATOMIC_ACQUIRE);
+    }
+}
+
+int pthread_spin_lock(pthread_spinlock_t* lock)
+{
+    int saved_errno = errno;
+    int result = rin_pthread_spin_lock_impl(lock);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_spin_unlock_impl(pthread_spinlock_t* lock)
+{
+    uint32_t state;
+    if (lock == NULL) return EINVAL;
+    state = __atomic_load_n(&lock->state, __ATOMIC_ACQUIRE);
+    for (;;) {
+        uint32_t serving;
+        if (!rin_pthread_spin_state_valid(state) ||
+            rin_pthread_spin_outstanding(state) == 0u)
+            return EINVAL;
+        serving = (rin_pthread_spin_serving(state) + 1u) &
+            RIN_PTHREAD_SPIN_TICKET_MASK;
+        if (__atomic_compare_exchange_n(
+                &lock->state, &state,
+                (state & ~RIN_PTHREAD_SPIN_TICKET_MASK) | serving, 0,
+                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            return 0;
+    }
+}
+
+int pthread_spin_unlock(pthread_spinlock_t* lock)
+{
+    int saved_errno = errno;
+    int result = rin_pthread_spin_unlock_impl(lock);
+    errno = saved_errno;
+    return result;
 }
