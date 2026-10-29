@@ -886,14 +886,17 @@ static int rin_pthread_create_impl(pthread_t* thread,
         }
 
         pthread_t created_thread = (pthread_t)ret;
-        (void)rin_pthread_cancel_register_created(created_thread);
+        int create_error =
+            rin_pthread_cancel_register_created(created_thread);
         if (alloc_kind != RIN_THREAD_ALLOC_NONE) {
             rin_thread_stack_register(created_thread, alloc_base, alloc_size,
                                       alloc_kind, 0);
         }
-        int create_error = 0;
-        create_error = pthread_setschedparam(created_thread, schedule_policy,
-                                              &schedule_param);
+        if (create_error == 0) {
+            create_error = pthread_setschedparam(created_thread,
+                                                  schedule_policy,
+                                                  &schedule_param);
+        }
         if (create_error == 0 && attr &&
             attr->detachstate == PTHREAD_CREATE_DETACHED) {
             create_error = rin_pthread_detach_created(created_thread);
@@ -1493,8 +1496,8 @@ int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
     return result;
 }
 
-static int rin_pthread_cond_clockwait_impl(
-    pthread_cond_t* cond, pthread_mutex_t* mutex, clockid_t clock_id,
+static int rin_pthread_cond_timedwait_impl(
+    pthread_cond_t* cond, pthread_mutex_t* mutex,
     const struct timespec* abstime) {
     int mutex_result;
 
@@ -1502,8 +1505,8 @@ static int rin_pthread_cond_clockwait_impl(
     pthread_testcancel();
     if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
         return EINVAL;
-    if (clock_id != CLOCK_REALTIME &&
-        clock_id != CLOCK_MONOTONIC)
+    if (cond->clock_id != CLOCK_REALTIME &&
+        cond->clock_id != CLOCK_MONOTONIC)
         return EINVAL;
 
     unsigned int gen = __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE);
@@ -1523,12 +1526,12 @@ static int rin_pthread_cond_clockwait_impl(
         }
 #endif
         int operation = FUTEX_WAIT_BITSET |
-            (clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
+            (cond->clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
         struct timespec relative_timeout;
         const struct timespec* timeout = abstime;
         int use_relative_timeout = 0;
 #if defined(RIN_TIME_ABI64)
-        if (clock_id == CLOCK_REALTIME) {
+        if (cond->clock_id == CLOCK_REALTIME) {
             int deadline_error = _rin_time_realtime_deadline_relative(
                 abstime, &relative_timeout, &use_relative_timeout);
             if (deadline_error == ETIMEDOUT) {
@@ -1589,22 +1592,10 @@ static int rin_pthread_cond_clockwait_impl(
     return result == EINTR ? 0 : result;
 }
 
-
-int pthread_cond_clockwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
-                           clockid_t clock_id,
-                           const struct timespec* abstime) {
-    int saved_errno = errno;
-    int result = rin_pthread_cond_clockwait_impl(
-        cond, mutex, clock_id, abstime);
-    errno = saved_errno;
-    return result;
-}
-
 int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
                            const struct timespec* abstime) {
     int saved_errno = errno;
-    int result = rin_pthread_cond_clockwait_impl(
-        cond, mutex, cond ? cond->clock_id : CLOCK_REALTIME, abstime);
+    int result = rin_pthread_cond_timedwait_impl(cond, mutex, abstime);
     errno = saved_errno;
     return result;
 }
@@ -1896,93 +1887,6 @@ int pthread_rwlock_wrlock(pthread_rwlock_t* rwlock) {
         return result;
     }
     return 0;
-}
-
-static int rin_pthread_rwlock_clocklock(
-    pthread_rwlock_t* rwlock, clockid_t clock_id,
-    const struct timespec* abstime, int writer) {
-    int result;
-    RinPthreadRwlockWaitCleanup cleanup;
-    if (!rwlock || !abstime ||
-        (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC) ||
-        abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
-        return EINVAL;
-    result = pthread_mutex_lock(&rwlock->mutex);
-    if (result != 0) return result;
-    cleanup.rwlock = rwlock;
-    cleanup.writer = writer;
-    if (writer) rwlock->waiting_writers++;
-    for (;;) {
-        const int blocked = writer
-            ? (rin_pthread_rwlock_writer_active(rwlock) || rwlock->readers > 0)
-            : (rin_pthread_rwlock_writer_active(rwlock) ||
-               rwlock->waiting_writers > 0);
-        if (!blocked) break;
-        if (!writer) rwlock->waiting_readers++;
-        pthread_cleanup_push(rin_pthread_rwlock_wait_cancel_cleanup,
-                             &cleanup);
-        result = pthread_cond_clockwait(
-            writer ? &rwlock->can_write : &rwlock->can_read,
-            &rwlock->mutex, clock_id, abstime);
-        pthread_cleanup_pop(0);
-        if (result != 0 &&
-            !rin_pthread_mutex_owned_by_current_thread(&rwlock->mutex)) {
-            int relock_result = pthread_mutex_lock(&rwlock->mutex);
-            if (relock_result != 0) return relock_result;
-        }
-        if (!writer)
-            __atomic_fetch_sub(&rwlock->waiting_readers, 1, __ATOMIC_SEQ_CST);
-        if (result != 0) {
-            if (writer)
-                __atomic_fetch_sub(&rwlock->waiting_writers, 1,
-                                   __ATOMIC_SEQ_CST);
-            (void)rin_pthread_rwlock_notify_waiters_locked(rwlock);
-            {
-                int unlock_result = pthread_mutex_unlock(&rwlock->mutex);
-                return unlock_result != 0 ? unlock_result : result;
-            }
-        }
-    }
-    if (writer) {
-        __atomic_fetch_sub(&rwlock->waiting_writers, 1, __ATOMIC_SEQ_CST);
-        rwlock->writer |= RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
-    } else {
-        rwlock->readers++;
-    }
-    result = pthread_mutex_unlock(&rwlock->mutex);
-    if (result != 0) {
-        rin_pthread_rwlock_rollback_acquire(rwlock, writer);
-        return result;
-    }
-    return 0;
-}
-
-int pthread_rwlock_clockrdlock(pthread_rwlock_t* rwlock, clockid_t clock_id,
-                               const struct timespec* abstime) {
-    int saved_errno = errno;
-    int result = rin_pthread_rwlock_clocklock(
-        rwlock, clock_id, abstime, 0);
-    errno = saved_errno;
-    return result;
-}
-
-int pthread_rwlock_clockwrlock(pthread_rwlock_t* rwlock, clockid_t clock_id,
-                               const struct timespec* abstime) {
-    int saved_errno = errno;
-    int result = rin_pthread_rwlock_clocklock(
-        rwlock, clock_id, abstime, 1);
-    errno = saved_errno;
-    return result;
-}
-
-int pthread_rwlock_timedrdlock(pthread_rwlock_t* rwlock,
-                               const struct timespec* abstime) {
-    return pthread_rwlock_clockrdlock(rwlock, CLOCK_REALTIME, abstime);
-}
-
-int pthread_rwlock_timedwrlock(pthread_rwlock_t* rwlock,
-                               const struct timespec* abstime) {
-    return pthread_rwlock_clockwrlock(rwlock, CLOCK_REALTIME, abstime);
 }
 
 int pthread_rwlock_tryrdlock(pthread_rwlock_t* rwlock) {
