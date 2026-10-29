@@ -1385,7 +1385,13 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
         lookup_address = (const uint8_t*)&sin->sin_addr.s_addr;
         lookup_address_length = RIN_RESOLVED_IPV4_ADDRESS_BYTES;
     }
-    if (lookup_family == AF_INET6) {
+    if (sin6 && (flags & NI_NUMERICHOST) != 0) {
+        /* Reverse lookup treats IPv4-mapped/compatible IPv6 addresses as
+         * IPv4, but NI_NUMERICHOST reports the supplied sockaddr's family. */
+        if (rin_ipv6_text_format(sin6->sin6_addr.s6_addr, numeric_host,
+                                 sizeof(numeric_host)) != 0)
+            return EAI_FAIL;
+    } else if (lookup_family == AF_INET6) {
         if (rin_ipv6_text_format(sin6->sin6_addr.s6_addr, numeric_host,
                                  sizeof(numeric_host)) != 0)
             return EAI_FAIL;
