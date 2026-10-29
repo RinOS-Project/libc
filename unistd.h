@@ -1725,7 +1725,19 @@ static inline long sysconf(int name) {
         case _SC_CLK_TCK:
             return 1000;  /* 1000 Hz (1ms tick) */
         case _SC_OPEN_MAX:
+#if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
+        {
+            struct rlimit limit;
+            if (getrlimit(RLIMIT_NOFILE, &limit) < 0) return -1;
+            /* The scheduler's descriptor table is a fixed OPEN_MAX-sized
+             * array.  Report the effective per-process bound when the
+             * configurable soft limit is higher, and reflect reductions. */
+            return limit.rlim_cur > (rlim_t)OPEN_MAX
+                ? OPEN_MAX : (long)limit.rlim_cur;
+        }
+#else
             return OPEN_MAX;
+#endif
         case _SC_STREAM_MAX:
             return STREAM_MAX;
         case _SC_LINE_MAX:
