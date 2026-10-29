@@ -43,13 +43,35 @@ static inline int _inet_parse_legacy_ipv4(const char* text,
     if (!text || !address_out) return 0;
     for (;;) {
         unsigned int value = 0u;
+        unsigned int base = 10u;
+        unsigned int digits = 0u;
         if (count >= 4u || *cursor < '0' || *cursor > '9') return 0;
-        do {
-            unsigned int digit = (unsigned int)(*cursor - '0');
-            if (value > (0xffffffffu - digit) / 10u) return 0;
-            value = value * 10u + digit;
+        if (cursor[0] == '0') {
+            if (cursor[1] == 'x' || cursor[1] == 'X') {
+                base = 16u;
+                cursor += 2;
+            } else {
+                base = 8u;
+            }
+        }
+        for (;;) {
+            unsigned int digit;
+            if (*cursor >= '0' && *cursor <= '9') {
+                digit = (unsigned int)(*cursor - '0');
+            } else if (base == 16u && *cursor >= 'a' && *cursor <= 'f') {
+                digit = (unsigned int)(*cursor - 'a') + 10u;
+            } else if (base == 16u && *cursor >= 'A' && *cursor <= 'F') {
+                digit = (unsigned int)(*cursor - 'A') + 10u;
+            } else {
+                break;
+            }
+            if (digit >= base || value > (0xffffffffu - digit) / base)
+                return 0;
+            value = value * base + digit;
+            ++digits;
             ++cursor;
-        } while (*cursor >= '0' && *cursor <= '9');
+        }
+        if (digits == 0u) return 0;
         part[count++] = value;
         if (*cursor == '\0') break;
         if (*cursor++ != '.') return 0;
