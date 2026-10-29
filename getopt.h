@@ -103,7 +103,8 @@ static inline const char* _rin_getopt_short_options(
 }
 
 static inline void _rin_getopt_initialize(const char* optstring) {
-    if (!optreset && optind != 0 && _rin_getopt_initialized) return;
+    if (!optreset && optind != 0 && _rin_getopt_initialized &&
+        !(_rin_getopt_finished && optind == 1)) return;
     optind = 1;
     _rin_getopt_pos = 0;
     _rin_getopt_first_nonopt = 1;
