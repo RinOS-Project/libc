@@ -552,10 +552,11 @@ static inline int _netdb_parse_service_port(const char* service,
     const char* cursor;
     int lookup_status;
     if (!port_out) return -1;
-    if (!service || !*service) {
+    if (!service) {
         *port_out = 0u;
         return 0;
     }
+    if (!*service) return -1;
     cursor = service;
     while (*cursor >= '0' && *cursor <= '9') {
         uint32_t digit = (uint32_t)(*cursor - '0');
@@ -607,7 +608,8 @@ static inline int _netdb_bounded_length(const char* text,
 static inline int _netdb_service_is_numeric(const char* service,
                                              size_t length) {
     size_t index;
-    if (!service || length == 0u) return 1;
+    if (!service) return 1;
+    if (length == 0u) return 0;
     for (index = 0u; index < length; ++index) {
         if (service[index] < '0' || service[index] > '9') return 0;
     }

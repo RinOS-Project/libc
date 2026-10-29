@@ -3348,24 +3348,20 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                     ftmp = format_allocation;
                 }
 
-                /* Classify special values without doing arithmetic on them.
-                 * In particular, inf - inf is invalid and must not set
-                 * FE_INVALID merely because printf is rendering infinity. */
-                if (__builtin_isnan(val)) {
+                /* Handle special values */
+                /* Check for NaN: NaN != NaN */
+                if (val != val) {
                     special_value = 1;
-                    if (__builtin_signbit(val) &&
-                        (size_t)fi + 1u < fcapacity)
-                        ftmp[fi++] = '-';
                     const char* ns = "nan";
                     if (*fmt == 'F' || *fmt == 'E' || *fmt == 'G' ||
                         *fmt == 'A') ns = "NAN";
                     while (*ns && (size_t)fi + 1u < fcapacity)
                         ftmp[fi++] = *ns++;
                 } else {
-                    /* Do not infer infinity from magnitude or x-x: arithmetic
-                     * classification raises FE_INVALID for infinity and may
-                     * disturb the caller's floating-point environment. */
-                    const int is_inf = __builtin_isinf(val);
+                    /* Finite magnitude is never evidence of infinity.  For
+                     * IEEE values x-x is zero for every finite x and NaN for
+                     * infinity; NaN was handled by the preceding branch. */
+                    const int is_inf = val != 0.0L && (val - val) != 0.0L;
                     if (is_inf) {
                         special_value = 1;
                         if (val < 0 && (size_t)fi + 1u < fcapacity)

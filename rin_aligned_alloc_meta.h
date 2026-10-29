@@ -15,8 +15,6 @@
 typedef struct RinAlignedAllocationMeta {
     size_t guard;
     void* raw;
-    size_t alignment;
-    size_t requested_size;
 } RinAlignedAllocationMeta;
 
 static inline size_t rin_aligned_allocation_meta_size(void)
@@ -71,26 +69,14 @@ static inline size_t rin_aligned_allocation_guard_value(void* aligned_ptr)
     return RIN_ALIGNED_META_MARKER ^ (size_t)(uintptr_t)aligned_ptr;
 }
 
-static inline void rin_store_aligned_allocation_metadata_ex(
-    void* aligned_ptr, void* raw_ptr, size_t alignment, size_t requested_size)
+static inline void rin_store_aligned_allocation_metadata(void* aligned_ptr, void* raw_ptr)
 {
     RinAlignedAllocationMeta* meta = rin_aligned_allocation_meta_from_ptr(aligned_ptr);
     meta->guard = rin_aligned_allocation_guard_value(aligned_ptr);
     meta->raw = raw_ptr;
-    meta->alignment = alignment;
-    meta->requested_size = requested_size;
 }
 
-static inline void rin_store_aligned_allocation_metadata(void* aligned_ptr,
-                                                         void* raw_ptr)
-{
-    rin_store_aligned_allocation_metadata_ex(aligned_ptr, raw_ptr,
-                                              sizeof(void*), 0u);
-}
-
-static inline int rin_load_aligned_allocation_metadata(
-    void* aligned_ptr, void** out_raw, size_t* out_alignment,
-    size_t* out_requested_size)
+static inline int rin_load_aligned_allocation_raw_pointer(void* aligned_ptr, void** out_raw)
 {
     RinAlignedAllocationMeta* meta;
 
@@ -102,26 +88,9 @@ static inline int rin_load_aligned_allocation_metadata(
         return 0;
     if (!rin_is_valid_aligned_allocation_metadata(aligned_ptr, meta->raw))
         return 0;
-    if (meta->alignment < sizeof(void*) ||
-        (meta->alignment & (meta->alignment - 1u)) != 0u ||
-        ((uintptr_t)aligned_ptr & (meta->alignment - 1u)) != 0u)
-        return 0;
-    if (meta->requested_size > (uintptr_t)-1 -
-                                   ((uintptr_t)aligned_ptr -
-                                    (uintptr_t)meta->raw))
-        return 0;
 
     *out_raw = meta->raw;
-    if (out_alignment) *out_alignment = meta->alignment;
-    if (out_requested_size) *out_requested_size = meta->requested_size;
     return 1;
-}
-
-static inline int rin_load_aligned_allocation_raw_pointer(void* aligned_ptr,
-                                                          void** out_raw)
-{
-    return rin_load_aligned_allocation_metadata(aligned_ptr, out_raw, NULL,
-                                                NULL);
 }
 
 #endif /* !MIDL_PASS */
