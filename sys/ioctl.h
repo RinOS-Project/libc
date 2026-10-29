@@ -3,6 +3,11 @@
  * デバイス制御
  */
 
+#if !defined(RIN_FREESTANDING) && defined(__STDC_HOSTED__) && \
+    __STDC_HOSTED__ && (defined(__clang__) || defined(__GNUC__))
+#include_next <sys/ioctl.h>
+#else
+
 #ifndef _SYS_IOCTL_H
 #define _SYS_IOCTL_H
 
@@ -322,3 +327,5 @@ static inline int ioctl(int fd, unsigned long request, ...) {
 #endif
 
 #endif /* _SYS_IOCTL_H */
+
+#endif /* hosted ioctl owner */
