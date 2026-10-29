@@ -913,8 +913,6 @@ static inline int _rin_glob_commit(glob_t* pglob, int flags,
     size_t offsets;
     size_t old_count;
     size_t total;
-    size_t previous_pathc = pglob->gl_pathc;
-    size_t previous_offsets = pglob->gl_offs;
     char** paths;
     int append = (flags & GLOB_APPEND) != 0;
     size_t old_pathc = append ? pglob->gl_pathc : 0u;
@@ -922,10 +920,6 @@ static inline int _rin_glob_commit(glob_t* pglob, int flags,
     size_t old_offsets = (append || (flags & GLOB_DOOFFS) != 0) ?
                          pglob->gl_offs : 0u;
     if (append && old_pathc != 0u && !old_paths) {
-        errno = EINVAL;
-        return GLOB_ABORTED;
-    }
-    if (!append && previous_pathc != 0u && !pglob->gl_pathv) {
         errno = EINVAL;
         return GLOB_ABORTED;
     }
@@ -944,11 +938,6 @@ static inline int _rin_glob_commit(glob_t* pglob, int flags,
     for (size_t index = 0; index < matches->count; ++index)
         paths[offsets + old_count + index] = matches->items[index];
     paths[offsets + old_count + matches->count] = NULL;
-    if (!append && pglob->gl_pathv) {
-        for (size_t index = 0; index < previous_pathc; ++index)
-            free(pglob->gl_pathv[previous_offsets + index]);
-        free(pglob->gl_pathv);
-    }
     if (old_paths) free(old_paths);
     free(matches->items);
     matches->items = NULL;
@@ -966,11 +955,6 @@ static inline int _rin_glob_commit(glob_t* pglob, int flags,
 static inline int _rin_glob_no_match(glob_t* pglob, int flags)
 {
     if (!(flags & GLOB_APPEND)) {
-        if (pglob->gl_pathv) {
-            for (size_t index = 0u; index < pglob->gl_pathc; ++index)
-                free(pglob->gl_pathv[pglob->gl_offs + index]);
-            free(pglob->gl_pathv);
-        }
         pglob->gl_pathc = 0u;
         pglob->gl_pathv = NULL;
         pglob->gl_flags = flags;
@@ -1063,11 +1047,13 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
 
     if (!pattern || !pglob || !handled || !scratch) return GLOB_ABORTED;
     *handled = 0;
-    aggregate.gl_closedir = pglob->gl_closedir;
-    aggregate.gl_readdir = pglob->gl_readdir;
-    aggregate.gl_opendir = pglob->gl_opendir;
-    aggregate.gl_lstat = pglob->gl_lstat;
-    aggregate.gl_stat = pglob->gl_stat;
+    if (flags & GLOB_ALTDIRFUNC) {
+        aggregate.gl_closedir = pglob->gl_closedir;
+        aggregate.gl_readdir = pglob->gl_readdir;
+        aggregate.gl_opendir = pglob->gl_opendir;
+        aggregate.gl_lstat = pglob->gl_lstat;
+        aggregate.gl_stat = pglob->gl_stat;
+    }
     found = _rin_glob_find_brace(
         pattern, flags, &open, &close, &comma, scratch);
     if (found < 0) {
