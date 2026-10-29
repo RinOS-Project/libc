@@ -1200,33 +1200,17 @@ _RIN_STDIO_INTERNAL intptr_t _rin_stdio_read_block(FILE* stream,
     available = stream->buf_end - stream->buf_pos;
     if (available == 0u) {
         size_t filled = 0u;
-        if (stream->buf_mode == _IOLBF) {
-            /* Input line buffering must not consume bytes from the next
-             * logical line.  Read one byte at a time until newline, EOF, or
-             * the caller-owned buffer is full; the existing cursor then keeps
-             * the complete line prefix failure-atomically. */
-            while (filled < stream->buf_size) {
-                result = _rin_stdio_read_backend(stream,
-                    stream->buf + filled, 1u);
-                if (result < 0) return result;
-                if (result == 0) break;
-                if (result != 1) {
-                    errno = EIO;
-                    return -1;
-                }
-                ++filled;
-                if (stream->buf[filled - 1u] == (unsigned char)'\n') break;
-            }
-        } else {
-            result = _rin_stdio_read_backend(stream, stream->buf,
-                                             stream->buf_size);
-            if (result < 0) return result;
-            if ((uintptr_t)result > (uintptr_t)stream->buf_size) {
-                errno = EIO;
-                return -1;
-            }
-            filled = (size_t)(uintptr_t)result;
+        /* Refill in blocks for line-buffered input as well.  Bytes beyond a
+         * newline remain in FILE for later calls, avoiding one syscall per
+         * byte while preserving the caller-visible line boundary. */
+        result = _rin_stdio_read_backend(stream, stream->buf,
+                                         stream->buf_size);
+        if (result < 0) return result;
+        if ((uintptr_t)result > (uintptr_t)stream->buf_size) {
+            errno = EIO;
+            return -1;
         }
+        filled = (size_t)(uintptr_t)result;
         stream->buf_pos = 0u;
         stream->buf_end = filled;
         available = stream->buf_end;
