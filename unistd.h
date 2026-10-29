@@ -2257,11 +2257,9 @@ static inline int gethostname(char* name, size_t len) {
         errno = EIO;
         return -1;
     }
-    if (size + 1u > len) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    for (size_t index = 0; index <= size; ++index)
+    if (size + 1u > len) size = len;
+    else ++size;
+    for (size_t index = 0; index < size; ++index)
         name[index] = identity.nodename[index];
     return 0;
 }
