@@ -127,7 +127,9 @@
 #define __NR_vm86old        113
 #define __NR_wait4          114
 #define __NR_swapoff        115
-#define __NR_sysinfo        116
+/* __NR_sysinfo is intentionally omitted: Linux number 116 uses a different
+ * syscall namespace. Use sysinfo() from <sys/sysinfo.h>, which requests the
+ * Linux struct sysinfo layout through RinOS's versioned syscall. */
 #define __NR_ipc            117
 #define __NR_fsync          118
 #define __NR_sigreturn      119

@@ -36,6 +36,7 @@
 #include <rin/process/image_path_abi.h>
 #include <rin/process/image_range_abi.h>
 #include <rin/process/exec_limits_abi.h>
+#include <rin/system_info_snapshot_v1.h>
 
 #if ARG_MAX != RIN_EXEC_ARGUMENT_ENV_BYTES_MAX
 #error "ARG_MAX must match the public exec argument/environment byte limit"
@@ -1844,6 +1845,30 @@ static inline int lockf(int fd, int function, off_t size) {
     return fcntl(fd, command, &lock);
 }
 
+static inline int _rin_unistd_get_system_info_snapshot(
+    RinSystemInfoSnapshotV1* information) {
+    if (information == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (_rin_unistd_status(_RIN_UNISTD_SYSCALL2(
+            RIN_SYS_SYSTEM_INFO_SNAPSHOT_V1, (uintptr_t)information,
+            RIN_SYSTEM_INFO_SNAPSHOT_LAYOUT_RIN_V1)) < 0)
+        return -1;
+    if (information->struct_size != sizeof(*information) ||
+        information->version != RIN_SYSTEM_INFO_SNAPSHOT_VERSION_V1 ||
+        (information->valid_metrics & RIN_SYSTEM_INFO_SNAPSHOT_MEMORY_VALID) == 0u ||
+        (information->valid_metrics & ~RIN_SYSTEM_INFO_SNAPSHOT_VALID_MASK) != 0u ||
+        information->reserved != 0u || information->total_ram_bytes == 0u ||
+        information->available_ram_bytes > information->total_ram_bytes ||
+        (information->total_ram_bytes % RIN_SYSTEM_INFO_SNAPSHOT_PAGE_SIZE) != 0u ||
+        (information->available_ram_bytes % RIN_SYSTEM_INFO_SNAPSHOT_PAGE_SIZE) != 0u) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+
 static inline long sysconf(int name) {
     switch (name) {
         case _SC_ARG_MAX:
@@ -1902,21 +1927,10 @@ static inline long sysconf(int name) {
             return (long)count;
         }
         case _SC_PHYS_PAGES: {
-            /* カーネルのSYS_SYSINFOから実メモリ量を取得 */
-            struct { unsigned long long uptime; unsigned long long total_ram;
-                     unsigned long long free_ram; unsigned int procs; } si;
+            RinSystemInfoSnapshotV1 si;
             uint64_t pages;
-            if (_rin_unistd_status(_RIN_UNISTD_SYSCALL1(
-                    SYS_SYSINFO, (uintptr_t)&si)) < 0)
-                return -1;
-            /* A successful provider must publish a complete, coherent
-             * snapshot.  Treat an empty total or free > total as an error
-             * instead of exposing a fabricated page count. */
-            if (si.total_ram == 0 || si.free_ram > si.total_ram) {
-                errno = EIO;
-                return -1;
-            }
-            pages = (uint64_t)(si.total_ram / UINT64_C(4096));
+            if (_rin_unistd_get_system_info_snapshot(&si) < 0) return -1;
+            pages = si.total_ram_bytes / RIN_SYSTEM_INFO_SNAPSHOT_PAGE_SIZE;
             if (pages > (uint64_t)LONG_MAX) {
                 errno = EOVERFLOW;
                 return -1;
@@ -1924,17 +1938,10 @@ static inline long sysconf(int name) {
             return (long)pages;
         }
         case _SC_AVPHYS_PAGES: {
-            struct { unsigned long long uptime; unsigned long long total_ram;
-                     unsigned long long free_ram; unsigned int procs; } si;
+            RinSystemInfoSnapshotV1 si;
             uint64_t pages;
-            if (_rin_unistd_status(_RIN_UNISTD_SYSCALL1(
-                    SYS_SYSINFO, (uintptr_t)&si)) < 0)
-                return -1;
-            if (si.total_ram == 0 || si.free_ram > si.total_ram) {
-                errno = EIO;
-                return -1;
-            }
-            pages = (uint64_t)(si.free_ram / UINT64_C(4096));
+            if (_rin_unistd_get_system_info_snapshot(&si) < 0) return -1;
+            pages = si.available_ram_bytes / RIN_SYSTEM_INFO_SNAPSHOT_PAGE_SIZE;
             if (pages > (uint64_t)LONG_MAX) {
                 errno = EOVERFLOW;
                 return -1;
