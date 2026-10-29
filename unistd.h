@@ -2161,7 +2161,10 @@ static inline int _rin_pathconf_path_is_terminal(const char* path) {
     int saved_errno = errno;
     int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     int result;
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        errno = saved_errno;
+        return -1;
+    }
     result = isatty(fd);
     (void)close(fd);
     errno = saved_errno;
@@ -2710,6 +2713,14 @@ static inline int fsync(int fd) {
     __rin_pthread_cancel_point_if_linked();
     int result = _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
         SYS_FSYNC, (uintptr_t)(intptr_t)fd));
+    __rin_pthread_cancel_point_if_linked();
+    return result;
+}
+
+static inline int syncfs(int fd) {
+    __rin_pthread_cancel_point_if_linked();
+    int result = _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
+        SYS_SYNCFS, (uintptr_t)(intptr_t)fd));
     __rin_pthread_cancel_point_if_linked();
     return result;
 }
