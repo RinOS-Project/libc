@@ -968,11 +968,11 @@ static inline double log(double x) {
     if (__builtin_isinf(x)) return x;
     if (x == 1.0) return 0.0;
 
-    /* x = m * 2^e として分解 */
-    double m = x;
+    /* x = m * 2^e として分解する。frexpを使うことで、subnormalでも
+     * 正規化の反復回数が指数に比例しない。 */
     int e = 0;
-    while (m >= 2.0) { m /= 2.0; e++; }
-    while (m < 1.0) { m *= 2.0; e--; }
+    double m = frexp(x, &e) * 2.0;
+    --e;
 
     /* atanh series converges quickly for z=(m-1)/(m+1) in [0,1/3). */
     double z = (m - 1.0) / (m + 1.0);
