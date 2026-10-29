@@ -46,7 +46,10 @@ void free_aligned_sized(void* ptr, size_t alignment, size_t size) {
 
 void* calloc(size_t nmemb, size_t size) {
     if (nmemb == 0 || size == 0) return 0;
-    if (nmemb > ((size_t)-1) / size) return 0;  /* オーバーフロー防止 */
+    if (nmemb > ((size_t)-1) / size) {
+        errno = ENOMEM;
+        return 0;  /* オーバーフロー防止 */
+    }
     size_t total = nmemb * size;
     void* ptr = rin_malloc(total);
     if (ptr) {
