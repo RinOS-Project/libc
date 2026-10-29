@@ -1370,6 +1370,21 @@ static inline float scalbnf(float x, int n) {
     return ldexpf(x, n);
 }
 
+/* scalbln accepts a long exponent.  For binary32/binary64 inputs, +/-2100
+ * already moves every finite nonzero value beyond the representable range,
+ * so larger exponents can be clamped without narrowing an out-of-range long. */
+static inline double scalbln(double x, long n) {
+    if (n > 2100L) n = 2100L;
+    else if (n < -2100L) n = -2100L;
+    return scalbn(x, (int)n);
+}
+
+static inline float scalblnf(float x, long n) {
+    if (n > 2100L) n = 2100L;
+    else if (n < -2100L) n = -2100L;
+    return scalbnf(x, (int)n);
+}
+
 /* rint - 最近接整数への丸め（現在のモードに従う） */
 static inline double __rin_math_round_even(double x) {
     if (__builtin_isnan(x) || __builtin_isinf(x) || x == 0.0) return x;
@@ -1716,6 +1731,10 @@ static inline long double ldexpl(long double x, int exp) {
 
 static inline long double scalbnl(long double x, int exp) {
     return (long double)scalbn((double)x, exp);
+}
+
+static inline long double scalblnl(long double x, long exp) {
+    return (long double)scalbln((double)x, exp);
 }
 
 static inline long double remainderl(long double x, long double y) {
