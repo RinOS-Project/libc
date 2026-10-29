@@ -315,7 +315,6 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     int ready_count = 0;
 
     for (nfds_t i = 0u; i < npfds; ++i) {
-        int fd_ready = 0;
         if ((pfds[i].revents & POLLNVAL) != 0) {
             free(pfds);
             errno = EBADF;
@@ -327,6 +326,7 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     __rin_select_clear_sets(readfds, writefds, exceptfds);
 
     for (nfds_t i = 0u; i < npfds; ++i) {
+        int fd_ready = 0;
         if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
             if (readfds) {
                 FD_SET(pfds[i].fd, readfds);
@@ -377,7 +377,6 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
         }
         int ready_count = 0;
         for (nfds_t i = 0u; i < npfds; ++i) {
-            int fd_ready = 0;
             if ((pfds[i].revents & POLLNVAL) != 0) {
                 free(pfds);
                 errno = EBADF;
@@ -386,6 +385,7 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
         }
         __rin_select_clear_sets(readfds, writefds, exceptfds);
         for (nfds_t i = 0u; i < npfds; ++i) {
+            int fd_ready = 0;
             if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
                 if (readfds) {
                     FD_SET(pfds[i].fd, readfds);
