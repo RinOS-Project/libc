@@ -63,6 +63,14 @@ static inline void _rin_getopt_long_diagnostic(char* const argv[],
             argument ? argument : "?");
 }
 
+static inline int _rin_getopt_return_nonoption(char* const argv[],
+                                                const char* optstring) {
+    if (!optstring || optstring[0] != '-') return -1;
+    optarg = argv[optind++];
+    _rin_getopt_pos = 0;
+    return 1;
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * getopt関数
  * ═══════════════════════════════════════════════════════════════*/
@@ -81,7 +89,8 @@ static inline int getopt(int argc, char* const argv[], const char* optstring) {
     if (!arg) return -1;
 
     /* オプションではない */
-    if (arg[0] != '-' || arg[1] == '\0') return -1;
+    if (arg[0] != '-' || arg[1] == '\0')
+        return _rin_getopt_return_nonoption(argv, optstring);
 
     /* "--" は終了 */
     if (arg[1] == '-' && arg[2] == '\0') {
@@ -160,7 +169,8 @@ static inline int getopt_long(int argc, char* const argv[],
     if (!arg) return -1;
 
     /* オプションではない */
-    if (arg[0] != '-') return -1;
+    if (arg[0] != '-')
+        return _rin_getopt_return_nonoption(argv, optstring);
 
     /* "--" は終了 */
     if (arg[1] == '-' && arg[2] == '\0') {
@@ -257,7 +267,9 @@ static inline int getopt_long_only(int argc, char* const argv[],
     if (optind >= argc) return -1;
 
     const char* arg = argv[optind];
-    if (!arg || arg[0] != '-' || arg[1] == '\0') return -1;
+    if (!arg) return -1;
+    if (arg[0] != '-' || arg[1] == '\0')
+        return _rin_getopt_return_nonoption(argv, optstring);
 
     /* GNU getopt_long_only gives a matching short option precedence. */
     if (arg[1] != '-' && longopts && optstring) {
