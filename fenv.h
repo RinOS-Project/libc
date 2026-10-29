@@ -111,6 +111,18 @@ static inline unsigned int __rin_mxcsr_get(void) {
 static inline void __rin_mxcsr_set(unsigned int mxcsr) {
     __asm__ volatile ("ldmxcsr %0" : : "m"(mxcsr) : "memory");
 }
+
+/* SSE/SIMD rounding is the canonical mode. Keep x87 in step when an
+ * application has changed MXCSR directly. */
+static inline unsigned int __rin_fenv_mxcsr_round(void) {
+    return (__rin_mxcsr_get() >> 3) & 0x0C00u;
+}
+
+static inline unsigned int __rin_fenv_x87_round(void) {
+    unsigned short control;
+    __asm__ volatile ("fnstcw %0" : "=m"(control));
+    return (unsigned int)control & 0x0C00u;
+}
 #endif
 #endif
 
@@ -189,9 +201,9 @@ static inline int fesetexceptflag(const fexcept_t* flagp, int excepts) {
 /* 丸めモードを取得 */
 static inline int fegetround(void) {
 #if defined(__i386__) || defined(__x86_64__)
-    unsigned short control;
-    __asm__ volatile ("fnstcw %0" : "=m"(control));
-    return control & 0x0C00;
+    unsigned int mxcsr_round = __rin_fenv_mxcsr_round();
+    unsigned int x87_round = __rin_fenv_x87_round();
+    return x87_round == mxcsr_round ? (int)mxcsr_round : -1;
 #else
     return FE_TONEAREST;
 #endif
@@ -239,6 +251,8 @@ static inline int fegetenv(fenv_t* envp) {
 #if defined(__i386__) || defined(__x86_64__)
     envp->__others[0] = __rin_mxcsr_get();
 #endif
+    /* FNSTENV masks x87 exceptions as a side effect. Restore the exact
+     * environment captured above; fegetenv must not change the caller. */
     __rin_x87_setenv(&x87_environment);
 #else
     return -1;
@@ -252,13 +266,14 @@ static inline int fesetenv(const fenv_t* envp) {
 
 #if defined(__i386__) || defined(__x86_64__)
     __rin_x87_environment_t x87_environment;
+    unsigned int mxcsr = envp->__others[0];
     __rin_x87_getenv(&x87_environment);
     x87_environment.control = (unsigned short)envp->__control;
     x87_environment.status = (unsigned short)envp->__status;
     x87_environment.tag = (unsigned short)envp->__tag;
     __rin_x87_setenv(&x87_environment);
 #if defined(__i386__) || defined(__x86_64__)
-    __rin_mxcsr_set(envp->__others[0]);
+    __rin_mxcsr_set(mxcsr);
 #endif
 #else
     return -1;
