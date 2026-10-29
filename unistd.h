@@ -2562,6 +2562,7 @@ static inline int fdatasync(int fd) {
 
 /* dup3 - フラグ付きdup2 */
 static inline int dup3(int oldfd, int newfd, int flags) {
+    intptr_t result;
     if (oldfd == newfd) {
         errno = EINVAL;
         return -1;
@@ -2570,9 +2571,16 @@ static inline int dup3(int oldfd, int newfd, int flags) {
         errno = EINVAL;
         return -1;
     }
-    return _rin_unistd_status(_RIN_UNISTD_SYSCALL3(
+    result = _rin_unistd_result(_RIN_UNISTD_SYSCALL3(
         SYS_DUP3, (uintptr_t)(intptr_t)oldfd,
         (uintptr_t)(intptr_t)newfd, (uintptr_t)flags));
+    if (result < 0) return -1;
+    if ((uintptr_t)result > (uintptr_t)INT_MAX) {
+        (void)_RIN_UNISTD_SYSCALL1(SYS_CLOSE, (uintptr_t)result);
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return (int)result;
 }
 
 /* exec frontend.  These bounds match the kernel's pointer-free snapshot. */
