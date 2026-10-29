@@ -268,6 +268,14 @@ static inline int _fcntl_lock64_flock(int fd, int command,
     wire.pid = (int32_t)lock->l_pid;
     result = _fcntl_lock64_wire(fd, kernel_command, &wire);
     if (result == 0 && _fcntl_lock64_get_command(command)) {
+        if (sizeof(off_t) < sizeof(int64_t) &&
+            (wire.start < (int64_t)INT_MIN ||
+             wire.start > (int64_t)INT_MAX ||
+             wire.length < (int64_t)INT_MIN ||
+             wire.length > (int64_t)INT_MAX)) {
+            errno = EOVERFLOW;
+            return -1;
+        }
         lock->l_type = wire.type;
         lock->l_whence = wire.whence;
         lock->l_start = (off_t)wire.start;
