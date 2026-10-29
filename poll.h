@@ -313,7 +313,8 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
         const int ret = poll(NULL, 0, timeout_ms);
         /* No descriptor below nfds was requested, so a successful select
          * must clear bits that were set only at or above nfds as well. */
-        __rin_select_clear_sets(readfds, writefds, exceptfds);
+        if (ret >= 0)
+            __rin_select_clear_sets(readfds, writefds, exceptfds);
         free(pfds);
         return ret;
     }
@@ -321,7 +322,6 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     int ret = poll(pfds, npfds, timeout_ms);
     if (ret < 0) {
         free(pfds);
-        __rin_select_clear_sets(readfds, writefds, exceptfds);
         return ret;
     }
     int ready_count = 0;
@@ -329,7 +329,6 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     for (nfds_t i = 0u; i < npfds; ++i) {
         if ((pfds[i].revents & POLLNVAL) != 0) {
             free(pfds);
-            __rin_select_clear_sets(readfds, writefds, exceptfds);
             errno = EBADF;
             return -1;
         }
@@ -384,14 +383,12 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
         ret = ppoll(pfds, npfds, timeout, sigmask);
         if (ret < 0) {
             free(pfds);
-            __rin_select_clear_sets(readfds, writefds, exceptfds);
             return ret;
         }
         int ready_count = 0;
         for (nfds_t i = 0u; i < npfds; ++i) {
             if ((pfds[i].revents & POLLNVAL) != 0) {
                 free(pfds);
-                __rin_select_clear_sets(readfds, writefds, exceptfds);
                 errno = EBADF;
                 return -1;
             }
