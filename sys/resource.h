@@ -110,6 +110,8 @@ struct rlimit64 {
     unsigned long long rlim_cur;
     unsigned long long rlim_max;
 };
+
+#define RLIM64_INFINITY (~0ULL)
 /* A freestanding product may bind these hooks to the kernel's
  * generation-bound resource-limit owner.  They use POSIX return values
  * (0/-1) and must set errno on failure.  Weak lookup keeps hosted libc
@@ -163,10 +165,10 @@ static inline int __rin_resource_limit_wire_resource(
     return 0;
 }
 
-static inline int __rin_resource_limit_wire_call(
+static inline int __rin_resource_limit_wire_call_common(
     uint16_t operation, uint32_t flags, uint32_t target_process_id,
     uint64_t target_instance_cookie, int resource,
-    const struct rlimit* new_limit, struct rlimit* old_limit)
+    const void* new_limit, void* old_limit, int limit64)
 {
     RinResourceLimitCallRequestV1 request = {0};
     RinResourceLimitCallResponseV1 response = {0};
@@ -190,7 +192,8 @@ static inline int __rin_resource_limit_wire_call(
     request.struct_size = RIN_RESOURCE_LIMIT_CALL_SIZE;
     request.version = RIN_RESOURCE_LIMIT_ABI_VERSION;
     request.operation = operation;
-    request.flags = flags;
+    request.flags = flags | (limit64
+        ? RIN_RESOURCE_LIMIT_CALL_FLAG_LIMIT64 : 0u);
     request.resource = wire_resource;
     request.target_process_id = target_process_id;
     request.target_instance_cookie = target_instance_cookie;
@@ -208,14 +211,24 @@ static inline int __rin_resource_limit_wire_call(
         response.target_instance_cookie != target_instance_cookie ||
         response.reserved0 != 0u || response.reserved[0] != 0u ||
         response.reserved[1] != 0u || response.current > response.maximum ||
-        (response.current > (uint64_t)(rlim_t)~(rlim_t)0 &&
+        (!limit64 && response.current > (uint64_t)(rlim_t)~(rlim_t)0 &&
          response.current != UINT64_MAX) ||
-        (response.maximum > (uint64_t)(rlim_t)~(rlim_t)0 &&
+        (!limit64 && response.maximum > (uint64_t)(rlim_t)~(rlim_t)0 &&
          response.maximum != UINT64_MAX)) {
         errno = EIO;
         return -1;
     }
     return 0;
+}
+
+static inline int __rin_resource_limit_wire_call(
+    uint16_t operation, uint32_t flags, uint32_t target_process_id,
+    uint64_t target_instance_cookie, int resource,
+    const struct rlimit* new_limit, struct rlimit* old_limit)
+{
+    return __rin_resource_limit_wire_call_common(
+        operation, flags, target_process_id, target_instance_cookie, resource,
+        new_limit, old_limit, 0);
 }
 #endif
 
@@ -341,6 +354,67 @@ static inline int prlimit(pid_t pid, int resource,
         return -1;
     }
     return getrlimit(resource, old_limit);
+#endif
+}
+
+/* 64-bit limit APIs retain finite IA-32 limits above 4 GiB. */
+static inline int getrlimit64(int resource, struct rlimit64* rlim)
+{
+    if (resource < 0 || resource >= RLIMIT_NLIMITS) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (rlim == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+#if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
+    return __rin_resource_limit_wire_call_common(
+        RIN_RESOURCE_LIMIT_CALL_GET, 0u, 0u, 0u, resource, NULL, rlim, 1);
+#else
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+static inline int setrlimit64(int resource, const struct rlimit64* rlim)
+{
+    if (resource < 0 || resource >= RLIMIT_NLIMITS) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (rlim == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+#if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
+    return __rin_resource_limit_wire_call_common(
+        RIN_RESOURCE_LIMIT_CALL_SET, RIN_RESOURCE_LIMIT_CALL_FLAG_SET,
+        0u, 0u, resource, rlim, NULL, 1);
+#else
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+static inline int prlimit64(pid_t pid, int resource,
+                            const struct rlimit64* new_limit,
+                            struct rlimit64* old_limit)
+{
+    if (pid < 0 || resource < 0 || resource >= RLIMIT_NLIMITS ||
+        (new_limit == NULL && old_limit == NULL)) {
+        errno = EINVAL;
+        return -1;
+    }
+#if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
+    return __rin_resource_limit_wire_call_common(
+        RIN_RESOURCE_LIMIT_CALL_PRLIMIT,
+        new_limit ? RIN_RESOURCE_LIMIT_CALL_FLAG_SET : 0u,
+        pid == 0 ? 0u : (uint32_t)pid, 0u, resource,
+        new_limit, old_limit, 1);
+#else
+    errno = ENOSYS;
+    return -1;
 #endif
 }
 
