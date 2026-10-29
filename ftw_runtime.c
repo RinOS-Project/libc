@@ -413,6 +413,7 @@ static int rin_ftw_run(const char* path, int fd_limit, int flags,
     int traversal_locked = 0;
     int result;
     int saved_errno;
+    int mutex_result;
 
     if (!path || (!callback3 && !callback4)) {
         errno = EFAULT;
@@ -428,9 +429,10 @@ static int rin_ftw_run(const char* path, int fd_limit, int flags,
         errno = ENOENT;
         return -1;
     }
-    /* Absolute walks without FTW_CHDIR neither depend on nor change cwd.
-     * Relative walks retain the lock so FTW_CHDIR callbacks cannot change
-     * their path base while they are traversing. */
+    /* FTW_CHDIR changes the process cwd during callbacks, so serialize those
+     * walks. Relative walks without FTW_CHDIR only need a cwd snapshot; make
+     * their root absolute before releasing the lock so callbacks and other
+     * ftw walks cannot change the base used by later path operations. */
     if ((flags & FTW_CHDIR) != 0 || path[0] != '/') {
         if (rin_ftw_lock_chdir() != 0) return -1;
         traversal_locked = 1;
@@ -451,6 +453,23 @@ static int rin_ftw_run(const char* path, int fd_limit, int flags,
             result = -1;
             goto done;
         }
+    } else if (path[0] != '/') {
+        if (!getcwd(cwd, sizeof(cwd))) {
+            result = -1;
+            goto done;
+        }
+        walk_path = rin_ftw_absolute_path(path, cwd);
+        if (!walk_path) {
+            result = -1;
+            goto done;
+        }
+        mutex_result = pthread_mutex_unlock(&g_rin_ftw_chdir_mutex);
+        if (mutex_result != 0) {
+            errno = mutex_result;
+            result = -1;
+            goto done;
+        }
+        traversal_locked = 0;
     } else {
         size_t length = rin_ftw_length(path);
         while (length > 1u && path[length - 1u] == '/') --length;
