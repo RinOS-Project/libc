@@ -455,6 +455,28 @@ static inline int _rin_unistd_status(intptr_t result) {
 #define _CS_POSIX_V6_LPBIG_OFFBIG_LINTFLAGS 1131
 #define _CS_POSIX_V6_WIDTH_RESTRICTED_ENVS \
     _CS_V6_WIDTH_RESTRICTED_ENVS
+#define _CS_POSIX_V7_ILP32_OFF32_CFLAGS 1132
+#define _CS_POSIX_V7_ILP32_OFF32_LDFLAGS 1133
+#define _CS_POSIX_V7_ILP32_OFF32_LIBS 1134
+#define _CS_POSIX_V7_ILP32_OFF32_LINTFLAGS 1135
+#define _CS_POSIX_V7_ILP32_OFFBIG_CFLAGS 1136
+#define _CS_POSIX_V7_ILP32_OFFBIG_LDFLAGS 1137
+#define _CS_POSIX_V7_ILP32_OFFBIG_LIBS 1138
+#define _CS_POSIX_V7_ILP32_OFFBIG_LINTFLAGS 1139
+#define _CS_POSIX_V7_LP64_OFF64_CFLAGS 1140
+#define _CS_POSIX_V7_LP64_OFF64_LDFLAGS 1141
+#define _CS_POSIX_V7_LP64_OFF64_LIBS 1142
+#define _CS_POSIX_V7_LP64_OFF64_LINTFLAGS 1143
+#define _CS_POSIX_V7_LPBIG_OFFBIG_CFLAGS 1144
+#define _CS_POSIX_V7_LPBIG_OFFBIG_LDFLAGS 1145
+#define _CS_POSIX_V7_LPBIG_OFFBIG_LIBS 1146
+#define _CS_POSIX_V7_LPBIG_OFFBIG_LINTFLAGS 1147
+#define _CS_V7_ENV 1148
+#define _CS_POSIX_V7_THREADS_CFLAGS 1149
+#define _CS_POSIX_V7_THREADS_LDFLAGS 1150
+#define _CS_V7_WIDTH_RESTRICTED_ENVS 2
+#define _CS_POSIX_V7_WIDTH_RESTRICTED_ENVS \
+    _CS_V7_WIDTH_RESTRICTED_ENVS
 
 /* ═══════════════════════════════════════════════════════════════
  * ファイル操作
@@ -2189,6 +2211,9 @@ static inline const char* __rin_confstr_model_value(
     static const char width_restricted_v6[] =
         "POSIX_V6_ILP32_OFF32\nPOSIX_V6_ILP32_OFFBIG\n"
         "POSIX_V6_LP64_OFF64\nPOSIX_V6_LPBIG_OFFBIG";
+    static const char width_restricted_v7[] =
+        "POSIX_V7_ILP32_OFF32\nPOSIX_V7_ILP32_OFFBIG\n"
+        "POSIX_V7_LP64_OFF64\nPOSIX_V7_LPBIG_OFFBIG";
     static const char i686[] = "--target=i686-unknown-rinos";
     static const char i686_offbig[] =
         "--target=i686-unknown-rinos -D_FILE_OFFSET_BITS=64";
@@ -2199,36 +2224,48 @@ static inline const char* __rin_confstr_model_value(
     switch (name) {
     case _CS_XBS5_ILP32_OFF32_CFLAGS:
     case _CS_POSIX_V6_ILP32_OFF32_CFLAGS:
+    case _CS_POSIX_V7_ILP32_OFF32_CFLAGS:
         return i686;
     case _CS_XBS5_ILP32_OFF32_LDFLAGS:
     case _CS_POSIX_V6_ILP32_OFF32_LDFLAGS:
+    case _CS_POSIX_V7_ILP32_OFF32_LDFLAGS:
         return i686;
     case _CS_XBS5_ILP32_OFF32_LIBS:
     case _CS_POSIX_V6_ILP32_OFF32_LIBS:
+    case _CS_POSIX_V7_ILP32_OFF32_LIBS:
         return libraries;
     case _CS_XBS5_ILP32_OFFBIG_CFLAGS:
     case _CS_POSIX_V6_ILP32_OFFBIG_CFLAGS:
+    case _CS_POSIX_V7_ILP32_OFFBIG_CFLAGS:
         return i686_offbig;
     case _CS_XBS5_ILP32_OFFBIG_LDFLAGS:
     case _CS_POSIX_V6_ILP32_OFFBIG_LDFLAGS:
+    case _CS_POSIX_V7_ILP32_OFFBIG_LDFLAGS:
         return i686;
     case _CS_XBS5_ILP32_OFFBIG_LIBS:
     case _CS_POSIX_V6_ILP32_OFFBIG_LIBS:
+    case _CS_POSIX_V7_ILP32_OFFBIG_LIBS:
         return libraries;
     case _CS_XBS5_LP64_OFF64_CFLAGS:
     case _CS_POSIX_V6_LP64_OFF64_CFLAGS:
+    case _CS_POSIX_V7_LP64_OFF64_CFLAGS:
     case _CS_XBS5_LPBIG_OFFBIG_CFLAGS:
     case _CS_POSIX_V6_LPBIG_OFFBIG_CFLAGS:
+    case _CS_POSIX_V7_LPBIG_OFFBIG_CFLAGS:
         return x86_64;
     case _CS_XBS5_LP64_OFF64_LDFLAGS:
     case _CS_POSIX_V6_LP64_OFF64_LDFLAGS:
+    case _CS_POSIX_V7_LP64_OFF64_LDFLAGS:
     case _CS_XBS5_LPBIG_OFFBIG_LDFLAGS:
     case _CS_POSIX_V6_LPBIG_OFFBIG_LDFLAGS:
+    case _CS_POSIX_V7_LPBIG_OFFBIG_LDFLAGS:
         return x86_64;
     case _CS_XBS5_LP64_OFF64_LIBS:
     case _CS_POSIX_V6_LP64_OFF64_LIBS:
+    case _CS_POSIX_V7_LP64_OFF64_LIBS:
     case _CS_XBS5_LPBIG_OFFBIG_LIBS:
     case _CS_POSIX_V6_LPBIG_OFFBIG_LIBS:
+    case _CS_POSIX_V7_LPBIG_OFFBIG_LIBS:
         return libraries;
     case _CS_XBS5_ILP32_OFF32_LINTFLAGS:
     case _CS_XBS5_ILP32_OFFBIG_LINTFLAGS:
@@ -2238,10 +2275,20 @@ static inline const char* __rin_confstr_model_value(
     case _CS_POSIX_V6_ILP32_OFFBIG_LINTFLAGS:
     case _CS_POSIX_V6_LP64_OFF64_LINTFLAGS:
     case _CS_POSIX_V6_LPBIG_OFFBIG_LINTFLAGS:
+    case _CS_POSIX_V7_ILP32_OFF32_LINTFLAGS:
+    case _CS_POSIX_V7_ILP32_OFFBIG_LINTFLAGS:
+    case _CS_POSIX_V7_LP64_OFF64_LINTFLAGS:
+    case _CS_POSIX_V7_LPBIG_OFFBIG_LINTFLAGS:
+    case _CS_V7_ENV:
         *configured = 0;
         return NULL;
     case _CS_V6_WIDTH_RESTRICTED_ENVS:
         return width_restricted_v6;
+    case _CS_V7_WIDTH_RESTRICTED_ENVS:
+        return width_restricted_v7;
+    case _CS_POSIX_V7_THREADS_CFLAGS:
+    case _CS_POSIX_V7_THREADS_LDFLAGS:
+        return "";
     default:
         *configured = -1;
         return NULL;
