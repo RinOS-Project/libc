@@ -1310,19 +1310,36 @@ static inline float copysignf(float x, float y) {
 
 /* frexp - 仮数と指数に分解 */
 static inline double frexp(double x, int* exp) {
-    if (__builtin_isnan(x) || __builtin_isinf(x)) {
+    union { double value; unsigned long long bits; } u;
+    u.value = x;
+
+    const unsigned long long sign = u.bits & (1ULL << 63);
+    const unsigned long long fraction = u.bits & 0xFFFFFFFFFFFFFULL;
+    const unsigned int exponent = (unsigned int)((u.bits >> 52) & 0x7FFU);
+    if (exponent == 0x7FFU) {
         if (exp) *exp = 0;
         return x;
     }
-    if (x == 0.0) { if (exp) *exp = 0; return x; }
+    if (exponent == 0 && fraction == 0) {
+        if (exp) *exp = 0;
+        return x;
+    }
 
-    int e = 0;
-    double m = fabs(x);
-    while (m >= 1.0) { m /= 2.0; e++; }
-    while (m < 0.5) { m *= 2.0; e--; }
+    int result_exponent;
+    if (exponent != 0) {
+        result_exponent = (int)exponent - 1022;
+        u.bits = sign | (1022ULL << 52) | fraction;
+    } else {
+        int highest_bit = 0;
+        for (unsigned long long scan = fraction; (scan >>= 1) != 0; )
+            highest_bit++;
+        result_exponent = highest_bit - 1073;
+        u.bits = sign | (1022ULL << 52) |
+                 ((fraction << (52 - highest_bit)) & 0xFFFFFFFFFFFFFULL);
+    }
 
-    if (exp) *exp = e;
-    return x < 0 ? -m : m;
+    if (exp) *exp = result_exponent;
+    return u.value;
 }
 
 static inline float frexpf(float x, int* exp) {
