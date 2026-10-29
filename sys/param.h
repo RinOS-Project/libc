@@ -8,6 +8,7 @@
 
 #include "types.h"
 #include "../limits.h"
+#include "../internal/posix_clock.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -266,7 +267,7 @@ extern "C" {
 #endif
 
 #ifndef CLK_TCK
-#define CLK_TCK         HZ
+#define CLK_TCK         RIN_POSIX_CLK_TCK
 #endif
 
 /* ═══════════════════════════════════════════════════════════════

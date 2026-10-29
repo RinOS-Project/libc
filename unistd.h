@@ -11,6 +11,7 @@
 #include "stdint.h"
 #include "stdarg.h"
 #include "limits.h"
+#include "internal/posix_clock.h"
 #include "errno.h"
 #include "stdlib.h"
 #include "sys/syscall.h"
@@ -1882,7 +1883,7 @@ static inline long sysconf(int name) {
         case _SC_PAGESIZE:
             return 4096;
         case _SC_CLK_TCK:
-            return 1000;  /* 1000 Hz (1ms tick) */
+            return RIN_POSIX_CLK_TCK;
         case _SC_OPEN_MAX:
 #if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
         {
