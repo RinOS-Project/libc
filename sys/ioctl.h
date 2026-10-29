@@ -116,7 +116,36 @@ extern "C" {
 #define TIOCINQ     FIONREAD
 #define TIOCLINUX   0x541C
 #define TIOCCONS    0x541D
+#ifndef TIOCPKT
 #define TIOCPKT     0x5420
+#endif
+#ifndef TIOCPKT_DATA
+#define TIOCPKT_DATA 0x00
+#endif
+#ifndef TIOCPKT_FLUSHREAD
+#define TIOCPKT_FLUSHREAD 0x01
+#endif
+#ifndef TIOCPKT_FLUSHWRITE
+#define TIOCPKT_FLUSHWRITE 0x02
+#endif
+#ifndef TIOCPKT_STOP
+#define TIOCPKT_STOP 0x04
+#endif
+#ifndef TIOCPKT_START
+#define TIOCPKT_START 0x08
+#endif
+#ifndef TIOCPKT_NOSTOP
+#define TIOCPKT_NOSTOP 0x10
+#endif
+#ifndef TIOCPKT_DOSTOP
+#define TIOCPKT_DOSTOP 0x20
+#endif
+#ifndef TIOCPKT_IOCTL
+#define TIOCPKT_IOCTL 0x40
+#endif
+#ifndef TIOCPKT_WINDOW
+#define TIOCPKT_WINDOW 0x80
+#endif
 #define FIONBIO     0x5421  /* ノンブロッキング設定 */
 #define TIOCNOTTY   0x5422  /* 制御端末解除 */
 #define TIOCSETD    0x5423
@@ -246,6 +275,7 @@ _rin_ioctl_get_argument_kind(unsigned long request) {
         case TIOCMSET:
         case TIOCGSOFTCAR:
         case TIOCSSOFTCAR:
+        case TIOCPKT:
         case FIONREAD:
         case FIONBIO:
         case TIOCSETD:
