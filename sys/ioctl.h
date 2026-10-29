@@ -116,8 +116,6 @@ extern "C" {
 #define TIOCINQ     FIONREAD
 #define TIOCLINUX   0x541C
 #define TIOCCONS    0x541D
-#define TIOCGSERIAL 0x541E
-#define TIOCSSERIAL 0x541F
 #define TIOCPKT     0x5420
 #define FIONBIO     0x5421  /* ノンブロッキング設定 */
 #define TIOCNOTTY   0x5422  /* 制御端末解除 */
