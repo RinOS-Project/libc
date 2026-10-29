@@ -514,13 +514,6 @@ static inline void* dlopen(const char* filename, int flags) {
      * loader ABI so RTLD_GLOBAL is published to the process namespace and
      * RTLD_DEEPBIND is retained as an explicit policy bit. */
 
-    /* 初期化 (初回のみ) */
-    static int initialized = 0;
-    if (!initialized) {
-        dynlink_init();
-        initialized = 1;
-    }
-
     if (!filename) {
         /* A successful dlopen must never return the NULL failure sentinel. */
         return RIN_RTLD_MAIN;
