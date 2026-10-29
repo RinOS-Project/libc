@@ -1272,7 +1272,7 @@ static inline int timer_create(clockid_t clock_id,
     }
     request.struct_size = (uint32_t)sizeof(request);
     request.version = (uint16_t)RIN_TIMER_ABI_VERSION;
-    request.flags = 0u;
+    request.flags = event ? 0u : RIN_TIMER_CREATE_FLAG_VALUE_TIMER_ID;
     request.clock_id = (int32_t)clock_id;
     request.notify = notify;
     request.signo = (int32_t)signo;
