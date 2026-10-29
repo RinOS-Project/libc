@@ -44,7 +44,11 @@ struct RinLocaleObject {
 _Static_assert(sizeof(struct RinLocaleObject) == 24u,
                "locale object layout drift");
 
-static _Thread_local locale_t locale_thread_current = LC_GLOBAL_LOCALE;
+static _Thread_local locale_t locale_thread_current_value;
+
+static locale_t locale_thread_current(void) {
+    return locale_thread_current_value ? locale_thread_current_value : LC_GLOBAL_LOCALE;
+}
 
 static void locale_zero(void* pointer, size_t size) {
     volatile uint8_t* output = (volatile uint8_t*)pointer;
@@ -232,13 +236,13 @@ void freelocale(locale_t locale) {
 }
 
 locale_t uselocale(locale_t locale) {
-    locale_t previous = locale_thread_current;
+    locale_t previous = locale_thread_current();
     if (!locale) return previous;
     if (locale != LC_GLOBAL_LOCALE && !locale_object_valid(locale)) {
         errno = EINVAL;
         return NULL;
     }
-    locale_thread_current = locale;
+    locale_thread_current_value = locale;
     return previous;
 }
 
@@ -385,7 +389,7 @@ int rin_locale_ctype_test(locale_t locale, int character,
 }
 
 int rin_locale_current_ctype_test(int character, uint32_t operation) {
-    return rin_locale_ctype_test(locale_thread_current, character, operation);
+    return rin_locale_ctype_test(locale_thread_current(), character, operation);
 }
 
 int rin_locale_wide_ctype_test(locale_t locale, uint32_t character,
@@ -400,7 +404,7 @@ int rin_locale_wide_ctype_test(locale_t locale, uint32_t character,
 
 int rin_locale_current_wide_ctype_test(uint32_t character,
                                        uint32_t operation) {
-    return rin_locale_wide_ctype_test(locale_thread_current, character,
+    return rin_locale_wide_ctype_test(locale_thread_current(), character,
                                       operation);
 }
 
@@ -414,7 +418,7 @@ int rin_locale_wide_ctype_iswctype(locale_t locale, uint32_t character,
 
 int rin_locale_current_wide_ctype_iswctype(uint32_t character,
                                            unsigned long descriptor) {
-    return rin_locale_wide_ctype_iswctype(locale_thread_current, character,
+    return rin_locale_wide_ctype_iswctype(locale_thread_current(), character,
                                           descriptor);
 }
 
@@ -432,7 +436,7 @@ uint32_t rin_locale_wide_ctype_map(locale_t locale, uint32_t character,
 
 uint32_t rin_locale_current_wide_ctype_map(uint32_t character,
                                            uint32_t operation) {
-    return rin_locale_wide_ctype_map(locale_thread_current, character,
+    return rin_locale_wide_ctype_map(locale_thread_current(), character,
                                      operation);
 }
 
@@ -447,7 +451,7 @@ uint32_t rin_locale_wide_ctype_towctrans(locale_t locale, uint32_t character,
 
 uint32_t rin_locale_current_wide_ctype_towctrans(
     uint32_t character, unsigned long descriptor) {
-    return rin_locale_wide_ctype_towctrans(locale_thread_current, character,
+    return rin_locale_wide_ctype_towctrans(locale_thread_current(), character,
                                           descriptor);
 }
 
@@ -472,7 +476,7 @@ int rin_locale_ctype_map(locale_t locale, int character,
 }
 
 int rin_locale_current_ctype_map(int character, uint32_t operation) {
-    return rin_locale_ctype_map(locale_thread_current, character, operation);
+    return rin_locale_ctype_map(locale_thread_current(), character, operation);
 }
 
 static _Thread_local rin_unicode_mbstate_t locale_mbrtowc_private_state = {
@@ -550,7 +554,7 @@ static int locale_conversion_state(locale_t locale,
 }
 
 int rin_locale_current_mb_cur_max(void) {
-    return locale_codeset_is_utf8(locale_thread_current) ? 4 : 1;
+    return locale_codeset_is_utf8(locale_thread_current()) ? 4 : 1;
 }
 
 static size_t locale_mbrtowc32(locale_t locale, uint32_t* character,
@@ -630,10 +634,10 @@ static size_t locale_wcrtomb32(locale_t locale, char* destination,
 size_t rin_locale_current_mbrlen(const char* source, size_t length,
                                  struct rin_unicode_mbstate* state) {
     rin_unicode_mbstate_t* active = (rin_unicode_mbstate_t*)state;
-    if (!locale_conversion_state(locale_thread_current, &active,
+    if (!locale_conversion_state(locale_thread_current(), &active,
                                  &locale_mbrlen_private_state))
         return (size_t)-1;
-    return locale_mbrtowc32(locale_thread_current, (uint32_t*)0, source,
+    return locale_mbrtowc32(locale_thread_current(), (uint32_t*)0, source,
                             length, active);
 }
 
@@ -641,10 +645,10 @@ size_t rin_locale_current_mbrtowc32(
     uint32_t* character, const char* source, size_t length,
     struct rin_unicode_mbstate* state) {
     rin_unicode_mbstate_t* active = (rin_unicode_mbstate_t*)state;
-    if (!locale_conversion_state(locale_thread_current, &active,
+    if (!locale_conversion_state(locale_thread_current(), &active,
                                  &locale_mbrtowc_private_state))
         return (size_t)-1;
-    return locale_mbrtowc32(locale_thread_current, character, source, length,
+    return locale_mbrtowc32(locale_thread_current(), character, source, length,
                             active);
 }
 
@@ -652,10 +656,10 @@ size_t rin_locale_current_wcrtomb32(
     char* destination, uint32_t character,
     struct rin_unicode_mbstate* state) {
     rin_unicode_mbstate_t* active = (rin_unicode_mbstate_t*)state;
-    if (!locale_conversion_state(locale_thread_current, &active,
+    if (!locale_conversion_state(locale_thread_current(), &active,
                                  &locale_wcrtomb_private_state))
         return (size_t)-1;
-    return locale_wcrtomb32(locale_thread_current, destination, character,
+    return locale_wcrtomb32(locale_thread_current(), destination, character,
                             active);
 }
 
@@ -677,16 +681,16 @@ size_t rin_locale_current_mbsrtowcs32(
         errno = EINVAL;
         return (size_t)-1;
     }
-    if (!locale_conversion_state(locale_thread_current, &active,
+    if (!locale_conversion_state(locale_thread_current(), &active,
                                  &locale_mbsrtowcs_private_state))
         return (size_t)-1;
     cursor = *source;
     if (!cursor) return 0u;
     while (*cursor != '\0' && (!destination || converted < length)) {
         uint32_t character = 0u;
-        size_t available = locale_multibyte_available(locale_thread_current,
+        size_t available = locale_multibyte_available(locale_thread_current(),
                                                        cursor);
-        size_t consumed = locale_mbrtowc32(locale_thread_current, &character,
+        size_t consumed = locale_mbrtowc32(locale_thread_current(), &character,
                                            cursor, available, active);
         if (consumed == (size_t)-1 || consumed == (size_t)-2) {
             if (consumed == (size_t)-2) errno = EILSEQ;
@@ -725,7 +729,7 @@ size_t rin_locale_current_wcsrtombs32(
         errno = EINVAL;
         return (size_t)-1;
     }
-    if (!locale_conversion_state(locale_thread_current, &active,
+    if (!locale_conversion_state(locale_thread_current(), &active,
                                  &locale_wcsrtombs_private_state))
         return (size_t)-1;
     cursor = *source;
@@ -733,7 +737,7 @@ size_t rin_locale_current_wcsrtombs32(
     while (*cursor != 0u) {
         char encoded[4];
         rin_unicode_mbstate_t candidate_state = *active;
-        size_t written = locale_wcrtomb32(locale_thread_current, encoded,
+        size_t written = locale_wcrtomb32(locale_thread_current(), encoded,
                                           *cursor, &candidate_state);
         if (written == (size_t)-1) {
             *source = cursor;
@@ -773,7 +777,7 @@ int rin_locale_current_mblen(const char* source, size_t length) {
     size_t result;
     locale_mbstate_reset(&locale_mblen_private_state);
     if (!source) return 0;
-    result = locale_mbrtowc32(locale_thread_current, (uint32_t*)0, source,
+    result = locale_mbrtowc32(locale_thread_current(), (uint32_t*)0, source,
                               length, &locale_mblen_private_state);
     if (result == (size_t)-1 || result == (size_t)-2) {
         if (result == (size_t)-2) errno = EILSEQ;
@@ -788,7 +792,7 @@ int rin_locale_current_mbtowc32(uint32_t* character, const char* source,
     size_t result;
     locale_mbstate_reset(&locale_mbtowc_private_state);
     if (!source) return 0;
-    result = locale_mbrtowc32(locale_thread_current, character, source,
+    result = locale_mbrtowc32(locale_thread_current(), character, source,
                               length, &locale_mbtowc_private_state);
     if (result == (size_t)-1 || result == (size_t)-2) {
         if (result == (size_t)-2) errno = EILSEQ;
@@ -804,7 +808,7 @@ int rin_locale_current_wctomb32(char* destination, uint32_t character) {
         locale_mbstate_reset(&locale_wctomb_private_state);
         return 0;
     }
-    result = locale_wcrtomb32(locale_thread_current, destination, character,
+    result = locale_wcrtomb32(locale_thread_current(), destination, character,
                               &locale_wctomb_private_state);
     return result == (size_t)-1 ? -1 : (int)result;
 }
@@ -820,10 +824,10 @@ size_t rin_locale_current_mbstowcs32(uint32_t* destination,
     locale_mbstate_reset(&locale_mbstowcs_private_state);
     while (*cursor != '\0' && (!destination || converted < length)) {
         uint32_t character = 0u;
-        size_t available = locale_multibyte_available(locale_thread_current,
+        size_t available = locale_multibyte_available(locale_thread_current(),
                                                        cursor);
         size_t consumed = locale_mbrtowc32(
-            locale_thread_current, &character, cursor, available,
+            locale_thread_current(), &character, cursor, available,
             &locale_mbstowcs_private_state);
         if (consumed == (size_t)-1 || consumed == (size_t)-2) {
             if (consumed == (size_t)-2) errno = EILSEQ;
@@ -854,7 +858,7 @@ size_t rin_locale_current_wcstombs32(char* destination,
     while (*cursor != 0u) {
         char encoded[4];
         rin_unicode_mbstate_t candidate_state = locale_wcstombs_private_state;
-        size_t written = locale_wcrtomb32(locale_thread_current, encoded,
+        size_t written = locale_wcrtomb32(locale_thread_current(), encoded,
                                           *cursor, &candidate_state);
         if (written == (size_t)-1) return (size_t)-1;
         if (destination && (converted > length ||
@@ -974,23 +978,23 @@ size_t rin_locale_wcsxfrm32(locale_t locale, uint32_t* destination,
 }
 
 int rin_locale_current_strcoll(const char* left, const char* right) {
-    return rin_locale_strcoll(locale_thread_current, left, right);
+    return rin_locale_strcoll(locale_thread_current(), left, right);
 }
 
 size_t rin_locale_current_strxfrm(char* destination, const char* source,
                                   size_t capacity) {
-    return rin_locale_strxfrm(locale_thread_current, destination, source,
+    return rin_locale_strxfrm(locale_thread_current(), destination, source,
                               capacity);
 }
 
 int rin_locale_current_wcscoll32(const uint32_t* left,
                                  const uint32_t* right) {
-    return rin_locale_wcscoll32(locale_thread_current, left, right);
+    return rin_locale_wcscoll32(locale_thread_current(), left, right);
 }
 
 size_t rin_locale_current_wcsxfrm32(uint32_t* destination,
                                     const uint32_t* source,
                                     size_t capacity) {
-    return rin_locale_wcsxfrm32(locale_thread_current, destination, source,
+    return rin_locale_wcsxfrm32(locale_thread_current(), destination, source,
                                 capacity);
 }
