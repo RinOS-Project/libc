@@ -15,6 +15,12 @@
 #include "syscall.h"
 #include <rin/fs/path_at_abi.h>
 
+#if defined(__i386__) && defined(RIN_TIME_ABI64) && \
+    !defined(__RIN_FILE_OFFSET_BITS64) && \
+    !defined(__RIN_SYS_TYPES_HOST_OWNER) && !defined(MIDL_PASS)
+#define __RIN_STAT_TIME64_ABI 1
+#endif
+
 #ifndef MIDL_PASS
 #ifndef _RIN_STAT_SYSCALL2
 #define _RIN_STAT_SYSCALL2(number, argument1, argument2) \
@@ -150,6 +156,38 @@ struct stat {
     time_t    st_ctime;   /* 最終状態変更時刻 */
 };
 
+#if defined(__RIN_STAT_TIME64_ABI)
+#if defined(__cplusplus)
+static_assert(sizeof(struct stat) == 64u, "RinOS IA-32 time64 stat size");
+static_assert(offsetof(struct stat, st_ino) == 4u,
+              "RinOS IA-32 time64 stat inode offset");
+static_assert(offsetof(struct stat, st_size) == 28u,
+              "RinOS IA-32 time64 stat size offset");
+static_assert(offsetof(struct stat, st_blocks) == 36u,
+              "RinOS IA-32 time64 stat blocks offset");
+static_assert(offsetof(struct stat, st_atime) == 40u,
+              "RinOS IA-32 time64 stat timestamp offset");
+static_assert(offsetof(struct stat, st_mtime) == 48u,
+              "RinOS IA-32 time64 stat timestamp offset");
+static_assert(offsetof(struct stat, st_ctime) == 56u,
+              "RinOS IA-32 time64 stat timestamp offset");
+#else
+_Static_assert(sizeof(struct stat) == 64u, "RinOS IA-32 time64 stat size");
+_Static_assert(offsetof(struct stat, st_ino) == 4u,
+               "RinOS IA-32 time64 stat inode offset");
+_Static_assert(offsetof(struct stat, st_size) == 28u,
+               "RinOS IA-32 time64 stat size offset");
+_Static_assert(offsetof(struct stat, st_blocks) == 36u,
+               "RinOS IA-32 time64 stat blocks offset");
+_Static_assert(offsetof(struct stat, st_atime) == 40u,
+               "RinOS IA-32 time64 stat timestamp offset");
+_Static_assert(offsetof(struct stat, st_mtime) == 48u,
+               "RinOS IA-32 time64 stat timestamp offset");
+_Static_assert(offsetof(struct stat, st_ctime) == 56u,
+               "RinOS IA-32 time64 stat timestamp offset");
+#endif
+#endif
+
 #if !defined(__RIN_SYS_TYPES_HOST_OWNER)
 /* Stable compat32 large-file record. The old 52-byte stat ABI intentionally
  * stays unchanged; stat64 and _FILE_OFFSET_BITS=64 use this 88-byte layout. */
@@ -175,6 +213,82 @@ static_assert(sizeof(struct stat64) == 88u, "RinOS stat64 ABI size");
 #elif !defined(MIDL_PASS)
 _Static_assert(sizeof(struct stat64) == 88u, "RinOS stat64 ABI size");
 #endif
+
+#if defined(__RIN_STAT_TIME64_ABI)
+static inline int __rin_stat64_to_time64(const struct stat64* source,
+                                         struct stat* output) {
+    if (!source || !output) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (source->st_ino > ULONG_MAX ||
+        source->st_size < (int64_t)LONG_MIN ||
+        source->st_size > (int64_t)LONG_MAX ||
+        source->st_blksize < (int64_t)LONG_MIN ||
+        source->st_blksize > (int64_t)LONG_MAX ||
+        source->st_blocks < (int64_t)LONG_MIN ||
+        source->st_blocks > (int64_t)LONG_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    output->st_dev = (dev_t)source->st_dev;
+    output->st_ino = (ino_t)source->st_ino;
+    output->st_mode = (mode_t)source->st_mode;
+    output->st_nlink = (nlink_t)source->st_nlink;
+    output->st_uid = (uid_t)source->st_uid;
+    output->st_gid = (gid_t)source->st_gid;
+    output->st_rdev = (dev_t)source->st_rdev;
+    output->st_size = (off_t)source->st_size;
+    output->st_blksize = (blksize_t)source->st_blksize;
+    output->st_blocks = (blkcnt_t)source->st_blocks;
+    output->st_atime = (time_t)source->st_atime;
+    output->st_mtime = (time_t)source->st_mtime;
+    output->st_ctime = (time_t)source->st_ctime;
+    return 0;
+}
+
+static inline int __rin_fstat_time64(int fd, struct stat* statbuf) {
+    struct stat64 wide;
+    int result;
+    if (!statbuf) {
+        errno = EFAULT;
+        return -1;
+    }
+    result = __rin_stat_int_result(_RIN_STAT_SYSCALL2(
+        SYS_FSTAT64, fd, &wide));
+    return result < 0 ? -1 : __rin_stat64_to_time64(&wide, statbuf);
+}
+
+static inline int __rin_stat_time64_pathat(int dirfd, const char* pathname,
+                                           struct stat* statbuf, int flags) {
+    RinPathAtCallV1 call;
+    if (!pathname || !statbuf) {
+        errno = EFAULT;
+        return -1;
+    }
+    if ((flags & ~(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW |
+                   AT_NO_AUTOMOUNT)) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (pathname[0] == '\0') {
+        if ((flags & AT_EMPTY_PATH) == 0) {
+            errno = ENOENT;
+            return -1;
+        }
+        if (dirfd != AT_FDCWD) return __rin_fstat_time64(dirfd, statbuf);
+        pathname = ".";
+        flags &= ~AT_EMPTY_PATH;
+    }
+    __rin_stat_path_at_init(&call, RIN_PATH_AT_STAT);
+    call.flags = (uint32_t)(flags & ~AT_EMPTY_PATH);
+    call.dirfd = dirfd;
+    call.path1 = (uint64_t)(uintptr_t)pathname;
+    call.buffer = (uint64_t)(uintptr_t)statbuf;
+    call.buffer_size = sizeof(*statbuf);
+    return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
+}
+#endif /* __RIN_STAT_TIME64_ABI */
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -183,29 +297,42 @@ _Static_assert(sizeof(struct stat64) == 88u, "RinOS stat64 ABI size");
 
 #ifndef MIDL_PASS
 static inline int stat(const char* pathname, struct stat* statbuf) {
+#if defined(__RIN_STAT_TIME64_ABI)
+    return __rin_stat_time64_pathat(AT_FDCWD, pathname, statbuf, 0);
+#else
     if (!pathname || !statbuf) {
         errno = EFAULT;
         return -1;
     }
     return __rin_stat_int_result(_RIN_STAT_SYSCALL2(
         SYS_STAT, pathname, statbuf));
+#endif
 }
 
 static inline int fstat(int fd, struct stat* statbuf) {
+#if defined(__RIN_STAT_TIME64_ABI)
+    return __rin_fstat_time64(fd, statbuf);
+#else
     if (!statbuf) {
         errno = EFAULT;
         return -1;
     }
     return __rin_stat_int_result(_RIN_STAT_SYSCALL2(
         SYS_FSTAT, fd, statbuf));
+#endif
 }
 
 static inline int lstat(const char* pathname, struct stat* statbuf) {
+#if defined(__RIN_STAT_TIME64_ABI)
+    return __rin_stat_time64_pathat(AT_FDCWD, pathname, statbuf,
+                                    AT_SYMLINK_NOFOLLOW);
+#else
     if (!pathname || !statbuf) {
         errno = EFAULT;
         return -1;
     }
     return __rin_stat_int_result(_RIN_STAT_SYSCALL2(SYS_LSTAT, pathname, statbuf));
+#endif
 }
 
 /* Device and FIFO inode creation shares the stable descriptor-relative path
@@ -239,6 +366,9 @@ static inline int mkfifo(const char* pathname, mode_t mode) {
 }
 
 static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf, int flags) {
+#if defined(__RIN_STAT_TIME64_ABI)
+    return __rin_stat_time64_pathat(dirfd, pathname, statbuf, flags);
+#else
     RinPathAtCallV1 call;
     if (!pathname || !statbuf) {
         errno = EFAULT;
@@ -275,6 +405,7 @@ static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf,
     call.buffer = (uint64_t)(uintptr_t)statbuf;
     call.buffer_size = sizeof(*statbuf);
     return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
+#endif
 }
 
 #if !defined(__RIN_SYS_TYPES_HOST_OWNER)
@@ -335,8 +466,15 @@ static inline int lstat64(const char* pathname, struct stat64* statbuf) {
 /* Capability-only fstatat for WASI preopens. Unlike fstatat(), this cannot
  * fall back to the process CWD or traverse outside the retained dirfd. */
 static inline int rin_fstatat_beneath(int dirfd, const char* pathname,
-                                      struct stat* statbuf, int flags) {
+#if defined(__RIN_FILE_OFFSET_BITS64) && \
+    !defined(__RIN_SYS_TYPES_HOST_OWNER)
+                                      struct stat64* statbuf,
+#else
+                                      struct stat* statbuf,
+#endif
+                                      int flags) {
     intptr_t result;
+    RinPathAtCallV1 call;
 
     if (!pathname || !statbuf) {
         errno = EFAULT;
@@ -350,11 +488,14 @@ static inline int rin_fstatat_beneath(int dirfd, const char* pathname,
         errno = EINVAL;
         return -1;
     }
-
-    result = _RIN_STAT_SYSCALL4(
-        SYS_FSTATAT_BENEATH, (uintptr_t)dirfd, (uintptr_t)pathname,
-        (uintptr_t)statbuf, (uintptr_t)flags);
-    return __rin_stat_int_result(result);
+    __rin_stat_path_at_init(&call, RIN_PATH_AT_STAT_BENEATH);
+    call.flags = (uint32_t)flags;
+    call.dirfd = dirfd;
+    call.path1 = (uint64_t)(uintptr_t)pathname;
+    call.buffer = (uint64_t)(uintptr_t)statbuf;
+    call.buffer_size = sizeof(*statbuf);
+    result = _RIN_STAT_PATH_AT_CALL(&call);
+    return __rin_stat_path_at_result(result);
 }
 
 #ifndef __MKDIR_DEFINED
