@@ -92,6 +92,9 @@
 #ifndef _POSIX_THREAD_ATTR_STACKSIZE
 #define _POSIX_THREAD_ATTR_STACKSIZE 200809L
 #endif
+#ifndef _POSIX_THREAD_ROBUST_PRIO_INHERIT
+#define _POSIX_THREAD_ROBUST_PRIO_INHERIT 200809L
+#endif
 #if (defined(__x86_64__) || defined(_M_X64)) && \
     (!defined(RIN_FREESTANDING) || defined(RIN_USERSPACE))
 #ifndef _POSIX_THREAD_PROCESS_SHARED
@@ -1956,7 +1959,6 @@ static inline long sysconf(int name) {
     (defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE))
         case _SC_THREAD_PROCESS_SHARED:
 #endif
-        case _SC_THREAD_ROBUST_PRIO_INHERIT:
         case _SC_THREAD_ROBUST_PRIO_PROTECT:
         case _SC_THREAD_SPORADIC_SERVER:
         case _SC_TIMEOUTS:
@@ -1978,6 +1980,8 @@ static inline long sysconf(int name) {
             /* POSIX reserves errno changes for invalid names.  A known but
              * unsupported option returns -1 without changing errno. */
             return -1;
+        case _SC_THREAD_ROBUST_PRIO_INHERIT:
+            return 200809L;
         case _SC_SYNCHRONIZED_IO:
         case _SC_FSYNC:
         case _SC_MAPPED_FILES:

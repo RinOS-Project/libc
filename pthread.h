@@ -246,8 +246,13 @@ extern uint32_t platform_thread_current_tid(void);
 
 extern void* platform_mutex_create(void);
 extern void* platform_mutex_create_pi(void);
+extern void* platform_mutex_create_robust(int is_priority_inherit);
 extern void  platform_mutex_lock(void* mutex);
 extern int   platform_mutex_trylock(void* mutex);
+extern int   platform_mutex_lock_robust(void* mutex);
+extern int   platform_mutex_trylock_robust(void* mutex);
+extern int   platform_mutex_consistent(void* mutex);
+extern int   platform_mutex_unlock_robust(void* mutex);
 extern int   platform_mutex_busy(void* mutex);
 extern void  platform_mutex_unlock(void* mutex);
 extern void  platform_mutex_destroy(void* mutex);
@@ -572,6 +577,7 @@ static inline int pthread_mutexattr_init(pthread_mutexattr_t* attr) {
 #define RIN_PTHREAD_MUTEXATTR_PSHARED_MASK 0xff
 #define RIN_PTHREAD_MUTEXATTR_TYPE_MASK 0xff
 #define RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG 0x100
+#define RIN_PTHREAD_MUTEX_ROBUST_FLAG 0x200
 
 static inline int pthread_mutexattr_destroy(pthread_mutexattr_t* attr) {
     if (!attr) return EINVAL;
@@ -638,9 +644,6 @@ static inline int pthread_mutexattr_setrobust(pthread_mutexattr_t* attr,
     if (!attr || (robust != PTHREAD_MUTEX_STALLED &&
                   robust != PTHREAD_MUTEX_ROBUST))
         return EINVAL;
-#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    if (robust == PTHREAD_MUTEX_ROBUST) return ENOTSUP;
-#endif
     attr->pshared = (attr->pshared & RIN_PTHREAD_MUTEXATTR_PSHARED_MASK) |
         (robust == PTHREAD_MUTEX_ROBUST ?
              RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG : 0);
@@ -663,9 +666,6 @@ static inline int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutex
             PTHREAD_PROCESS_PRIVATE)
         return ENOTSUP;
     if (attr &&
-        (attr->pshared & RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG) != 0)
-        return ENOTSUP;
-    if (attr &&
         ((attr->type & RIN_PTHREAD_MUTEXATTR_TYPE_MASK) >
              PTHREAD_MUTEX_ERRORCHECK ||
          (attr->type & ~(RIN_PTHREAD_MUTEXATTR_TYPE_MASK |
@@ -674,12 +674,20 @@ static inline int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutex
     mutex->locked = 0;
     __rin_pthread_mutex_owner_store(mutex, 0);
     mutex->type = attr ? attr->type : PTHREAD_MUTEX_DEFAULT;
+    if (attr &&
+        (attr->pshared & RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG) != 0)
+        mutex->type |= RIN_PTHREAD_MUTEX_ROBUST_FLAG;
     mutex->recursion = 0;
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    mutex->kernel_mutex =
-        attr &&
-                (attr->type & RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG) != 0
-            ? platform_mutex_create_pi() : platform_mutex_create();
+    if ((mutex->type & RIN_PTHREAD_MUTEX_ROBUST_FLAG) != 0)
+        mutex->kernel_mutex = platform_mutex_create_robust(
+            attr &&
+            (attr->type & RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG) != 0);
+    else
+        mutex->kernel_mutex =
+            attr &&
+                    (attr->type & RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG) != 0
+                ? platform_mutex_create_pi() : platform_mutex_create();
     if (!mutex->kernel_mutex) return ENOMEM;
 #endif
     return 0;
@@ -720,6 +728,17 @@ static inline int pthread_mutex_lock(pthread_mutex_t* mutex) {
         return EDEADLK;
     }
 
+    if ((mutex->type & RIN_PTHREAD_MUTEX_ROBUST_FLAG) != 0) {
+        int result;
+        if (!mutex->kernel_mutex) return EINVAL;
+        result = platform_mutex_lock_robust(mutex->kernel_mutex);
+        if (result != 0 && result != EOWNERDEAD) return result;
+        __atomic_store_n(&mutex->locked, 1, __ATOMIC_RELEASE);
+        __rin_pthread_mutex_owner_store(mutex, self);
+        mutex->recursion = 1;
+        return result;
+    }
+
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
     if (!mutex->kernel_mutex) return EINVAL;
     platform_mutex_lock(mutex->kernel_mutex);
@@ -743,6 +762,17 @@ static inline int pthread_mutex_trylock(pthread_mutex_t* mutex) {
         if (mutex->recursion == INT_MAX) return EAGAIN;
         mutex->recursion++;
         return 0;
+    }
+
+    if ((mutex->type & RIN_PTHREAD_MUTEX_ROBUST_FLAG) != 0) {
+        int result;
+        if (!mutex->kernel_mutex) return EINVAL;
+        result = platform_mutex_trylock_robust(mutex->kernel_mutex);
+        if (result != 0 && result != EOWNERDEAD) return result;
+        __atomic_store_n(&mutex->locked, 1, __ATOMIC_RELEASE);
+        __rin_pthread_mutex_owner_store(mutex, self);
+        mutex->recursion = 1;
+        return result;
     }
 
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
@@ -773,6 +803,17 @@ static inline int pthread_mutex_unlock(pthread_mutex_t* mutex) {
         }
     }
 
+    if ((mutex->type & RIN_PTHREAD_MUTEX_ROBUST_FLAG) != 0) {
+        int result;
+        if (!mutex->kernel_mutex) return EINVAL;
+        result = platform_mutex_unlock_robust(mutex->kernel_mutex);
+        if (result != 0) return result;
+        __rin_pthread_mutex_owner_store(mutex, 0);
+        mutex->recursion = 0;
+        __atomic_store_n(&mutex->locked, 0, __ATOMIC_RELEASE);
+        return 0;
+    }
+
     __rin_pthread_mutex_owner_store(mutex, 0);
     mutex->recursion = 0;
 
@@ -783,6 +824,17 @@ static inline int pthread_mutex_unlock(pthread_mutex_t* mutex) {
 #endif
 
     return 0;
+}
+
+static inline int pthread_mutex_consistent(pthread_mutex_t* mutex) {
+    pthread_t self;
+    if (!mutex) return EINVAL;
+    if ((mutex->type & RIN_PTHREAD_MUTEX_ROBUST_FLAG) == 0) return EINVAL;
+    self = pthread_self();
+    if (self == 0) return ESRCH;
+    if (__rin_pthread_mutex_owner_load(mutex) != self) return EPERM;
+    if (!mutex->kernel_mutex) return EINVAL;
+    return platform_mutex_consistent(mutex->kernel_mutex);
 }
 #else
 /* ユーザー空間: libc がABI実装を提供 */
