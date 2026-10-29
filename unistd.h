@@ -114,7 +114,7 @@
 #ifndef _POSIX_BARRIERS
 #define _POSIX_BARRIERS 200809L
 #endif
-#ifndef _POSIX_SPAWN
+#if defined(RIN_USERSPACE) && !defined(_POSIX_SPAWN)
 #define _POSIX_SPAWN 200809L
 #endif
 
@@ -2024,8 +2024,11 @@ static inline long sysconf(int name) {
         case _SC_THREADS:
         case _SC_READER_WRITER_LOCKS:
         case _SC_BARRIERS:
+            return 200809L;
+#if defined(RIN_USERSPACE)
         case _SC_SPAWN:
             return 200809L;
+#endif
         case _SC_IOV_MAX:
             return IOV_MAX;
 #if !defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
@@ -2086,6 +2089,9 @@ static inline long sysconf(int name) {
 #endif
         case _SC_SPORADIC_SERVER:
         case _SC_SS_REPL_MAX:
+#if !defined(RIN_USERSPACE)
+        case _SC_SPAWN:
+#endif
         case _SC_THREAD_ATTR_STACKADDR:
         case _SC_THREAD_CPUTIME:
         case _SC_THREAD_PRIO_INHERIT:
