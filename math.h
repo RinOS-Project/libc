@@ -325,6 +325,36 @@ static inline float nextafterf(float from, float to) {
     return u.f;
 }
 
+/* RinOS long double uses the binary64 representation and calling convention,
+ * so the long-double nextafter variants can share the double implementation
+ * without losing a representable value. */
+static inline long double nextafterl(long double from, long double to) {
+    return (long double)nextafter((double)from, (double)to);
+}
+
+/* nexttoward must compare against the long-double direction before choosing
+ * the next value of the narrower return type.  In particular, converting
+ * `to` first can round it back to `from` on targets with wider long double. */
+static inline double nexttoward(double from, long double to) {
+    if (from == to)
+        return (double)to;
+    if (from != from || to != to)
+        return from + (double)to;
+    return nextafter(from, to > (long double)from ? HUGE_VAL : -HUGE_VAL);
+}
+
+static inline float nexttowardf(float from, long double to) {
+    if ((long double)from == to)
+        return (float)to;
+    if (from != from || to != to)
+        return from + (float)to;
+    return nextafterf(from, to > (long double)from ? HUGE_VALF : -HUGE_VALF);
+}
+
+static inline long double nexttowardl(long double from, long double to) {
+    return nextafterl(from, to);
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
