@@ -35,7 +35,18 @@
 #define RIN_PTHREAD_ROBUST_OWNER_DIED UINT32_C(0x40000000)
 #define RIN_PTHREAD_ROBUST_WAITERS UINT32_C(0x80000000)
 
+/* The Windows host-test toolchain emulates __thread through a
+ * pthread_once call, which would re-enter RinOS's own pthread_once in
+ * TUs that link this runtime (and pollute futex-call accounting with its
+ * one-time init wake).  A plain cell is safe on that host-only path:
+ * host-test waits are single-threaded and scripted, so no second thread
+ * can bump the epoch mid-wait.  Production (ELF) toolchains use real
+ * TLS. */
+#if defined(_WIN32)
+static uint64_t g_rin_pthread_cond_signal_interrupt_epoch;
+#else
 static __thread uint64_t g_rin_pthread_cond_signal_interrupt_epoch;
+#endif
 
 #ifndef _RIN_PTHREAD_RUNTIME_FUTEX
 #define _RIN_PTHREAD_RUNTIME_FUTEX(address, operation, value, timeout) \
@@ -289,12 +300,6 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
 #define _RIN_PTHREAD_RUNTIME_SELF() pthread_self()
 #endif
 
-#if defined(__x86_64__) || defined(_M_X64)
-/* Keep the bootstrap argument record below the initial callee frame,
- * the SysV red-zone, and a small bootstrap spill area. */
-#define THREAD_BOOTSTRAP_RESERVED_64 0x100UL
-#endif
-
 #define PROT_NONE      0x00
 #define PROT_READ      0x01
 #define PROT_WRITE     0x02
@@ -335,6 +340,7 @@ typedef struct {
     void* arg;
     volatile int start_release;
     int start_error;
+    uint32_t references;
 } rin_thread_start_record_t;
 
 static uintptr_t rin_align_up_word(uintptr_t value, uintptr_t align) {
@@ -345,12 +351,6 @@ static int rin_pthread_syscall_error(intptr_t result) {
     if (result >= 0 || result < -(intptr_t)4095) return EIO;
     return (int)-result;
 }
-
-#if defined(__x86_64__) || defined(_M_X64)
-static uintptr_t rin_align_down_word(uintptr_t value, uintptr_t align) {
-    return value & ~(align - (uintptr_t)1);
-}
-#endif
 
 static void rin_thread_stack_lock_acquire(void) {
     while (__sync_lock_test_and_set(&g_thread_stack_lock, 1U)) {
@@ -567,11 +567,21 @@ static void __attribute__((naked, used)) __thread_exit_trampoline(void) {
     );
 }
 
+static void rin_pthread_start_record_release_ref(
+    rin_thread_start_record_t* record) {
+    if (record &&
+        __atomic_fetch_sub(&record->references, 1u,
+                           __ATOMIC_ACQ_REL) == 1u) {
+        free(record);
+    }
+}
+
 static void* __attribute__((used)) __pthread_thread_bootstrap(void* raw_arg) {
     rin_thread_start_record_t* start = (rin_thread_start_record_t*)raw_arg;
     void* (*start_routine)(void*) = NULL;
     void* start_arg = NULL;
     void* result = NULL;
+    int start_error = 0;
 
     (void)rin_pthread_cancel_register(_RIN_PTHREAD_RUNTIME_SELF());
 
@@ -580,12 +590,16 @@ static void* __attribute__((used)) __pthread_thread_bootstrap(void* raw_arg) {
             (void)_RIN_PTHREAD_RUNTIME_FUTEX(
                 &start->start_release, FUTEX_WAIT_PRIVATE, 0, NULL);
         }
-        if (__atomic_load_n(&start->start_error, __ATOMIC_ACQUIRE) != 0) {
+        start_error = __atomic_load_n(&start->start_error, __ATOMIC_ACQUIRE);
+        if (start_error == 0) {
+            start_routine = start->start_routine;
+            start_arg = start->arg;
+        }
+        rin_pthread_start_record_release_ref(start);
+        if (start_error != 0) {
             __thread_exit_wrapper(NULL);
             __builtin_unreachable();
         }
-        start_routine = start->start_routine;
-        start_arg = start->arg;
     }
 
     if (start_routine) {
@@ -620,6 +634,7 @@ static void rin_pthread_start_release(rin_thread_start_record_t* record,
     __atomic_store_n(&record->start_release, 1, __ATOMIC_RELEASE);
     (void)_RIN_PTHREAD_RUNTIME_FUTEX(
         &record->start_release, FUTEX_WAKE_PRIVATE, 1, NULL);
+    rin_pthread_start_record_release_ref(record);
 }
 
 static int rin_pthread_create_impl(pthread_t* thread,
@@ -800,12 +815,9 @@ static int rin_pthread_create_impl(pthread_t* thread,
 
     {
         uintptr_t stack_top = 0;
-        uintptr_t record_size = rin_align_up_word(
-            (uintptr_t)sizeof(rin_thread_start_record_t), (uintptr_t)sizeof(uintptr_t));
         uintptr_t record_addr = 0;
         rin_thread_start_record_t* record = NULL;
 #if defined(__x86_64__) || defined(_M_X64)
-        uintptr_t record_limit = 0;
         {
             uintptr_t checked_top = 0;
             if (!rin_thread_stack_top_checked((uintptr_t)stack_usable_base,
@@ -821,48 +833,26 @@ static int rin_pthread_create_impl(pthread_t* thread,
             }
             stack_top = checked_top;
         }
-        record_limit = stack_top - sizeof(uintptr_t);
-        if (record_limit <= THREAD_BOOTSTRAP_RESERVED_64 + record_size) {
-            if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
-                (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base, alloc_size);
-            } else if (alloc_kind == RIN_THREAD_ALLOC_MALLOC) {
-                free(alloc_base);
-            }
-            return EINVAL;
-        }
-        record_addr = rin_align_down_word(record_limit - THREAD_BOOTSTRAP_RESERVED_64 - record_size,
-                                          16UL);
-        if (record_addr < (uintptr_t)stack_usable_base ||
-            record_addr + record_size > record_limit - THREAD_BOOTSTRAP_RESERVED_64) {
-            if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
-                (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base, alloc_size);
-            } else if (alloc_kind == RIN_THREAD_ALLOC_MALLOC) {
-                free(alloc_base);
-            }
-            return EINVAL;
-        }
 #else
-        {
-            uintptr_t shadow_bytes = sizeof(uintptr_t) * 2UL;
-            stack_top = (((uintptr_t)stack_usable_base + stack_usable_size) &
-                         ~(uintptr_t)0xFULL);
-            if (stack_top < (uintptr_t)stack_usable_base + shadow_bytes + record_size) {
-                if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
-                    (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base,
-                                                      alloc_size);
-                } else if (alloc_kind == RIN_THREAD_ALLOC_MALLOC) {
-                    free(alloc_base);
-                }
-                return EINVAL;
-            }
-            record_addr = stack_top - shadow_bytes - record_size;
-        }
+        stack_top = (((uintptr_t)stack_usable_base + stack_usable_size) &
+                     ~(uintptr_t)0xFULL);
 #endif
-        record = (rin_thread_start_record_t*)(uintptr_t)record_addr;
+        record = (rin_thread_start_record_t*)malloc(sizeof(*record));
+        if (!record) {
+            if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
+                (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base,
+                                                  alloc_size);
+            } else if (alloc_kind == RIN_THREAD_ALLOC_MALLOC) {
+                free(alloc_base);
+            }
+            return EAGAIN;
+        }
+        record_addr = (uintptr_t)record;
         record->start_routine = start_routine;
         record->arg = arg;
         record->start_release = 0;
         record->start_error = 0;
+        record->references = 2u;
         *(uintptr_t*)(uintptr_t)(stack_top - sizeof(uintptr_t)) =
             (uintptr_t)__thread_exit_trampoline;
 
@@ -877,6 +867,7 @@ static int rin_pthread_create_impl(pthread_t* thread,
         if (ret <= 0) {
             int err = rin_pthread_syscall_error(ret);
             rin_log("[PTHREAD] clone failed\n");
+            free(record);
             if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
                 (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base, alloc_size);
             } else if (alloc_kind == RIN_THREAD_ALLOC_MALLOC) {
@@ -1904,6 +1895,133 @@ int pthread_rwlock_wrlock(pthread_rwlock_t* rwlock) {
         return result;
     }
     return 0;
+}
+
+static int rin_pthread_rwlock_timedlock_impl(
+    pthread_rwlock_t* rwlock, const struct timespec* abstime, int writer) {
+    int result;
+    int acquired = 0;
+    int waiter_registered = 0;
+    RinPthreadRwlockWaitCleanup cleanup;
+    if (!rwlock || !abstime || abstime->tv_nsec < 0 ||
+        abstime->tv_nsec >= 1000000000L)
+        return EINVAL;
+
+    result = pthread_mutex_timedlock(&rwlock->mutex, abstime);
+    if (result != 0) return result;
+    cleanup.rwlock = rwlock;
+    cleanup.writer = writer;
+
+    if (writer) {
+        rwlock->waiting_writers++;
+        waiter_registered = 1;
+        while (rin_pthread_rwlock_writer_active(rwlock) ||
+               rwlock->readers > 0) {
+            pthread_cleanup_push(rin_pthread_rwlock_wait_cancel_cleanup,
+                                 &cleanup);
+            result = pthread_cond_timedwait(&rwlock->can_write,
+                                            &rwlock->mutex, abstime);
+            pthread_cleanup_pop(0);
+            if (result != 0) {
+                --rwlock->waiting_writers;
+                waiter_registered = 0;
+                if (rin_pthread_mutex_owned_by_current_thread(
+                        &rwlock->mutex)) {
+                    if (result == ETIMEDOUT &&
+                        !rin_pthread_rwlock_writer_active(rwlock) &&
+                        rwlock->readers == 0 &&
+                        rwlock->waiting_writers == 0) {
+                        rwlock->writer |=
+                            RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
+                        acquired = 1;
+                        result = 0;
+                        break;
+                    }
+                    {
+                        int notify_result =
+                            rin_pthread_rwlock_notify_waiters_locked(rwlock);
+                        int unlock_result =
+                            pthread_mutex_unlock(&rwlock->mutex);
+                        if (notify_result != 0) return notify_result;
+                        if (unlock_result != 0) return unlock_result;
+                    }
+                }
+                return result;
+            }
+        }
+        if (waiter_registered) --rwlock->waiting_writers;
+        if (!acquired) {
+            if (!rin_pthread_rwlock_writer_active(rwlock) &&
+                rwlock->readers == 0) {
+                rwlock->writer |= RIN_PTHREAD_RWLOCK_WRITER_ACTIVE;
+            } else {
+                (void)rin_pthread_rwlock_notify_waiters_locked(rwlock);
+                (void)pthread_mutex_unlock(&rwlock->mutex);
+                return EBUSY;
+            }
+        }
+    } else {
+        while (rin_pthread_rwlock_writer_active(rwlock) ||
+               rwlock->waiting_writers > 0) {
+            rwlock->waiting_readers++;
+            pthread_cleanup_push(rin_pthread_rwlock_wait_cancel_cleanup,
+                                 &cleanup);
+            result = pthread_cond_timedwait(&rwlock->can_read,
+                                            &rwlock->mutex, abstime);
+            pthread_cleanup_pop(0);
+            __atomic_fetch_sub(&rwlock->waiting_readers, 1,
+                               __ATOMIC_SEQ_CST);
+            if (result != 0) {
+                if (result == ETIMEDOUT &&
+                    !rin_pthread_rwlock_writer_active(rwlock) &&
+                    rwlock->waiting_writers == 0) {
+                    rwlock->readers++;
+                    acquired = 1;
+                    result = 0;
+                    break;
+                }
+                if (rin_pthread_mutex_owned_by_current_thread(
+                        &rwlock->mutex)) {
+                    int unlock_result =
+                        pthread_mutex_unlock(&rwlock->mutex);
+                    if (unlock_result != 0) return unlock_result;
+                }
+                return result;
+            }
+        }
+        if (!acquired) {
+            if (!rin_pthread_rwlock_writer_active(rwlock) &&
+                rwlock->waiting_writers == 0) {
+                rwlock->readers++;
+            } else {
+                (void)pthread_mutex_unlock(&rwlock->mutex);
+                return EBUSY;
+            }
+        }
+    }
+
+    result = pthread_mutex_unlock(&rwlock->mutex);
+    if (result != 0) {
+        rin_pthread_rwlock_rollback_acquire(rwlock, writer);
+        return result;
+    }
+    return 0;
+}
+
+int pthread_rwlock_timedrdlock(pthread_rwlock_t* rwlock,
+                               const struct timespec* abstime) {
+    int saved_errno = errno;
+    int result = rin_pthread_rwlock_timedlock_impl(rwlock, abstime, 0);
+    errno = saved_errno;
+    return result;
+}
+
+int pthread_rwlock_timedwrlock(pthread_rwlock_t* rwlock,
+                               const struct timespec* abstime) {
+    int saved_errno = errno;
+    int result = rin_pthread_rwlock_timedlock_impl(rwlock, abstime, 1);
+    errno = saved_errno;
+    return result;
 }
 
 int pthread_rwlock_tryrdlock(pthread_rwlock_t* rwlock) {

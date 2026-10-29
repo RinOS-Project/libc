@@ -4,6 +4,22 @@
  * POSIX Threads API
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__unix__) || defined(__APPLE__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_PTHREAD_SYSCALL0) && \
+    !defined(_RIN_PTHREAD_SELF_SYSCALL0) && \
+    !defined(_RIN_PTHREAD_STACK_INFO_SYSCALL3) && \
+    !defined(_RIN_PTHREAD_SIGMASK_SYSCALL4) && \
+    !defined(_RIN_PTHREAD_NAME_SYSCALL1) && \
+    !defined(_RIN_SCHED_SYSCALL0) && \
+    !defined(_RIN_SCHED_SYSCALL1) && \
+    !defined(_RIN_SCHED_SYSCALL2) && \
+    !defined(_RIN_SCHED_SYSCALL3)
+#include_next <pthread.h>
+#else
+
 #ifndef _PTHREAD_H
 #define _PTHREAD_H
 
@@ -44,6 +60,11 @@
 #ifndef _RIN_PTHREAD_NAME_SYSCALL1
 #define _RIN_PTHREAD_NAME_SYSCALL1(number, argument) \
     _syscall1((uintptr_t)(number), (uintptr_t)(argument))
+#endif
+#ifndef _RIN_PTHREAD_SCHED_SYSCALL2
+#define _RIN_PTHREAD_SCHED_SYSCALL2(number, argument1, argument2) \
+    _syscall2((uintptr_t)(number), (uintptr_t)(argument1), \
+              (uintptr_t)(argument2))
 #endif
 
 /* Pthread entry points return either a POSIX error number directly or a
@@ -168,6 +189,11 @@ typedef struct {
 typedef struct {
     int pshared;
 } pthread_rwlockattr_t;
+
+/* Shared-memory ticket word; active owners and waiters stay visible to destroy. */
+typedef struct {
+    volatile uint32_t state;
+} pthread_spinlock_t;
 
 #define RIN_PTHREAD_RWLOCK_WRITER_ACTIVE 0x1
 #define RIN_PTHREAD_RWLOCK_PROCESS_SHARED 0x2
@@ -989,9 +1015,16 @@ extern int pthread_mutex_destroy(pthread_mutex_t* mutex);
 extern int pthread_mutex_lock(pthread_mutex_t* mutex);
 extern int pthread_mutex_timedlock(pthread_mutex_t* mutex,
                                   const struct timespec* abstime);
+extern int pthread_mutex_clocklock(pthread_mutex_t* mutex, clockid_t clock_id,
+                                   const struct timespec* abstime);
 extern int pthread_mutex_trylock(pthread_mutex_t* mutex);
 extern int pthread_mutex_unlock(pthread_mutex_t* mutex);
 extern int pthread_mutex_consistent(pthread_mutex_t* mutex);
+extern int pthread_spin_init(pthread_spinlock_t* lock, int pshared);
+extern int pthread_spin_destroy(pthread_spinlock_t* lock);
+extern int pthread_spin_lock(pthread_spinlock_t* lock);
+extern int pthread_spin_trylock(pthread_spinlock_t* lock);
+extern int pthread_spin_unlock(pthread_spinlock_t* lock);
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1434,6 +1467,10 @@ extern int pthread_rwlock_init(pthread_rwlock_t* rwlock, const pthread_rwlockatt
 extern int pthread_rwlock_destroy(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_rdlock(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_wrlock(pthread_rwlock_t* rwlock);
+extern int pthread_rwlock_timedrdlock(pthread_rwlock_t* rwlock,
+                                      const struct timespec* abstime);
+extern int pthread_rwlock_timedwrlock(pthread_rwlock_t* rwlock,
+                                      const struct timespec* abstime);
 extern int pthread_rwlock_tryrdlock(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_trywrlock(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_unlock(pthread_rwlock_t* rwlock);
@@ -1624,6 +1661,10 @@ int pthread_setcancelstate(int state, int* oldstate);
 int pthread_setcanceltype(int type, int* oldtype);
 int pthread_cancel(pthread_t thread);
 void pthread_testcancel(void);
+/* Async-cancel delivery on __RIN_SIGCANCEL.  Installed once per process
+ * when the first thread enables PTHREAD_CANCEL_ASYNCHRONOUS; acts only
+ * for an async, enabled, pending, non-deferred owner. */
+void __rin_pthread_async_cancel_handler(int sig);
 
 typedef struct __rin_pthread_cleanup_buffer {
     struct __rin_pthread_cleanup_buffer* next;
@@ -1680,8 +1721,9 @@ static inline int pthread_getschedparam(pthread_t thread, int* policy, struct sc
     intptr_t result;
     if (!policy || !param) return EINVAL;
     if (thread == 0) return ESRCH;
-    result = _syscall2((uintptr_t)SYS_THREAD_SCHED_GET,
-                       (uintptr_t)thread, (uintptr_t)&parameters);
+    result = _RIN_PTHREAD_SCHED_SYSCALL2(
+        (uintptr_t)SYS_THREAD_SCHED_GET, (uintptr_t)thread,
+        (uintptr_t)&parameters);
     if (result < 0)
         return _rin_pthread_error_from_result(result);
     if (result != 0 || parameters.struct_size != sizeof(parameters) ||
@@ -1715,8 +1757,9 @@ static inline int pthread_setschedparam(pthread_t thread, int policy, const stru
     parameters.policy = policy;
     parameters.priority = param->sched_priority;
     parameters.reserved1 = 0u;
-    result = _syscall2((uintptr_t)SYS_THREAD_SCHED_SET,
-                       (uintptr_t)thread, (uintptr_t)&parameters);
+    result = _RIN_PTHREAD_SCHED_SYSCALL2(
+        (uintptr_t)SYS_THREAD_SCHED_SET, (uintptr_t)thread,
+        (uintptr_t)&parameters);
     if (result < 0) return _rin_pthread_error_from_result(result);
     return result == 0 ? 0 : EIO;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
@@ -1758,3 +1801,5 @@ static inline int pthread_setschedprio(pthread_t thread, int prio) {
 #endif
 
 #endif /* _PTHREAD_H */
+
+#endif /* hosted POSIX pthread delegation */
