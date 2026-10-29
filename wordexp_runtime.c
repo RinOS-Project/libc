@@ -376,7 +376,8 @@ static int wordexp_validate_fragment(const char* text, size_t length,
             if (ch == '\n') return WRDE_BADCHAR;
             if (ch == '#' && word_start) return WRDE_BADCHAR;
             if (ch == '|' || ch == '&' || ch == ';' || ch == '<' ||
-                ch == '>' || ch == '(' || ch == ')')
+                ch == '>' || ch == '(' || ch == ')' || ch == '{' ||
+                ch == '}')
                 return WRDE_BADCHAR;
             if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\v' ||
                 ch == '\f') {
