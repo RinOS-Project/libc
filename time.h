@@ -1518,7 +1518,9 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
     for (;;) {
         errno = 0;
         wait_result = _RIN_TIME_FUTEX_WAIT(
-            &futex_word, FUTEX_WAIT_BITSET_PRIVATE, 0, &deadline,
+            &futex_word,
+            FUTEX_WAIT_BITSET_PRIVATE | FUTEX_RIN_SLEEP_NORESTART,
+            0, &deadline,
             FUTEX_BITSET_MATCH_ANY);
         __rin_pthread_cancel_point_if_linked();
         if (wait_result < 0) {
@@ -1620,7 +1622,8 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
 
     {
         int entry_errno = errno;
-        int operation = FUTEX_WAIT_BITSET_PRIVATE;
+        int operation = FUTEX_WAIT_BITSET_PRIVATE |
+                        FUTEX_RIN_SLEEP_NORESTART;
         int32_t futex_word = 0;
 
         if (clock_id == CLOCK_REALTIME)

@@ -31,6 +31,13 @@
 #define FUTEX_CLOCK_REALTIME    256
 #define FUTEX_RIN_PI_FLAG       512
 #define FUTEX_RIN_PI_ROBUST_FLAG 1024
+/* Mark a deadline wait whose EINTR must be returned to sleep APIs even when
+ * the caller installed the signal handler with SA_RESTART. */
+#if defined(RIN_HOST_LINUX_FUTEX_TEST)
+#define FUTEX_RIN_SLEEP_NORESTART 0
+#else
+#define FUTEX_RIN_SLEEP_NORESTART 2048
+#endif
 
 /* Combined operations with flags */
 #define FUTEX_WAIT_PRIVATE      (FUTEX_WAIT | FUTEX_PRIVATE_FLAG)
