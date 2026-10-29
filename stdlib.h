@@ -20,6 +20,12 @@
 #include "locale.h"
 #endif
 #include "fcntl_flags.h"
+#if !defined(MIDL_PASS) && !defined(_MSVCRT_COMPAT) && \
+    (defined(__RINOS__) || defined(RIN_USERSPACE) || \
+     defined(RIN_FREESTANDING))
+#include "signal.h"
+#define _RIN_STDLIB_HAS_SIGNAL_API 1
+#endif
 #ifndef MIDL_PASS
 #include "rin_aligned_alloc_meta.h"
 #include "sys/syscall.h"
@@ -241,15 +247,43 @@ __attribute__((noreturn)) static inline void abort(void) {
     const char* msg = "[ABORT] libc abort() called\n";
     _RIN_STDLIB_SYSCALL2(110, (uintptr_t)msg, (uintptr_t)29u);
 
-    /* Print return address and stack frames */
+    /* A failed stack query or malformed frame chain only suppresses the
+     * optional trace; it must never make abort itself fault. */
+    uintptr_t stack_low = 0u;
+    uintptr_t stack_high = 0u;
+#if defined(_RIN_STDLIB_HAS_SIGNAL_API)
+    rin_thread_stack_info_v1 stack_info = {0};
+    intptr_t tid = _RIN_STDLIB_SYSCALL0(SYS_GETTID);
+    if (tid >= 0) {
+        intptr_t stack_result = _RIN_STDLIB_SYSCALL3(
+            SYS_THREAD_STACK_INFO, (uintptr_t)tid,
+            (uintptr_t)&stack_info, (uintptr_t)sizeof(stack_info));
+        const unsigned int known_stack_flags =
+            RIN_THREAD_STACK_INFO_FLAG_GROWS_DOWN |
+            RIN_THREAD_STACK_INFO_FLAG_HAS_GUARD |
+            RIN_THREAD_STACK_INFO_FLAG_DETACHED;
+        if (stack_result == 0 && stack_info.reserved == 0u &&
+            (stack_info.flags & ~known_stack_flags) == 0u &&
+            (stack_info.flags & RIN_THREAD_STACK_INFO_FLAG_GROWS_DOWN) != 0u &&
+            stack_info.stack_base != 0u && stack_info.stack_size != 0u &&
+            stack_info.stack_base <= (unsigned long long)UINTPTR_MAX &&
+            stack_info.stack_size <= (unsigned long long)UINTPTR_MAX &&
+            stack_info.stack_size <=
+                (unsigned long long)(UINTPTR_MAX -
+                    (uintptr_t)stack_info.stack_base)) {
+            stack_low = (uintptr_t)stack_info.stack_base;
+            stack_high = stack_low + (uintptr_t)stack_info.stack_size;
+        }
+    }
+#endif
+
+    /* Print only frames wholly inside the current thread's usable stack. */
     uintptr_t bp, ret_addr;
 #if defined(__x86_64__) || defined(_M_X64)
     __asm__ volatile("mov %%rbp, %0" : "=r"(bp));
-    const uintptr_t limit = UINTPTR_MAX / 2u + 1u;
     const int hex_digits = 60;  /* 16 hex digits for 64-bit */
 #else
     __asm__ volatile("movl %%ebp, %0" : "=r"(bp));
-    const uintptr_t limit = UINTPTR_MAX / 2u + 1u;
     const int hex_digits = 28;  /* 8 hex digits for 32-bit */
 #endif
 
@@ -257,8 +291,14 @@ __attribute__((noreturn)) static inline void abort(void) {
     _RIN_STDLIB_SYSCALL2(110, (uintptr_t)msg2, (uintptr_t)21u);
 
     /* Walk up to 8 stack frames */
-    for (int i = 0; i < 8 && bp != 0 && bp < limit; i++) {
-        ret_addr = ((uintptr_t*)bp)[1];
+    const uintptr_t frame_bytes = 2u * sizeof(uintptr_t);
+    for (int i = 0; i < 8 && stack_high > stack_low &&
+         stack_high - stack_low >= frame_bytes && bp >= stack_low &&
+         bp <= stack_high - frame_bytes &&
+         (bp & (sizeof(uintptr_t) - 1u)) == 0u; i++) {
+        uintptr_t next_bp;
+        ret_addr = ((const uintptr_t*)bp)[1];
+        next_bp = ((const uintptr_t*)bp)[0];
         if (ret_addr == 0) break;
 
         /* Print frame: "  [N] 0xXXXXXXXX...\n" */
@@ -275,10 +315,35 @@ __attribute__((noreturn)) static inline void abort(void) {
         _RIN_STDLIB_SYSCALL2(110, (uintptr_t)buf,
                              (uintptr_t)(p - buf));
 
-        bp = ((uintptr_t*)bp)[0];
+        if (next_bp == 0u || next_bp <= bp || next_bp > stack_high - frame_bytes ||
+            (next_bp & (sizeof(uintptr_t) - 1u)) != 0u)
+            break;
+        bp = next_bp;
     }
 
-    _RIN_STDLIB_SYSCALL1(SYS_EXIT, (uintptr_t)1u);
+    /* POSIX abort delivers SIGABRT even if the caller blocked or ignored it.
+     * If a handler returns, restore the default action and deliver it again. */
+#if defined(_RIN_STDLIB_HAS_SIGNAL_API)
+    sigset_t abort_set;
+    if (sigemptyset(&abort_set) == 0 && sigaddset(&abort_set, SIGABRT) == 0)
+        (void)sigprocmask(SIG_UNBLOCK, &abort_set, 0);
+    (void)raise(SIGABRT);
+
+    {
+        struct sigaction default_action = {0};
+        default_action.sa_handler = SIG_DFL;
+        (void)sigemptyset(&default_action.sa_mask);
+        (void)sigaction(SIGABRT, &default_action, 0);
+    }
+    if (sigemptyset(&abort_set) == 0 && sigaddset(&abort_set, SIGABRT) == 0)
+        (void)sigprocmask(SIG_UNBLOCK, &abort_set, 0);
+    (void)raise(SIGABRT);
+
+    _RIN_STDLIB_SYSCALL1(SYS_EXIT, (uintptr_t)(128 + SIGABRT));
+#else
+    /* Non-RinOS compatibility builds have no RinOS signal ABI to invoke. */
+    _RIN_STDLIB_SYSCALL1(SYS_EXIT, (uintptr_t)134u);
+#endif
     for(;;) {}
 }
 #endif /* _RIN_CSTDLIB_GLOBAL_ABORT_DEFINED */
