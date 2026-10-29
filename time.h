@@ -469,6 +469,11 @@ static inline int _rin_cpu_time_ns(uint16_t scope, uint64_t* output) {
     request.scope = scope;
     result = _RIN_TIME_CPU_GET(&request);
     if (_rin_time_status(result) != 0) return -1;
+    if (!rin_cpu_time_v1_request_is_valid(&request) ||
+        request.scope != scope) {
+        errno = EIO;
+        return -1;
+    }
     *output = request.cpu_time_ns;
     return 0;
 #else
