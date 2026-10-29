@@ -821,53 +821,51 @@ static inline int posix_memalign(void** memptr, size_t alignment, size_t size) {
     return 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════
- * 文字列複製 (POSIX) - mallocの後に定義
- * ═══════════════════════════════════════════════════════════════*/
-
-/* Simple inline strlen for strdup (to avoid dependency on string.h) */
-static inline size_t _strdup_strlen(const char* s) {
-    size_t len = 0;
-    while (*s++) len++;
-    return len;
+/* POSIX string duplication: share runtime symbols when string.h is
+ * already present or when building the userspace libc. */
+#if (defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)) || \
+    defined(RIN_STRING_DUP_EXTERNAL_DECLARED) || \
+    defined(RIN_STRING_RUNTIME_IMPLEMENTATION)
+char* strdup(const char* string);
+char* strndup(const char* string, size_t size);
+#define RIN_STRING_DUP_EXTERNAL_DECLARED 1
+#else
+static inline size_t _strdup_strlen(const char* string) {
+    size_t length = 0u;
+    while (string[length] != 0) ++length;
+    return length;
 }
 
 #ifndef strdup
-static inline char* strdup(const char* s) {
-    if (!s) return NULL;
-    size_t len = _strdup_strlen(s) + 1;
-    char* dup = (char*)malloc(len);
-    if (!dup) {
-        errno = ENOMEM;
-        return NULL;
-    }
-    const char* src = s;
-    char* dst = dup;
-    while (len--) *dst++ = *src++;
-    return dup;
+static inline char* strdup(const char* string) {
+    size_t length;
+    char* copy;
+    if (!string) return NULL;
+    length = _strdup_strlen(string);
+    if (length == SIZE_MAX) { errno = ENOMEM; return NULL; }
+    copy = (char*)malloc(length + 1u);
+    if (!copy) { errno = ENOMEM; return NULL; }
+    for (size_t index = 0u; index <= length; ++index)
+        copy[index] = string[index];
+    return copy;
 }
 #endif
 
-static inline char* strndup(const char* s, size_t n) {
-    if (!s) return NULL;
-    size_t len = 0;
-    while (len < n && s[len] != '\0') len++;
-    if (len == SIZE_MAX) {
-        errno = ENOMEM;
-        return NULL;
-    }
-    char* dup = (char*)malloc(len + 1);
-    if (!dup) {
-        errno = ENOMEM;
-        return NULL;
-    }
-    const char* src = s;
-    char* dst = dup;
-    size_t i;
-    for (i = 0; i < len; i++) *dst++ = *src++;
-    *dst = '\0';
-    return dup;
+static inline char* strndup(const char* string, size_t size) {
+    size_t length = 0u;
+    char* copy;
+    if (!string) return NULL;
+    while (length < size && string[length] != 0) ++length;
+    if (length == SIZE_MAX) { errno = ENOMEM; return NULL; }
+    copy = (char*)malloc(length + 1u);
+    if (!copy) { errno = ENOMEM; return NULL; }
+    for (size_t index = 0u; index < length; ++index)
+        copy[index] = string[index];
+    copy[length] = 0;
+    return copy;
 }
+#define RIN_STRING_DUP_INLINE_AVAILABLE 1
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * 算術関数

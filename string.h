@@ -297,8 +297,19 @@ RIN_STRING_INLINE char* strtok_r(char* str, const char* delim,
 
 /* ═══════════════════════════════════════════════════════════════
  * 文字列複製 (POSIX)
- * Note: strdup/strndup are defined in stdlib.h after malloc is defined
- * ═══════════════════════════════════════════════════════════════*/
+ * POSIX string duplication is declared here and implemented by the shared runtime.
+ */
+
+/* A freestanding stdlib.h included first provides its inline fallback. */
+#if defined(RIN_STRING_IMPLEMENTATION) || \
+    defined(RIN_STRING_RUNTIME_IMPLEMENTATION) || \
+    (defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)) || \
+    (!defined(_MSVCRT_COMPAT) && \
+     !defined(RIN_STRING_DUP_INLINE_AVAILABLE))
+char* strdup(const char* string);
+char* strndup(const char* string, size_t size);
+#define RIN_STRING_DUP_EXTERNAL_DECLARED 1
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * ロケール依存文字列比較 (カーネルlocale.c連携)

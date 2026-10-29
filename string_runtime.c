@@ -1,8 +1,41 @@
 /* RinOS libc string runtime state shared by all translation units. */
 
+#define RIN_STRING_RUNTIME_IMPLEMENTATION 1
 #include "string.h"
+#include "stdlib.h"
 #include "locale.h"
 #include "../libunicode/rin_unicode.h"
+
+char* strdup(const char* string) {
+    size_t length = 0u;
+    char* copy;
+    if (!string) return NULL;
+    while (string[length] != 0) {
+        if (length == SIZE_MAX - 1u) { errno = ENOMEM; return NULL; }
+        ++length;
+    }
+    copy = (char*)malloc(length + 1u);
+    if (!copy) { errno = ENOMEM; return NULL; }
+    for (size_t index = 0u; index <= length; ++index)
+        copy[index] = string[index];
+    return copy;
+}
+
+char* strndup(const char* string, size_t size) {
+    size_t length = 0u;
+    char* copy;
+    if (!string) return NULL;
+    while (length < size && string[length] != 0) {
+        if (length == SIZE_MAX - 1u) { errno = ENOMEM; return NULL; }
+        ++length;
+    }
+    copy = (char*)malloc(length + 1u);
+    if (!copy) { errno = ENOMEM; return NULL; }
+    for (size_t index = 0u; index < length; ++index)
+        copy[index] = string[index];
+    copy[length] = 0;
+    return copy;
+}
 
 static _Thread_local char* g_rin_strtok_last;
 
