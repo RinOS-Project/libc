@@ -186,7 +186,10 @@ static inline wchar_t* wmemcpy(wchar_t* dest, const wchar_t* src, size_t n) {
 }
 
 static inline wchar_t* wmemmove(wchar_t* dest, const wchar_t* src, size_t n) {
-    if (dest < src) {
+    uintptr_t dest_address = (uintptr_t)dest;
+    uintptr_t src_address = (uintptr_t)src;
+    if (n == 0u || dest == src) return dest;
+    if (dest_address < src_address) {
         for (size_t i = 0; i < n; i++) dest[i] = src[i];
     } else {
         for (size_t i = n; i > 0; i--) dest[i-1] = src[i-1];
