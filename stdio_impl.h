@@ -1389,6 +1389,12 @@ _RIN_STDIO_API ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
             }
             break;
         }
+        if (length >= (size_t)SSIZE_MAX) {
+            (*lineptr)[length] = '\0';
+            errno = EOVERFLOW;
+            funlockfile(stream);
+            return (ssize_t)-1;
+        }
         if (length + 1u >= capacity) {
             size_t next_capacity = capacity <= ((size_t)-1 / 2u)
                 ? capacity * 2u
@@ -1456,6 +1462,12 @@ _RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* 
                 return (ssize_t)-1;
             }
             break;
+        }
+        if (length >= (size_t)SSIZE_MAX) {
+            (*lineptr)[length] = '\0';
+            errno = EOVERFLOW;
+            funlockfile(stream);
+            return (ssize_t)-1;
         }
         if (length + 1u >= capacity) {
             size_t next_capacity = capacity <= ((size_t)-1 / 2u)
