@@ -40,6 +40,263 @@ static inline int _rin_stdio_double_signbit(double value) {
     return (int)(representation.bits >> 63);
 }
 
+static inline int _rin_stdio_candidate_put(char* output, size_t capacity,
+                                           size_t* length, char value) {
+    if (!output || !length || *length >= capacity ||
+        *length + 1u >= capacity) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    output[(*length)++] = value;
+    return 0;
+}
+
+/* Convert a large, already-integral binary floating value without an
+ * out-of-range floating-to-integer cast.  The decimal limbs preserve the
+ * exact significand while repeated doubling applies the binary exponent. */
+static inline int _rin_stdio_append_large_fixed_integer(
+    char* output, size_t capacity, size_t* length, long double value,
+    unsigned int mantissa_bits) {
+    uint32_t decimal_limb[600];
+    uint32_t limb_count = 0u;
+    uint64_t significand = 1u;
+    long double normalized = value;
+    long double fraction;
+    int binary_exponent = 0;
+    uint32_t digit;
+
+    if (!output || !length || mantissa_bits < 2u || mantissa_bits > 64u ||
+        value < 18446744073709551616.0L) {
+        errno = EINVAL;
+        return -1;
+    }
+    while (normalized >= 2.0L) {
+        normalized *= 0.5L;
+        ++binary_exponent;
+    }
+    while (normalized < 1.0L) {
+        normalized *= 2.0L;
+        --binary_exponent;
+    }
+    if (binary_exponent < (int)mantissa_bits - 1) {
+        errno = EINVAL;
+        return -1;
+    }
+    fraction = normalized - 1.0L;
+    for (digit = 1u; digit < mantissa_bits; ++digit) {
+        fraction *= 2.0L;
+        significand <<= 1u;
+        if (fraction >= 1.0L) {
+            significand |= 1u;
+            fraction -= 1.0L;
+        }
+    }
+    do {
+        decimal_limb[limb_count++] =
+            (uint32_t)(significand % UINT64_C(1000000000));
+        significand /= UINT64_C(1000000000);
+    } while (significand != 0u);
+    for (int shift = binary_exponent - ((int)mantissa_bits - 1);
+         shift > 0; --shift) {
+        uint64_t carry = 0u;
+        for (uint32_t index = 0u; index < limb_count; ++index) {
+            uint64_t doubled = (uint64_t)decimal_limb[index] * 2u + carry;
+            decimal_limb[index] =
+                (uint32_t)(doubled % UINT64_C(1000000000));
+            carry = doubled / UINT64_C(1000000000);
+        }
+        if (carry != 0u) {
+            if (limb_count == sizeof(decimal_limb) / sizeof(decimal_limb[0])) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            decimal_limb[limb_count++] = (uint32_t)carry;
+        }
+    }
+
+    {
+        char reversed[10];
+        uint32_t count = 0u;
+        uint32_t highest = decimal_limb[limb_count - 1u];
+        do {
+            reversed[count++] = (char)('0' + highest % 10u);
+            highest /= 10u;
+        } while (highest != 0u);
+        while (count != 0u)
+            if (_rin_stdio_candidate_put(output, capacity, length,
+                                         reversed[--count]) != 0)
+                return -1;
+    }
+    while (limb_count > 1u) {
+        char reversed[9];
+        uint32_t value = decimal_limb[--limb_count];
+        for (uint32_t index = 0u; index < 9u; ++index) {
+            reversed[index] = (char)('0' + value % 10u);
+            value /= 10u;
+        }
+        for (uint32_t index = 9u; index != 0u; --index)
+            if (_rin_stdio_candidate_put(output, capacity, length,
+                                         reversed[index - 1u]) != 0)
+                return -1;
+    }
+    return 0;
+}
+
+static inline int _rin_stdio_format_hex_float_candidate(
+    char* output, size_t capacity, size_t* length, long double value,
+    int uppercase, int precision, int alternate,
+    unsigned int mantissa_bits) {
+    const char* digits = uppercase ? "0123456789ABCDEF" :
+                                      "0123456789abcdef";
+    size_t fraction_start;
+    unsigned int shown;
+    unsigned int available;
+    unsigned int index;
+    size_t mantissa_start;
+    int exponent = 0;
+    int exponent_magnitude;
+    int leading_index;
+    int rounding_up = 0;
+    long double normalized;
+    long double fraction;
+    char exponent_digits[8];
+    unsigned int exponent_length = 0u;
+
+    if (!output || !length || mantissa_bits < 2u || mantissa_bits > 64u ||
+        precision < -1) {
+        errno = EINVAL;
+        return -1;
+    }
+    available = (mantissa_bits - 1u + 3u) / 4u;
+    shown = precision < 0 ? available : (unsigned int)precision;
+    if (precision < 0 && value == 0.0L) shown = 0u;
+    if ((size_t)shown > capacity || *length > capacity - (size_t)shown ||
+        *length + (size_t)shown + 16u >= capacity) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    mantissa_start = *length;
+    if (_rin_stdio_candidate_put(output, capacity, length, '0') != 0 ||
+        _rin_stdio_candidate_put(output, capacity, length,
+                                 uppercase ? 'X' : 'x') != 0)
+        return -1;
+    if (value == 0.0L) {
+        if (_rin_stdio_candidate_put(output, capacity, length, '0') != 0)
+            return -1;
+        if (shown != 0u || alternate) {
+            if (_rin_stdio_candidate_put(output, capacity, length, '.') != 0)
+                return -1;
+            for (index = 0u; index < shown; ++index)
+                if (_rin_stdio_candidate_put(output, capacity, length, '0') != 0)
+                    return -1;
+        }
+    } else {
+        normalized = value;
+        while (normalized >= 2.0L) {
+            normalized *= 0.5L;
+            ++exponent;
+        }
+        while (normalized < 1.0L) {
+            normalized *= 2.0L;
+            --exponent;
+        }
+        leading_index = (int)*length;
+        if (_rin_stdio_candidate_put(output, capacity, length, '1') != 0)
+            return -1;
+        if (shown != 0u || alternate)
+            if (_rin_stdio_candidate_put(output, capacity, length, '.') != 0)
+                return -1;
+        fraction_start = *length;
+        fraction = normalized - 1.0L;
+        for (index = 0u; index < shown; ++index) {
+            unsigned int nibble = 0u;
+            if (index < available) {
+                fraction *= 16.0L;
+                nibble = (unsigned int)fraction;
+                if (nibble > 15u) nibble = 15u;
+                fraction -= (long double)nibble;
+            }
+            if (_rin_stdio_candidate_put(output, capacity, length,
+                                         digits[nibble]) != 0)
+                return -1;
+        }
+        if (precision >= 0 && shown < available) {
+            long double guard_value = fraction * 16.0L;
+            unsigned int guard = (unsigned int)guard_value;
+            long double remainder = guard_value - (long double)guard;
+            unsigned int last = shown == 0u ? 1u : 0u;
+            if (shown != 0u) {
+                for (index = 0u; index < 16u; ++index)
+                    if (digits[index] == output[*length - 1u]) {
+                        last = index;
+                        break;
+                    }
+            }
+            rounding_up = guard > 8u ||
+                (guard == 8u &&
+                 (remainder != 0.0L || (last & 1u) != 0u));
+        }
+        if (precision >= 0 && rounding_up) {
+            size_t cursor = *length;
+            int carried = 1;
+            while (cursor > fraction_start && carried) {
+                unsigned int nibble;
+                --cursor;
+                for (nibble = 0u; nibble < 16u; ++nibble)
+                    if (digits[nibble] == output[cursor]) break;
+                if (nibble >= 15u) output[cursor] = digits[0];
+                else {
+                    output[cursor] = digits[nibble + 1u];
+                    carried = 0;
+                }
+            }
+            if (carried) {
+                for (cursor = fraction_start; cursor < *length; ++cursor)
+                    output[cursor] = digits[0];
+                output[leading_index] = '1';
+                ++exponent;
+            }
+        }
+        if (precision < 0) {
+            while (*length > fraction_start && output[*length - 1u] == '0')
+                --*length;
+            if (*length > fraction_start && output[*length - 1u] == '.')
+                --*length;
+        }
+    }
+    if (alternate) {
+        int has_point = 0;
+        for (size_t scan = mantissa_start; scan < *length; ++scan)
+            if (output[scan] == '.') has_point = 1;
+        if (!has_point &&
+            _rin_stdio_candidate_put(output, capacity, length, '.') != 0)
+            return -1;
+    }
+    if (_rin_stdio_candidate_put(output, capacity, length,
+                                 uppercase ? 'P' : 'p') != 0)
+        return -1;
+    if (exponent < 0) {
+        if (_rin_stdio_candidate_put(output, capacity, length, '-') != 0)
+            return -1;
+        exponent_magnitude = -exponent;
+    } else {
+        if (_rin_stdio_candidate_put(output, capacity, length, '+') != 0)
+            return -1;
+        exponent_magnitude = exponent;
+    }
+    do {
+        exponent_digits[exponent_length++] =
+            (char)('0' + exponent_magnitude % 10);
+        exponent_magnitude /= 10;
+    } while (exponent_magnitude != 0 && exponent_length <
+             sizeof(exponent_digits));
+    while (exponent_length != 0u)
+        if (_rin_stdio_candidate_put(output, capacity, length,
+                                     exponent_digits[--exponent_length]) != 0)
+            return -1;
+    return 0;
+}
+
 #ifndef F_GETFL
 #define F_GETFL 3
 #endif
@@ -3022,7 +3279,9 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
             case 'e':
             case 'E':
             case 'g':
-            case 'G': {
+            case 'G':
+            case 'a':
+            case 'A': {
 #if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
                 typedef long double rin_stdio_format_fp_t;
                 rin_stdio_format_fp_t val = is_longdouble
@@ -3037,11 +3296,29 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                 rin_stdio_format_fp_t val = va_arg(ap, double);
 #endif
                 int prec = (precision >= 0) ? precision : 6;
+                const int hexadecimal_conversion =
+                    *fmt == 'a' || *fmt == 'A';
+                if ((*fmt == 'g' || *fmt == 'G') && prec == 0)
+                    prec = 1;
                 char stack_ftmp[4096];
-                size_t fcapacity = prec > 4000
-                    ? (size_t)prec + 64u : sizeof(stack_ftmp);
+                size_t integer_capacity = 309u;
+                size_t fcapacity;
+#if !defined(__RINOS__) && defined(__LDBL_MAX_10_EXP__)
+                if (is_longdouble)
+                    integer_capacity =
+                        (size_t)__LDBL_MAX_10_EXP__ + 1u;
+#endif
+                if ((size_t)prec > SIZE_MAX - integer_capacity - 64u) {
+                    errno = EOVERFLOW;
+                    goto format_error;
+                }
+                fcapacity = integer_capacity + (size_t)prec + 64u;
+                if (fcapacity < sizeof(stack_ftmp))
+                    fcapacity = sizeof(stack_ftmp);
                 char* ftmp = stack_ftmp;
                 int fi = 0;
+                size_t candidate_length = 0u;
+                int special_value = 0;
                 if (fcapacity > sizeof(stack_ftmp)) {
                     format_allocation = (char*)malloc(fcapacity);
                     if (!format_allocation) {
@@ -3054,28 +3331,24 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                 /* Handle special values */
                 /* Check for NaN: NaN != NaN */
                 if (val != val) {
+                    special_value = 1;
                     const char* ns = "nan";
-                    if (*fmt == 'F' || *fmt == 'E' || *fmt == 'G') ns = "NAN";
+                    if (*fmt == 'F' || *fmt == 'E' || *fmt == 'G' ||
+                        *fmt == 'A') ns = "NAN";
                     while (*ns && (size_t)fi + 1u < fcapacity)
                         ftmp[fi++] = *ns++;
                 } else {
-                    /* Check for infinity: val > large or val < -large */
-                    int is_inf = 0;
-                    if (val > 1e18) {
-                        rin_stdio_format_fp_t t = val;
-                        /* Keep doubling threshold - if val keeps being larger, it's inf */
-                        for (int k = 0; k < 30; k++) t *= 0.5;
-                        if (t > 1e18) is_inf = 1;
-                    } else if (val < -1e18) {
-                        rin_stdio_format_fp_t t = val;
-                        for (int k = 0; k < 30; k++) t *= 0.5;
-                        if (t < -1e18) is_inf = 1;
-                    }
+                    /* Finite magnitude is never evidence of infinity.  For
+                     * IEEE values x-x is zero for every finite x and NaN for
+                     * infinity; NaN was handled by the preceding branch. */
+                    const int is_inf = val != 0.0L && (val - val) != 0.0L;
                     if (is_inf) {
+                        special_value = 1;
                         if (val < 0 && (size_t)fi + 1u < fcapacity)
                             ftmp[fi++] = '-';
                         const char* ns = "inf";
-                        if (*fmt == 'F' || *fmt == 'E' || *fmt == 'G') ns = "INF";
+                        if (*fmt == 'F' || *fmt == 'E' || *fmt == 'G' ||
+                            *fmt == 'A') ns = "INF";
                         while (*ns && (size_t)fi + 1u < fcapacity)
                             ftmp[fi++] = *ns++;
                     } else {
@@ -3087,6 +3360,27 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                             val = -val;
                         }
 
+                        if (hexadecimal_conversion) {
+                            unsigned int mantissa_bits = 53u;
+#if defined(__DBL_MANT_DIG__)
+                            mantissa_bits = (unsigned int)__DBL_MANT_DIG__;
+#endif
+#if !defined(__RINOS__) && defined(__LDBL_MANT_DIG__)
+                            if (is_longdouble)
+                                mantissa_bits = (unsigned int)__LDBL_MANT_DIG__;
+#endif
+                            candidate_length = (size_t)fi;
+                            if (_rin_stdio_format_hex_float_candidate(
+                                    ftmp, fcapacity, &candidate_length,
+                                    (long double)val, *fmt == 'A', precision,
+                                    alternate, mantissa_bits) != 0)
+                                goto format_error;
+                            if (candidate_length > (size_t)INT_MAX) {
+                                errno = EOVERFLOW;
+                                goto format_error;
+                            }
+                            fi = (int)candidate_length;
+                        } else {
                         int scientific = (*fmt == 'e' || *fmt == 'E');
                         const int general = (*fmt == 'g' || *fmt == 'G');
                         int scientific_exponent = 0;
@@ -3112,30 +3406,60 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                         }
 
                         /* Separate integer and fractional parts */
-                        unsigned long long ipart = (unsigned long long)val;
-                        rin_stdio_format_fp_t frac =
-                            val - (rin_stdio_format_fp_t)ipart;
+                        unsigned long long ipart = 0u;
+                        rin_stdio_format_fp_t frac = 0.0L;
+                        const int large_fixed = !scientific &&
+                            val >= 18446744073709551616.0L;
+                        if (large_fixed) {
+                            unsigned int mantissa_bits = 53u;
+#if defined(__DBL_MANT_DIG__)
+                            mantissa_bits = (unsigned int)__DBL_MANT_DIG__;
+#endif
+#if !defined(__RINOS__) && defined(__LDBL_MANT_DIG__)
+                            if (is_longdouble)
+                                mantissa_bits = (unsigned int)__LDBL_MANT_DIG__;
+#endif
+                            candidate_length = (size_t)fi;
+                            if (_rin_stdio_append_large_fixed_integer(
+                                    ftmp, fcapacity, &candidate_length,
+                                    (long double)val, mantissa_bits) != 0)
+                                goto format_error;
+                            if (candidate_length > (size_t)INT_MAX) {
+                                errno = EOVERFLOW;
+                                goto format_error;
+                            }
+                            fi = (int)candidate_length;
+                        } else {
+                            ipart = (unsigned long long)val;
+                            frac = val - (rin_stdio_format_fp_t)ipart;
 
-                        /* Round the fractional part */
-                        rin_stdio_format_fp_t round_add = 0.5;
-                        for (int k = 0; k < prec && round_add != 0.0; k++)
-                            round_add /= 10.0;
-                        frac += round_add;
-                        if (frac >= 1.0) { ipart++; frac -= 1.0; }
-                        if (scientific && ipart >= 10u) {
-                            /* Rounding 9.99... across the decade boundary
-                             * must carry into the scientific exponent. */
-                            ipart = 1u;
-                            frac = 0.0;
-                            ++scientific_exponent;
+                            /* Round the fractional part */
+                            rin_stdio_format_fp_t round_add = 0.5;
+                            for (int k = 0; k < prec && round_add != 0.0; k++)
+                                round_add /= 10.0;
+                            frac += round_add;
+                            if (frac >= 1.0) { ipart++; frac -= 1.0; }
+                            if (scientific && ipart >= 10u) {
+                                /* Rounding 9.99... across the decade boundary
+                                 * must carry into the scientific exponent. */
+                                ipart = 1u;
+                                frac = 0.0;
+                                ++scientific_exponent;
+                            }
+
+                            /* Integer part to string (reverse) */
+                            char itmp[24]; int ii = 0;
+                            if (ipart == 0) { itmp[ii++] = '0'; }
+                            else {
+                                while (ipart > 0 && ii < 23) {
+                                    itmp[ii++] = '0' + (int)(ipart % 10);
+                                    ipart /= 10;
+                                }
+                            }
+                            while (ii-- > 0 &&
+                                   (size_t)fi + 1u < fcapacity)
+                                ftmp[fi++] = itmp[ii];
                         }
-
-                        /* Integer part to string (reverse) */
-                        char itmp[24]; int ii = 0;
-                        if (ipart == 0) { itmp[ii++] = '0'; }
-                        else { while (ipart > 0 && ii < 23) { itmp[ii++] = '0' + (int)(ipart % 10); ipart /= 10; } }
-                        while (ii-- > 0 && (size_t)fi + 1u < fcapacity)
-                            ftmp[fi++] = itmp[ii];
 
                         /* Decimal point and fractional digits */
                         int fractional_precision = scientific
@@ -3151,11 +3475,15 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                             if ((size_t)fi + 1u < fcapacity) ftmp[fi++] = '.';
                             for (int k = 0; k < fractional_precision &&
                                  (size_t)fi + 1u < fcapacity; k++) {
-                                frac *= 10.0;
-                                int digit = (int)frac;
-                                if (digit > 9) digit = 9;
-                                ftmp[fi++] = '0' + digit;
-                                frac -= (rin_stdio_format_fp_t)digit;
+                                if (large_fixed) {
+                                    ftmp[fi++] = '0';
+                                } else {
+                                    frac *= 10.0;
+                                    int digit = (int)frac;
+                                    if (digit > 9) digit = 9;
+                                    ftmp[fi++] = '0' + digit;
+                                    frac -= (rin_stdio_format_fp_t)digit;
+                                }
                             }
                         }
                         if (scientific && (size_t)fi + 1u < fcapacity) {
@@ -3179,32 +3507,42 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                                 ftmp[fi++] = exponent_digits[exponent_size];
                         }
                         if (general && !alternate) {
-                            int end = fi;
-                            while (end > 0 && ftmp[end - 1] == '0') --end;
-                            if (end > 0 && ftmp[end - 1] == '.') --end;
                             if (scientific) {
-                                int exponent_mark = end;
-                                while (exponent_mark > 0 &&
-                                       ftmp[exponent_mark - 1] != 'e' &&
-                                       ftmp[exponent_mark - 1] != 'E') --exponent_mark;
-                                if (exponent_mark != 0) {
-                                    int mantissa_end = exponent_mark - 1;
-                                    while (mantissa_end > 0 &&
-                                           ftmp[mantissa_end - 1] == '0')
-                                        --mantissa_end;
-                                    if (mantissa_end > 0 &&
-                                        ftmp[mantissa_end - 1] == '.')
-                                        --mantissa_end;
-                                    int tail = fi - exponent_mark;
-                                    for (int k = 0; k < tail; ++k)
-                                        ftmp[mantissa_end + k] = ftmp[exponent_mark + k];
-                                    fi = mantissa_end + tail;
-                                } else {
-                                    fi = end;
+                                int exponent_mark = 0;
+                                while (exponent_mark < fi &&
+                                       ftmp[exponent_mark] != 'e' &&
+                                       ftmp[exponent_mark] != 'E')
+                                    ++exponent_mark;
+                                if (exponent_mark < fi) {
+                                    int point = 0;
+                                    while (point < exponent_mark &&
+                                           ftmp[point] != '.')
+                                        ++point;
+                                    if (point < exponent_mark) {
+                                        int mantissa_end = exponent_mark;
+                                        while (mantissa_end > point + 1 &&
+                                               ftmp[mantissa_end - 1] == '0')
+                                            --mantissa_end;
+                                        if (mantissa_end == point + 1)
+                                            --mantissa_end;
+                                        int tail = fi - exponent_mark;
+                                        for (int k = 0; k < tail; ++k)
+                                            ftmp[mantissa_end + k] =
+                                                ftmp[exponent_mark + k];
+                                        fi = mantissa_end + tail;
+                                    }
                                 }
                             } else {
-                                fi = end;
+                                int point = 0;
+                                while (point < fi && ftmp[point] != '.') ++point;
+                                if (point < fi) {
+                                    while (fi > point + 1 &&
+                                           ftmp[fi - 1] == '0')
+                                        --fi;
+                                    if (fi == point + 1) --fi;
+                                }
                             }
+                        }
                         }
                     }
                 }
@@ -3223,7 +3561,7 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                     ftmp[0] = ' ';
                     ++fi;
                 }
-                if (alternate && prec == 0 &&
+                if (!hexadecimal_conversion && alternate && prec == 0 &&
                     (size_t)fi + 1u < fcapacity) {
                     int point = 0;
                     while (point < fi && ftmp[point] != 'e' &&
@@ -3236,12 +3574,20 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                         ++fi;
                     }
                 }
-                if (!left_align && zero && fi > 0 &&
-                    (ftmp[0] == '-' || ftmp[0] == '+' || ftmp[0] == ' ')) {
-                    _RIN_STDIO_FORMAT_PUT(ftmp[0]);
+                if (!left_align && zero && fi > 0 && !special_value) {
+                    size_t prefix = 0u;
+                    if (ftmp[0] == '-' || ftmp[0] == '+' || ftmp[0] == ' ')
+                        prefix = 1u;
+                    if (hexadecimal_conversion && prefix + 1u < (size_t)fi &&
+                        ftmp[prefix] == '0' &&
+                        (ftmp[prefix + 1u] == 'x' ||
+                         ftmp[prefix + 1u] == 'X'))
+                        prefix += 2u;
+                    _RIN_STDIO_FORMAT_APPEND(ftmp, prefix);
                     _RIN_STDIO_FORMAT_REPEAT('0',
                         pad > fi ? (size_t)(pad - fi) : 0u);
-                    _RIN_STDIO_FORMAT_APPEND(ftmp + 1, (size_t)(fi - 1));
+                    _RIN_STDIO_FORMAT_APPEND(ftmp + prefix,
+                                             (size_t)fi - prefix);
                 } else {
                     if (!left_align) {
                         _RIN_STDIO_FORMAT_REPEAT(' ',
