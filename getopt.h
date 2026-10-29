@@ -70,6 +70,152 @@ static inline int _rin_getopt_match_long_option(
  * ═══════════════════════════════════════════════════════════════*/
 
 extern int _rin_getopt_pos;  /* 現在のargv[optind]内の位置 */
+extern int _rin_getopt_first_nonopt;
+extern int _rin_getopt_last_nonopt;
+extern int _rin_getopt_ordering;
+extern int _rin_getopt_initialized;
+extern int _rin_getopt_finished;
+int _rin_getopt_posixly_correct(void);
+
+enum {
+    _RIN_GETOPT_REQUIRE_ORDER = 0,
+    _RIN_GETOPT_PERMUTE = 1,
+    _RIN_GETOPT_RETURN_IN_ORDER = 2
+};
+
+static inline int _rin_getopt_is_nonoption(const char* argument) {
+    return !argument || argument[0] != '-' || argument[1] == '\0';
+}
+
+static inline int _rin_getopt_has_missing_argument_colon(
+    const char* optstring) {
+    if (!optstring) return 0;
+    if (optstring[0] == '+' || optstring[0] == '-') ++optstring;
+    return optstring[0] == ':';
+}
+
+static inline const char* _rin_getopt_short_options(
+    const char* optstring) {
+    if (!optstring) return "";
+    if (optstring[0] == '+' || optstring[0] == '-') ++optstring;
+    if (optstring[0] == ':') ++optstring;
+    return optstring;
+}
+
+static inline void _rin_getopt_initialize(const char* optstring) {
+    if (!optreset && optind != 0 && _rin_getopt_initialized) return;
+    optind = 1;
+    _rin_getopt_pos = 0;
+    _rin_getopt_first_nonopt = 1;
+    _rin_getopt_last_nonopt = 1;
+    _rin_getopt_finished = 0;
+    optreset = 0;
+    if (optstring && optstring[0] == '+') {
+        _rin_getopt_ordering = _RIN_GETOPT_REQUIRE_ORDER;
+    } else if (optstring && optstring[0] == '-') {
+        _rin_getopt_ordering = _RIN_GETOPT_RETURN_IN_ORDER;
+    } else {
+        _rin_getopt_ordering = _rin_getopt_posixly_correct()
+            ? _RIN_GETOPT_REQUIRE_ORDER : _RIN_GETOPT_PERMUTE;
+    }
+    _rin_getopt_initialized = 1;
+}
+
+/* Exchange argv[first_nonopt,last_nonopt) with the intervening option block.
+ * The block-swap rotation is stable and uses no allocation. */
+static inline void _rin_getopt_exchange(char* const argv[], int optind_value) {
+    char** mutable_argv = (char**)argv;
+    int bottom = _rin_getopt_first_nonopt;
+    int middle = _rin_getopt_last_nonopt;
+    int top = optind_value;
+    int nonoptions = middle - bottom;
+    int options = top - middle;
+    while (nonoptions > 0 && options > 0) {
+        if (options > nonoptions) {
+            int offset = top - nonoptions;
+            for (int index = 0; index < nonoptions; ++index) {
+                char* value = mutable_argv[bottom + index];
+                mutable_argv[bottom + index] = mutable_argv[offset + index];
+                mutable_argv[offset + index] = value;
+            }
+            top -= nonoptions;
+            options -= nonoptions;
+        } else {
+            for (int index = 0; index < options; ++index) {
+                char* value = mutable_argv[bottom + index];
+                mutable_argv[bottom + index] = mutable_argv[middle + index];
+                mutable_argv[middle + index] = value;
+            }
+            bottom += options;
+            nonoptions -= options;
+        }
+    }
+    _rin_getopt_first_nonopt += optind_value - _rin_getopt_last_nonopt;
+    _rin_getopt_last_nonopt = optind_value;
+}
+
+/* Return 0 at end, 1 for an option, or 2 for a return-in-order operand. */
+static inline int _rin_getopt_prepare(int argc, char* const argv[],
+                                      const char* optstring) {
+    _rin_getopt_initialize(optstring);
+    if (optind < 1) optind = 1;
+    if (!argv) return 0;
+    if (_rin_getopt_finished) return 0;
+    if (_rin_getopt_ordering != _RIN_GETOPT_PERMUTE && optind >= argc)
+        return 0;
+
+    if (_rin_getopt_ordering == _RIN_GETOPT_PERMUTE) {
+        if (_rin_getopt_pos == 0) {
+            if (_rin_getopt_first_nonopt != _rin_getopt_last_nonopt &&
+                _rin_getopt_last_nonopt != optind) {
+                _rin_getopt_exchange(argv, optind);
+            } else if (_rin_getopt_last_nonopt != optind) {
+                _rin_getopt_first_nonopt = optind;
+            }
+            while (optind < argc &&
+                   _rin_getopt_is_nonoption(argv[optind]))
+                ++optind;
+            _rin_getopt_last_nonopt = optind;
+        }
+
+        if (optind < argc && argv[optind] &&
+            argv[optind][0] == '-' && argv[optind][1] == '-' &&
+            argv[optind][2] == '\0') {
+            ++optind;
+            if (_rin_getopt_first_nonopt != _rin_getopt_last_nonopt &&
+                _rin_getopt_last_nonopt != optind) {
+                _rin_getopt_exchange(argv, optind);
+            } else if (_rin_getopt_first_nonopt ==
+                       _rin_getopt_last_nonopt) {
+                _rin_getopt_first_nonopt = optind;
+            }
+            _rin_getopt_last_nonopt = argc;
+            optind = argc;
+        }
+        if (optind >= argc) {
+            if (_rin_getopt_first_nonopt != _rin_getopt_last_nonopt)
+                optind = _rin_getopt_first_nonopt;
+            _rin_getopt_finished = 1;
+            return 0;
+        }
+        return 1;
+    }
+
+    if (argv[optind] && argv[optind][0] == '-' &&
+        argv[optind][1] == '-' && argv[optind][2] == '\0') {
+        ++optind;
+        _rin_getopt_finished = 1;
+        return 0;
+    }
+    if (_rin_getopt_is_nonoption(argv[optind])) {
+        if (_rin_getopt_ordering == _RIN_GETOPT_RETURN_IN_ORDER)
+            return 2;
+        _rin_getopt_finished = 1;
+        return 0;
+    }
+    if (optind >= argc) _rin_getopt_finished = 1;
+    return 1;
+}
 
 static inline void _rin_getopt_diagnostic(char* const argv[],
                                           const char* message, int option) {
@@ -101,13 +247,9 @@ static inline int _rin_getopt_return_nonoption(char* const argv[],
 
 static inline int getopt(int argc, char* const argv[], const char* optstring) {
     optarg = NULL;
-    if (optreset) {
-        optind = 1;
-        _rin_getopt_pos = 0;
-        optreset = 0;
-    }
-
-    if (optind >= argc) return -1;
+    int prepared = _rin_getopt_prepare(argc, argv, optstring);
+    if (prepared == 0) return -1;
+    if (prepared == 2) return _rin_getopt_return_nonoption(argv, optstring);
 
     const char* arg = argv[optind];
     if (!arg) return -1;
@@ -134,8 +276,7 @@ static inline int getopt(int argc, char* const argv[], const char* optstring) {
     }
 
     /* optstring内でオプションを検索 */
-    const char* p = optstring;
-    if (*p == ':' || *p == '+' || *p == '-') p++;  /* 特殊接頭辞をスキップ */
+    const char* p = _rin_getopt_short_options(optstring);
 
     while (*p) {
         if (*p == c) {
@@ -153,7 +294,8 @@ static inline int getopt(int argc, char* const argv[], const char* optstring) {
                 } else if (p[2] != ':') {
                     /* 必須引数がない */
                     optopt = c;
-                    if (optstring[0] == ':') return ':';
+                    if (_rin_getopt_has_missing_argument_colon(optstring))
+                        return ':';
                     _rin_getopt_diagnostic(argv,
                                            "option requires an argument", c);
                     return '?';
@@ -181,13 +323,9 @@ static inline int getopt_long(int argc, char* const argv[],
                               const struct option* longopts,
                               int* longindex) {
     optarg = NULL;
-    if (optreset) {
-        optind = 1;
-        _rin_getopt_pos = 0;
-        optreset = 0;
-    }
-
-    if (optind >= argc) return -1;
+    int prepared = _rin_getopt_prepare(argc, argv, optstring);
+    if (prepared == 0) return -1;
+    if (prepared == 2) return _rin_getopt_return_nonoption(argv, optstring);
 
     const char* arg = argv[optind];
     if (!arg) return -1;
@@ -236,7 +374,8 @@ static inline int getopt_long(int argc, char* const argv[],
                         optarg = argv[optind++];
                     } else if (longopts[i].has_arg == required_argument) {
                         optopt = longopts[i].val;
-                        if (optstring && optstring[0] == ':') return ':';
+                        if (_rin_getopt_has_missing_argument_colon(optstring))
+                            return ':';
                         _rin_getopt_long_diagnostic(
                             argv, "option requires an argument", arg);
                         return '?';
@@ -277,12 +416,9 @@ static inline int getopt_long_only(int argc, char* const argv[],
                                    const struct option* longopts,
                                    int* longindex) {
     optarg = NULL;
-    if (optreset) {
-        optind = 1;
-        _rin_getopt_pos = 0;
-        optreset = 0;
-    }
-    if (optind >= argc) return -1;
+    int prepared = _rin_getopt_prepare(argc, argv, optstring);
+    if (prepared == 0) return -1;
+    if (prepared == 2) return _rin_getopt_return_nonoption(argv, optstring);
 
     const char* arg = argv[optind];
     if (!arg) return -1;
@@ -291,10 +427,7 @@ static inline int getopt_long_only(int argc, char* const argv[],
 
     /* GNU getopt_long_only gives a matching short option precedence. */
     if (arg[1] != '-' && longopts && optstring) {
-        const char* short_options = optstring;
-        if (*short_options == ':' || *short_options == '+' ||
-            *short_options == '-')
-            ++short_options;
+        const char* short_options = _rin_getopt_short_options(optstring);
         int short_match = 0;
         for (const char* option = short_options; *option; ++option) {
             if (*option == arg[1]) {
@@ -336,7 +469,8 @@ static inline int getopt_long_only(int argc, char* const argv[],
                     optarg = argv[optind++];
                 } else if (longopts[i].has_arg == required_argument) {
                     optopt = longopts[i].val;
-                    if (optstring[0] == ':') return ':';
+                    if (_rin_getopt_has_missing_argument_colon(optstring))
+                        return ':';
                     _rin_getopt_long_diagnostic(
                         argv, "option requires an argument", arg);
                     return '?';
