@@ -1011,11 +1011,15 @@ static inline int _rin_temp_random_suffix(char suffix[6]) {
             __NR_getrandom, (uintptr_t)random_bytes,
             (uintptr_t)sizeof(random_bytes), (uintptr_t)0u);
         if (received < 0 && received >= -4095) {
+            for (size_t index = 0; index < sizeof(random_bytes); ++index)
+                random_bytes[index] = 0;
             errno = (int)-received;
             return -1;
         }
         if (received <= 0 ||
             (uintptr_t)received > (uintptr_t)sizeof(random_bytes)) {
+            for (size_t index = 0; index < sizeof(random_bytes); ++index)
+                random_bytes[index] = 0;
             errno = EIO;
             return -1;
         }
