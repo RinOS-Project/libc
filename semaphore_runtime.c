@@ -48,7 +48,6 @@ static int rin_semaphore_status(intptr_t result)
 sem_t* sem_open(const char* name, int oflag, ...)
 {
     uint32_t kernel_flags = 0u;
-    uint32_t creation_mode = 0u;
     unsigned int initial_value = 0u;
     intptr_t result;
 
@@ -60,19 +59,17 @@ sem_t* sem_open(const char* name, int oflag, ...)
 
     if ((oflag & O_CREAT) != 0) {
         va_list arguments;
+        mode_t ignored_mode;
         va_start(arguments, oflag);
-        creation_mode = (uint32_t)va_arg(arguments, mode_t);
+        ignored_mode = va_arg(arguments, mode_t);
         initial_value = va_arg(arguments, unsigned int);
         va_end(arguments);
+        (void)ignored_mode;
         if (initial_value > SEM_VALUE_MAX) {
             errno = EINVAL;
             return SEM_FAILED;
         }
-        kernel_flags |= RIN_POSIX_SEMAPHORE_OPEN_CREAT |
-                        RIN_POSIX_SEMAPHORE_OPEN_MODE_PRESENT |
-                        (((creation_mode & 0777u) <<
-                          RIN_POSIX_SEMAPHORE_OPEN_MODE_SHIFT) &
-                         RIN_POSIX_SEMAPHORE_OPEN_MODE_MASK);
+        kernel_flags |= RIN_POSIX_SEMAPHORE_OPEN_CREAT;
     }
     if ((oflag & O_EXCL) != 0)
         kernel_flags |= RIN_POSIX_SEMAPHORE_OPEN_EXCL;

@@ -13,7 +13,6 @@
 #include "../errno.h"
 #endif
 #include "../stdint.h"
-#include "../internal/time_type.h"
 
 /* The SDK deliberately keeps legacy SYS_* aliases opt-in for C++ consumers.
  * RinOS libc is itself a legacy C/C++ implementation and its public wrapper
@@ -151,11 +150,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_futex           RIN_HOST_LINUX_SYS_FUTEX
 #else
 #define SYS_sched_yield     SYS_SCHED_YIELD
-#if defined(RIN_TIME_BITS) && RIN_TIME_BITS == 32
 #define SYS_futex           SYS_FUTEX
-#else
-#define SYS_futex           RIN_SYS_FUTEX_TIME64
-#endif
 #endif
 #define SYS_clone           SYS_CLONE
 #define SYS_getcpu          SYS_GETCPU

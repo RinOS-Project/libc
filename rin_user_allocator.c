@@ -38,8 +38,7 @@
 #define RIN_USER_MAGAZINE_MAX_BYTES ((size_t)16u * 1024u)
 #define RIN_USER_MAGAZINE_REFILL_COUNT 8u
 #define RIN_USER_MAGAZINE_ACTIVITY_BATCH 256u
-#define RIN_USER_MAGAZINE_REAP_CADENCE 1u
-#define RIN_USER_REAPER_REMOTE_FREE_BATCH 8u
+#define RIN_USER_MAGAZINE_REAP_CADENCE 64u
 #define RIN_USER_MAGAZINE_IDLE_EPOCHS 128u
 #define RIN_USER_ALLOCATOR_METRICS_VERSION 1u
 
@@ -128,7 +127,6 @@ struct RinUserAllocatorMap {
 
 static RinUserAllocatorMap* rin_user_allocator_maps = 0;
 static volatile unsigned rin_user_allocator_directory_lock = 0u;
-static RinUserAllocatorMap* rin_user_allocator_reap_map_cursor = 0;
 
 typedef struct RinUserAllocatorTlsCache {
     RinUserAllocatorMap* arena_by_class[RIN_USER_ARENA_CLASS_COUNT];
@@ -153,7 +151,6 @@ static RIN_USER_THREAD_LOCAL RinUserAllocatorTlsCache
     rin_user_allocator_tls_cache;
 static RinUserAllocatorTlsCache* rin_user_allocator_cache_registry = 0;
 static volatile unsigned rin_user_allocator_cache_registry_lock = 0u;
-static RinUserAllocatorTlsCache* rin_user_allocator_reap_cache_cursor = 0;
 static volatile unsigned rin_user_allocator_pthread_key_state = 0u;
 static volatile uint64_t rin_user_allocator_next_owner_token = 1u;
 static volatile uint32_t rin_user_allocator_fork_generation = 1u;
@@ -213,8 +210,6 @@ static int rin_user_allocator_cache_flush_locked(
     RinUserAllocatorTlsCache* cache);
 static void rin_user_allocator_cache_reap_idle(uint64_t epoch);
 static int rin_user_allocator_drain_all_remote_queues(void);
-static void rin_user_allocator_drain_remote_frees_bounded_locked(
-    RinUserAllocatorMap* map);
 
 /* Compatibility declarations let older host fixtures keep using the old
  * bump backend while product runtimes migrate to map/unmap.  New product
@@ -1073,8 +1068,6 @@ static void rin_user_map_insert(RinUserAllocatorMap* map)
 {
     map->next = rin_user_allocator_maps;
     rin_user_allocator_maps = map;
-    if (!rin_user_allocator_reap_map_cursor)
-        rin_user_allocator_reap_map_cursor = map;
 }
 
 static RinUserAllocatorMap* rin_user_find_map(const void* pointer)
@@ -1094,11 +1087,7 @@ static int rin_user_unlink_map(RinUserAllocatorMap* target)
     RinUserAllocatorMap** cursor = &rin_user_allocator_maps;
     while (*cursor) {
         if (*cursor == target) {
-            RinUserAllocatorMap* next = target->next;
             *cursor = target->next;
-            if (rin_user_allocator_reap_map_cursor == target)
-                rin_user_allocator_reap_map_cursor = next ? next
-                                                          : rin_user_allocator_maps;
             target->next = NULL;
             return 1;
         }
@@ -1280,103 +1269,6 @@ static void rin_user_allocator_drain_remote_frees_locked(
         __atomic_store_n(&map->remote_corrupt, 1u, __ATOMIC_RELEASE);
 }
 
-static int rin_user_allocator_release_remote_block_locked(
-    RinUserAllocatorMap* map, RinUserAllocationHeader* block)
-{
-    uintptr_t address = (uintptr_t)block;
-    size_t offset;
-    size_t capacity;
-    if (!map || !block ||
-        !rin_user_map_range_valid(map, address, sizeof(*block)) ||
-        (address & (RIN_USER_BLOCK_ALIGNMENT - 1u)) != 0u ||
-        address < (uintptr_t)map + map->data_offset)
-        return 0;
-    offset = (size_t)(address - ((uintptr_t)map + map->data_offset));
-    if (block->total_size < rin_user_min_block_size() ||
-        (block->total_size & (RIN_USER_BLOCK_ALIGNMENT - 1u)) != 0u ||
-        offset > map->data_end - map->data_offset ||
-        block->total_size > map->data_end - map->data_offset - offset)
-        return 0;
-    capacity = block->total_size - sizeof(*block) -
-               RIN_USER_ARENA_TAIL_GUARD_SIZE;
-    if (block->map != (uintptr_t)map ||
-        !((block->magic == RIN_USER_ARENA_MAGIC_ALLOCATED &&
-           block->flags == RIN_USER_BLOCK_FLAG_ALLOCATED) ||
-          (block->magic == RIN_USER_ARENA_MAGIC_CACHED &&
-           block->flags == RIN_USER_BLOCK_FLAG_CACHED)) ||
-        __atomic_load_n(&block->remote_state, __ATOMIC_ACQUIRE) != 1u ||
-        block->requested_size == 0u ||
-        block->requested_size > capacity ||
-        block->bin_index >= RIN_USER_ARENA_CLASS_COUNT ||
-        block->bin_index != rin_user_bin_for_size(block->requested_size) ||
-        block->owner_token == 0u || block->owner_generation == 0u ||
-        !rin_user_block_tail_valid(block) ||
-        !rin_user_release_block(map, block))
-        return 0;
-    __atomic_add_fetch(&map->remote_free_drains, 1u, __ATOMIC_RELAXED);
-    return 1;
-}
-
-static void rin_user_allocator_drain_remote_frees_bounded_locked(
-    RinUserAllocatorMap* map)
-{
-    RinUserAllocationHeader* batch[RIN_USER_REAPER_REMOTE_FREE_BATCH];
-    size_t count = 0u;
-    size_t index;
-    uint64_t depth;
-    int corrupt = 0;
-    if (!map || map->kind != RIN_USER_ARENA_KIND ||
-        __atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) != 0u)
-        return;
-
-    rin_user_allocator_lock(&map->remote_free_lock);
-    depth = __atomic_load_n(&map->remote_free_depth, __ATOMIC_RELAXED);
-    while (count < RIN_USER_REAPER_REMOTE_FREE_BATCH) {
-        RinUserAllocationHeader* block = __atomic_load_n(
-            &map->remote_free_head, __ATOMIC_RELAXED);
-        RinUserAllocationHeader* next;
-        size_t prior;
-        if (!block) break;
-        if (depth == 0u ||
-            !rin_user_map_range_valid(map, (uintptr_t)block,
-                                      sizeof(*block)) ||
-            ((uintptr_t)block & (RIN_USER_BLOCK_ALIGNMENT - 1u)) != 0u ||
-            (uintptr_t)block < (uintptr_t)map + map->data_offset) {
-            corrupt = 1;
-            break;
-        }
-        for (prior = 0u; prior < count; ++prior) {
-            if (batch[prior] == block) {
-                corrupt = 1;
-                break;
-            }
-        }
-        if (corrupt) break;
-        next = __atomic_load_n(&block->remote_next, __ATOMIC_RELAXED);
-        __atomic_store_n(&map->remote_free_head, next, __ATOMIC_RELAXED);
-        __atomic_store_n(&block->remote_next, NULL, __ATOMIC_RELAXED);
-        batch[count++] = block;
-        --depth;
-        __atomic_store_n(&map->remote_free_depth, depth, __ATOMIC_RELAXED);
-    }
-    {
-        RinUserAllocationHeader* head = __atomic_load_n(
-            &map->remote_free_head, __ATOMIC_RELAXED);
-        if ((!head && depth != 0u) || (head && depth == 0u)) corrupt = 1;
-        for (index = 0u; head && index < count; ++index) {
-            if (batch[index] == head) corrupt = 1;
-        }
-    }
-    rin_user_allocator_unlock(&map->remote_free_lock);
-
-    for (index = 0u; index < count; ++index) {
-        if (!rin_user_allocator_release_remote_block_locked(map, batch[index]))
-            corrupt = 1;
-    }
-    if (corrupt)
-        __atomic_store_n(&map->remote_corrupt, 1u, __ATOMIC_RELEASE);
-}
-
 static int rin_user_allocator_drain_all_remote_queues(void)
 {
     RinUserAllocatorMap* map;
@@ -1415,11 +1307,7 @@ static void rin_user_allocator_cache_unlink_locked(
     RinUserAllocatorTlsCache** cursor = &rin_user_allocator_cache_registry;
     while (*cursor) {
         if (*cursor == target) {
-            RinUserAllocatorTlsCache* next = target->registry_next;
             *cursor = target->registry_next;
-            if (rin_user_allocator_reap_cache_cursor == target)
-                rin_user_allocator_reap_cache_cursor = next ? next
-                    : rin_user_allocator_cache_registry;
             target->registry_next = NULL;
             target->registered = 0u;
             return;
@@ -1555,154 +1443,27 @@ static int rin_user_allocator_cache_flush_locked(
     return corrupt;
 }
 
-static int rin_user_allocator_cache_reap_map_locked(
-    RinUserAllocatorTlsCache* cache, RinUserAllocatorMap* map)
-{
-    unsigned class_index;
-    int corrupt = 0;
-    if (!cache || !map || map->kind != RIN_USER_ARENA_KIND) return 0;
-    for (class_index = 0u; class_index < RIN_USER_ARENA_CLASS_COUNT;
-         ++class_index) {
-        uint32_t slot = 0u;
-        if (cache->magazine_count[class_index] > RIN_USER_MAGAZINE_CAPACITY) {
-            cache->magazine_count[class_index] = RIN_USER_MAGAZINE_CAPACITY;
-            corrupt = 1;
-        }
-        while (slot < cache->magazine_count[class_index]) {
-            RinUserAllocationHeader* block =
-                cache->magazine[class_index][slot];
-            uintptr_t address;
-            uintptr_t data_begin = (uintptr_t)map + map->data_offset;
-            uintptr_t data_end = (uintptr_t)map + map->data_end;
-            size_t block_size;
-            uint32_t last_slot;
-            int valid_size;
-            if (!block) {
-                last_slot = --cache->magazine_count[class_index];
-                cache->magazine[class_index][slot] =
-                    cache->magazine[class_index][last_slot];
-                cache->magazine[class_index][last_slot] = NULL;
-                corrupt = 1;
-                continue;
-            }
-            address = (uintptr_t)block;
-            if (!rin_user_map_range_valid(map, address, sizeof(*block))) {
-                ++slot;
-                continue;
-            }
-            last_slot = --cache->magazine_count[class_index];
-            cache->magazine[class_index][slot] =
-                cache->magazine[class_index][last_slot];
-            cache->magazine[class_index][last_slot] = NULL;
-            if ((address & (RIN_USER_BLOCK_ALIGNMENT - 1u)) != 0u ||
-                address < data_begin || address > data_end - sizeof(*block)) {
-                corrupt = 1;
-                continue;
-            }
-            block_size = block->total_size;
-            valid_size = block_size >= rin_user_min_block_size() &&
-                (block_size & (RIN_USER_BLOCK_ALIGNMENT - 1u)) == 0u &&
-                block_size <= data_end - address;
-            if (valid_size) {
-                if (cache->cached_bytes >= block_size)
-                    cache->cached_bytes -= block_size;
-                else {
-                    cache->cached_bytes = 0u;
-                    corrupt = 1;
-                }
-            } else {
-                corrupt = 1;
-            }
-            if (!valid_size || block->map != (uintptr_t)map ||
-                block->magic != RIN_USER_ARENA_MAGIC_CACHED ||
-                block->flags != RIN_USER_BLOCK_FLAG_CACHED ||
-                block->bin_index != class_index ||
-                __atomic_load_n(&block->remote_next, __ATOMIC_RELAXED) != NULL ||
-                __atomic_load_n(&block->remote_state, __ATOMIC_RELAXED) != 2u ||
-                block->owner_token != cache->owner_token ||
-                block->owner_generation != cache->owner_generation ||
-                !rin_user_block_tail_valid(block) ||
-                !rin_user_release_block(map, block)) {
-                corrupt = 1;
-            } else {
-                cache->magazine_flushes++;
-            }
-        }
-    }
-    return corrupt;
-}
-
-static void rin_user_allocator_reap_map_locked(
-    RinUserAllocatorMap* map, RinUserAllocatorTlsCache* cache,
-    int cache_idle, int* corrupt)
-{
-    if (!map) return;
-    rin_user_allocator_lock(&map->lock);
-    __atomic_add_fetch(
-        &rin_user_allocator_tls_cache.arena_lock_acquisitions, 1u,
-        __ATOMIC_RELAXED);
-    rin_user_allocator_drain_remote_frees_bounded_locked(map);
-    if (__atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) != 0u)
-        *corrupt = 1;
-    if (cache_idle && cache &&
-        rin_user_allocator_cache_reap_map_locked(cache, map))
-        *corrupt = 1;
-    rin_user_allocator_unlock(&map->lock);
-}
-
 static void rin_user_allocator_cache_reap_idle(uint64_t epoch)
 {
     RinUserAllocatorTlsCache* cache;
-    RinUserAllocatorMap* map;
     int corrupt = 0;
     rin_user_allocator_lock(&rin_user_allocator_cache_registry_lock);
-    cache = rin_user_allocator_reap_cache_cursor
-        ? rin_user_allocator_reap_cache_cursor
-        : rin_user_allocator_cache_registry;
-    if (!cache) {
-        rin_user_allocator_reap_cache_cursor = NULL;
-        rin_user_allocator_lock(&rin_user_allocator_directory_lock);
-        map = rin_user_allocator_reap_map_cursor
-            ? rin_user_allocator_reap_map_cursor
-            : rin_user_allocator_maps;
-        if (map) {
-            rin_user_allocator_reap_map_locked(map, NULL, 0, &corrupt);
-            rin_user_allocator_reap_map_cursor = map->next;
-        } else {
-            rin_user_allocator_reap_map_cursor = NULL;
+    for (cache = rin_user_allocator_cache_registry; cache;
+         cache = cache->registry_next) {
+        uint64_t last_activity;
+        rin_user_cache_lock(cache);
+        last_activity = __atomic_load_n(&cache->last_activity_epoch,
+                                        __ATOMIC_RELAXED);
+        if (cache->cached_bytes != 0u && epoch >= last_activity &&
+            epoch - last_activity >= RIN_USER_MAGAZINE_IDLE_EPOCHS) {
+            if (rin_user_allocator_cache_flush_locked(cache)) corrupt = 1;
+            __atomic_store_n(&cache->last_activity_epoch, epoch,
+                             __ATOMIC_RELAXED);
         }
-        rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
-        rin_user_allocator_unlock(&rin_user_allocator_cache_registry_lock);
-        if (corrupt) rin_user_allocator_corruption();
-        return;
+        rin_user_cache_unlock(cache);
     }
-
-    rin_user_cache_lock(cache);
-    rin_user_allocator_lock(&rin_user_allocator_directory_lock);
-    map = rin_user_allocator_reap_map_cursor
-        ? rin_user_allocator_reap_map_cursor
-        : rin_user_allocator_maps;
-    if (map) {
-        uint64_t last_activity = __atomic_load_n(
-            &cache->last_activity_epoch, __ATOMIC_RELAXED);
-        int cache_idle = cache->cached_bytes != 0u && epoch >= last_activity &&
-            epoch - last_activity >= RIN_USER_MAGAZINE_IDLE_EPOCHS;
-        rin_user_allocator_reap_map_locked(map, cache, cache_idle, &corrupt);
-        rin_user_allocator_reap_map_cursor = map->next;
-        if (!rin_user_allocator_reap_map_cursor) {
-            rin_user_allocator_reap_cache_cursor = cache->registry_next
-                ? cache->registry_next : rin_user_allocator_cache_registry;
-        } else {
-            rin_user_allocator_reap_cache_cursor = cache;
-        }
-    } else {
-        rin_user_allocator_reap_map_cursor = NULL;
-        rin_user_allocator_reap_cache_cursor = cache->registry_next
-            ? cache->registry_next : rin_user_allocator_cache_registry;
-    }
-    rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
-    rin_user_cache_unlock(cache);
     rin_user_allocator_unlock(&rin_user_allocator_cache_registry_lock);
+    if (!rin_user_allocator_drain_all_remote_queues()) corrupt = 1;
     if (corrupt) rin_user_allocator_corruption();
 }
 
@@ -1808,8 +1569,6 @@ static int rin_user_allocator_thread_cache_ensure(
             cache->registry_next = rin_user_allocator_cache_registry;
             rin_user_allocator_cache_registry = cache;
             cache->registered = 1u;
-            if (!rin_user_allocator_reap_cache_cursor)
-                rin_user_allocator_reap_cache_cursor = cache;
             cache->operations_since_epoch = 0u;
             __atomic_store_n(
                 &cache->last_activity_epoch,
@@ -2288,9 +2047,6 @@ void rin_user_allocator_after_fork_child(void)
     unsigned class_index;
     int prepared = __atomic_exchange_n(&rin_user_allocator_fork_prepared, 0u,
                                        __ATOMIC_ACQ_REL) != 0u;
-
-    rin_user_allocator_reap_cache_cursor = NULL;
-    rin_user_allocator_reap_map_cursor = NULL;
 
     if (prepared) {
         for (current = rin_user_allocator_cache_registry; current;

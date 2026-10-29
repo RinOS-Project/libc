@@ -475,9 +475,8 @@ rin_ucontext_return_trampoline(void) {
     __asm__("call rin_ucontext_finish\n\tud2\n\t");
 }
 
-static inline void rin_ucontext_makecontext_va(
-    ucontext_t* context, void (*function)(void), int argc, va_list ap,
-    int pointer_width_arguments) {
+static inline void makecontext(ucontext_t* context, void (*function)(void),
+                               int argc, ...) {
 #if defined(_WIN64)
     uintptr_t arguments[4] = {0u};
 #else
@@ -489,6 +488,7 @@ static inline void rin_ucontext_makecontext_va(
     size_t stack_argument_count;
     size_t stack_words;
     size_t stack_bytes;
+    va_list ap;
     int index;
 
     if (!context || !function) {
@@ -556,10 +556,9 @@ static inline void rin_ucontext_makecontext_va(
     entry_stack = top - stack_bytes;
  #endif
     *(uintptr_t*)entry_stack = (uintptr_t)rin_ucontext_return_trampoline;
+    va_start(ap, argc);
     for (index = 0; index < argc; ++index) {
-        const uintptr_t argument = pointer_width_arguments
-            ? va_arg(ap, uintptr_t)
-            : (uintptr_t)va_arg(ap, int);
+        const uintptr_t argument = va_arg(ap, uintptr_t);
  #if defined(_WIN64)
         if (index < 4) arguments[index] = argument;
         else *(uintptr_t*)(entry_stack + 5u * sizeof(uintptr_t) +
@@ -570,6 +569,7 @@ static inline void rin_ucontext_makecontext_va(
                            (size_t)(index - 6) * sizeof(uintptr_t)) = argument;
  #endif
     }
+    va_end(ap);
     for (index = 0; index < NGREG; ++index)
         context->uc_mcontext.gregs[index] = 0;
     context->uc_mcontext.gregs[REG_RIP] = (greg_t)(uintptr_t)function;
@@ -592,24 +592,6 @@ static inline void rin_ucontext_makecontext_va(
     context->uc_mcontext.gregs[REG_R12] = (greg_t)(uintptr_t)context->uc_link;
     context->uc_flags = RIN_UCONTEXT_FLAG_TAG | RIN_UCONTEXT_FLAG_READY |
                         RIN_UCONTEXT_FLAG_MADE;
-}
-
-static inline void makecontext(ucontext_t* context, void (*function)(void),
-                               int argc, ...) {
-    va_list ap;
-    va_start(ap, argc);
-    rin_ucontext_makecontext_va(context, function, argc, ap, 0);
-    va_end(ap);
-}
-
-/* RinOS extension for context entries that require pointer-width arguments.
- * The POSIX makecontext() entry above reads each variadic argument as int. */
-static inline void rin_makecontext_uintptr(
-    ucontext_t* context, void (*function)(void), int argc, ...) {
-    va_list ap;
-    va_start(ap, argc);
-    rin_ucontext_makecontext_va(context, function, argc, ap, 1);
-    va_end(ap);
 }
 
 static RIN_UCONTEXT_NOINLINE RIN_UCONTEXT_RETURNS_TWICE RIN_UCONTEXT_UNUSED int
@@ -788,15 +770,15 @@ rin_ucontext_i386_return_trampoline(void) {
     __asm__("call rin_ucontext_i386_finish\n\tud2\n\t");
 }
 
-static inline void rin_ucontext_makecontext_va(
-    ucontext_t* context, void (*function)(void), int argc, va_list ap,
-    int pointer_width_arguments) {
+static inline void makecontext(ucontext_t* context, void (*function)(void),
+                               int argc, ...) {
     uintptr_t base;
     uintptr_t top;
     uintptr_t candidate;
     uintptr_t entry_stack;
     size_t stack_words;
     size_t stack_bytes;
+    va_list ap;
     int index;
 
     if (!context || !function) {
@@ -845,13 +827,13 @@ static inline void rin_ucontext_makecontext_va(
 
     *(uintptr_t*)entry_stack =
         (uintptr_t)rin_ucontext_i386_return_trampoline;
+    va_start(ap, argc);
     for (index = 0; index < argc; ++index) {
         *(uintptr_t*)(entry_stack + sizeof(uintptr_t) +
                       (size_t)index * sizeof(uintptr_t)) =
-            pointer_width_arguments
-                ? va_arg(ap, uintptr_t)
-                : (uintptr_t)va_arg(ap, int);
+            va_arg(ap, uintptr_t);
     }
+    va_end(ap);
     for (index = 0; index < NGREG; ++index)
         context->uc_mcontext.gregs[index] = 0;
     context->uc_mcontext.gregs[REG_EIP] = (greg_t)(uintptr_t)function;
@@ -863,24 +845,6 @@ static inline void rin_ucontext_makecontext_va(
         (greg_t)(uintptr_t)context->uc_link;
     context->uc_flags = RIN_UCONTEXT_FLAG_TAG | RIN_UCONTEXT_FLAG_READY |
                         RIN_UCONTEXT_FLAG_MADE;
-}
-
-static inline void makecontext(ucontext_t* context, void (*function)(void),
-                               int argc, ...) {
-    va_list ap;
-    va_start(ap, argc);
-    rin_ucontext_makecontext_va(context, function, argc, ap, 0);
-    va_end(ap);
-}
-
-/* RinOS extension for context entries that require pointer-width arguments.
- * The POSIX makecontext() entry above reads each variadic argument as int. */
-static inline void rin_makecontext_uintptr(
-    ucontext_t* context, void (*function)(void), int argc, ...) {
-    va_list ap;
-    va_start(ap, argc);
-    rin_ucontext_makecontext_va(context, function, argc, ap, 1);
-    va_end(ap);
 }
 
 static RIN_UCONTEXT_NOINLINE RIN_UCONTEXT_RETURNS_TWICE RIN_UCONTEXT_UNUSED int

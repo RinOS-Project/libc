@@ -67,13 +67,10 @@ typedef struct {
 #define _RIN_POSIX_SPAWN_ACTION_PATH_CAPACITY RIN_POSIX_SPAWN_ACTION_PATH_MAX
 #define _RIN_POSIX_SPAWN_EXEC_PATH_CAPACITY 512u
 #define _RIN_POSIX_SPAWN_ENV_PATH_CAPACITY 4096u
-#define _RIN_POSIX_SPAWN_ACTIONS_MAGIC UINT32_C(0x53504157)
 
 typedef struct {
     int action_count;
-    _rin_posix_spawn_file_action_t* actions;
-    size_t action_capacity;
-    uint32_t state_cookie;
+    _rin_posix_spawn_file_action_t actions[_RIN_POSIX_SPAWN_MAX_ACTIONS];
 } posix_spawn_file_actions_t;
 
 #if defined(__cplusplus)
@@ -220,33 +217,17 @@ static inline int posix_spawnattr_getflags(const posix_spawnattr_t* attr,
     return 0;
 }
 
-static _rin_posix_spawn_file_action_t _rin_posix_spawn_empty_action;
-
 static inline int posix_spawn_file_actions_init(posix_spawn_file_actions_t* actions) {
     if (!actions)
         return EINVAL;
-    actions->action_count = 0;
-    actions->actions = NULL;
-    actions->action_capacity = 0u;
-    actions->state_cookie = _RIN_POSIX_SPAWN_ACTIONS_MAGIC;
+    memset(actions, 0, sizeof(*actions));
     return 0;
 }
 
 static inline int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t* actions) {
     if (!actions)
         return EINVAL;
-    if (actions->state_cookie != _RIN_POSIX_SPAWN_ACTIONS_MAGIC ||
-        actions->action_capacity > _RIN_POSIX_SPAWN_MAX_ACTIONS ||
-        (actions->action_capacity == 0u) != (actions->actions == NULL))
-        return EINVAL;
-    free(actions->actions);
-    actions->action_count = 0;
-    /* A zero sentinel keeps legacy code that inspects the now-invalid object
-     * from dereferencing null while retaining no per-object storage. */
-    actions->actions = (_rin_posix_spawn_file_action_t*)
-        &_rin_posix_spawn_empty_action;
-    actions->action_capacity = 0u;
-    actions->state_cookie = 0u;
+    memset(actions, 0, sizeof(*actions));
     return 0;
 }
 
@@ -331,38 +312,13 @@ static inline int _rin_posix_spawn_reserve_action(
     posix_spawn_file_actions_t* actions,
     _rin_posix_spawn_file_action_t** output)
 {
-    size_t new_capacity;
-    _rin_posix_spawn_file_action_t* new_actions;
     if (!actions || !output)
-        return EINVAL;
-    if (actions->state_cookie != _RIN_POSIX_SPAWN_ACTIONS_MAGIC)
         return EINVAL;
     if (actions->action_count < 0 ||
         actions->action_count > (int)_RIN_POSIX_SPAWN_MAX_ACTIONS)
         return EINVAL;
     if (actions->action_count == _RIN_POSIX_SPAWN_MAX_ACTIONS)
         return ENOMEM;
-    if (actions->action_capacity > _RIN_POSIX_SPAWN_MAX_ACTIONS ||
-        (actions->action_capacity == 0u) != (actions->actions == NULL) ||
-        (size_t)actions->action_count > actions->action_capacity)
-        return EINVAL;
-    if ((size_t)actions->action_count == actions->action_capacity) {
-        new_capacity = actions->action_capacity == 0u
-            ? 4u : actions->action_capacity * 2u;
-        if (new_capacity > _RIN_POSIX_SPAWN_MAX_ACTIONS)
-            new_capacity = _RIN_POSIX_SPAWN_MAX_ACTIONS;
-        if (new_capacity > SIZE_MAX / sizeof(*actions->actions))
-            return ENOMEM;
-        new_actions = (_rin_posix_spawn_file_action_t*)realloc(
-            actions->actions, new_capacity * sizeof(*actions->actions));
-        if (!new_actions)
-            return ENOMEM;
-        memset(new_actions + actions->action_capacity, 0,
-               (new_capacity - actions->action_capacity) *
-                   sizeof(*actions->actions));
-        actions->actions = new_actions;
-        actions->action_capacity = new_capacity;
-    }
     *output = &actions->actions[actions->action_count];
     memset(*output, 0, sizeof(**output));
     (*output)->src_fd = -1;
@@ -444,20 +400,16 @@ static inline int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t* a
 #endif
 
 static inline int _rin_posix_spawn_capture_search_path(
-    char** storage_out, const char** path_out,
+    char* storage, size_t storage_size, const char** path_out,
     char*** environment_out, unsigned int* epoch_out)
 {
     char** snapshot;
     const char* path;
-    char* storage;
     size_t path_length;
     int result;
-    if (!storage_out || !path_out || !environment_out || !epoch_out)
+    if (!storage || storage_size < _RIN_POSIX_SPAWN_ENV_PATH_CAPACITY + 1u ||
+        !path_out || !environment_out || !epoch_out)
         return EINVAL;
-    *storage_out = NULL;
-    *path_out = NULL;
-    *environment_out = NULL;
-    *epoch_out = 0u;
     snapshot = __rin_unistd_environment_snapshot(epoch_out);
     *environment_out = snapshot;
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
@@ -472,28 +424,13 @@ static inline int _rin_posix_spawn_capture_search_path(
     }
     result = _rin_posix_spawn_bounded_string_length(
         path, _RIN_POSIX_SPAWN_ENV_PATH_CAPACITY, &path_length);
-    if (result != 0) {
+    if (result == 0) {
+        for (size_t index = 0u; index <= path_length; ++index)
+            storage[index] = path[index];
+        *path_out = storage;
+    } else {
         __rin_unistd_environment_release(*epoch_out);
-        *epoch_out = 0u;
-        *environment_out = NULL;
-        return result;
     }
-    if (path_length == SIZE_MAX)
-        result = ENOMEM;
-    else {
-        storage = (char*)malloc(path_length + 1u);
-        if (!storage)
-            result = ENOMEM;
-        else {
-            memcpy(storage, path, path_length + 1u);
-            *storage_out = storage;
-            *path_out = storage;
-            return 0;
-        }
-    }
-    __rin_unistd_environment_release(*epoch_out);
-    *epoch_out = 0u;
-    *environment_out = NULL;
     return result;
 }
 
@@ -530,20 +467,8 @@ static inline int _rin_posix_spawn_validate(
         return EINVAL;
     if (!file_actions)
         return 0;
-    if (file_actions->state_cookie != _RIN_POSIX_SPAWN_ACTIONS_MAGIC ||
-        file_actions->action_count < 0 ||
+    if (file_actions->action_count < 0 ||
         file_actions->action_count > (int)_RIN_POSIX_SPAWN_MAX_ACTIONS)
-        return EINVAL;
-    if (file_actions->action_count == 0)
-        return (file_actions->action_capacity <=
-                    _RIN_POSIX_SPAWN_MAX_ACTIONS &&
-                ((file_actions->action_capacity == 0u) ==
-                 (file_actions->actions == NULL)))
-                   ? 0
-                   : EINVAL;
-    if (file_actions->action_capacity > _RIN_POSIX_SPAWN_MAX_ACTIONS ||
-        file_actions->action_capacity < (size_t)file_actions->action_count ||
-        !file_actions->actions)
         return EINVAL;
     for (int index = 0; index < file_actions->action_count; ++index) {
         int action_error = _rin_posix_spawn_action_is_valid(
@@ -629,50 +554,33 @@ static inline int _rin_posix_spawn_attribute_action(
 static inline int _rin_posix_spawn_build_actions(
     const posix_spawn_file_actions_t* file_actions,
     const posix_spawnattr_t* attr,
-    _rin_posix_spawn_file_action_t** output_out,
+    _rin_posix_spawn_file_action_t* output,
     uintptr_t* count_out)
 {
     uintptr_t count = 0u;
-    uintptr_t file_action_count = file_actions
-        ? (uintptr_t)file_actions->action_count : 0u;
     int has_attribute_action = attr &&
         (attr->flags & (POSIX_SPAWN_SETPGROUP |
                         POSIX_SPAWN_SETSIGDEF |
                         POSIX_SPAWN_SETSIGMASK |
                         POSIX_SPAWN_SETSCHEDPARAM |
                         POSIX_SPAWN_SETSCHEDULER)) != 0;
-    uintptr_t required_count = file_action_count +
-        (has_attribute_action ? 1u : 0u);
-    _rin_posix_spawn_file_action_t* output;
-    int error;
-    if (!output_out || !count_out) return EINVAL;
-    *output_out = NULL;
-    *count_out = 0u;
-    if (required_count > _RIN_POSIX_SPAWN_MAX_ACTIONS)
-        return E2BIG;
-    if (required_count == 0u)
-        return 0;
-    if (required_count > SIZE_MAX / sizeof(*output))
-        return ENOMEM;
-    output = (_rin_posix_spawn_file_action_t*)malloc(
-        (size_t)required_count * sizeof(*output));
-    if (!output)
-        return ENOMEM;
-    memset(output, 0, (size_t)required_count * sizeof(*output));
+    if (!output || !count_out) return EINVAL;
     if (has_attribute_action) {
-        error = _rin_posix_spawn_attribute_action(attr, &output[count]);
-        if (error != 0) {
-            free(output);
-            return error;
-        }
+        if (_rin_posix_spawn_attribute_action(attr, &output[count]) != 0)
+            return EINVAL;
         ++count;
     }
-    if (file_action_count != 0u) {
-        memcpy(output + count, file_actions->actions,
-               (size_t)file_action_count * sizeof(*output));
-        count += file_action_count;
+    if (!file_actions) {
+        *count_out = count;
+        return 0;
     }
-    *output_out = output;
+    if (file_actions->action_count < 0 ||
+        file_actions->action_count > (int)_RIN_POSIX_SPAWN_MAX_ACTIONS ||
+        count + (uintptr_t)file_actions->action_count >
+            _RIN_POSIX_SPAWN_MAX_ACTIONS)
+        return E2BIG;
+    for (int index = 0; index < file_actions->action_count; ++index)
+        output[count++] = file_actions->actions[index];
     *count_out = count;
     return 0;
 }
@@ -688,7 +596,7 @@ static inline int _rin_posix_spawn_direct(
     uintptr_t spawn_flags = 0u;
     unsigned int environment_epoch = 0u;
     char* const* environment = envp;
-    _rin_posix_spawn_file_action_t* wire_actions = NULL;
+    _rin_posix_spawn_file_action_t wire_actions[_RIN_POSIX_SPAWN_MAX_ACTIONS];
     uintptr_t wire_action_count = 0u;
 
     if (!pid || !path)
@@ -706,7 +614,7 @@ static inline int _rin_posix_spawn_direct(
     if (validation != 0)
         return validation;
     validation = _rin_posix_spawn_build_actions(
-        file_actions, attr, &wire_actions, &wire_action_count);
+        file_actions, attr, wire_actions, &wire_action_count);
     if (validation != 0)
         return validation;
 
@@ -717,7 +625,6 @@ static inline int _rin_posix_spawn_direct(
         wire_action_count != 0u ? wire_actions : NULL,
         wire_action_count,
         spawn_flags);
-    free(wire_actions);
     if (!envp)
         __rin_unistd_environment_release(environment_epoch);
     if (result < 0 && result >= -4095)
@@ -751,8 +658,8 @@ static inline int posix_spawnp(
     unsigned int environment_epoch = 0u;
     char** inherited_environment = NULL;
     char* const* spawn_environment = envp;
-    char* candidate = NULL;
-    char* path_storage = NULL;
+    char candidate[512];
+    char path_storage[_RIN_POSIX_SPAWN_ENV_PATH_CAPACITY + 1u];
 
     if (!pid || !file)
         return EINVAL;
@@ -770,7 +677,7 @@ static inline int posix_spawnp(
             pid, file, file_actions, attr, argv, envp);
 
     validation = _rin_posix_spawn_capture_search_path(
-        &path_storage, &search_path,
+        path_storage, sizeof(path_storage), &search_path,
         &inherited_environment, &environment_epoch);
     if (validation != 0)
         return validation;
@@ -782,16 +689,9 @@ static inline int posix_spawnp(
         search_path = "/bin:/sys/bin:/sys/apps";
     validation = _rin_posix_spawn_bounded_string_length(
         search_path, _RIN_POSIX_SPAWN_ENV_PATH_CAPACITY, &search_path_length);
-    if (validation != 0) {
-        free(path_storage);
+    if (validation != 0)
         return __rin_unistd_environment_finish(
             validation, environment_epoch);
-    }
-    candidate = (char*)malloc(_RIN_POSIX_SPAWN_EXEC_PATH_CAPACITY);
-    if (!candidate) {
-        free(path_storage);
-        return __rin_unistd_environment_finish(ENOMEM, environment_epoch);
-    }
     segment_begin = search_path;
 
     for (;;) {
@@ -804,7 +704,7 @@ static inline int posix_spawnp(
             ++segment_end;
         dir_len = (size_t)(segment_end - segment_begin);
         required = dir_len + (dir_len ? 1u : 0u) + file_len + 1u;
-        if (required <= _RIN_POSIX_SPAWN_EXEC_PATH_CAPACITY) {
+        if (required <= sizeof(candidate)) {
             size_t offset = 0;
             if (dir_len) {
                 memcpy(candidate, segment_begin, dir_len);
@@ -814,17 +714,12 @@ static inline int posix_spawnp(
             memcpy(candidate + offset, file, file_len + 1u);
             result = _rin_posix_spawn_direct(
                 pid, candidate, file_actions, attr, argv, spawn_environment);
-            if (result == 0) {
-                free(candidate);
-                free(path_storage);
+            if (result == 0)
                 return __rin_unistd_environment_finish(
                     0, environment_epoch);
-            }
             if (result == EACCES) {
                 saved_error = EACCES;
             } else if (result != ENOENT && result != ENOTDIR) {
-                free(candidate);
-                free(path_storage);
                 return __rin_unistd_environment_finish(
                     result, environment_epoch);
             }
@@ -835,8 +730,6 @@ static inline int posix_spawnp(
             break;
         segment_begin = segment_end + 1;
     }
-    free(candidate);
-    free(path_storage);
     return __rin_unistd_environment_finish(
         saved_error, environment_epoch);
 }

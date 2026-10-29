@@ -31,23 +31,6 @@
 typedef int (*RinWprintfEmit)(void* context, wchar_t value);
 
 typedef struct {
-    RinWprintfEmit emit;
-    void* context;
-    size_t written;
-} RinWprintfTrackedEmit;
-
-static int rin_wprintf_tracked_emit(void* context, wchar_t value) {
-    RinWprintfTrackedEmit* tracked = (RinWprintfTrackedEmit*)context;
-    if (tracked->written == SIZE_MAX) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    if (tracked->emit(tracked->context, value) != 0) return -1;
-    ++tracked->written;
-    return 0;
-}
-
-typedef struct {
     size_t length;
 } RinWprintfCounter;
 
@@ -345,14 +328,12 @@ static int rin_wprintf_integer_formatted(
             candidate[0] = plus ? L'+' : L' ';
             ++buffer.length;
         }
-        if (precision_set && precision == 0u && signed_value == 0)
-            buffer.length = 0u;
     } else if (rin_wprintf_unsigned(rin_wprintf_buffer_emit, &buffer,
                                     unsigned_value, base, uppercase) != 0) {
         return -1;
     }
     length = buffer.length;
-    if (!is_signed && alternate && (base == 16u || base == 2u) &&
+    if (!is_signed && alternate && base == 16u &&
         !(length == 1u && candidate[0] == L'0')) {
         if (length > sizeof(candidate) / sizeof(candidate[0]) - 2u) {
             errno = EOVERFLOW;
@@ -361,9 +342,7 @@ static int rin_wprintf_integer_formatted(
         for (index = length; index != 0u; --index)
             candidate[index + 1u] = candidate[index - 1u];
         candidate[0] = L'0';
-        candidate[1] = base == 2u
-            ? (uppercase ? L'B' : L'b')
-            : (uppercase ? L'X' : L'x');
+        candidate[1] = uppercase ? L'X' : L'x';
         length += 2u;
         alternate_prefix = 2u;
     }
@@ -1031,16 +1010,10 @@ static int rin_wprintf_float_formatted(
 static int rin_wprintf_format(RinWprintfEmit emit, void* context,
                                const wchar_t* format, va_list arguments) {
     size_t offset = 0u;
-    RinWprintfTrackedEmit tracked;
     if (!format) {
         errno = EINVAL;
         return -1;
     }
-    tracked.emit = emit;
-    tracked.context = context;
-    tracked.written = 0u;
-    emit = rin_wprintf_tracked_emit;
-    context = &tracked;
     while (offset < RIN_WPRINTF_FORMAT_LIMIT) {
         uint32_t conversion;
         int length = 0;
@@ -1050,8 +1023,6 @@ static int rin_wprintf_format(RinWprintfEmit emit, void* context,
         int space = 0;
         int alternate = 0;
         int precision_set = 0;
-        int width_set = 0;
-        unsigned int width_bits = 0u;
         unsigned int width = 0u;
         unsigned int precision = 0u;
         unsigned int width_digit;
@@ -1097,7 +1068,6 @@ static int rin_wprintf_format(RinWprintfEmit emit, void* context,
             }
         }
         if (conversion == (uint32_t)'*') {
-            width_set = 1;
             int dynamic_width = va_arg(arguments, int);
             if (dynamic_width < 0) {
                 /* Avoid negating INT_MIN in the signed domain. */
@@ -1117,8 +1087,6 @@ static int rin_wprintf_format(RinWprintfEmit emit, void* context,
                 return -1;
             }
         } else {
-            width_set = conversion >= (uint32_t)'0' &&
-                        conversion <= (uint32_t)'9';
             while (conversion >= (uint32_t)'0' &&
                    conversion <= (uint32_t)'9') {
                 width_digit = (unsigned int)(conversion - (uint32_t)'0');
@@ -1219,66 +1187,6 @@ static int rin_wprintf_format(RinWprintfEmit emit, void* context,
                 errno = EILSEQ;
                 return -1;
             }
-        } else if (conversion == (uint32_t)'h') {
-            length = 5;
-            if (offset == RIN_WPRINTF_FORMAT_LIMIT) {
-                errno = EOVERFLOW;
-                return -1;
-            }
-            conversion = (uint32_t)format[offset++];
-            if (conversion == (uint32_t)'h') {
-                length = 6;
-                if (offset == RIN_WPRINTF_FORMAT_LIMIT) {
-                    errno = EOVERFLOW;
-                    return -1;
-                }
-                conversion = (uint32_t)format[offset++];
-            }
-            if (!rin_wchar_scalar_valid(conversion)) {
-                errno = EILSEQ;
-                return -1;
-            }
-        } else if (conversion == (uint32_t)'j') {
-            length = 7;
-            if (offset == RIN_WPRINTF_FORMAT_LIMIT) {
-                errno = EOVERFLOW;
-                return -1;
-            }
-            conversion = (uint32_t)format[offset++];
-            if (!rin_wchar_scalar_valid(conversion)) {
-                errno = EILSEQ;
-                return -1;
-            }
-        } else if (conversion == (uint32_t)'t') {
-            length = 8;
-            if (offset == RIN_WPRINTF_FORMAT_LIMIT) {
-                errno = EOVERFLOW;
-                return -1;
-            }
-            conversion = (uint32_t)format[offset++];
-            if (!rin_wchar_scalar_valid(conversion)) {
-                errno = EILSEQ;
-                return -1;
-            }
-        } else if (conversion == (uint32_t)'w') {
-            int fast = 0;
-            size_t width_offset = offset - 1u;
-            int parsed = rin_stdio_parse_width_spec_wide(
-                format, &width_offset,
-                RIN_WPRINTF_FORMAT_LIMIT, &width_bits, &fast);
-            if (parsed != 1) return -1;
-            length = fast ? RIN_SSCANF_LENGTH_FAST_WIDTH
-                          : RIN_SSCANF_LENGTH_WIDTH;
-            if (width_offset == RIN_WPRINTF_FORMAT_LIMIT) {
-                errno = EOVERFLOW;
-                return -1;
-            }
-            conversion = (uint32_t)format[width_offset++];
-            offset = width_offset;
-            if (!rin_wchar_scalar_valid(conversion)) {
-                errno = EILSEQ;
-                return -1;
-            }
         } else if (conversion == (uint32_t)'L') {
             length = 4;
             if (offset == RIN_WPRINTF_FORMAT_LIMIT) {
@@ -1290,20 +1198,6 @@ static int rin_wprintf_format(RinWprintfEmit emit, void* context,
                 errno = EILSEQ;
                 return -1;
             }
-        }
-        if ((length == RIN_SSCANF_LENGTH_WIDTH ||
-             length == RIN_SSCANF_LENGTH_FAST_WIDTH) &&
-            conversion != (uint32_t)'b' && conversion != (uint32_t)'B' &&
-            conversion != (uint32_t)'d' && conversion != (uint32_t)'i' &&
-            conversion != (uint32_t)'o' && conversion != (uint32_t)'u' &&
-            conversion != (uint32_t)'x' && conversion != (uint32_t)'X' &&
-            conversion != (uint32_t)'n') {
-            errno = EINVAL;
-            return -1;
-        }
-        if (conversion == (uint32_t)'w') {
-            errno = EINVAL;
-            return -1;
         }
         switch (conversion) {
             case '%':
@@ -1351,170 +1245,31 @@ static int rin_wprintf_format(RinWprintfEmit emit, void* context,
             case 'd': case 'i': {
                 long long signed_value;
                 if (alternate) break;
-                if (length == RIN_SSCANF_LENGTH_WIDTH ||
-                    length == RIN_SSCANF_LENGTH_FAST_WIDTH) {
-                    int fast = length == RIN_SSCANF_LENGTH_FAST_WIDTH;
-                    if (width_bits == 8u)
-                        signed_value = fast
-                            ? (long long)(int_fast8_t)RIN_STDIO_VA_ARG_PROMOTED(
-                                arguments, int_fast8_t)
-                            : (long long)(int8_t)RIN_STDIO_VA_ARG_PROMOTED(
-                                arguments, int8_t);
-                    else if (width_bits == 16u)
-                        signed_value = fast
-                            ? (long long)(int_fast16_t)RIN_STDIO_VA_ARG_PROMOTED(
-                                arguments, int_fast16_t)
-                            : (long long)(int16_t)RIN_STDIO_VA_ARG_PROMOTED(
-                                arguments, int16_t);
-                    else if (width_bits == 32u)
-                        signed_value = fast
-                            ? (long long)(int_fast32_t)RIN_STDIO_VA_ARG_PROMOTED(
-                                arguments, int_fast32_t)
-                            : (long long)(int32_t)RIN_STDIO_VA_ARG_PROMOTED(
-                                arguments, int32_t);
-                    else
-                        signed_value = fast
-                            ? (long long)(int_fast64_t)RIN_STDIO_VA_ARG_PROMOTED(
-                                arguments, int_fast64_t)
-                            : (long long)(int64_t)RIN_STDIO_VA_ARG_PROMOTED(
-                                arguments, int64_t);
-                } else if (length == 0)
-                    signed_value = (long long)va_arg(arguments, int);
-                else if (length == 5)
-                    signed_value = (short)va_arg(arguments, int);
-                else if (length == 6)
-                    signed_value = (signed char)va_arg(arguments, int);
-                else if (length == 1)
-                    signed_value = (long long)va_arg(arguments, long);
-                else if (length == 3 || length == 8)
-                    signed_value = (long long)va_arg(arguments, ptrdiff_t);
-                else if (length == 7)
-                    signed_value = (long long)va_arg(arguments, intmax_t);
-                else
-                    signed_value = va_arg(arguments, long long);
+                if (length == 0) signed_value = (long long)va_arg(arguments, int);
+                else if (length == 1) signed_value = (long long)va_arg(arguments, long);
+                else if (length == 3) signed_value = (long long)va_arg(arguments, ptrdiff_t);
+                else signed_value = va_arg(arguments, long long);
                 if (rin_wprintf_integer_formatted(
                         emit, context, signed_value, 0u, 1, 10u, 0, width,
                         left, zero, plus, space, 0, precision, precision_set) != 0)
                     return -1;
                 continue;
             }
-            case 'u': case 'o': case 'x': case 'X':
-            case 'b': case 'B': {
+            case 'u': case 'o': case 'x': case 'X': {
                 unsigned long long unsigned_value;
                 unsigned int base = conversion == (uint32_t)'o' ? 8u :
-                                    conversion == (uint32_t)'u' ? 10u :
-                                    (conversion == (uint32_t)'b' ||
-                                     conversion == (uint32_t)'B') ? 2u : 16u;
-                int uppercase = conversion == (uint32_t)'X' ||
-                                conversion == (uint32_t)'B';
+                                    conversion == (uint32_t)'u' ? 10u : 16u;
+                int uppercase = conversion == (uint32_t)'X';
                 if (plus || space) break;
-                if (length == RIN_SSCANF_LENGTH_WIDTH ||
-                    length == RIN_SSCANF_LENGTH_FAST_WIDTH) {
-                    int fast = length == RIN_SSCANF_LENGTH_FAST_WIDTH;
-                    if (width_bits == 8u)
-                        unsigned_value = fast
-                            ? (unsigned long long)(uint_fast8_t)
-                                RIN_STDIO_VA_ARG_PROMOTED(arguments, uint_fast8_t)
-                            : (unsigned long long)(uint8_t)
-                                RIN_STDIO_VA_ARG_PROMOTED(arguments, uint8_t);
-                    else if (width_bits == 16u)
-                        unsigned_value = fast
-                            ? (unsigned long long)(uint_fast16_t)
-                                RIN_STDIO_VA_ARG_PROMOTED(arguments, uint_fast16_t)
-                            : (unsigned long long)(uint16_t)
-                                RIN_STDIO_VA_ARG_PROMOTED(arguments, uint16_t);
-                    else if (width_bits == 32u)
-                        unsigned_value = fast
-                            ? (unsigned long long)(uint_fast32_t)
-                                RIN_STDIO_VA_ARG_PROMOTED(arguments, uint_fast32_t)
-                            : (unsigned long long)(uint32_t)
-                                RIN_STDIO_VA_ARG_PROMOTED(arguments, uint32_t);
-                    else
-                        unsigned_value = fast
-                            ? (unsigned long long)(uint_fast64_t)
-                                RIN_STDIO_VA_ARG_PROMOTED(arguments, uint_fast64_t)
-                            : (unsigned long long)(uint64_t)
-                                RIN_STDIO_VA_ARG_PROMOTED(arguments, uint64_t);
-                } else if (length == 0)
-                    unsigned_value = (unsigned long long)va_arg(arguments, unsigned int);
-                else if (length == 5)
-                    unsigned_value = (unsigned short)va_arg(arguments, int);
-                else if (length == 6)
-                    unsigned_value = (unsigned char)va_arg(arguments, int);
-                else if (length == 1)
-                    unsigned_value = (unsigned long long)va_arg(arguments, unsigned long);
-                else if (length == 3 || length == 8)
-                    unsigned_value = (unsigned long long)va_arg(arguments, size_t);
-                else if (length == 7)
-                    unsigned_value = (unsigned long long)va_arg(arguments, uintmax_t);
-                else
-                    unsigned_value = va_arg(arguments, unsigned long long);
+                if (length == 0) unsigned_value = (unsigned long long)va_arg(arguments, unsigned int);
+                else if (length == 1) unsigned_value = (unsigned long long)va_arg(arguments, unsigned long);
+                else if (length == 3) unsigned_value = (unsigned long long)va_arg(arguments, size_t);
+                else unsigned_value = va_arg(arguments, unsigned long long);
                 if (rin_wprintf_integer_formatted(
                         emit, context, 0, unsigned_value, 0, base, uppercase,
                         width, left, zero, 0, 0, alternate, precision,
                         precision_set) != 0)
                     return -1;
-                continue;
-            }
-            case 'n': {
-                unsigned int type_bits;
-                uint64_t maximum;
-                if (width_set || precision_set || left || zero || plus ||
-                    space || alternate || length == 4) {
-                    errno = EINVAL;
-                    return -1;
-                }
-#define RIN_WPRINTF_STORE_N(type) do { \
-                    type* output; \
-                    if (tracked.written > (size_t)maximum) { \
-                        errno = ERANGE; \
-                        return -1; \
-                    } \
-                    output = va_arg(arguments, type*); \
-                    if (!output) { errno = EFAULT; return -1; } \
-                    *output = (type)tracked.written; \
-                } while (0)
-                if (length == RIN_SSCANF_LENGTH_WIDTH ||
-                    length == RIN_SSCANF_LENGTH_FAST_WIDTH) {
-                    int fast = length == RIN_SSCANF_LENGTH_FAST_WIDTH;
-                    type_bits = rin_stdio_width_type_bits(width_bits, fast);
-                    if (type_bits == 0u || type_bits > 64u) {
-                        errno = ENOSYS;
-                        return -1;
-                    }
-                    maximum = type_bits == 64u
-                        ? (uint64_t)INT64_MAX
-                        : (UINT64_C(1) << (type_bits - 1u)) - 1u;
-                    if (fast) {
-                        if (width_bits == 8u) RIN_WPRINTF_STORE_N(int_fast8_t);
-                        else if (width_bits == 16u) RIN_WPRINTF_STORE_N(int_fast16_t);
-                        else if (width_bits == 32u) RIN_WPRINTF_STORE_N(int_fast32_t);
-                        else RIN_WPRINTF_STORE_N(int_fast64_t);
-                    } else {
-                        if (width_bits == 8u) RIN_WPRINTF_STORE_N(int8_t);
-                        else if (width_bits == 16u) RIN_WPRINTF_STORE_N(int16_t);
-                        else if (width_bits == 32u) RIN_WPRINTF_STORE_N(int32_t);
-                        else RIN_WPRINTF_STORE_N(int64_t);
-                    }
-                } else {
-                    if (length == 6) maximum = (uint64_t)SCHAR_MAX;
-                    else if (length == 5) maximum = (uint64_t)SHRT_MAX;
-                    else if (length == 1) maximum = (uint64_t)LONG_MAX;
-                    else if (length == 2) maximum = (uint64_t)LLONG_MAX;
-                    else if (length == 3 || length == 8)
-                        maximum = (uint64_t)PTRDIFF_MAX;
-                    else if (length == 7) maximum = (uint64_t)INTMAX_MAX;
-                    else maximum = (uint64_t)INT_MAX;
-                    if (length == 6) RIN_WPRINTF_STORE_N(signed char);
-                    else if (length == 5) RIN_WPRINTF_STORE_N(short);
-                    else if (length == 1) RIN_WPRINTF_STORE_N(long);
-                    else if (length == 2) RIN_WPRINTF_STORE_N(long long);
-                    else if (length == 3 || length == 8)
-                        RIN_WPRINTF_STORE_N(ptrdiff_t);
-                    else if (length == 7) RIN_WPRINTF_STORE_N(intmax_t);
-                    else RIN_WPRINTF_STORE_N(int);
-                }
-#undef RIN_WPRINTF_STORE_N
                 continue;
             }
             case 'a': case 'A':
@@ -1709,16 +1464,6 @@ static wint_t _rin_fgetwc_unlocked(FILE* stream) {
             return (wint_t)value;
         }
     }
-#if defined(RIN_USERSPACE)
-    if (rin_stdio_memstream_kind(stream) == RIN_STDIO_MEMSTREAM_WIDE) {
-        uint32_t value = 0u;
-        int status = rin_stdio_memstream_read_wide(stream, &value);
-        if (status > 0) return (wint_t)value;
-        if (status == 0) stream->eof = 1;
-        else stream->error = 1;
-        return WEOF;
-    }
-#endif
     for (byte_index = 0u; byte_index < 4u; ++byte_index) {
         char byte = 0;
         long count = _rin_stdio_read_block(
@@ -1822,13 +1567,6 @@ static wint_t _rin_fputwc_unlocked(wchar_t c, FILE* stream) {
         return WEOF;
     }
     if (!_rin_stdio_claim_wide_orientation(stream)) return WEOF;
-#if defined(RIN_USERSPACE)
-    if (rin_stdio_memstream_kind(stream) == RIN_STDIO_MEMSTREAM_WIDE) {
-        if (rin_stdio_memstream_write_wide(stream, value) != 1)
-            return WEOF;
-        return (wint_t)value;
-    }
-#endif
     if (!rin_wchar_scalar_valid(value)) {
         errno = EILSEQ;
         stream->error = 1;
@@ -1960,9 +1698,7 @@ enum {
     RIN_WSCANF_LENGTH_SHORT,
     RIN_WSCANF_LENGTH_CHAR,
     RIN_WSCANF_LENGTH_INTMAX,
-    RIN_WSCANF_LENGTH_LONG_DOUBLE,
-    RIN_WSCANF_LENGTH_WIDTH = RIN_SSCANF_LENGTH_WIDTH,
-    RIN_WSCANF_LENGTH_FAST_WIDTH = RIN_SSCANF_LENGTH_FAST_WIDTH
+    RIN_WSCANF_LENGTH_LONG_DOUBLE
 };
 
 static int rin_wscanf_space(uint32_t value) {
@@ -2093,43 +1829,37 @@ static int rin_wscanf_number(RinWscanfInput* input, unsigned int width,
             RIN_WSCANF_NOMATCH : status;
     }
 
-    base = conversion == (uint32_t)'b' ? 2u :
-           conversion == (uint32_t)'o' ? 8u :
+    base = conversion == (uint32_t)'o' ? 8u :
            (conversion == (uint32_t)'x' || conversion == (uint32_t)'X') ?
-           16u : conversion == (uint32_t)'i'
-               ? (value == (uint32_t)'0' ? 0u : 10u) : 10u;
-    if ((conversion == (uint32_t)'i' || base == 16u || base == 2u) &&
+           16u : 10u;
+    if ((conversion == (uint32_t)'i' || base == 16u) &&
         value == (uint32_t)'0') {
         *magnitude = 0u;
         digits = 1u;
         if (conversion == (uint32_t)'i') base = 8u;
         status = rin_wscanf_take(input, width, &used, &value);
         if (status == RIN_WSCANF_MATCH &&
-            (((conversion == (uint32_t)'i' || base == 16u) &&
-              (value == (uint32_t)'x' || value == (uint32_t)'X')) ||
-             ((conversion == (uint32_t)'i' || base == 2u) &&
-              (value == (uint32_t)'b' || value == (uint32_t)'B')))) {
-            uint32_t prefix = value;
-            unsigned int prefix_base =
-                prefix == (uint32_t)'x' || prefix == (uint32_t)'X'
-                    ? 16u : 2u;
+            (value == (uint32_t)'x' || value == (uint32_t)'X')) {
             unsigned int prefix_digit;
+            base = 16u;
             digits = 0u;
             status = rin_wscanf_take(input, width, &used, &value);
             if (status == RIN_WSCANF_MATCH &&
-                rin_wscanf_digit(value, prefix_base, &prefix_digit)) {
-                base = prefix_base;
+                rin_wscanf_digit(value, base, &prefix_digit)) {
                 have_value = 1;
             } else if (status == RIN_WSCANF_WIDTH ||
                        status == RIN_WSCANF_EOF ||
-                       status == RIN_WSCANF_MATCH) {
-                /* A radix introducer is part of the conversion only when a
-                 * valid digit follows.  Otherwise keep the leading zero and
-                 * return the introducer and lookahead to the input. */
+                       (status == RIN_WSCANF_MATCH &&
+                        !rin_wscanf_digit(value, base, &prefix_digit))) {
+                /* A hexadecimal introducer is only part of the conversion
+                 * once a hexadecimal digit follows it.  Keep the valid
+                 * leading zero and return the rejected `x` (and lookahead)
+                 * so `%x` follows the same non-destructive token boundary
+                 * rule as the other integer conversions. */
                 if (status == RIN_WSCANF_MATCH &&
                     rin_wscanf_unread(input, value) != RIN_WSCANF_MATCH)
                     return RIN_WSCANF_ERROR;
-                if (rin_wscanf_unread(input, prefix) != RIN_WSCANF_MATCH)
+                if (rin_wscanf_unread(input, (uint32_t)'x') != RIN_WSCANF_MATCH)
                     return RIN_WSCANF_ERROR;
                 return RIN_WSCANF_MATCH;
             } else {
@@ -2498,13 +2228,13 @@ static int rin_wscanf_store_count(int length, size_t count,
         }
         *output = (intmax_t)count;
     } else if (length == RIN_WSCANF_LENGTH_SIZE) {
-        ptrdiff_t* output = va_arg(*arguments, ptrdiff_t*);
-        if (!output || count > (size_t)PTRDIFF_MAX) {
-            errno = !output ? EFAULT : EOVERFLOW;
+        size_t* output = va_arg(*arguments, size_t*);
+        if (!output) {
+            errno = EFAULT;
             return RIN_WSCANF_ERROR;
         }
-        *output = (ptrdiff_t)count;
-    } else if (length == RIN_WSCANF_LENGTH_PTRDIFF) {
+        *output = count;
+    } else {
         ptrdiff_t* output = va_arg(*arguments, ptrdiff_t*);
         if (!output) {
             errno = EFAULT;
@@ -2752,8 +2482,6 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
             int produces_assignment = 1;
             int length = RIN_WSCANF_LENGTH_DEFAULT;
             int width_present = 0;
-            unsigned int width_bits = 0u;
-            int width_fast = 0;
             unsigned int width = 0u;
             uint32_t conversion;
             if (offset == RIN_WSCANF_FORMAT_LIMIT) {
@@ -2847,38 +2575,9 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                     return EOF;
                 }
                 conversion = (uint32_t)format[offset++];
-            } else if (conversion == (uint32_t)'w') {
-                size_t width_offset = offset - 1u;
-                int parsed = rin_stdio_parse_width_spec_wide(
-                    format, &width_offset, RIN_WSCANF_FORMAT_LIMIT,
-                    &width_bits, &width_fast);
-                if (parsed != 1) return EOF;
-                length = width_fast
-                    ? RIN_WSCANF_LENGTH_FAST_WIDTH
-                    : RIN_WSCANF_LENGTH_WIDTH;
-                if (width_offset == RIN_WSCANF_FORMAT_LIMIT) {
-                    errno = EOVERFLOW;
-                    return EOF;
-                }
-                conversion = (uint32_t)format[width_offset];
-                offset = width_offset + 1u;
             }
             if (!rin_wchar_scalar_valid(conversion)) {
                 errno = EILSEQ;
-                return EOF;
-            }
-            if ((length == RIN_WSCANF_LENGTH_WIDTH ||
-                 length == RIN_WSCANF_LENGTH_FAST_WIDTH) &&
-                conversion != (uint32_t)'b' &&
-                conversion != (uint32_t)'B' &&
-                conversion != (uint32_t)'d' &&
-                conversion != (uint32_t)'i' &&
-                conversion != (uint32_t)'o' &&
-                conversion != (uint32_t)'u' &&
-                conversion != (uint32_t)'x' &&
-                conversion != (uint32_t)'X' &&
-                conversion != (uint32_t)'n') {
-                errno = EINVAL;
                 return EOF;
             }
             if (length == RIN_WSCANF_LENGTH_LONG_DOUBLE &&
@@ -2935,8 +2634,7 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                                                 length == RIN_WSCANF_LENGTH_LONG,
                                                 suppress, arguments);
             } else if (conversion == (uint32_t)'d' || conversion == (uint32_t)'i' ||
-                       conversion == (uint32_t)'b' || conversion == (uint32_t)'u' ||
-                       conversion == (uint32_t)'o' ||
+                       conversion == (uint32_t)'u' || conversion == (uint32_t)'o' ||
                        conversion == (uint32_t)'x' || conversion == (uint32_t)'X') {
                 int negative;
                 unsigned long long magnitude;
@@ -2945,45 +2643,18 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                 if (status == RIN_WSCANF_MATCH)
                     status = rin_wscanf_number(input, width, conversion,
                                                &negative, &magnitude);
-                if (status == RIN_WSCANF_MATCH &&
-                    (length == RIN_WSCANF_LENGTH_WIDTH ||
-                     length == RIN_WSCANF_LENGTH_FAST_WIDTH) &&
-                    !rin_stdio_width_integer_in_range(
-                        width_bits, width_fast,
-                        conversion == (uint32_t)'d' ||
-                        conversion == (uint32_t)'i',
-                        magnitude, negative))
-                    status = RIN_WSCANF_ERROR;
-                if (status == RIN_WSCANF_MATCH && !suppress) {
-                    if (length == RIN_WSCANF_LENGTH_WIDTH ||
-                        length == RIN_WSCANF_LENGTH_FAST_WIDTH) {
-                        status = rin_stdio_store_width_integer(
-                            arguments, width_bits, width_fast,
-                            (char)conversion, magnitude, negative) == 0
-                            ? RIN_WSCANF_MATCH : RIN_WSCANF_ERROR;
-                    } else {
-                        status = rin_wscanf_store_number(
-                            conversion, length, negative, magnitude,
-                            arguments);
-                    }
-                }
+                if (status == RIN_WSCANF_MATCH && !suppress)
+                    status = rin_wscanf_store_number(conversion, length,
+                                                      negative, magnitude,
+                                                      arguments);
             } else if (conversion == (uint32_t)'n') {
                 if (suppress || width_present) {
-                    errno = EINVAL;
+                    errno = ENOSYS;
                     return EOF;
                 }
                 produces_assignment = 0;
-                if (length == RIN_WSCANF_LENGTH_WIDTH ||
-                    length == RIN_WSCANF_LENGTH_FAST_WIDTH) {
-                    status = rin_stdio_store_width_count(
-                        arguments, width_bits, width_fast,
-                        input->consumed) == 0
-                        ? RIN_WSCANF_MATCH : RIN_WSCANF_ERROR;
-                } else {
-                    status = rin_wscanf_store_count(length,
-                                                    input->consumed,
-                                                    arguments);
-                }
+                status = rin_wscanf_store_count(length, input->consumed,
+                                                arguments);
             } else if (conversion == (uint32_t)'p') {
                 int negative;
                 unsigned long long magnitude;

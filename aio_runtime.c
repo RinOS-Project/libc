@@ -4,7 +4,6 @@
 
 #include "errno.h"
 #include "fcntl.h"
-#include "internal/pthread_cond_interrupt.h"
 #include "limits.h"
 #include "pthread.h"
 #include "signal.h"
@@ -823,19 +822,11 @@ int aio_suspend(const struct aiocb* const requests[], int count,
             break;
         }
         if (timeout)
-            wait_error = __rin_pthread_cond_timedwait_interruptible(
-                &g_rin_aio_changed, &g_rin_aio_mutex, &deadline);
+            wait_error = pthread_cond_timedwait(&g_rin_aio_changed,
+                                                &g_rin_aio_mutex, &deadline);
         else
-            wait_error = __rin_pthread_cond_wait_interruptible(
-                &g_rin_aio_changed, &g_rin_aio_mutex);
-        if (wait_error == EINTR) {
-            if (rin_aio_list_has_completion_locked(requests, count)) {
-                wait_error = 0;
-                break;
-            }
-            errno = EINTR;
-            break;
-        }
+            wait_error = pthread_cond_wait(&g_rin_aio_changed,
+                                           &g_rin_aio_mutex);
         if (wait_error != 0 && wait_error != ETIMEDOUT) {
             errno = wait_error;
             break;

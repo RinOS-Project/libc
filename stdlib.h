@@ -91,16 +91,7 @@
 #endif
 #endif
 #ifndef _RIN_STDLIB_SYSTEM_AVAILABLE
-#ifndef MIDL_PASS
-#ifdef __cplusplus
-extern "C" {
-#endif
-int __rin_stdlib_system_available(void);
-#ifdef __cplusplus
-}
-#endif
-#endif
-#define _RIN_STDLIB_SYSTEM_AVAILABLE() __rin_stdlib_system_available()
+#define _RIN_STDLIB_SYSTEM_AVAILABLE() 0
 #endif
 
 #ifndef MIDL_PASS

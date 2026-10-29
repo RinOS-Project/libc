@@ -18,23 +18,25 @@ static int barrier_futex_operation(const pthread_barrier_t* barrier,
 static int barrier_futex_wait(pthread_barrier_t* barrier,
                               volatile uint32_t* address, uint32_t expected)
 {
+    int saved_errno = errno;
     long result = syscall(SYS_futex, address,
                           barrier_futex_operation(barrier, FUTEX_WAIT),
                           expected, NULL, NULL, 0);
-    if (result == 0) return 0;
-    if (result == -1) return errno;
-    return EIO;
+    int error = result == 0 ? 0 : (result == -1 ? errno : EIO);
+    errno = saved_errno;
+    return error;
 }
 
 static int barrier_futex_wake(pthread_barrier_t* barrier,
                               volatile uint32_t* address, int count)
 {
+    int saved_errno = errno;
     long result = syscall(SYS_futex, address,
                           barrier_futex_operation(barrier, FUTEX_WAKE),
                           count, NULL, NULL, 0);
-    if (result >= 0) return 0;
-    if (result == -1) return errno;
-    return EIO;
+    int error = result >= 0 ? 0 : (result == -1 ? errno : EIO);
+    errno = saved_errno;
+    return error;
 }
 
 static int barrier_lock(pthread_barrier_t* barrier)

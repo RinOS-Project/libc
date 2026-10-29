@@ -228,12 +228,8 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
             continue;
         }
 
-        int invalid_deadline = abstime->tv_nsec < 0 ||
-            abstime->tv_nsec >= 1000000000L;
-#if !defined(RIN_TIME_ABI64)
-        invalid_deadline = invalid_deadline || abstime->tv_sec < 0;
-#endif
-        if (invalid_deadline) {
+        if (abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
+            abstime->tv_nsec >= 1000000000L) {
             errno = EINVAL;
             return -1;
         }
@@ -253,35 +249,11 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
             continue;
         }
 
-        struct timespec relative_timeout;
-        const struct timespec* timeout = abstime;
-        int operation = rin_sem_futex_operation(
-            sem, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME);
-        int use_relative_timeout = 0;
-#if defined(RIN_TIME_ABI64)
-        {
-            int deadline_error = _rin_time_realtime_deadline_relative(
-                abstime, &relative_timeout, &use_relative_timeout);
-            if (deadline_error == ETIMEDOUT) {
-                rin_sem_waiter_remove(sem);
-                if (sem_trywait(sem) == 0) return 0;
-                errno = ETIMEDOUT;
-                return -1;
-            }
-            if (deadline_error != 0) {
-                rin_sem_waiter_remove(sem);
-                errno = deadline_error;
-                return -1;
-            }
-            if (use_relative_timeout) {
-                operation = rin_sem_futex_operation(sem, FUTEX_WAIT);
-                timeout = &relative_timeout;
-            }
-        }
-#endif
         long ret = _RIN_SEMAPHORE_FUTEX_BITSET(
-            &sem->value, operation, 0, timeout,
-            FUTEX_BITSET_MATCH_ANY);
+            &sem->value,
+            rin_sem_futex_operation(
+                sem, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME),
+            0, abstime, FUTEX_BITSET_MATCH_ANY);
         rin_sem_waiter_remove(sem);
         __rin_pthread_cancel_point_if_linked();
 
@@ -363,9 +335,8 @@ static inline int sem_getvalue(sem_t* sem, int* sval) {
 /*
  * 名前付きセマフォはkernelのshared-memory objectが所有し、プロセス間で
  * 同じsem_t stateを共有する。sem_open()のvarargsはO_CREATのときmode_tと
- * 初期値をこの順で受け取り、新規作成時はmode_tとprocess umaskで権限を
- * 決める。既存名を開くときはkernelがowner/group/otherのread/write権限を
- * 検査する。
+ * 初期値をこの順で受け取る。mode_tのpermissionはcurrent-session namespace
+ * 内では適用されない。
  */
 sem_t* sem_open(const char* name, int oflag, ...);
 int sem_close(sem_t* sem);
