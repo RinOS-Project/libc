@@ -26,7 +26,9 @@ size_t memalignment(const void* ptr) {
 
 void* malloc(size_t size) {
     if (size == 0) return 0;
-    return rin_malloc(size);
+    void* ptr = rin_malloc(size);
+    if (!ptr) errno = ENOMEM;
+    return ptr;
 }
 
 void free(void* ptr) {
@@ -52,17 +54,21 @@ void* calloc(size_t nmemb, size_t size) {
     }
     size_t total = nmemb * size;
     void* ptr = rin_malloc(total);
-    if (ptr) {
-        char* p = (char*)ptr;
-        for (size_t i = 0; i < total; i++) p[i] = 0;
+    if (!ptr) {
+        errno = ENOMEM;
+        return 0;
     }
+    char* p = (char*)ptr;
+    for (size_t i = 0; i < total; i++) p[i] = 0;
     return ptr;
 }
 
 void* realloc(void* ptr, size_t size) {
     if (!ptr) return malloc(size);
     if (size == 0) { free(ptr); return 0; }
-    return rin_realloc(ptr, size);
+    void* replacement = rin_realloc(ptr, size);
+    if (!replacement) errno = ENOMEM;
+    return replacement;
 }
 
 void* reallocarray(void* ptr, size_t nmemb, size_t size) {
