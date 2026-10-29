@@ -277,6 +277,8 @@ static inline int _libc_fpclassify_d(double x) {
     float: _libc_fpclassify_f, \
     double: _libc_fpclassify_d, \
     default: _libc_fpclassify_d)(x)
+#define issubnormal(x) (fpclassify(x) == FP_SUBNORMAL)
+#define iszero(x) (fpclassify(x) == FP_ZERO)
 
 #endif /* !__cplusplus */
 
@@ -297,6 +299,36 @@ static inline int signbit(double x) {
     } u;
     u.d = x;
     return (u.i >> 63) != 0;
+}
+
+static inline int issubnormal(float x) {
+    return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL,
+                                FP_SUBNORMAL, FP_ZERO, x) == FP_SUBNORMAL;
+}
+
+static inline int issubnormal(double x) {
+    return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL,
+                                FP_SUBNORMAL, FP_ZERO, x) == FP_SUBNORMAL;
+}
+
+static inline int issubnormal(long double x) {
+    return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL,
+                                FP_SUBNORMAL, FP_ZERO, x) == FP_SUBNORMAL;
+}
+
+static inline int iszero(float x) {
+    return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL,
+                                FP_SUBNORMAL, FP_ZERO, x) == FP_ZERO;
+}
+
+static inline int iszero(double x) {
+    return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL,
+                                FP_SUBNORMAL, FP_ZERO, x) == FP_ZERO;
+}
+
+static inline int iszero(long double x) {
+    return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL,
+                                FP_SUBNORMAL, FP_ZERO, x) == FP_ZERO;
 }
 #endif
 
