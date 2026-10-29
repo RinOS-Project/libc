@@ -3097,6 +3097,13 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                             round_add /= 10.0;
                         frac += round_add;
                         if (frac >= 1.0) { ipart++; frac -= 1.0; }
+                        if (scientific && ipart >= 10u) {
+                            /* Rounding 9.99... across the decade boundary
+                             * must carry into the scientific exponent. */
+                            ipart = 1u;
+                            frac = 0.0;
+                            ++scientific_exponent;
+                        }
 
                         /* Integer part to string (reverse) */
                         char itmp[24]; int ii = 0;
