@@ -7,6 +7,9 @@
 #define _STRING_H
 
 #include "stddef.h"
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+#include "locale.h"
+#endif
 #if defined(__cplusplus) && !defined(RIN_FREESTANDING) && \
     defined(__STDC_HOSTED__) && __STDC_HOSTED__
 #include <errno.h>
@@ -304,6 +307,10 @@ RIN_STRING_INLINE char* strtok_r(char* str, const char* delim,
 /* RinUnicode-backed collation functions are owned by libc's shared runtime. */
 int strcoll(const char* s1, const char* s2);
 size_t strxfrm(char* dest, const char* src, size_t n);
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+int strcoll_l(const char* s1, const char* s2, locale_t locale);
+size_t strxfrm_l(char* dest, const char* src, size_t n, locale_t locale);
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * エラーメッセージ

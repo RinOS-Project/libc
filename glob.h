@@ -866,9 +866,7 @@ static inline int _rin_glob_expand(_RinGlobContext* context,
 
 static inline int _rin_glob_string_compare(const char* left, const char* right)
 {
-    size_t index = 0u;
-    while (left[index] && right[index] && left[index] == right[index]) ++index;
-    return (unsigned char)left[index] - (unsigned char)right[index];
+    return strcoll(left, right);
 }
 
 static inline void _rin_glob_heap_sift_down(_RinGlobMatchList* list,

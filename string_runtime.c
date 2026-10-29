@@ -1,6 +1,7 @@
 /* RinOS libc string runtime state shared by all translation units. */
 
 #include "string.h"
+#include "locale.h"
 #include "../libunicode/rin_unicode.h"
 
 static _Thread_local char* g_rin_strtok_last;
@@ -44,10 +45,18 @@ char* strtok(char* input, const char* delimiters) {
 }
 
 int strcoll(const char* left, const char* right) {
-    return rin_unicode_compare_utf8(left ? left : "", right ? right : "");
+    return rin_locale_current_strcoll(left, right);
 }
 
 size_t strxfrm(char* destination, const char* source, size_t capacity) {
-    return rin_unicode_transform_utf8(destination, capacity,
-                                      source ? source : "");
+    return rin_locale_current_strxfrm(destination, source, capacity);
+}
+
+int strcoll_l(const char* left, const char* right, locale_t locale) {
+    return rin_locale_strcoll(locale, left, right);
+}
+
+size_t strxfrm_l(char* destination, const char* source, size_t capacity,
+                 locale_t locale) {
+    return rin_locale_strxfrm(locale, destination, source, capacity);
 }

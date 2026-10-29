@@ -171,12 +171,36 @@ static inline wchar_t* wcsncat(wchar_t* dest, const wchar_t* src, size_t n) {
 }
 
 static inline int wcscoll(const wchar_t* s1, const wchar_t* s2) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    return rin_locale_current_wcscoll32((const uint32_t*)s1,
+                                        (const uint32_t*)s2);
+#else
     return rin_unicode_wcscoll32((const uint32_t*)s1, (const uint32_t*)s2);
+#endif
 }
 
 static inline size_t wcsxfrm(wchar_t* dest, const wchar_t* src, size_t n) {
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+    return rin_locale_current_wcsxfrm32((uint32_t*)dest,
+                                        (const uint32_t*)src, n);
+#else
     return rin_unicode_wcsxfrm32((uint32_t*)dest, (const uint32_t*)src, n);
+#endif
 }
+
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+static inline int wcscoll_l(const wchar_t* s1, const wchar_t* s2,
+                            locale_t locale) {
+    return rin_locale_wcscoll32(locale, (const uint32_t*)s1,
+                                (const uint32_t*)s2);
+}
+
+static inline size_t wcsxfrm_l(wchar_t* dest, const wchar_t* src, size_t n,
+                               locale_t locale) {
+    return rin_locale_wcsxfrm32(locale, (uint32_t*)dest,
+                                (const uint32_t*)src, n);
+}
+#endif
 
 static inline size_t wcsspn(const wchar_t* s, const wchar_t* accept) {
     size_t count = 0;

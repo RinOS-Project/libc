@@ -146,6 +146,24 @@ locale_t duplocale(locale_t locobj);
 void freelocale(locale_t locobj);
 locale_t uselocale(locale_t newloc);
 
+/* LC_COLLATEに基づく文字列比較・変換。C/POSIXではbyte列／符号位置順、
+ * 対応するUnicode localeでは共通のUnicode照合順を使う。 */
+int rin_locale_strcoll(locale_t locobj, const char* left, const char* right);
+size_t rin_locale_strxfrm(locale_t locobj, char* destination,
+                          const char* source, size_t capacity);
+int rin_locale_wcscoll32(locale_t locobj, const uint32_t* left,
+                         const uint32_t* right);
+size_t rin_locale_wcsxfrm32(locale_t locobj, uint32_t* destination,
+                            const uint32_t* source, size_t capacity);
+int rin_locale_current_strcoll(const char* left, const char* right);
+size_t rin_locale_current_strxfrm(char* destination, const char* source,
+                                  size_t capacity);
+int rin_locale_current_wcscoll32(const uint32_t* left,
+                                 const uint32_t* right);
+size_t rin_locale_current_wcsxfrm32(uint32_t* destination,
+                                    const uint32_t* source,
+                                    size_t capacity);
+
 /* localeconvは呼出スレッドのlocaleを使う。返却領域は呼出スレッドに属し、
  * 次のlocaleconv呼出しまで有効とする。 */
 struct lconv* rin_localeconv_for_locale(locale_t locobj);

@@ -877,3 +877,120 @@ size_t rin_locale_current_wcstombs32(char* destination,
         destination[converted] = '\0';
     return converted;
 }
+
+static int locale_collate_is_c(locale_t locale) {
+    if (locale == LC_GLOBAL_LOCALE) {
+        const char* name = rin_locale_name(LC_COLLATE);
+        return !name || locale_equal(name, "C") || locale_equal(name, "POSIX");
+    }
+    if (!locale_object_valid(locale)) return 1;
+    return locale->categories[LC_COLLATE] == RIN_LOCALE_KIND_C;
+}
+
+static int locale_compare_bytes(const char* left, const char* right) {
+    const unsigned char* a = (const unsigned char*)(left ? left : "");
+    const unsigned char* b = (const unsigned char*)(right ? right : "");
+    while (*a != 0u && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return *a < *b ? -1 : (*a > *b ? 1 : 0);
+}
+
+static size_t locale_transform_bytes(char* destination, const char* source,
+                                     size_t capacity) {
+    size_t length = 0u;
+    size_t copied = 0u;
+    const char* input = source ? source : "";
+    while (input[length] != '\0') {
+        if (length == SIZE_MAX) return (size_t)-1;
+        ++length;
+    }
+    if (destination && capacity != 0u) {
+        copied = length < capacity - 1u ? length : capacity - 1u;
+        for (size_t index = 0u; index < copied; ++index)
+            destination[index] = input[index];
+        destination[copied] = '\0';
+    }
+    return length;
+}
+
+static int locale_compare_wide(const uint32_t* left, const uint32_t* right) {
+    static const uint32_t empty[1] = {0u};
+    const uint32_t* a = left ? left : empty;
+    const uint32_t* b = right ? right : empty;
+    while (*a != 0u && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return *a < *b ? -1 : (*a > *b ? 1 : 0);
+}
+
+static size_t locale_transform_wide(uint32_t* destination,
+                                    const uint32_t* source,
+                                    size_t capacity) {
+    static const uint32_t empty[1] = {0u};
+    const uint32_t* input = source ? source : empty;
+    size_t length = 0u;
+    if (source) {
+        while (input[length] != 0u) {
+            if (length == SIZE_MAX) return (size_t)-1;
+            ++length;
+        }
+    }
+    if (destination && capacity != 0u) {
+        size_t copied = length < capacity - 1u ? length : capacity - 1u;
+        for (size_t index = 0u; index < copied; ++index)
+            destination[index] = input[index];
+        destination[copied] = 0u;
+    }
+    return length;
+}
+
+int rin_locale_strcoll(locale_t locale, const char* left, const char* right) {
+    if (locale_collate_is_c(locale)) return locale_compare_bytes(left, right);
+    return rin_unicode_compare_utf8(left ? left : "", right ? right : "");
+}
+
+size_t rin_locale_strxfrm(locale_t locale, char* destination,
+                          const char* source, size_t capacity) {
+    if (locale_collate_is_c(locale))
+        return locale_transform_bytes(destination, source, capacity);
+    return rin_unicode_transform_utf8(destination, capacity,
+                                      source ? source : "");
+}
+
+int rin_locale_wcscoll32(locale_t locale, const uint32_t* left,
+                         const uint32_t* right) {
+    if (locale_collate_is_c(locale)) return locale_compare_wide(left, right);
+    return rin_unicode_compare_utf32(left, right);
+}
+
+size_t rin_locale_wcsxfrm32(locale_t locale, uint32_t* destination,
+                            const uint32_t* source, size_t capacity) {
+    if (locale_collate_is_c(locale))
+        return locale_transform_wide(destination, source, capacity);
+    return rin_unicode_transform_utf32(destination, capacity, source);
+}
+
+int rin_locale_current_strcoll(const char* left, const char* right) {
+    return rin_locale_strcoll(locale_thread_current, left, right);
+}
+
+size_t rin_locale_current_strxfrm(char* destination, const char* source,
+                                  size_t capacity) {
+    return rin_locale_strxfrm(locale_thread_current, destination, source,
+                              capacity);
+}
+
+int rin_locale_current_wcscoll32(const uint32_t* left,
+                                 const uint32_t* right) {
+    return rin_locale_wcscoll32(locale_thread_current, left, right);
+}
+
+size_t rin_locale_current_wcsxfrm32(uint32_t* destination,
+                                    const uint32_t* source,
+                                    size_t capacity) {
+    return rin_locale_wcsxfrm32(locale_thread_current, destination, source,
+                                capacity);
+}
