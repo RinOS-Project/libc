@@ -3,6 +3,17 @@
  * シグナル処理
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__unix__) || defined(__APPLE__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_SIGNAL_SYSCALL0) && \
+    !defined(_RIN_SIGNAL_SYSCALL2) && \
+    !defined(_RIN_SIGNAL_SYSCALL3) && \
+    !defined(_RIN_SIGNAL_SYSCALL4)
+#include_next <signal.h>
+#else
+
 #ifndef _SIGNAL_H
 #define _SIGNAL_H
 
@@ -680,3 +691,5 @@ static inline int pthread_kill_sig(uintptr_t tid, int sig) {
 #endif
 
 #endif /* _SIGNAL_H */
+
+#endif /* hosted POSIX signal delegation */
