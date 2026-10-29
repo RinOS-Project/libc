@@ -955,8 +955,9 @@ static inline int getaddrinfo(const char* node, const char* service,
      * the V3 resolver request starts the two wire lookups together. */
     unspec_dual = family == AF_UNSPEC && ipv4_configured && ipv6_configured;
     if (family == AF_INET6 ||
-        (family == AF_UNSPEC && (flags & AI_ADDRCONFIG) != 0 &&
-         ipv6_configured)) {
+        (family == AF_UNSPEC &&
+         (((flags & AI_ADDRCONFIG) != 0 && ipv6_configured) ||
+          unspec_dual))) {
         result_family = AF_INET6;
     } else {
         result_family = AF_INET;
