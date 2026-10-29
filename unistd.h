@@ -1100,6 +1100,10 @@ static inline pid_t set_tid_address(int* clear_child_tid) {
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL1(
         SYS_set_tid_address, (uintptr_t)clear_child_tid));
     if (result < 0) return (pid_t)-1;
+    if (result == 0) {
+        errno = EIO;
+        return (pid_t)-1;
+    }
     if ((uintptr_t)result > (uintptr_t)INT_MAX) {
         errno = EOVERFLOW;
         return (pid_t)-1;
