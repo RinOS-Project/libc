@@ -336,9 +336,12 @@ static int mq_timed_transfer_validate(const struct timespec* absolute)
 }
 
 static int mq_send_common(mqd_t queue, const char* message, size_t length,
-                          unsigned int priority,
+                          unsigned int priority, int timed,
                           const struct timespec* absolute)
 {
+    struct timespec timeout_snapshot;
+    const struct timespec* wait_timeout = NULL;
+    int timeout_validated = 0;
     for (;;) {
         RinPosixMqAttrV1 attributes;
         int wait_result;
@@ -356,7 +359,19 @@ static int mq_send_common(mqd_t queue, const char* message, size_t length,
             errno = EAGAIN;
             return -1;
         }
-        wait_result = mq_wait_ready(queue, RIN_WAIT_EVENT_WRITABLE, absolute);
+        if (timed && !timeout_validated) {
+            if (!absolute) {
+                errno = EFAULT;
+                return -1;
+            }
+            timeout_snapshot = *absolute;
+            if (mq_timed_transfer_validate(&timeout_snapshot) != 0)
+                return -1;
+            wait_timeout = &timeout_snapshot;
+            timeout_validated = 1;
+        }
+        wait_result = mq_wait_ready(queue, RIN_WAIT_EVENT_WRITABLE,
+                                    wait_timeout);
         __rin_pthread_cancel_point_if_linked();
         if (wait_result < 0) return -1;
     }
@@ -364,9 +379,13 @@ static int mq_send_common(mqd_t queue, const char* message, size_t length,
 
 static ssize_t mq_receive_common(mqd_t queue, char* message, size_t capacity,
                                  unsigned int* priority_out,
+                                 int timed,
                                  const struct timespec* absolute)
 {
     uint64_t waiter_token = RIN_POSIX_MQ_WAIT_TOKEN_INVALID;
+    struct timespec timeout_snapshot;
+    const struct timespec* wait_timeout = NULL;
+    int timeout_validated = 0;
     for (;;) {
         RinPosixMqAttrV1 attributes;
         RinPosixMqReceiveResultV1 received;
@@ -398,6 +417,20 @@ static ssize_t mq_receive_common(mqd_t queue, char* message, size_t capacity,
             errno = EAGAIN;
             return -1;
         }
+        if (timed && !timeout_validated) {
+            if (!absolute) {
+                (void)mq_wait_receive_end(waiter_token);
+                errno = EFAULT;
+                return -1;
+            }
+            timeout_snapshot = *absolute;
+            if (mq_timed_transfer_validate(&timeout_snapshot) != 0) {
+                (void)mq_wait_receive_end(waiter_token);
+                return -1;
+            }
+            wait_timeout = &timeout_snapshot;
+            timeout_validated = 1;
+        }
         if (waiter_token == RIN_POSIX_MQ_WAIT_TOKEN_INVALID) {
             result = mq_wait_receive_begin(queue, &waiter_token);
             if (result != RIN_SUCCESS)
@@ -406,7 +439,8 @@ static ssize_t mq_receive_common(mqd_t queue, char* message, size_t capacity,
             if (waiter_token == RIN_POSIX_MQ_WAIT_TOKEN_INVALID)
                 continue;
         }
-        wait_result = mq_wait_ready(queue, RIN_WAIT_EVENT_READABLE, absolute);
+        wait_result = mq_wait_ready(queue, RIN_WAIT_EVENT_READABLE,
+                                    wait_timeout);
         (void)mq_wait_receive_end(waiter_token);
         waiter_token = RIN_POSIX_MQ_WAIT_TOKEN_INVALID;
         __rin_pthread_cancel_point_if_linked();
@@ -671,7 +705,7 @@ int mq_send(mqd_t mqdes, const char* msg_ptr, size_t msg_len,
         errno = EFAULT;
         return -1;
     }
-    return mq_send_common(mqdes, msg_ptr, msg_len, msg_prio, NULL);
+    return mq_send_common(mqdes, msg_ptr, msg_len, msg_prio, 0, NULL);
 }
 
 int mq_timedsend(mqd_t mqdes, const char* msg_ptr, size_t msg_len,
@@ -682,8 +716,7 @@ int mq_timedsend(mqd_t mqdes, const char* msg_ptr, size_t msg_len,
         errno = EFAULT;
         return -1;
     }
-    if (mq_timed_transfer_validate(abs_timeout) != 0) return -1;
-    return mq_send_common(mqdes, msg_ptr, msg_len, msg_prio, abs_timeout);
+    return mq_send_common(mqdes, msg_ptr, msg_len, msg_prio, 1, abs_timeout);
 }
 
 ssize_t mq_receive(mqd_t mqdes, char* msg_ptr, size_t msg_len,
@@ -693,7 +726,7 @@ ssize_t mq_receive(mqd_t mqdes, char* msg_ptr, size_t msg_len,
         errno = EFAULT;
         return -1;
     }
-    return mq_receive_common(mqdes, msg_ptr, msg_len, msg_prio, NULL);
+    return mq_receive_common(mqdes, msg_ptr, msg_len, msg_prio, 0, NULL);
 }
 
 ssize_t mq_timedreceive(mqd_t mqdes, char* msg_ptr, size_t msg_len,
@@ -704,8 +737,8 @@ ssize_t mq_timedreceive(mqd_t mqdes, char* msg_ptr, size_t msg_len,
         errno = EFAULT;
         return -1;
     }
-    if (mq_timed_transfer_validate(abs_timeout) != 0) return -1;
-    return mq_receive_common(mqdes, msg_ptr, msg_len, msg_prio, abs_timeout);
+    return mq_receive_common(mqdes, msg_ptr, msg_len, msg_prio, 1,
+                             abs_timeout);
 }
 
 int mq_notify(mqd_t mqdes, const struct sigevent* notification)
