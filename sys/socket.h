@@ -473,8 +473,8 @@ static inline int __rin_socket_message_length(const struct msghdr* message,
 
 struct ucred {
     pid_t pid;
-    uid_t uid;
-    gid_t gid;
+    uint32_t uid;
+    uint32_t gid;
 };
 
 #ifdef __cplusplus
