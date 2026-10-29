@@ -2303,7 +2303,7 @@ static inline int getdomainname(char* name, size_t len) {
         return -1;
     }
     if (size + 1u > len) {
-        errno = ENAMETOOLONG;
+        errno = EINVAL;
         return -1;
     }
     for (size_t index = 0; index <= size; ++index)
