@@ -1042,7 +1042,7 @@ int pthread_mutex_destroy(pthread_mutex_t* mutex) {
     return 0;
 }
 
-int pthread_mutex_lock(pthread_mutex_t* mutex) {
+static int rin_pthread_mutex_lock_impl(pthread_mutex_t* mutex) {
     if (!mutex) return EINVAL;
 
     pthread_t self = _RIN_PTHREAD_RUNTIME_SELF();
@@ -1096,8 +1096,15 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
     return 0;
 }
 
-int pthread_mutex_timedlock(pthread_mutex_t* mutex,
-                            const struct timespec* abstime) {
+int pthread_mutex_lock(pthread_mutex_t* mutex) {
+    int saved_errno = errno;
+    int result = rin_pthread_mutex_lock_impl(mutex);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_mutex_timedlock_impl(
+    pthread_mutex_t* mutex, const struct timespec* abstime) {
     if (!mutex || !abstime) return EINVAL;
     if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
         return EINVAL;
@@ -1167,7 +1174,15 @@ int pthread_mutex_timedlock(pthread_mutex_t* mutex,
     return 0;
 }
 
-int pthread_mutex_trylock(pthread_mutex_t* mutex) {
+int pthread_mutex_timedlock(pthread_mutex_t* mutex,
+                            const struct timespec* abstime) {
+    int saved_errno = errno;
+    int result = rin_pthread_mutex_timedlock_impl(mutex, abstime);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_mutex_trylock_impl(pthread_mutex_t* mutex) {
     if (!mutex) return EINVAL;
 
     pthread_t self = _RIN_PTHREAD_RUNTIME_SELF();
@@ -1199,7 +1214,14 @@ int pthread_mutex_trylock(pthread_mutex_t* mutex) {
     return 0;
 }
 
-int pthread_mutex_unlock(pthread_mutex_t* mutex) {
+int pthread_mutex_trylock(pthread_mutex_t* mutex) {
+    int saved_errno = errno;
+    int result = rin_pthread_mutex_trylock_impl(mutex);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_mutex_unlock_impl(pthread_mutex_t* mutex) {
     if (!mutex) return EINVAL;
 
     pthread_t self = _RIN_PTHREAD_RUNTIME_SELF();
@@ -1301,7 +1323,14 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
     return 0;
 }
 
-int pthread_mutex_consistent(pthread_mutex_t* mutex) {
+int pthread_mutex_unlock(pthread_mutex_t* mutex) {
+    int saved_errno = errno;
+    int result = rin_pthread_mutex_unlock_impl(mutex);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_mutex_consistent_impl(pthread_mutex_t* mutex) {
     pthread_t self;
     pthread_t owner;
     uint32_t state;
@@ -1328,6 +1357,13 @@ int pthread_mutex_consistent(pthread_mutex_t* mutex) {
     return 0;
 }
 
+int pthread_mutex_consistent(pthread_mutex_t* mutex) {
+    int saved_errno = errno;
+    int result = rin_pthread_mutex_consistent_impl(mutex);
+    errno = saved_errno;
+    return result;
+}
+
 int pthread_cond_init(pthread_cond_t* cond, const pthread_condattr_t* attr) {
     if (!cond) return EINVAL;
     if (attr && attr->pshared != PTHREAD_PROCESS_PRIVATE &&
@@ -1346,7 +1382,8 @@ int pthread_cond_destroy(pthread_cond_t* cond) {
     return 0;
 }
 
-int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
+static int rin_pthread_cond_wait_impl(pthread_cond_t* cond,
+                                      pthread_mutex_t* mutex) {
     int result = 0;
     int mutex_result;
 
@@ -1390,8 +1427,16 @@ int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
     return result == EINTR ? 0 : result;
 }
 
-int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
-                           const struct timespec* abstime) {
+int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
+    int saved_errno = errno;
+    int result = rin_pthread_cond_wait_impl(cond, mutex);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_cond_timedwait_impl(
+    pthread_cond_t* cond, pthread_mutex_t* mutex,
+    const struct timespec* abstime) {
     int mutex_result;
 
     if (!cond || !mutex || !abstime) return EINVAL;
@@ -1485,6 +1530,14 @@ int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
     return result == EINTR ? 0 : result;
 }
 
+int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
+                           const struct timespec* abstime) {
+    int saved_errno = errno;
+    int result = rin_pthread_cond_timedwait_impl(cond, mutex, abstime);
+    errno = saved_errno;
+    return result;
+}
+
 int __rin_pthread_cond_wait_interruptible(pthread_cond_t* cond,
                                           pthread_mutex_t* mutex) {
     uint64_t before = g_rin_pthread_cond_signal_interrupt_epoch;
@@ -1502,7 +1555,7 @@ int __rin_pthread_cond_timedwait_interruptible(
     return g_rin_pthread_cond_signal_interrupt_epoch != before ? EINTR : 0;
 }
 
-int pthread_cond_signal(pthread_cond_t* cond) {
+static int rin_pthread_cond_signal_impl(pthread_cond_t* cond) {
     if (!cond) return EINVAL;
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0) {
@@ -1515,7 +1568,14 @@ int pthread_cond_signal(pthread_cond_t* cond) {
     return 0;
 }
 
-int pthread_cond_broadcast(pthread_cond_t* cond) {
+int pthread_cond_signal(pthread_cond_t* cond) {
+    int saved_errno = errno;
+    int result = rin_pthread_cond_signal_impl(cond);
+    errno = saved_errno;
+    return result;
+}
+
+static int rin_pthread_cond_broadcast_impl(pthread_cond_t* cond) {
     if (!cond) return EINVAL;
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0) {
@@ -1527,6 +1587,13 @@ int pthread_cond_broadcast(pthread_cond_t* cond) {
         if (wake_error != 0) return wake_error;
     }
     return 0;
+}
+
+int pthread_cond_broadcast(pthread_cond_t* cond) {
+    int saved_errno = errno;
+    int result = rin_pthread_cond_broadcast_impl(cond);
+    errno = saved_errno;
+    return result;
 }
 
 static void rin_pthread_once_cancel_reset(void* argument) {
@@ -1547,16 +1614,20 @@ retry_initialization:
         pthread_cleanup_pop(0);
         __atomic_store_n(once_control, 2, __ATOMIC_RELEASE);
         {
+            int saved_errno = errno;
             long wake_result = _RIN_PTHREAD_RUNTIME_FUTEX(
                 once_control, FUTEX_WAKE_PRIVATE, 0x7fffffff, NULL);
             int wake_error = rin_pthread_futex_wake_error(wake_result, errno);
+            errno = saved_errno;
             if (wake_error != 0) return wake_error;
         }
     } else {
         while (__atomic_load_n(once_control, __ATOMIC_ACQUIRE) == 1) {
+            int saved_errno = errno;
             long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
                 once_control, FUTEX_WAIT_PRIVATE, 1, NULL);
             int wait_error = rin_pthread_futex_wait_error(wait_result, errno);
+            errno = saved_errno;
             if (wait_error != 0) return wait_error;
         }
         /* Cancellation of the initializer resets the control word to zero.
