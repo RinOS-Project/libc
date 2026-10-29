@@ -1198,13 +1198,10 @@ static int rin_pthread_mutex_timedlock_impl(
                                             __ATOMIC_ACQUIRE);
                     continue;
                 }
-                if (wait_error == ETIMEDOUT) {
-                    /* Resolve a concurrent unlock before returning timeout. */
-                    c = __atomic_exchange_n(&mutex->locked, 2,
-                                            __ATOMIC_ACQUIRE);
-                    if (c != 0) return ETIMEDOUT;
-                    break;
-                }
+                /* The absolute futex deadline has elapsed. Do not acquire a
+                 * mutex that became free only after that deadline while this
+                 * waiter was being scheduled back onto the CPU. */
+                if (wait_error == ETIMEDOUT) return ETIMEDOUT;
                 if (wait_error != 0) return wait_error;
                 c = __atomic_exchange_n(&mutex->locked, 2, __ATOMIC_ACQUIRE);
             }
