@@ -1648,16 +1648,6 @@ static inline int _rin_fclose_unlocked(FILE* stream) {
     stream->buf_owned = 0;
     if (previous_owned && previous_buffer) free(previous_buffer);
 
-    /* スロットを解放 */
-    _rin_stdio_lock_table_enter();
-    for (int i = 3; i < _STDIO_MAX_FILES; i++) {
-        if (&_stdio_files[i] == stream) {
-            _stdio_files_used[i] = 0;
-            break;
-        }
-    }
-    _rin_stdio_lock_table_leave();
-
     return (ret != 0 || flush_failed) ? EOF : 0;
 }
 
@@ -1681,6 +1671,13 @@ _RIN_STDIO_API int fclose(FILE* stream) {
     }
     result = _rin_fclose_unlocked(stream);
     funlockfile(stream);
+    /* Keep the pool slot unavailable until close has released the stream
+     * owner.  Otherwise a concurrent fopen() can reuse this FILE while its
+     * lock entry is still marked closing and leave the new stream unusable. */
+    _rin_stdio_lock_table_enter();
+    _stdio_files_used[stream_index] = 0;
+    _rin_stdio_stream_lock_reset_closed(stream);
+    _rin_stdio_lock_table_leave();
     return result;
 }
 
