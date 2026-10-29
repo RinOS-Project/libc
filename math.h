@@ -650,6 +650,7 @@ static inline double pow(double base, double exponent) {
                   magnitude < 9007199254740992.0 &&
                   trunc(magnitude / 2.0) * 2.0 != magnitude;
 
+    if (!integral_exp && base < 0.0) return NAN;
     if (__builtin_isinf(exponent)) {
         double abs_base = fabs(base);
         if (abs_base == 1.0) return 1.0;
@@ -661,7 +662,6 @@ static inline double pow(double base, double exponent) {
         double result = neg_exp ? 0.0 : INFINITY;
         return (negative_base && odd_exp) ? -result : result;
     }
-    if (!integral_exp && base < 0.0) return NAN;
     if (base == 0.0) {
         double result = neg_exp ? INFINITY : 0.0;
         return (negative_base && odd_exp) ? -result : result;
@@ -968,11 +968,11 @@ static inline double log(double x) {
     if (__builtin_isinf(x)) return x;
     if (x == 1.0) return 0.0;
 
-    /* x = m * 2^e として分解する。frexpを使うことで、subnormalでも
-     * 正規化の反復回数が指数に比例しない。 */
+    /* x = m * 2^e として分解 */
+    double m = x;
     int e = 0;
-    double m = frexp(x, &e) * 2.0;
-    --e;
+    while (m >= 2.0) { m /= 2.0; e++; }
+    while (m < 1.0) { m *= 2.0; e--; }
 
     /* atanh series converges quickly for z=(m-1)/(m+1) in [0,1/3). */
     double z = (m - 1.0) / (m + 1.0);

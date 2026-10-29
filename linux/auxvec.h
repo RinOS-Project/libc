@@ -12,7 +12,6 @@
 
 #include "../errno.h"
 #include "../rin_account_compat.h"
-#include "../internal/posix_clock.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -217,7 +216,7 @@ static inline unsigned long getauxval(unsigned long type) {
         case AT_PAGESZ:
             return 4096;
         case AT_CLKTCK:
-            return RIN_POSIX_CLK_TCK;
+            return 1000;  /* RinOS scheduler tick, also exposed by sysconf() */
         case AT_HWCAP:
             /* Conservative x86_64 architectural baseline. */
             return HWCAP_X86_FPU | HWCAP_X86_MMX | HWCAP_X86_SSE |
