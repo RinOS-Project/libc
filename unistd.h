@@ -84,7 +84,7 @@
 #define _POSIX_READER_WRITER_LOCKS 200809L
 #endif
 #ifndef _POSIX_THREAD_SAFE_FUNCTIONS
-#define _POSIX_THREAD_SAFE_FUNCTIONS 200809L
+#define _POSIX_THREAD_SAFE_FUNCTIONS -1
 #endif
 #ifndef _POSIX_THREAD_ATTR_STACKSIZE
 #define _POSIX_THREAD_ATTR_STACKSIZE 200809L
@@ -2844,6 +2844,8 @@ __attribute__((unused, noinline)) static void* sbrk(long increment) {
 #define truncate truncate64
 #define ftruncate ftruncate64
 #endif
+
+#include "sys/splice.h"
 
 #ifdef __cplusplus
 }
