@@ -190,6 +190,7 @@ static int32_t mq_send_once(mqd_t queue, const char* message, size_t length,
 
 static int32_t mq_receive_once(mqd_t queue, char* message, size_t capacity,
                                uint64_t waiter_token,
+                               unsigned int* priority_out,
                                RinPosixMqReceiveResultV1* result_out)
 {
     RinSdkArgsV1 request;
@@ -199,6 +200,8 @@ static int32_t mq_receive_once(mqd_t queue, char* message, size_t capacity,
     request.value[1] = (uint64_t)(uintptr_t)message;
     request.value[2] = (uint64_t)capacity;
     request.value[3] = waiter_token;
+    request.value[RIN_POSIX_MQ_RECEIVE_PRIORITY_OUTPUT_SLOT] =
+        (uint64_t)(uintptr_t)priority_out;
     result = mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
                              RIN_LIBC_SDK_IPC_POSIX_MQ_RECEIVE,
                              &request, result_out, sizeof(*result_out));
@@ -370,12 +373,12 @@ static ssize_t mq_receive_common(mqd_t queue, char* message, size_t capacity,
         int wait_result;
         __rin_pthread_cancel_point_if_linked();
         int32_t result = mq_receive_once(queue, message, capacity,
-                                         waiter_token, &received);
+                                         waiter_token, priority_out,
+                                         &received);
         if (result == RIN_SUCCESS) {
             /* The kernel consumes a registered receiver token atomically
              * with the message dequeue. */
             waiter_token = RIN_POSIX_MQ_WAIT_TOKEN_INVALID;
-            if (priority_out) *priority_out = received.priority;
             return (ssize_t)received.length;
         }
         if (result != RIN_ERROR_WOULD_BLOCK) {
