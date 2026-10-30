@@ -3,6 +3,12 @@
  * コマンドライン引数解析
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
+#include_next <getopt.h>
+#else
+
 #ifndef _GETOPT_H
 #define _GETOPT_H
 
@@ -501,3 +507,5 @@ static inline int getopt_long_only(int argc, char* const argv[],
 #endif
 
 #endif /* _GETOPT_H */
+
+#endif /* hosted Linux delegates to its native option parser */

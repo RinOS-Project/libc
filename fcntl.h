@@ -4,6 +4,17 @@
  * ファイル制御
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_FCNTL_SYSCALL2) && \
+    !defined(_RIN_FCNTL_SYSCALL3) && \
+    !defined(_RIN_FCNTL_SYSCALL4) && \
+    !defined(_RIN_FCNTL_SYSCALL6) && \
+    !defined(_RIN_FCNTL_PATH_AT_CALL)
+#include_next <fcntl.h>
+#else
+
 #ifndef _FCNTL_H
 #define _FCNTL_H
 
@@ -972,3 +983,5 @@ static inline ssize_t readlinkat(int dirfd, const char* pathname, char* buf, siz
 #endif /* !MIDL_PASS */
 
 #endif /* _FCNTL_H */
+
+#endif /* hosted Linux delegates to its native file-control provider */
