@@ -612,6 +612,122 @@ static inline int clearenv(void) {
  * 数値変換
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+static inline const char* rin_integer_skip_locale_space(
+    const char* input, locale_t locale) {
+    const char* cursor = input;
+    if (!cursor) return cursor;
+    while (*cursor != '\0' &&
+           rin_locale_ctype_test(locale, (unsigned char)*cursor,
+                                 RIN_LOCALE_CTYPE_SPACE))
+        ++cursor;
+    return cursor;
+}
+
+static inline rin_integer_parse_result rin_integer_parse_locale(
+    const char* input, int base, unsigned long long positive_limit,
+    unsigned long long negative_limit, locale_t locale) {
+    return rin_integer_parse(
+        rin_integer_skip_locale_space(input, locale), base, positive_limit,
+        negative_limit);
+}
+
+static inline rin_integer_parse_result rin_integer_parse_current_locale(
+    const char* input, int base, unsigned long long positive_limit,
+    unsigned long long negative_limit) {
+    return rin_integer_parse_locale(input, base, positive_limit,
+                                    negative_limit, uselocale(NULL));
+}
+#else
+static inline rin_integer_parse_result rin_integer_parse_current_locale(
+    const char* input, int base, unsigned long long positive_limit,
+    unsigned long long negative_limit) {
+    return rin_integer_parse(input, base, positive_limit, negative_limit);
+}
+#endif
+
+static inline long rin_integer_result_long(
+    rin_integer_parse_result parsed, const char* original, char** endptr) {
+    const unsigned long long positive_limit =
+        (unsigned long long)__LONG_MAX__;
+    const unsigned long long negative_limit = positive_limit + 1ULL;
+    if (endptr)
+        *endptr = (char*)(__UINTPTR_TYPE__)(parsed.any ? parsed.end : original);
+    if (parsed.invalid_input || parsed.invalid_base) {
+        errno = EINVAL;
+        return 0;
+    }
+    if (parsed.overflow) {
+        errno = ERANGE;
+        return parsed.negative ? (-__LONG_MAX__ - 1L) : __LONG_MAX__;
+    }
+    if (!parsed.any) return 0;
+    if (!parsed.negative) return (long)parsed.magnitude;
+    if (parsed.magnitude == negative_limit) return -__LONG_MAX__ - 1L;
+    return -(long)parsed.magnitude;
+}
+
+static inline unsigned long rin_integer_result_ulong(
+    rin_integer_parse_result parsed, const char* original, char** endptr) {
+    const unsigned long maximum =
+        (unsigned long)__LONG_MAX__ * 2UL + 1UL;
+    if (endptr)
+        *endptr = (char*)(__UINTPTR_TYPE__)(parsed.any ? parsed.end : original);
+    if (parsed.invalid_input || parsed.invalid_base) {
+        errno = EINVAL;
+        return 0;
+    }
+    if (parsed.overflow) {
+        errno = ERANGE;
+        return maximum;
+    }
+    if (!parsed.any) return 0;
+    return parsed.negative
+        ? 0UL - (unsigned long)parsed.magnitude
+        : (unsigned long)parsed.magnitude;
+}
+
+static inline long long rin_integer_result_long_long(
+    rin_integer_parse_result parsed, const char* original, char** endptr) {
+    const unsigned long long positive_limit =
+        (unsigned long long)__LONG_LONG_MAX__;
+    const unsigned long long negative_limit = positive_limit + 1ULL;
+    if (endptr)
+        *endptr = (char*)(__UINTPTR_TYPE__)(parsed.any ? parsed.end : original);
+    if (parsed.invalid_input || parsed.invalid_base) {
+        errno = EINVAL;
+        return 0;
+    }
+    if (parsed.overflow) {
+        errno = ERANGE;
+        return parsed.negative
+            ? (-__LONG_LONG_MAX__ - 1LL) : __LONG_LONG_MAX__;
+    }
+    if (!parsed.any) return 0;
+    if (!parsed.negative) return (long long)parsed.magnitude;
+    if (parsed.magnitude == negative_limit)
+        return -__LONG_LONG_MAX__ - 1LL;
+    return -(long long)parsed.magnitude;
+}
+
+static inline unsigned long long rin_integer_result_ulong_long(
+    rin_integer_parse_result parsed, const char* original, char** endptr) {
+    const unsigned long long maximum =
+        (unsigned long long)__LONG_LONG_MAX__ * 2ULL + 1ULL;
+    if (endptr)
+        *endptr = (char*)(__UINTPTR_TYPE__)(parsed.any ? parsed.end : original);
+    if (parsed.invalid_input || parsed.invalid_base) {
+        errno = EINVAL;
+        return 0;
+    }
+    if (parsed.overflow) {
+        errno = ERANGE;
+        return maximum;
+    }
+    if (!parsed.any) return 0;
+    return parsed.negative ? 0ULL - parsed.magnitude : parsed.magnitude;
+}
+
 #ifndef _STDLIB_SKIP_INLINE_DEFS
 
 #ifndef _ATOF_DEFINED
@@ -633,98 +749,35 @@ static inline long strtol(const char* s, char** endptr, int base) {
     const unsigned long long positive_limit =
         (unsigned long long)__LONG_MAX__;
     const unsigned long long negative_limit = positive_limit + 1ULL;
-    rin_integer_parse_result parsed = rin_integer_parse(
+    rin_integer_parse_result parsed = rin_integer_parse_current_locale(
         s, base, positive_limit, negative_limit);
-
-    if (endptr)
-        *endptr = (char*)(__UINTPTR_TYPE__)parsed.end;
-    if (parsed.invalid_input || parsed.invalid_base) {
-        errno = EINVAL;
-        return 0;
-    }
-    if (parsed.overflow) {
-        errno = ERANGE;
-        return parsed.negative ? (-__LONG_MAX__ - 1L) : __LONG_MAX__;
-    }
-    if (!parsed.any)
-        return 0;
-    if (!parsed.negative)
-        return (long)parsed.magnitude;
-    if (parsed.magnitude == negative_limit)
-        return -__LONG_MAX__ - 1L;
-    return -(long)parsed.magnitude;
+    return rin_integer_result_long(parsed, s, endptr);
 }
 
 static inline unsigned long strtoul(const char* s, char** endptr, int base) {
     const unsigned long maximum =
         (unsigned long)__LONG_MAX__ * 2UL + 1UL;
-    rin_integer_parse_result parsed = rin_integer_parse(
+    rin_integer_parse_result parsed = rin_integer_parse_current_locale(
         s, base, (unsigned long long)maximum,
         (unsigned long long)maximum);
-
-    if (endptr)
-        *endptr = (char*)(__UINTPTR_TYPE__)parsed.end;
-    if (parsed.invalid_input || parsed.invalid_base) {
-        errno = EINVAL;
-        return 0;
-    }
-    if (parsed.overflow) {
-        errno = ERANGE;
-        return maximum;
-    }
-    if (!parsed.any)
-        return 0;
-    return parsed.negative
-        ? 0UL - (unsigned long)parsed.magnitude
-        : (unsigned long)parsed.magnitude;
+    return rin_integer_result_ulong(parsed, s, endptr);
 }
 
 static inline long long strtoll(const char* s, char** endptr, int base) {
     const unsigned long long positive_limit =
         (unsigned long long)__LONG_LONG_MAX__;
     const unsigned long long negative_limit = positive_limit + 1ULL;
-    rin_integer_parse_result parsed = rin_integer_parse(
+    rin_integer_parse_result parsed = rin_integer_parse_current_locale(
         s, base, positive_limit, negative_limit);
-
-    if (endptr)
-        *endptr = (char*)(__UINTPTR_TYPE__)parsed.end;
-    if (parsed.invalid_input || parsed.invalid_base) {
-        errno = EINVAL;
-        return 0;
-    }
-    if (parsed.overflow) {
-        errno = ERANGE;
-        return parsed.negative
-            ? (-__LONG_LONG_MAX__ - 1LL) : __LONG_LONG_MAX__;
-    }
-    if (!parsed.any)
-        return 0;
-    if (!parsed.negative)
-        return (long long)parsed.magnitude;
-    if (parsed.magnitude == negative_limit)
-        return -__LONG_LONG_MAX__ - 1LL;
-    return -(long long)parsed.magnitude;
+    return rin_integer_result_long_long(parsed, s, endptr);
 }
 
 static inline unsigned long long strtoull(const char* s, char** endptr, int base) {
     const unsigned long long maximum =
         (unsigned long long)__LONG_LONG_MAX__ * 2ULL + 1ULL;
-    rin_integer_parse_result parsed = rin_integer_parse(
+    rin_integer_parse_result parsed = rin_integer_parse_current_locale(
         s, base, maximum, maximum);
-
-    if (endptr)
-        *endptr = (char*)(__UINTPTR_TYPE__)parsed.end;
-    if (parsed.invalid_input || parsed.invalid_base) {
-        errno = EINVAL;
-        return 0;
-    }
-    if (parsed.overflow) {
-        errno = ERANGE;
-        return maximum;
-    }
-    if (!parsed.any)
-        return 0;
-    return parsed.negative ? 0ULL - parsed.magnitude : parsed.magnitude;
+    return rin_integer_result_ulong_long(parsed, s, endptr);
 }
 
 #ifndef atoi
@@ -732,7 +785,7 @@ static inline int atoi(const char* s) {
     const unsigned long long positive_limit =
         (unsigned long long)__INT_MAX__;
     const unsigned long long negative_limit = positive_limit + 1ULL;
-    rin_integer_parse_result parsed = rin_integer_parse(
+    rin_integer_parse_result parsed = rin_integer_parse_current_locale(
         s, 10, positive_limit, negative_limit);
 
     if (parsed.invalid_input) {
@@ -871,53 +924,43 @@ static inline long double strtold(const char* s, char** endptr) {
 /* Locale-explicit integer conversions use the selected LC_CTYPE for their
  * leading whitespace. The integer digit and base grammar is shared. */
 #if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
-static inline const char* rin_integer_l_skip_locale_space(
-    const char* input, locale_t locale) {
-    const char* cursor = input;
-    if (!cursor) return cursor;
-    while (*cursor != '\0' &&
-           rin_locale_ctype_test(locale, (unsigned char)*cursor,
-                                 RIN_LOCALE_CTYPE_SPACE))
-        ++cursor;
-    return cursor;
-}
-
-/* If conversion fails, strto* specifies the original input for endptr even
- * though these wrappers pass the parser a pointer after locale whitespace. */
 static inline long strtol_l(const char* s, char** endptr, int base,
                             locale_t locale) {
-    const char* input = rin_integer_l_skip_locale_space(s, locale);
-    char* parsed_end = (char*)0;
-    long result = strtol(input, &parsed_end, base);
-    if (endptr) *endptr = parsed_end == input ? (char*)s : parsed_end;
-    return result;
+    const unsigned long long positive_limit =
+        (unsigned long long)__LONG_MAX__;
+    const unsigned long long negative_limit = positive_limit + 1ULL;
+    rin_integer_parse_result parsed = rin_integer_parse_locale(
+        s, base, positive_limit, negative_limit, locale);
+    return rin_integer_result_long(parsed, s, endptr);
 }
 
 static inline unsigned long strtoul_l(const char* s, char** endptr, int base,
                                       locale_t locale) {
-    const char* input = rin_integer_l_skip_locale_space(s, locale);
-    char* parsed_end = (char*)0;
-    unsigned long result = strtoul(input, &parsed_end, base);
-    if (endptr) *endptr = parsed_end == input ? (char*)s : parsed_end;
-    return result;
+    const unsigned long maximum =
+        (unsigned long)__LONG_MAX__ * 2UL + 1UL;
+    rin_integer_parse_result parsed = rin_integer_parse_locale(
+        s, base, (unsigned long long)maximum,
+        (unsigned long long)maximum, locale);
+    return rin_integer_result_ulong(parsed, s, endptr);
 }
 
 static inline long long strtoll_l(const char* s, char** endptr, int base,
                                   locale_t locale) {
-    const char* input = rin_integer_l_skip_locale_space(s, locale);
-    char* parsed_end = (char*)0;
-    long long result = strtoll(input, &parsed_end, base);
-    if (endptr) *endptr = parsed_end == input ? (char*)s : parsed_end;
-    return result;
+    const unsigned long long positive_limit =
+        (unsigned long long)__LONG_LONG_MAX__;
+    const unsigned long long negative_limit = positive_limit + 1ULL;
+    rin_integer_parse_result parsed = rin_integer_parse_locale(
+        s, base, positive_limit, negative_limit, locale);
+    return rin_integer_result_long_long(parsed, s, endptr);
 }
 
 static inline unsigned long long strtoull_l(const char* s, char** endptr,
                                             int base, locale_t locale) {
-    const char* input = rin_integer_l_skip_locale_space(s, locale);
-    char* parsed_end = (char*)0;
-    unsigned long long result = strtoull(input, &parsed_end, base);
-    if (endptr) *endptr = parsed_end == input ? (char*)s : parsed_end;
-    return result;
+    const unsigned long long maximum =
+        (unsigned long long)__LONG_LONG_MAX__ * 2ULL + 1ULL;
+    rin_integer_parse_result parsed = rin_integer_parse_locale(
+        s, base, maximum, maximum, locale);
+    return rin_integer_result_ulong_long(parsed, s, endptr);
 }
 
 static inline float strtof_l(const char* s, char** endptr, locale_t locale) {
