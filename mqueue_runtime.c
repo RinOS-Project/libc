@@ -29,7 +29,8 @@ enum {
     RIN_LIBC_SDK_IPC_POSIX_MQ_NOTIFY = 21u,
     RIN_LIBC_SDK_IPC_POSIX_MQ_WAIT_RECEIVE_BEGIN = 22u,
     RIN_LIBC_SDK_IPC_POSIX_MQ_WAIT_RECEIVE_END = 23u,
-    RIN_LIBC_SDK_IPC_EVENT_QUERY = 24u
+    RIN_LIBC_SDK_IPC_EVENT_QUERY = 24u,
+    RIN_LIBC_SDK_IPC_POSIX_MQ_TIMEOUT_SNAPSHOT = 25u
 };
 
 typedef struct RinLibcMqNotifySlot {
@@ -329,6 +330,27 @@ static int32_t mq_wait_receive_end(uint64_t token)
                            &request, NULL, 0u);
 }
 
+static int mq_timeout_snapshot(const struct timespec* absolute,
+                               struct timespec* snapshot)
+{
+    RinSdkArgsV1 request;
+    int32_t result;
+    if (!absolute || !snapshot) {
+        errno = EFAULT;
+        return -1;
+    }
+    mq_sdk_request_init(&request);
+    request.value[0] = (uint64_t)(uintptr_t)absolute;
+    request.value[1] = sizeof(*snapshot);
+    result = mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
+                             RIN_LIBC_SDK_IPC_POSIX_MQ_TIMEOUT_SNAPSHOT,
+                             &request, snapshot, sizeof(*snapshot));
+    if (result != RIN_SUCCESS)
+        return mq_error_from_result(
+            result, RIN_LIBC_SDK_IPC_POSIX_MQ_TIMEOUT_SNAPSHOT, 0);
+    return 0;
+}
+
 static int mq_timed_transfer_validate(const struct timespec* absolute)
 {
     uint64_t ignored;
@@ -368,7 +390,8 @@ static int mq_send_common(mqd_t queue, const char* message, size_t length,
                 errno = EFAULT;
                 return -1;
             }
-            timeout_snapshot = *absolute;
+            if (mq_timeout_snapshot(absolute, &timeout_snapshot) != 0)
+                return -1;
             if (mq_timed_transfer_validate(&timeout_snapshot) != 0)
                 return -1;
             wait_timeout = &timeout_snapshot;
@@ -427,7 +450,10 @@ static ssize_t mq_receive_common(mqd_t queue, char* message, size_t capacity,
                 errno = EFAULT;
                 return -1;
             }
-            timeout_snapshot = *absolute;
+            if (mq_timeout_snapshot(absolute, &timeout_snapshot) != 0) {
+                (void)mq_wait_receive_end(waiter_token);
+                return -1;
+            }
             if (mq_timed_transfer_validate(&timeout_snapshot) != 0) {
                 (void)mq_wait_receive_end(waiter_token);
                 return -1;
