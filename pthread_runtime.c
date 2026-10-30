@@ -1519,6 +1519,12 @@ static int rin_pthread_cond_timedwait_impl(
     if (result == 0) cancel_wait_registered = 1;
     while (result == 0 &&
            __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
+        /* FUTEX_WAIT_BITSET rejects negative monotonic deadlines as EINVAL,
+         * but an absolute deadline before monotonic time zero has expired. */
+        if (cond->clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
+            result = ETIMEDOUT;
+            break;
+        }
 #if !defined(RIN_TIME_ABI64)
         if (abstime->tv_sec < 0) {
             result = ETIMEDOUT;

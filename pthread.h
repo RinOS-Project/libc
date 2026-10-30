@@ -1147,6 +1147,13 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* 
     }
 
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
+        /* CLOCK_MONOTONIC values cannot be negative.  A normalized negative
+         * absolute deadline is already expired; do not pass it to futex,
+         * whose non-realtime timeout ABI reports EINVAL for this value. */
+        if (cond->clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
+            result = ETIMEDOUT;
+            break;
+        }
 #if !defined(RIN_TIME_ABI64)
         if (abstime->tv_sec < 0) {
             result = ETIMEDOUT;
