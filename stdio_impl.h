@@ -768,12 +768,56 @@ struct _FILE {
 };
 #endif
 
+/* Standard streams keep their public FILE objects at stable addresses. */
+#if defined(RIN_STDIO_OWNER_BUILD)
+FILE _stdin_file  = { 0, 0, 0, O_RDONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
+FILE _stdout_file = { 1, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
+FILE _stderr_file = { 2, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
+#else
+static FILE _stdin_file  = { 0, 0, 0, O_RDONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
+static FILE _stdout_file = { 1, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
+static FILE _stderr_file = { 2, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
+#endif
+
+typedef struct _RinStdioStreamOwner {
+    FILE file;
+    FILE* stream;
+    uint64_t generation;
+    uint32_t active;
+    unsigned char io_direction;
+    unsigned char ungetc_byte[5];
+    unsigned char ungetc_valid[5];
+    unsigned char* ungetc_spill;
+    size_t ungetc_spill_count;
+    uintptr_t lock_owner;
+    uint32_t lock_depth;
+    volatile uint32_t lock_wait_seq;
+    uint32_t lock_waiters;
+    uint32_t lock_closing;
+    struct _RinStdioStreamOwner* next;
+} _RinStdioStreamOwner;
+
+#if defined(RIN_STDIO_OWNER_BUILD)
+_RinStdioStreamOwner _rin_stdio_standard_owners[3];
+_RinStdioStreamOwner* _rin_stdio_stream_owners;
+_RinStdioStreamOwner* _rin_stdio_stream_owners_tail;
+uint64_t _rin_stdio_next_stream_generation;
+volatile uint32_t _rin_stdio_stream_registry_state;
+#elif defined(RIN_USERSPACE)
+extern _RinStdioStreamOwner _rin_stdio_standard_owners[3];
+extern _RinStdioStreamOwner* _rin_stdio_stream_owners;
+extern _RinStdioStreamOwner* _rin_stdio_stream_owners_tail;
+extern uint64_t _rin_stdio_next_stream_generation;
+extern volatile uint32_t _rin_stdio_stream_registry_state;
+#else
+static _RinStdioStreamOwner _rin_stdio_standard_owners[3];
+static _RinStdioStreamOwner* _rin_stdio_stream_owners;
+static _RinStdioStreamOwner* _rin_stdio_stream_owners_tail;
+static uint64_t _rin_stdio_next_stream_generation;
+static volatile uint32_t _rin_stdio_stream_registry_state;
+#endif
+
 #ifndef MIDL_PASS
-/* 静的FILEプール */
-#define _STDIO_MAX_FILES 16
-static FILE _stdio_files[_STDIO_MAX_FILES];
-static int _stdio_files_used[_STDIO_MAX_FILES] = {1, 1, 1, 0};
-static uint64_t _rin_stdio_stream_generation[_STDIO_MAX_FILES] = {1u, 1u, 1u};
 typedef struct _RinStdioStreamSnapshot {
     FILE* stream;
     uint64_t generation;
@@ -811,24 +855,87 @@ static inline uint32_t _rin_stdio_tmpnam_next_sequence(void) {
 uint32_t _rin_stdio_tmpnam_next_sequence(void);
 #endif
 
-/* FILE cannot grow without breaking the freestanding ABI, so explicit stream
- * locking lives in a bounded side table. The owner token is thread-local and
- * recursion is counted. User-space waiters park on a per-entry generation;
- * fclose keeps a closed entry until the FILE slot is opened again so queued
- * callers cannot mistake a reused FILE address for the old stream. */
-#define _RIN_STDIO_LOCK_CAPACITY 32u
-struct _RinStdioLockOwner {
-    FILE* stream;
-    uintptr_t owner;
-    uint32_t depth;
-    volatile uint32_t wait_seq;
-    uint32_t waiters;
-    uint32_t closing;
-};
-static struct _RinStdioLockOwner
-    _rin_stdio_lock_owners[_RIN_STDIO_LOCK_CAPACITY];
+/* Lock and sidecar state are owned by stable, dynamically allocated stream
+ * records. Records stay linked until process teardown and inactive records
+ * are reused, so waiters and flush snapshots never observe moved storage. */
+#if defined(RIN_STDIO_OWNER_BUILD)
+volatile uint32_t _rin_stdio_lock_table_guard;
+volatile uint32_t _rin_stdio_lock_table_seq;
+#elif defined(RIN_USERSPACE)
+extern volatile uint32_t _rin_stdio_lock_table_guard;
+extern volatile uint32_t _rin_stdio_lock_table_seq;
+#else
 static volatile uint32_t _rin_stdio_lock_table_guard;
 static volatile uint32_t _rin_stdio_lock_table_seq;
+#endif
+
+static inline void _rin_stdio_lock_table_enter(void);
+static inline void _rin_stdio_lock_table_leave(void);
+
+static inline void _rin_stdio_stream_registry_initialize(void) {
+    uint32_t state = __atomic_load_n(&_rin_stdio_stream_registry_state,
+                                     __ATOMIC_ACQUIRE);
+    if (state == 2u) return;
+    if (state == 0u && __atomic_compare_exchange_n(
+            &_rin_stdio_stream_registry_state, &state, 1u, 0,
+            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        memset(_rin_stdio_standard_owners, 0,
+               sizeof(_rin_stdio_standard_owners));
+        _rin_stdio_standard_owners[0].stream = &_stdin_file;
+        _rin_stdio_standard_owners[0].generation = 1u;
+        _rin_stdio_standard_owners[0].active = 1u;
+        _rin_stdio_standard_owners[0].next =
+            &_rin_stdio_standard_owners[1];
+        _rin_stdio_standard_owners[1].stream = &_stdout_file;
+        _rin_stdio_standard_owners[1].generation = 2u;
+        _rin_stdio_standard_owners[1].active = 1u;
+        _rin_stdio_standard_owners[1].next =
+            &_rin_stdio_standard_owners[2];
+        _rin_stdio_standard_owners[2].stream = &_stderr_file;
+        _rin_stdio_standard_owners[2].generation = 3u;
+        _rin_stdio_standard_owners[2].active = 1u;
+        _rin_stdio_stream_owners = &_rin_stdio_standard_owners[0];
+        _rin_stdio_stream_owners_tail = &_rin_stdio_standard_owners[2];
+        _rin_stdio_next_stream_generation = 4u;
+        __atomic_store_n(&_rin_stdio_stream_registry_state, 2u,
+                         __ATOMIC_RELEASE);
+        return;
+    }
+    while (__atomic_load_n(&_rin_stdio_stream_registry_state,
+                           __ATOMIC_ACQUIRE) != 2u) {
+    }
+}
+
+static inline _RinStdioStreamOwner* _rin_stdio_stream_owner(FILE* stream) {
+    _rin_stdio_stream_registry_initialize();
+    _RinStdioStreamOwner* owner = __atomic_load_n(
+        &_rin_stdio_stream_owners, __ATOMIC_ACQUIRE);
+    while (owner != NULL) {
+        if (owner->stream == stream) return owner;
+        owner = __atomic_load_n(&owner->next, __ATOMIC_ACQUIRE);
+    }
+    return NULL;
+}
+
+static inline int _rin_stdio_stream_index(FILE* stream) {
+    _RinStdioStreamOwner* owner = _rin_stdio_stream_owner(stream);
+    int active;
+    if (!owner) return -1;
+    _rin_stdio_lock_table_enter();
+    active = owner->active != 0u;
+    _rin_stdio_lock_table_leave();
+    return active ? 0 : -1;
+}
+
+/* The caller holds _rin_stdio_lock_table_guard. */
+static inline int _rin_stdio_stream_generation_advance_locked(
+    _RinStdioStreamOwner* owner) {
+    if (!owner || _rin_stdio_next_stream_generation == 0u ||
+        _rin_stdio_next_stream_generation == UINT64_MAX)
+        return 0;
+    owner->generation = _rin_stdio_next_stream_generation++;
+    return 1;
+}
 
 #if defined(RIN_USERSPACE)
 #ifndef _RIN_STDIO_FUTEX_WAIT
@@ -890,61 +997,38 @@ static inline uintptr_t _rin_stdio_lock_owner_token(void) {
 }
 
 static inline int _rin_stdio_stream_owned_by_current(FILE* stream) {
+    _RinStdioStreamOwner* entry;
     uintptr_t owner;
-    size_t index;
     int owned = 0;
     if (!stream) return 0;
+    entry = _rin_stdio_stream_owner(stream);
+    if (!entry) return 0;
     owner = _rin_stdio_lock_owner_token();
     _rin_stdio_lock_table_enter();
-    for (index = 0u; index < _RIN_STDIO_LOCK_CAPACITY; ++index) {
-        struct _RinStdioLockOwner* entry = &_rin_stdio_lock_owners[index];
-        if (entry->stream == stream) {
-            owned = entry->closing == 0u && entry->owner == owner &&
-                    entry->depth != 0u;
-            break;
-        }
-    }
+    owned = entry->active != 0u && entry->lock_closing == 0u &&
+            entry->lock_owner == owner && entry->lock_depth != 0u;
     _rin_stdio_lock_table_leave();
     return owned;
 }
 
 static inline int _rin_stdio_stream_lock_try(FILE* stream) {
+    _RinStdioStreamOwner* entry;
     uintptr_t owner;
-    size_t index;
-    size_t free_index = _RIN_STDIO_LOCK_CAPACITY;
     if (!stream) return 1;
+    entry = _rin_stdio_stream_owner(stream);
+    if (!entry) return 1;
     owner = _rin_stdio_lock_owner_token();
     if (!_rin_stdio_lock_table_try_enter()) return 1;
-    for (index = 0u; index < _RIN_STDIO_LOCK_CAPACITY; ++index) {
-        struct _RinStdioLockOwner* entry = &_rin_stdio_lock_owners[index];
-        if (entry->stream == stream) {
-            int success = 0;
-            if (entry->closing == 0u && entry->owner == owner &&
-                entry->depth != UINT32_MAX) {
-                ++entry->depth;
-                success = 1;
-            } else if (entry->closing == 0u && entry->owner == 0u &&
-                       entry->waiters == 0u) {
-                entry->owner = owner;
-                entry->depth = 1u;
-                success = 1;
-            }
-            _rin_stdio_lock_table_leave();
-            return success ? 0 : 1;
-        }
-        if (!entry->stream && entry->waiters == 0u &&
-            free_index == _RIN_STDIO_LOCK_CAPACITY)
-            free_index = index;
+    if (entry->active != 0u && entry->lock_closing == 0u &&
+        entry->lock_owner == owner && entry->lock_depth != UINT32_MAX) {
+        ++entry->lock_depth;
+        _rin_stdio_lock_table_leave();
+        return 0;
     }
-    if (free_index != _RIN_STDIO_LOCK_CAPACITY) {
-        struct _RinStdioLockOwner* entry =
-            &_rin_stdio_lock_owners[free_index];
-        entry->stream = stream;
-        entry->owner = owner;
-        entry->depth = 1u;
-        entry->wait_seq = 0u;
-        entry->waiters = 0u;
-        entry->closing = 0u;
+    if (entry->active != 0u && entry->lock_closing == 0u &&
+        entry->lock_owner == 0u && entry->lock_waiters == 0u) {
+        entry->lock_owner = owner;
+        entry->lock_depth = 1u;
         _rin_stdio_lock_table_leave();
         return 0;
     }
@@ -956,99 +1040,67 @@ static inline int _rin_stdio_stream_lock_try(FILE* stream) {
  * acquired a recursive level while the first try was contending on the table
  * guard. */
 static inline int _rin_stdio_stream_lock_wait(FILE* stream) {
+    _RinStdioStreamOwner* entry;
     uintptr_t owner;
-    size_t index;
-    size_t free_index = _RIN_STDIO_LOCK_CAPACITY;
-    size_t wait_index = _RIN_STDIO_LOCK_CAPACITY;
     volatile uint32_t* wait_word = NULL;
     uint32_t expected = 0u;
-    int wait_for_entry = 0;
 
     if (!stream) return 1;
+    entry = _rin_stdio_stream_owner(stream);
+    if (!entry) return 1;
     owner = _rin_stdio_lock_owner_token();
     _rin_stdio_lock_table_enter();
-    for (index = 0u; index < _RIN_STDIO_LOCK_CAPACITY; ++index) {
-        struct _RinStdioLockOwner* entry = &_rin_stdio_lock_owners[index];
-        if (entry->stream == stream) {
-            if (entry->closing != 0u) {
-                _rin_stdio_lock_table_leave();
-                return 1;
-            }
-            if (entry->owner == owner && entry->depth != UINT32_MAX) {
-                ++entry->depth;
-                _rin_stdio_lock_table_leave();
-                return 2;
-            }
-            if (entry->owner == 0u && entry->waiters == 0u) {
-                entry->owner = owner;
-                entry->depth = 1u;
-                _rin_stdio_lock_table_leave();
-                return 2;
-            }
-            if (entry->waiters == UINT32_MAX) {
-                wait_word = &_rin_stdio_lock_table_seq;
-                expected = __atomic_load_n(wait_word, __ATOMIC_RELAXED);
-            } else {
-                ++entry->waiters;
-                wait_index = index;
-                wait_word = &entry->wait_seq;
-                expected = __atomic_load_n(wait_word, __ATOMIC_RELAXED);
-                wait_for_entry = 1;
-            }
-            break;
-        }
-        if (!entry->stream && entry->waiters == 0u &&
-            free_index == _RIN_STDIO_LOCK_CAPACITY)
-            free_index = index;
-    }
-
-    if (wait_word) {
+    if (entry->active == 0u || entry->lock_closing != 0u) {
         _rin_stdio_lock_table_leave();
-        _rin_stdio_wait_word(wait_word, expected);
-        if (!wait_for_entry) return 0;
-
-        _rin_stdio_lock_table_enter();
-        {
-            struct _RinStdioLockOwner* entry =
-                &_rin_stdio_lock_owners[wait_index];
-            int closing = entry->closing != 0u;
-            int acquired = 0;
-            int notify_table = 0;
-            /* Claim the released lock while still under the table guard.
-             * Otherwise every woken waiter can requeue behind the remaining
-             * waiter count after the generation already changed. */
-            if (!closing && entry->owner == 0u) {
-                entry->owner = owner;
-                entry->depth = 1u;
-                acquired = 1;
-            }
-            if (entry->waiters > 0u) --entry->waiters;
-            if (entry->waiters == 0u) {
-                __atomic_add_fetch(&_rin_stdio_lock_table_seq, 1u,
-                                   __ATOMIC_RELEASE);
-                notify_table = 1;
-            }
-            _rin_stdio_lock_table_leave();
-            if (notify_table)
-                _rin_stdio_wake_word(&_rin_stdio_lock_table_seq,
-                                     0x7fffffff);
-            return closing ? 1 : (acquired ? 2 : 0);
-        }
+        return 1;
     }
-
-    if (free_index != _RIN_STDIO_LOCK_CAPACITY) {
+    if (entry->lock_owner == owner && entry->lock_depth != UINT32_MAX) {
+        ++entry->lock_depth;
         _rin_stdio_lock_table_leave();
-        return 0;
+        return 2;
     }
-    wait_word = &_rin_stdio_lock_table_seq;
+    if (entry->lock_owner == 0u && entry->lock_waiters == 0u) {
+        entry->lock_owner = owner;
+        entry->lock_depth = 1u;
+        _rin_stdio_lock_table_leave();
+        return 2;
+    }
+    if (entry->lock_waiters == UINT32_MAX) {
+        wait_word = &_rin_stdio_lock_table_seq;
+    } else {
+        ++entry->lock_waiters;
+        wait_word = &entry->lock_wait_seq;
+    }
     expected = __atomic_load_n(wait_word, __ATOMIC_RELAXED);
     _rin_stdio_lock_table_leave();
     _rin_stdio_wait_word(wait_word, expected);
-    return 0;
+    if (wait_word == &_rin_stdio_lock_table_seq) return 0;
+
+    _rin_stdio_lock_table_enter();
+    {
+        int closing = entry->active == 0u || entry->lock_closing != 0u;
+        int acquired = 0;
+        int notify_table = 0;
+        if (!closing && entry->lock_owner == 0u) {
+            entry->lock_owner = owner;
+            entry->lock_depth = 1u;
+            acquired = 1;
+        }
+        if (entry->lock_waiters > 0u) --entry->lock_waiters;
+        if (entry->lock_waiters == 0u) {
+            __atomic_add_fetch(&_rin_stdio_lock_table_seq, 1u,
+                               __ATOMIC_RELEASE);
+            notify_table = 1;
+        }
+        _rin_stdio_lock_table_leave();
+        if (notify_table)
+            _rin_stdio_wake_word(&_rin_stdio_lock_table_seq, 0x7fffffff);
+        return closing ? 1 : (acquired ? 2 : 0);
+    }
 }
 
 _RIN_STDIO_API void flockfile(FILE* stream) {
-    if (!stream) return;
+    if (!stream || !_rin_stdio_stream_owner(stream)) return;
     while (_rin_stdio_stream_lock_try(stream) != 0) {
         int wait_result = _rin_stdio_stream_lock_wait(stream);
         if (wait_result == 1 || wait_result == 2) return;
@@ -1060,37 +1112,29 @@ _RIN_STDIO_API int ftrylockfile(FILE* stream) {
 }
 
 _RIN_STDIO_API void funlockfile(FILE* stream) {
+    _RinStdioStreamOwner* entry;
     uintptr_t owner;
-    size_t index;
     int saved_errno;
     if (!stream) return;
+    entry = _rin_stdio_stream_owner(stream);
+    if (!entry) return;
     saved_errno = errno;
     owner = _rin_stdio_lock_owner_token();
     _rin_stdio_lock_table_enter();
-    for (index = 0u; index < _RIN_STDIO_LOCK_CAPACITY; ++index) {
-        struct _RinStdioLockOwner* entry = &_rin_stdio_lock_owners[index];
-        if (entry->stream == stream && entry->owner == owner) {
-            if (entry->depth > 1u) {
-                --entry->depth;
-            } else {
-                entry->owner = 0u;
-                entry->depth = 0u;
-                /* Keep the identity published until queued callers have
-                 * observed this generation and retried. Otherwise a new
-                 * caller can allocate a second lock record for this FILE. */
-                if (entry->closing == 0u && entry->waiters == 0u)
-                    entry->stream = NULL;
-                __atomic_add_fetch(&entry->wait_seq, 1u, __ATOMIC_RELEASE);
-                __atomic_add_fetch(&_rin_stdio_lock_table_seq, 1u,
-                                   __ATOMIC_RELEASE);
-                _rin_stdio_lock_table_leave();
-                _rin_stdio_wake_word(&entry->wait_seq, 0x7fffffff);
-                _rin_stdio_wake_word(&_rin_stdio_lock_table_seq,
-                                     0x7fffffff);
-                errno = saved_errno;
-                return;
-            }
-            break;
+    if (entry->active != 0u && entry->lock_owner == owner) {
+        if (entry->lock_depth > 1u) {
+            --entry->lock_depth;
+        } else {
+            entry->lock_owner = 0u;
+            entry->lock_depth = 0u;
+            __atomic_add_fetch(&entry->lock_wait_seq, 1u, __ATOMIC_RELEASE);
+            __atomic_add_fetch(&_rin_stdio_lock_table_seq, 1u,
+                               __ATOMIC_RELEASE);
+            _rin_stdio_lock_table_leave();
+            _rin_stdio_wake_word(&entry->lock_wait_seq, 0x7fffffff);
+            _rin_stdio_wake_word(&_rin_stdio_lock_table_seq, 0x7fffffff);
+            errno = saved_errno;
+            return;
         }
     }
     _rin_stdio_lock_table_leave();
@@ -1098,46 +1142,43 @@ _RIN_STDIO_API void funlockfile(FILE* stream) {
 }
 
 static inline void _rin_stdio_stream_lock_reset_closed(FILE* stream) {
-    size_t index;
-    for (index = 0u; index < _RIN_STDIO_LOCK_CAPACITY; ++index) {
-        struct _RinStdioLockOwner* entry = &_rin_stdio_lock_owners[index];
-        if (entry->stream == stream && entry->closing != 0u &&
-            entry->owner == 0u && entry->waiters == 0u) {
-            entry->closing = 0u;
-            entry->depth = 0u;
-            return;
-        }
+    _RinStdioStreamOwner* entry = _rin_stdio_stream_owner(stream);
+    if (!entry) return;
+    _rin_stdio_lock_table_enter();
+    if (entry->lock_closing != 0u && entry->lock_owner == 0u &&
+        entry->lock_waiters == 0u) {
+        entry->active = 0u;
+        entry->lock_closing = 0u;
+        entry->lock_depth = 0u;
     }
+    _rin_stdio_lock_table_leave();
 }
 
 static inline int _rin_stdio_stream_lock_close_begin(FILE* stream) {
+    _RinStdioStreamOwner* closing_entry;
     uintptr_t owner = _rin_stdio_lock_owner_token();
-    struct _RinStdioLockOwner* closing_entry = NULL;
-    size_t index;
 
     if (!stream) return 0;
-    _rin_stdio_lock_table_enter();
-    for (index = 0u; index < _RIN_STDIO_LOCK_CAPACITY; ++index) {
-        struct _RinStdioLockOwner* entry = &_rin_stdio_lock_owners[index];
-        if (entry->stream == stream && entry->owner == owner &&
-            entry->closing == 0u) {
-            entry->closing = 1u;
-            __atomic_add_fetch(&entry->wait_seq, 1u, __ATOMIC_RELEASE);
-            __atomic_add_fetch(&_rin_stdio_lock_table_seq, 1u,
-                               __ATOMIC_RELEASE);
-            closing_entry = entry;
-            break;
-        }
-    }
-    _rin_stdio_lock_table_leave();
+    closing_entry = _rin_stdio_stream_owner(stream);
     if (!closing_entry) return 0;
+    _rin_stdio_lock_table_enter();
+    if (closing_entry->stream != stream || closing_entry->active == 0u ||
+        closing_entry->lock_owner != owner ||
+        closing_entry->lock_closing != 0u) {
+        _rin_stdio_lock_table_leave();
+        return 0;
+    }
+    closing_entry->lock_closing = 1u;
+    __atomic_add_fetch(&closing_entry->lock_wait_seq, 1u, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&_rin_stdio_lock_table_seq, 1u, __ATOMIC_RELEASE);
+    _rin_stdio_lock_table_leave();
 
-    _rin_stdio_wake_word(&closing_entry->wait_seq, 0x7fffffff);
+    _rin_stdio_wake_word(&closing_entry->lock_wait_seq, 0x7fffffff);
     _rin_stdio_wake_word(&_rin_stdio_lock_table_seq, 0x7fffffff);
     for (;;) {
         uint32_t expected;
         _rin_stdio_lock_table_enter();
-        if (closing_entry->waiters == 0u) {
+        if (closing_entry->lock_waiters == 0u) {
             _rin_stdio_lock_table_leave();
             return 1;
         }
@@ -1152,44 +1193,30 @@ static inline int _rin_stdio_stream_lock_close_begin(FILE* stream) {
  * while holding FILE locks must release each owner record and wake waiters. */
 _RIN_STDIO_API void rin_stdio_thread_exit_cleanup(void) {
     uintptr_t owner = _rin_stdio_lock_owner_token();
-    volatile uint32_t* wake_entries[_RIN_STDIO_LOCK_CAPACITY];
-    size_t wake_count = 0u;
-    size_t index;
-
-    _rin_stdio_lock_table_enter();
-    for (index = 0u; index < _RIN_STDIO_LOCK_CAPACITY; ++index) {
-        struct _RinStdioLockOwner* entry = &_rin_stdio_lock_owners[index];
-        if (entry->stream && entry->owner == owner) {
-            entry->owner = 0u;
-            entry->depth = 0u;
-            /* Waiters still refer to this record by index while parked. */
-            if (entry->closing == 0u && entry->waiters == 0u)
-                entry->stream = NULL;
-            __atomic_add_fetch(&entry->wait_seq, 1u, __ATOMIC_RELEASE);
-            wake_entries[wake_count++] = &entry->wait_seq;
+    _RinStdioStreamOwner* entry = __atomic_load_n(
+        &_rin_stdio_stream_owners, __ATOMIC_ACQUIRE);
+    while (entry) {
+        int wake = 0;
+        _RinStdioStreamOwner* next = __atomic_load_n(
+            &entry->next, __ATOMIC_ACQUIRE);
+        _rin_stdio_lock_table_enter();
+        if (entry->active != 0u && entry->lock_owner == owner) {
+            entry->lock_owner = 0u;
+            entry->lock_depth = 0u;
+            __atomic_add_fetch(&entry->lock_wait_seq, 1u,
+                               __ATOMIC_RELEASE);
+            __atomic_add_fetch(&_rin_stdio_lock_table_seq, 1u,
+                               __ATOMIC_RELEASE);
+            wake = 1;
         }
+        _rin_stdio_lock_table_leave();
+        if (wake) {
+            _rin_stdio_wake_word(&entry->lock_wait_seq, 0x7fffffff);
+            _rin_stdio_wake_word(&_rin_stdio_lock_table_seq, 0x7fffffff);
+        }
+        entry = next;
     }
-    if (wake_count != 0u) {
-        __atomic_add_fetch(&_rin_stdio_lock_table_seq, 1u, __ATOMIC_RELEASE);
-    }
-    _rin_stdio_lock_table_leave();
-
-    for (index = 0u; index < wake_count; ++index)
-        _rin_stdio_wake_word(wake_entries[index], 0x7fffffff);
-    if (wake_count != 0u)
-        _rin_stdio_wake_word(&_rin_stdio_lock_table_seq, 0x7fffffff);
 }
-
-/* 標準ストリーム */
-#if defined(RIN_STDIO_OWNER_BUILD)
-FILE _stdin_file  = { 0, 0, 0, O_RDONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
-FILE _stdout_file = { 1, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
-FILE _stderr_file = { 2, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
-#else
-static FILE _stdin_file  = { 0, 0, 0, O_RDONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
-static FILE _stdout_file = { 1, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
-static FILE _stderr_file = { 2, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
-#endif
 
 /* Standard streams select their default buffer on first I/O, when terminal
  * status can be queried without changing the public FILE layout. */
@@ -1200,7 +1227,6 @@ static unsigned char _rin_stdio_standard_buffer_pending[3] = {1u, 1u, 0u};
 #define _RIN_STDIO_IO_DIRECTION_NONE 0u
 #define _RIN_STDIO_IO_DIRECTION_READ 1u
 #define _RIN_STDIO_IO_DIRECTION_WRITE 2u
-static unsigned char _rin_stdio_io_direction[_STDIO_MAX_FILES];
 
 #ifdef stdin
 #undef stdin
@@ -1232,18 +1258,6 @@ _RIN_STDIO_API FILE* rin_stdio_get_stderr(void) {
  * when a scanner must restore a longer rejected token. */
 #define _RIN_STDIO_UNGETC_INLINE_CAPACITY 5u
 #define _RIN_STDIO_UNGETC_CAPACITY 4096u
-static unsigned char _rin_stdio_ungetc_byte[_STDIO_MAX_FILES];
-static unsigned char _rin_stdio_ungetc_valid[_STDIO_MAX_FILES];
-static unsigned char _rin_stdio_ungetc_second_byte[_STDIO_MAX_FILES];
-static unsigned char _rin_stdio_ungetc_second_valid[_STDIO_MAX_FILES];
-static unsigned char _rin_stdio_ungetc_third_byte[_STDIO_MAX_FILES];
-static unsigned char _rin_stdio_ungetc_third_valid[_STDIO_MAX_FILES];
-static unsigned char _rin_stdio_ungetc_fourth_byte[_STDIO_MAX_FILES];
-static unsigned char _rin_stdio_ungetc_fourth_valid[_STDIO_MAX_FILES];
-static unsigned char _rin_stdio_ungetc_fifth_byte[_STDIO_MAX_FILES];
-static unsigned char _rin_stdio_ungetc_fifth_valid[_STDIO_MAX_FILES];
-static unsigned char* _rin_stdio_ungetc_spill[_STDIO_MAX_FILES];
-static size_t _rin_stdio_ungetc_spill_count[_STDIO_MAX_FILES];
 /* Wide scanners need to restore a complete rejected numeric token, not just
  * the two scalars required by the basic ungetwc contract.  Keep the common
  * case inline in FILE and allocate this bounded spill only on demand. */
@@ -1257,163 +1271,117 @@ struct _RinStdioWideUngetwcOwner {
 static struct _RinStdioWideUngetwcOwner*
     _rin_stdio_wide_ungetwc_owners;
 
-static inline void _rin_stdio_ungetc_clear_inline(int stream_index) {
-    _rin_stdio_ungetc_byte[stream_index] = 0u;
-    _rin_stdio_ungetc_valid[stream_index] = 0u;
-    _rin_stdio_ungetc_second_byte[stream_index] = 0u;
-    _rin_stdio_ungetc_second_valid[stream_index] = 0u;
-    _rin_stdio_ungetc_third_byte[stream_index] = 0u;
-    _rin_stdio_ungetc_third_valid[stream_index] = 0u;
-    _rin_stdio_ungetc_fourth_byte[stream_index] = 0u;
-    _rin_stdio_ungetc_fourth_valid[stream_index] = 0u;
-    _rin_stdio_ungetc_fifth_byte[stream_index] = 0u;
-    _rin_stdio_ungetc_fifth_valid[stream_index] = 0u;
+static inline void _rin_stdio_ungetc_clear_inline(
+    _RinStdioStreamOwner* owner) {
+    if (!owner) return;
+    memset(owner->ungetc_byte, 0, sizeof(owner->ungetc_byte));
+    memset(owner->ungetc_valid, 0, sizeof(owner->ungetc_valid));
 }
 
-static inline size_t _rin_stdio_ungetc_count(int stream_index) {
-    if (_rin_stdio_ungetc_spill[stream_index])
-        return _rin_stdio_ungetc_spill_count[stream_index];
-    return (size_t)(_rin_stdio_ungetc_valid[stream_index] != 0u) +
-           (size_t)(_rin_stdio_ungetc_second_valid[stream_index] != 0u) +
-           (size_t)(_rin_stdio_ungetc_third_valid[stream_index] != 0u) +
-           (size_t)(_rin_stdio_ungetc_fourth_valid[stream_index] != 0u) +
-           (size_t)(_rin_stdio_ungetc_fifth_valid[stream_index] != 0u);
+static inline size_t _rin_stdio_ungetc_count(
+    FILE* stream) {
+    _RinStdioStreamOwner* owner = _rin_stdio_stream_owner(stream);
+    if (!owner) return 0u;
+    if (owner->ungetc_spill) return owner->ungetc_spill_count;
+    return (size_t)(owner->ungetc_valid[0] != 0u) +
+           (size_t)(owner->ungetc_valid[1] != 0u) +
+           (size_t)(owner->ungetc_valid[2] != 0u) +
+           (size_t)(owner->ungetc_valid[3] != 0u) +
+           (size_t)(owner->ungetc_valid[4] != 0u);
 }
 
-static inline void _rin_stdio_ungetc_clear(int stream_index) {
-    if (_rin_stdio_ungetc_spill[stream_index]) {
-        free(_rin_stdio_ungetc_spill[stream_index]);
-        _rin_stdio_ungetc_spill[stream_index] = (unsigned char*)0;
-        _rin_stdio_ungetc_spill_count[stream_index] = 0u;
+static inline void _rin_stdio_ungetc_clear(
+    FILE* stream) {
+    _RinStdioStreamOwner* owner = _rin_stdio_stream_owner(stream);
+    if (!owner) return;
+    if (owner->ungetc_spill) {
+        free(owner->ungetc_spill);
+        owner->ungetc_spill = NULL;
+        owner->ungetc_spill_count = 0u;
     }
-    _rin_stdio_ungetc_clear_inline(stream_index);
+    _rin_stdio_ungetc_clear_inline(owner);
 }
 
-static inline int _rin_stdio_ungetc_pop(int stream_index,
+static inline int _rin_stdio_ungetc_pop(FILE* stream,
                                         unsigned char* value_out) {
-    unsigned char* spill = _rin_stdio_ungetc_spill[stream_index];
+    _RinStdioStreamOwner* owner = _rin_stdio_stream_owner(stream);
+    unsigned char* spill;
     size_t count;
     size_t index;
 
+    if (!owner || !value_out) return 0;
+    spill = owner->ungetc_spill;
     if (spill) {
-        count = _rin_stdio_ungetc_spill_count[stream_index];
+        count = owner->ungetc_spill_count;
         if (count == 0u) return 0;
         *value_out = spill[0];
         if (count == 1u) {
             free(spill);
-            _rin_stdio_ungetc_spill[stream_index] = (unsigned char*)0;
-            _rin_stdio_ungetc_spill_count[stream_index] = 0u;
+            owner->ungetc_spill = NULL;
+            owner->ungetc_spill_count = 0u;
             return 1;
         }
         for (index = 1u; index < count; ++index) spill[index - 1u] = spill[index];
-        _rin_stdio_ungetc_spill_count[stream_index] = count - 1u;
+        owner->ungetc_spill_count = count - 1u;
         return 1;
     }
-    if (!_rin_stdio_ungetc_valid[stream_index]) return 0;
-    *value_out = _rin_stdio_ungetc_byte[stream_index];
-    _rin_stdio_ungetc_byte[stream_index] =
-        _rin_stdio_ungetc_second_byte[stream_index];
-    _rin_stdio_ungetc_valid[stream_index] =
-        _rin_stdio_ungetc_second_valid[stream_index];
-    _rin_stdio_ungetc_second_byte[stream_index] =
-        _rin_stdio_ungetc_third_byte[stream_index];
-    _rin_stdio_ungetc_second_valid[stream_index] =
-        _rin_stdio_ungetc_third_valid[stream_index];
-    _rin_stdio_ungetc_third_byte[stream_index] =
-        _rin_stdio_ungetc_fourth_byte[stream_index];
-    _rin_stdio_ungetc_third_valid[stream_index] =
-        _rin_stdio_ungetc_fourth_valid[stream_index];
-    _rin_stdio_ungetc_fourth_byte[stream_index] =
-        _rin_stdio_ungetc_fifth_byte[stream_index];
-    _rin_stdio_ungetc_fourth_valid[stream_index] =
-        _rin_stdio_ungetc_fifth_valid[stream_index];
-    _rin_stdio_ungetc_fifth_byte[stream_index] = 0u;
-    _rin_stdio_ungetc_fifth_valid[stream_index] = 0u;
+    if (!owner->ungetc_valid[0]) return 0;
+    *value_out = owner->ungetc_byte[0];
+    for (index = 1u; index < _RIN_STDIO_UNGETC_INLINE_CAPACITY; ++index) {
+        owner->ungetc_byte[index - 1u] = owner->ungetc_byte[index];
+        owner->ungetc_valid[index - 1u] = owner->ungetc_valid[index];
+    }
+    owner->ungetc_byte[4] = 0u;
+    owner->ungetc_valid[4] = 0u;
     return 1;
 }
 
-static inline int _rin_stdio_ungetc_push(int stream_index,
+static inline int _rin_stdio_ungetc_push(FILE* stream,
                                          unsigned char value) {
-    unsigned char* spill = _rin_stdio_ungetc_spill[stream_index];
-    size_t count = _rin_stdio_ungetc_count(stream_index);
+    _RinStdioStreamOwner* owner = _rin_stdio_stream_owner(stream);
+    unsigned char* spill;
+    size_t count;
     size_t index;
 
+    if (!owner) return 0;
+    spill = owner->ungetc_spill;
+    count = _rin_stdio_ungetc_count(stream);
     if (count == _RIN_STDIO_UNGETC_CAPACITY) return 0;
     if (!spill && count == _RIN_STDIO_UNGETC_INLINE_CAPACITY) {
         spill = (unsigned char*)malloc(_RIN_STDIO_UNGETC_CAPACITY);
         if (!spill) return 0;
-        spill[0] = _rin_stdio_ungetc_byte[stream_index];
-        spill[1] = _rin_stdio_ungetc_second_byte[stream_index];
-        spill[2] = _rin_stdio_ungetc_third_byte[stream_index];
-        spill[3] = _rin_stdio_ungetc_fourth_byte[stream_index];
-        spill[4] = _rin_stdio_ungetc_fifth_byte[stream_index];
-        _rin_stdio_ungetc_spill[stream_index] = spill;
-        _rin_stdio_ungetc_spill_count[stream_index] = count;
-        _rin_stdio_ungetc_clear_inline(stream_index);
+        memcpy(spill, owner->ungetc_byte, _RIN_STDIO_UNGETC_INLINE_CAPACITY);
+        owner->ungetc_spill = spill;
+        owner->ungetc_spill_count = count;
+        _rin_stdio_ungetc_clear_inline(owner);
     }
     if (spill) {
         for (index = count; index != 0u; --index) spill[index] = spill[index - 1u];
         spill[0] = value;
-        _rin_stdio_ungetc_spill_count[stream_index] = count + 1u;
+        owner->ungetc_spill_count = count + 1u;
         return 1;
     }
-    if (_rin_stdio_ungetc_valid[stream_index]) {
-        _rin_stdio_ungetc_fifth_byte[stream_index] =
-            _rin_stdio_ungetc_fourth_byte[stream_index];
-        _rin_stdio_ungetc_fifth_valid[stream_index] =
-            _rin_stdio_ungetc_fourth_valid[stream_index];
-        _rin_stdio_ungetc_fourth_byte[stream_index] =
-            _rin_stdio_ungetc_third_byte[stream_index];
-        _rin_stdio_ungetc_fourth_valid[stream_index] =
-            _rin_stdio_ungetc_third_valid[stream_index];
-        _rin_stdio_ungetc_third_byte[stream_index] =
-            _rin_stdio_ungetc_second_byte[stream_index];
-        _rin_stdio_ungetc_third_valid[stream_index] =
-            _rin_stdio_ungetc_second_valid[stream_index];
-        _rin_stdio_ungetc_second_byte[stream_index] =
-            _rin_stdio_ungetc_byte[stream_index];
-        _rin_stdio_ungetc_second_valid[stream_index] = 1u;
+    if (owner->ungetc_valid[0]) {
+        for (index = _RIN_STDIO_UNGETC_INLINE_CAPACITY - 1u;
+             index != 0u; --index) {
+            owner->ungetc_byte[index] = owner->ungetc_byte[index - 1u];
+            owner->ungetc_valid[index] = owner->ungetc_valid[index - 1u];
+        }
+        owner->ungetc_valid[1] = 1u;
     }
-    _rin_stdio_ungetc_byte[stream_index] = value;
-    _rin_stdio_ungetc_valid[stream_index] = 1u;
+    owner->ungetc_byte[0] = value;
+    owner->ungetc_valid[0] = 1u;
     return 1;
-}
-
-static inline int _rin_stdio_stream_index(FILE* stream) {
-    if (stream == stdin) return 0;
-    if (stream == stdout) return 1;
-    if (stream == stderr) return 2;
-    for (int i = 3; i < _STDIO_MAX_FILES; ++i) {
-        if (&_stdio_files[i] == stream && _stdio_files_used[i]) return i;
-    }
-    return -1;
-}
-
-/* The caller holds _rin_stdio_lock_table_guard. */
-static inline int _rin_stdio_stream_generation_advance_locked(int index) {
-    if (index < 0 || index >= _STDIO_MAX_FILES ||
-        _rin_stdio_stream_generation[index] == UINT64_MAX)
-        return 0;
-    ++_rin_stdio_stream_generation[index];
-    return _rin_stdio_stream_generation[index] != 0u;
 }
 
 /* The caller holds _rin_stdio_lock_table_guard and the stream lock. */
 static inline int _rin_stdio_stream_snapshot_matches_locked(
     FILE* stream, uint64_t generation) {
-    int index;
+    _RinStdioStreamOwner* owner;
     if (!stream || generation == 0u) return 0;
-    if (stream == stdin) index = 0;
-    else if (stream == stdout) index = 1;
-    else if (stream == stderr) index = 2;
-    else {
-        for (index = 3; index < _STDIO_MAX_FILES; ++index) {
-            if (&_stdio_files[index] == stream) break;
-        }
-        if (index == _STDIO_MAX_FILES) return 0;
-    }
-    return _stdio_files_used[index] != 0 &&
-           _rin_stdio_stream_generation[index] == generation;
+    owner = _rin_stdio_stream_owner(stream);
+    return owner != NULL && owner->active != 0u &&
+           owner->generation == generation;
 }
 
 _RIN_STDIO_INTERNAL void _rin_stdio_wide_pushback_clear(FILE* stream) {
@@ -1689,15 +1657,14 @@ static inline size_t _rin_stdio_buffer_position(const FILE* stream) {
 }
 
 static inline unsigned char _rin_stdio_get_io_direction(FILE* stream) {
-    int index = _rin_stdio_stream_index(stream);
-    return index >= 0 ? _rin_stdio_io_direction[index]
-                      : _RIN_STDIO_IO_DIRECTION_NONE;
+    _RinStdioStreamOwner* owner = _rin_stdio_stream_owner(stream);
+    return owner ? owner->io_direction : _RIN_STDIO_IO_DIRECTION_NONE;
 }
 
 static inline void _rin_stdio_set_io_direction(FILE* stream,
                                                 unsigned char direction) {
-    int index = _rin_stdio_stream_index(stream);
-    if (index >= 0) _rin_stdio_io_direction[index] = direction;
+    _RinStdioStreamOwner* owner = _rin_stdio_stream_owner(stream);
+    if (owner) owner->io_direction = direction;
 }
 
 static inline int _rin_stdio_input_buffer_enabled(const FILE* stream) {
@@ -1777,6 +1744,166 @@ static inline void _rin_stdio_install_default_buffer(FILE* stream, int mode) {
     errno = saved_errno;
 }
 
+/* Stream storage has a stable address until process teardown. A closed owner
+ * can be reused only after fclose() has drained its waiters. */
+static inline FILE* _rin_stdio_stream_allocate(int fd, unsigned int flags,
+                                                int orientation,
+                                                int install_buffer) {
+    _RinStdioStreamOwner* owner;
+    _RinStdioStreamOwner* fresh = NULL;
+    size_t active_count;
+    _rin_stdio_stream_registry_initialize();
+    for (;;) {
+        active_count = 0u;
+        owner = NULL;
+        _rin_stdio_lock_table_enter();
+        for (_RinStdioStreamOwner* current = _rin_stdio_stream_owners;
+             current; current = __atomic_load_n(&current->next,
+                                                __ATOMIC_ACQUIRE)) {
+            if (current->active != 0u) {
+                ++active_count;
+            } else if (!owner &&
+                       current != &_rin_stdio_standard_owners[0] &&
+                       current != &_rin_stdio_standard_owners[1] &&
+                       current != &_rin_stdio_standard_owners[2] &&
+                       current->lock_owner == 0u &&
+                       current->lock_waiters == 0u &&
+                       current->lock_closing == 0u) {
+                owner = current;
+            }
+        }
+        if (owner) {
+            if (!_rin_stdio_stream_generation_advance_locked(owner)) {
+                _rin_stdio_lock_table_leave();
+                if (fresh) free(fresh);
+                errno = EOVERFLOW;
+                return NULL;
+            }
+            owner->active = 1u;
+        } else if (active_count >= (size_t)STREAM_MAX) {
+            _rin_stdio_lock_table_leave();
+            if (fresh) free(fresh);
+            errno = EMFILE;
+            return NULL;
+        } else if (fresh) {
+            owner = fresh;
+            fresh = NULL;
+            owner->stream = &owner->file;
+            if (!_rin_stdio_stream_generation_advance_locked(owner)) {
+                _rin_stdio_lock_table_leave();
+                free(owner);
+                errno = EOVERFLOW;
+                return NULL;
+            }
+            owner->active = 1u;
+            __atomic_store_n(&_rin_stdio_stream_owners_tail->next, owner,
+                             __ATOMIC_RELEASE);
+            _rin_stdio_stream_owners_tail = owner;
+        } else {
+            _rin_stdio_lock_table_leave();
+            fresh = (_RinStdioStreamOwner*)malloc(sizeof(*fresh));
+            if (!fresh) {
+                errno = ENOMEM;
+                return NULL;
+            }
+            memset(fresh, 0, sizeof(*fresh));
+            continue;
+        }
+
+        owner->io_direction = _RIN_STDIO_IO_DIRECTION_NONE;
+        owner->lock_owner = 0u;
+        owner->lock_depth = 0u;
+        owner->lock_waiters = 0u;
+        owner->lock_closing = 0u;
+        owner->file.fd = fd;
+        owner->file.eof = 0;
+        owner->file.error = 0;
+        owner->file.mode = (int)flags;
+        owner->file.buf = NULL;
+        owner->file.buf_size = 0u;
+        owner->file.buf_pos = 0u;
+        owner->file.buf_end = 0u;
+        owner->file.buf_mode = _IONBF;
+        owner->file.orientation = orientation;
+        owner->file.wide_pushback = 0u;
+        owner->file.wide_pushback_valid = 0;
+        owner->file.wide_pushback_second = 0u;
+        owner->file.wide_pushback_second_valid = 0;
+        owner->file.buf_owned = 0;
+        _rin_stdio_lock_table_leave();
+        if (fresh) {
+            free(fresh);
+            fresh = NULL;
+        }
+        _rin_stdio_ungetc_clear(owner->stream);
+        if (install_buffer)
+            _rin_stdio_install_default_buffer(owner->stream, _IOFBF);
+        return owner->stream;
+    }
+}
+
+static inline int _rin_stdio_stream_snapshot_capture(
+    _RinStdioStreamSnapshot** streams_out, size_t* count_out) {
+    _RinStdioStreamSnapshot* streams;
+    size_t capacity;
+    if (!streams_out || !count_out) {
+        errno = EINVAL;
+        return -1;
+    }
+    *streams_out = NULL;
+    *count_out = 0u;
+    _rin_stdio_stream_registry_initialize();
+    for (;;) {
+        capacity = 0u;
+        _rin_stdio_lock_table_enter();
+        for (_RinStdioStreamOwner* owner = _rin_stdio_stream_owners;
+             owner; owner = __atomic_load_n(&owner->next, __ATOMIC_ACQUIRE)) {
+            if (owner->active != 0u) {
+                if (capacity == (size_t)-1) {
+                    _rin_stdio_lock_table_leave();
+                    errno = EOVERFLOW;
+                    return -1;
+                }
+                ++capacity;
+            }
+        }
+        _rin_stdio_lock_table_leave();
+        if (capacity == 0u) return 0;
+        if (capacity > (size_t)-1 / sizeof(*streams)) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        streams = (_RinStdioStreamSnapshot*)malloc(
+            capacity * sizeof(*streams));
+        if (!streams) {
+            errno = ENOMEM;
+            return -1;
+        }
+        size_t count = 0u;
+        int retry = 0;
+        _rin_stdio_lock_table_enter();
+        for (_RinStdioStreamOwner* owner = _rin_stdio_stream_owners;
+             owner; owner = __atomic_load_n(&owner->next, __ATOMIC_ACQUIRE)) {
+            if (owner->active == 0u) continue;
+            if (count == capacity) {
+                retry = 1;
+                break;
+            }
+            streams[count].stream = owner->stream;
+            streams[count].generation = owner->generation;
+            ++count;
+        }
+        _rin_stdio_lock_table_leave();
+        if (retry) {
+            free(streams);
+            continue;
+        }
+        *streams_out = streams;
+        *count_out = count;
+        return 0;
+    }
+}
+
 static inline int _rin_stdio_default_buffer_mode(FILE* stream) {
     if (stream == &_stderr_file) return _IONBF;
     if (stream == &_stdout_file && _rin_stdio_stream_is_terminal(stream))
@@ -1811,7 +1938,7 @@ static inline int _rin_stdio_sync_input_before_write(FILE* stream) {
         stream_index = _rin_stdio_stream_index(stream);
         if (unread != 0u ||
             (stream_index >= 0 &&
-             _rin_stdio_ungetc_count(stream_index) != 0u)) {
+             _rin_stdio_ungetc_count(stream) != 0u)) {
             if (fseek(stream, 0L, SEEK_CUR) != 0) return -1;
         } else {
             /* All prefetched bytes were consumed; discard the exhausted
@@ -1870,7 +1997,7 @@ static inline int _rin_stdio_flush_output_buffer(FILE* stream) {
  * 呼出元からはtrylockだけを使い、stream lockの逆順取得によるdeadlockを防ぐ。 */
 static inline int _rin_stdio_flush_line_buffered_outputs_before_input(
     FILE* input) {
-    _RinStdioStreamSnapshot streams[_STDIO_MAX_FILES];
+    _RinStdioStreamSnapshot* streams = NULL;
     size_t count = 0u;
     int input_lock_held;
     int failed = 0;
@@ -1883,19 +2010,8 @@ static inline int _rin_stdio_flush_line_buffered_outputs_before_input(
         return 0;
     input_lock_held = _rin_stdio_stream_owned_by_current(input);
 
-    _rin_stdio_lock_table_enter();
-    for (int index = 0; index < _STDIO_MAX_FILES; ++index) {
-        FILE* stream = index == 0 ? stdin :
-                       index == 1 ? stdout :
-                       index == 2 ? stderr : &_stdio_files[index];
-        if (_stdio_files_used[index] != 0 && count < _STDIO_MAX_FILES) {
-            streams[count].stream = stream;
-            streams[count].generation =
-                _rin_stdio_stream_generation[index];
-            ++count;
-        }
-    }
-    _rin_stdio_lock_table_leave();
+    if (_rin_stdio_stream_snapshot_capture(&streams, &count) != 0)
+        return -1;
 
     for (size_t slot = 0u; slot < count; ++slot) {
         FILE* stream = streams[slot].stream;
@@ -1921,6 +2037,7 @@ static inline int _rin_stdio_flush_line_buffered_outputs_before_input(
         }
         funlockfile(stream);
     }
+    free(streams);
     if (failed) {
         errno = first_errno;
         return -1;
@@ -2173,13 +2290,13 @@ static inline int _rin_fgetc_unlocked(FILE* stream) {
     unread_input = _rin_stdio_input_buffer_unread(stream);
     if (unread_input == (size_t)-1) return EOF;
     if (unread_input == 0u &&
-        (stream_index < 0 || _rin_stdio_ungetc_count(stream_index) == 0u) &&
+        (stream_index < 0 || _rin_stdio_ungetc_count(stream) == 0u) &&
         _rin_stdio_flush_line_buffered_outputs_before_input(stream) != 0)
         return EOF;
     if (_rin_stdio_flush_output_buffer(stream) != 0) return EOF;
     _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_READ);
     if (stream_index >= 0 &&
-        _rin_stdio_ungetc_pop(stream_index, &c)) {
+        _rin_stdio_ungetc_pop(stream, &c)) {
         stream->eof = 0;
         return (int)c;
     }
@@ -2321,7 +2438,10 @@ static inline ssize_t _rin_stdio_getdelim(char** lineptr, size_t* n,
             }
             break;
         }
-        if (length >= (size_t)SSIZE_MAX) {
+        /* The buffer needs one more byte for its terminator. Keep the last
+         * valid index below the maximum object size as well as the return
+         * type limit, so the overflow path itself never indexes SSIZE_MAX. */
+        if (length >= (size_t)SSIZE_MAX - 1u) {
             (*lineptr)[length] = '\0';
             stream->error = 1;
             errno = EOVERFLOW;
@@ -2379,7 +2499,7 @@ static inline int _rin_ungetc_unlocked(int c, FILE* stream) {
     }
     idx = _rin_stdio_stream_index(stream);
     if (idx < 0 || !_rin_stdio_claim_byte_orientation(stream) ||
-        !_rin_stdio_ungetc_push(idx, (unsigned char)c)) return EOF;
+        !_rin_stdio_ungetc_push(stream, (unsigned char)c)) return EOF;
     _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_READ);
     stream->eof = 0;
     return (int)(unsigned char)c;
@@ -2470,42 +2590,13 @@ _RIN_STDIO_API FILE* fopen(const char* path, const char* mode) {
         return NULL;
     }
 
-    /* 空きスロットを探す */
-    _rin_stdio_lock_table_enter();
-    for (int i = 3; i < _STDIO_MAX_FILES; i++) {
-        if (!_stdio_files_used[i]) {
-            if (!_rin_stdio_stream_generation_advance_locked(i)) continue;
-            _stdio_files_used[i] = 1;
-            FILE* f = &_stdio_files[i];
-            f->fd = fd;
-            f->eof = 0;
-            f->error = 0;
-            f->mode = (int)flags;
-            f->buf = NULL;
-            f->buf_size = 0;
-            f->buf_pos = 0;
-            f->buf_end = 0;
-            f->buf_mode = _IONBF;
-            f->orientation = 0;
-            f->wide_pushback = 0u;
-            f->wide_pushback_valid = 0;
-            f->wide_pushback_second = 0u;
-            f->wide_pushback_second_valid = 0;
-            f->buf_owned = 0;
-            _rin_stdio_stream_lock_reset_closed(f);
-            _rin_stdio_lock_table_leave();
-            _rin_stdio_ungetc_clear(i);
-            _rin_stdio_set_io_direction(f, _RIN_STDIO_IO_DIRECTION_NONE);
-            _rin_stdio_install_default_buffer(f, _IOFBF);
-            return f;
-        }
+    FILE* stream = _rin_stdio_stream_allocate(fd, flags, 0, 1);
+    if (!stream) {
+        int saved_errno = errno;
+        (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)fd);
+        errno = saved_errno;
     }
-
-    _rin_stdio_lock_table_leave();
-    /* スロットがない場合はfdを閉じて失敗 */
-    _RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)fd);
-    errno = EMFILE;
-    return NULL;
+    return stream;
 }
 
 static inline int _rin_fclose_unlocked(FILE* stream) {
@@ -2523,7 +2614,7 @@ static inline int _rin_fclose_unlocked(FILE* stream) {
     }
 
     stream_index = _rin_stdio_stream_index(stream);
-    if (stream_index < 0 || !_stdio_files_used[stream_index]) {
+    if (stream_index < 0) {
         errno = EINVAL;
         return EOF;
     }
@@ -2541,7 +2632,7 @@ static inline int _rin_fclose_unlocked(FILE* stream) {
         if (ret > 0) errno = EIO;
         stream->error = 1;
     }
-    if (stream_index >= 0) _rin_stdio_ungetc_clear(stream_index);
+    _rin_stdio_ungetc_clear(stream);
     _rin_stdio_wide_pushback_clear(stream);
     previous_buffer = stream->buf;
     previous_owned = stream->buf_owned;
@@ -2565,7 +2656,7 @@ _RIN_STDIO_API int fclose(FILE* stream) {
         return EOF;
     }
     stream_index = _rin_stdio_stream_index(stream);
-    if (stream_index < 0 || !_stdio_files_used[stream_index]) {
+    if (stream_index < 0) {
         errno = EINVAL;
         return EOF;
     }
@@ -2577,17 +2668,11 @@ _RIN_STDIO_API int fclose(FILE* stream) {
     }
     result = _rin_fclose_unlocked(stream);
     funlockfile(stream);
-    /* Keep the pool slot unavailable until close has released the stream
-     * owner.  Otherwise a concurrent fopen() can reuse this FILE while its
-     * lock entry is still marked closing and leave the new stream unusable. */
-    _rin_stdio_lock_table_enter();
-    _stdio_files_used[stream_index] = 0;
     _rin_stdio_stream_lock_reset_closed(stream);
-    _rin_stdio_lock_table_leave();
     return result;
 }
 
-static inline void _rin_freopen_discard_stream(FILE* stream, int stream_index) {
+static inline void _rin_freopen_discard_stream(FILE* stream) {
     unsigned char* previous_buffer = stream->buf;
     int previous_owned = stream->buf_owned;
 
@@ -2601,14 +2686,11 @@ static inline void _rin_freopen_discard_stream(FILE* stream, int stream_index) {
     stream->buf_end = 0u;
     stream->buf_mode = _IONBF;
     stream->orientation = 0;
+    (void)_rin_stdio_stream_lock_close_begin(stream);
     _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_NONE);
     _rin_stdio_wide_pushback_clear(stream);
     stream->buf_owned = 0;
-    (void)_rin_stdio_stream_lock_close_begin(stream);
-    _rin_stdio_lock_table_enter();
-    _stdio_files_used[stream_index] = 0;
-    _rin_stdio_lock_table_leave();
-    _rin_stdio_ungetc_clear(stream_index);
+    _rin_stdio_ungetc_clear(stream);
     if (previous_owned && previous_buffer) free(previous_buffer);
 }
 
@@ -2630,21 +2712,21 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     }
 #endif
     stream_index = _rin_stdio_stream_index(stream);
-    if (stream_index < 0 || !_stdio_files_used[stream_index]) {
+    if (stream_index < 0) {
         errno = EINVAL;
         return NULL;
     }
     if (_rin_stdio_parse_mode(mode, &flags) != 0) {
         int saved_errno = errno;
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
-        _rin_freopen_discard_stream(stream, stream_index);
+        _rin_freopen_discard_stream(stream);
         errno = saved_errno;
         return NULL;
     }
     if (_rin_stdio_flush_output_buffer(stream) != 0) {
         int saved_errno = errno;
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
-        _rin_freopen_discard_stream(stream, stream_index);
+        _rin_freopen_discard_stream(stream);
         errno = saved_errno;
         return NULL;
     }
@@ -2653,7 +2735,7 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     if (new_fd < 0) {
         int saved_errno = errno;
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
-        _rin_freopen_discard_stream(stream, stream_index);
+        _rin_freopen_discard_stream(stream);
         errno = saved_errno;
         return NULL;
     }
@@ -2661,7 +2743,7 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
         int saved_errno = EOVERFLOW;
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)new_fd);
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
-        _rin_freopen_discard_stream(stream, stream_index);
+        _rin_freopen_discard_stream(stream);
         errno = saved_errno;
         return NULL;
     }
@@ -2670,17 +2752,18 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     if (close_result != 0) {
         if (close_result > 0) errno = EIO;
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)new_fd);
-        _rin_freopen_discard_stream(stream, stream_index);
+        _rin_freopen_discard_stream(stream);
         return NULL;
     }
     _rin_stdio_lock_table_enter();
     {
         int generation_advanced =
-            _rin_stdio_stream_generation_advance_locked(stream_index);
+            _rin_stdio_stream_generation_advance_locked(
+                _rin_stdio_stream_owner(stream));
         _rin_stdio_lock_table_leave();
         if (!generation_advanced) {
             (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)new_fd);
-            _rin_freopen_discard_stream(stream, stream_index);
+            _rin_freopen_discard_stream(stream);
             errno = EOVERFLOW;
             return NULL;
         }
@@ -2700,7 +2783,7 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_NONE);
     _rin_stdio_wide_pushback_clear(stream);
     stream->buf_owned = 0;
-    _rin_stdio_ungetc_clear(stream_index);
+    _rin_stdio_ungetc_clear(stream);
     if (previous_owned && previous_buffer) free(previous_buffer);
     {
         int standard_index = _rin_stdio_standard_stream_index(stream);
@@ -2721,6 +2804,7 @@ _RIN_STDIO_API FILE* freopen(const char* path, const char* mode, FILE* stream) {
     flockfile(stream);
     result = _rin_freopen_unlocked(path, mode, stream);
     funlockfile(stream);
+    _rin_stdio_stream_lock_reset_closed(stream);
     return result;
 }
 
@@ -2758,39 +2842,7 @@ _RIN_STDIO_API FILE* fdopen(int fd, const char* mode) {
         }
     }
 
-    /* 空きスロットを探す */
-    _rin_stdio_lock_table_enter();
-    for (int i = 3; i < _STDIO_MAX_FILES; i++) {
-        if (!_stdio_files_used[i]) {
-            if (!_rin_stdio_stream_generation_advance_locked(i)) continue;
-            _stdio_files_used[i] = 1;
-            FILE* f = &_stdio_files[i];
-            f->fd = fd;
-            f->eof = 0;
-            f->error = 0;
-            f->mode = (int)flags;
-            f->buf = NULL;
-            f->buf_size = 0;
-            f->buf_pos = 0;
-            f->buf_end = 0;
-            f->buf_mode = _IONBF;
-            f->orientation = 0;
-            f->wide_pushback = 0u;
-            f->wide_pushback_valid = 0;
-            f->wide_pushback_second = 0u;
-            f->wide_pushback_second_valid = 0;
-            f->buf_owned = 0;
-            _rin_stdio_stream_lock_reset_closed(f);
-            _rin_stdio_lock_table_leave();
-            _rin_stdio_ungetc_clear(i);
-            _rin_stdio_set_io_direction(f, _RIN_STDIO_IO_DIRECTION_NONE);
-            _rin_stdio_install_default_buffer(f, _IOFBF);
-            return f;
-        }
-    }
-    _rin_stdio_lock_table_leave();
-    errno = EMFILE;
-    return NULL;
+    return _rin_stdio_stream_allocate(fd, flags, 0, 1);
 }
 
 _RIN_STDIO_API int fseek(FILE* stream, long offset, int whence);
@@ -2898,7 +2950,7 @@ static inline size_t _rin_fread_unlocked(void* ptr, size_t size, size_t nmemb, F
     unread_input = _rin_stdio_input_buffer_unread(stream);
     if (unread_input == (size_t)-1) return 0;
     if (unread_input == 0u &&
-        (stream_index < 0 || _rin_stdio_ungetc_count(stream_index) == 0u) &&
+        (stream_index < 0 || _rin_stdio_ungetc_count(stream) == 0u) &&
         _rin_stdio_flush_line_buffered_outputs_before_input(stream) != 0)
         return 0;
     if (_rin_stdio_flush_output_buffer(stream) != 0) return 0;
@@ -2906,7 +2958,7 @@ static inline size_t _rin_fread_unlocked(void* ptr, size_t size, size_t nmemb, F
     buffered_input = _rin_stdio_input_buffer_enabled(stream);
     if (buffered_input && !_rin_stdio_input_buffer_valid(stream)) return 0;
     while (stream_index >= 0 && prefix < total &&
-           _rin_stdio_ungetc_pop(stream_index, output + prefix)) {
+           _rin_stdio_ungetc_pop(stream, output + prefix)) {
         stream->eof = 0;
         ++prefix;
     }
@@ -3019,7 +3071,7 @@ static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
         }
         offset -= (long)unread;
         if (stream_index >= 0) {
-            size_t pushback = _rin_stdio_ungetc_count(stream_index);
+            size_t pushback = _rin_stdio_ungetc_count(stream);
             if (pushback > (size_t)__LONG_MAX__ ||
                 offset < (-__LONG_MAX__ - 1L) + (long)pushback) {
                 errno = EOVERFLOW;
@@ -3050,7 +3102,7 @@ static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
         stream->error = 1;
         return -1;
     }
-    if (stream_index >= 0) _rin_stdio_ungetc_clear(stream_index);
+    if (stream_index >= 0) _rin_stdio_ungetc_clear(stream);
     _rin_stdio_wide_pushback_clear(stream);
     stream->buf_pos = 0u;
     stream->buf_end = 0u;
@@ -3131,7 +3183,7 @@ static inline long _rin_ftell_unlocked(FILE* stream) {
     }
     stream_index = _rin_stdio_stream_index(stream);
     if (stream_index >= 0) {
-        size_t pushback = _rin_stdio_ungetc_count(stream_index);
+        size_t pushback = _rin_stdio_ungetc_count(stream);
         if (pushback > (size_t)__LONG_MAX__) {
             errno = EIO;
             stream->error = 1;
@@ -3196,7 +3248,7 @@ static inline int _rin_fseeko64_unlocked(FILE* stream, off64_t offset,
         }
         adjusted -= (int64_t)unread;
         if (stream_index >= 0) {
-            size_t pushback = _rin_stdio_ungetc_count(stream_index);
+            size_t pushback = _rin_stdio_ungetc_count(stream);
             if (pushback > (size_t)INT64_MAX ||
                 adjusted < INT64_MIN + (int64_t)pushback) {
                 errno = EOVERFLOW;
@@ -3227,7 +3279,7 @@ static inline int _rin_fseeko64_unlocked(FILE* stream, off64_t offset,
         stream->error = 1;
         return -1;
     }
-    if (stream_index >= 0) _rin_stdio_ungetc_clear(stream_index);
+    if (stream_index >= 0) _rin_stdio_ungetc_clear(stream);
     _rin_stdio_wide_pushback_clear(stream);
     stream->buf_pos = 0u;
     stream->buf_end = 0u;
@@ -3296,7 +3348,7 @@ static inline off64_t _rin_ftello64_unlocked(FILE* stream) {
     }
     stream_index = _rin_stdio_stream_index(stream);
     if (stream_index >= 0) {
-        size_t pushback = _rin_stdio_ungetc_count(stream_index);
+        size_t pushback = _rin_stdio_ungetc_count(stream);
         if (pushback > (size_t)INT64_MAX) {
             errno = EIO;
             stream->error = 1;
@@ -3427,7 +3479,7 @@ static inline int _rin_fflush_unlocked(FILE* stream) {
             if (unread == (size_t)-1) return EOF;
             if (unread != 0u ||
                 (stream_index >= 0 &&
-                 _rin_stdio_ungetc_count(stream_index) != 0u))
+                 _rin_stdio_ungetc_count(stream) != 0u))
                 return fseek(stream, 0L, SEEK_CUR) == 0 ? 0 : EOF;
         }
         return 0;
@@ -3436,29 +3488,17 @@ static inline int _rin_fflush_unlocked(FILE* stream) {
 }
 
 static inline int _rin_fflush_all(void) {
-    _RinStdioStreamSnapshot streams[_STDIO_MAX_FILES];
+    _RinStdioStreamSnapshot* streams = NULL;
     size_t count = 0u;
     int failed = 0;
     int first_errno = 0;
     int saved_errno = errno;
-    int index;
 
     /* Pool addresses are reused. Snapshot each publication generation, then
      * validate it after taking that stream's lock. Never hold two FILE locks
      * at once, which avoids inversions with callers using flockfile(). */
-    _rin_stdio_lock_table_enter();
-    for (index = 0; index < _STDIO_MAX_FILES; ++index) {
-        FILE* stream = index == 0 ? stdin :
-                       index == 1 ? stdout :
-                       index == 2 ? stderr : &_stdio_files[index];
-        if (_stdio_files_used[index] != 0 && count < _STDIO_MAX_FILES) {
-            streams[count].stream = stream;
-            streams[count].generation =
-                _rin_stdio_stream_generation[index];
-            ++count;
-        }
-    }
-    _rin_stdio_lock_table_leave();
+    if (_rin_stdio_stream_snapshot_capture(&streams, &count) != 0)
+        return EOF;
 
     for (size_t slot = 0u; slot < count; ++slot) {
         FILE* stream = streams[slot].stream;
@@ -3480,6 +3520,7 @@ static inline int _rin_fflush_all(void) {
             failed = 1;
         }
     }
+    free(streams);
     if (failed) {
         errno = first_errno;
         return EOF;

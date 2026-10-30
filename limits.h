@@ -341,7 +341,7 @@
 #define MQ_PRIO_MAX 32
 #endif
 #ifndef STREAM_MAX
-#define STREAM_MAX 16
+#define STREAM_MAX OPEN_MAX
 #endif
 #ifndef TTY_NAME_MAX
 #define TTY_NAME_MAX 16

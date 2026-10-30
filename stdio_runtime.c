@@ -40,19 +40,24 @@ typedef struct RinStdioMemstreamOwner {
     char** byte_output;
     wchar_t** wide_output;
     size_t* size_output;
+    struct RinStdioMemstreamOwner* next;
 } RinStdioMemstreamOwner;
 
-static RinStdioMemstreamOwner
-    _rin_stdio_memstream_owners[_STDIO_MAX_FILES];
+static RinStdioMemstreamOwner* _rin_stdio_memstream_owners;
 
 static RinStdioMemstreamOwner* _rin_stdio_memstream_find(FILE* stream) {
-    size_t index;
+    RinStdioMemstreamOwner* found = NULL;
     if (!stream) return NULL;
-    for (index = 3u; index < _STDIO_MAX_FILES; ++index) {
-        if (_rin_stdio_memstream_owners[index].stream == stream)
-            return &_rin_stdio_memstream_owners[index];
+    _rin_stdio_lock_table_enter();
+    for (RinStdioMemstreamOwner* owner = _rin_stdio_memstream_owners;
+         owner; owner = owner->next) {
+        if (owner->stream == stream) {
+            found = owner;
+            break;
+        }
     }
-    return NULL;
+    _rin_stdio_lock_table_leave();
+    return found;
 }
 
 int rin_stdio_memstream_kind(FILE* stream) {
@@ -67,50 +72,35 @@ static FILE* _rin_stdio_memstream_open(int kind, unsigned int mode,
                                         char** byte_output,
                                         wchar_t** wide_output,
                                         size_t* size_output) {
-    int index;
+    RinStdioMemstreamOwner* owner;
     FILE* stream = NULL;
-    _rin_stdio_lock_table_enter();
-    for (index = 3; index < _STDIO_MAX_FILES; ++index) {
-        if (!_stdio_files_used[index]) {
-            RinStdioMemstreamOwner* owner =
-                &_rin_stdio_memstream_owners[index];
-            stream = &_stdio_files[index];
-            _stdio_files_used[index] = 1;
-            stream->fd = -1;
-            stream->eof = 0;
-            stream->error = 0;
-            stream->mode = (int)mode;
-            stream->buf = NULL;
-            stream->buf_size = 0u;
-            stream->buf_pos = 0u;
-            stream->buf_end = 0u;
-            stream->buf_mode = _IONBF;
-            stream->orientation = orientation;
-            stream->wide_pushback = 0u;
-            stream->wide_pushback_valid = 0;
-            stream->wide_pushback_second = 0u;
-            stream->wide_pushback_second_valid = 0;
-            stream->buf_owned = 0;
-            _rin_stdio_io_direction[index] = _RIN_STDIO_IO_DIRECTION_NONE;
-            owner->stream = stream;
-            owner->data = data;
-            owner->capacity = capacity;
-            owner->length = 0u;
-            owner->position = 0u;
-            owner->kind = kind;
-            owner->owns_data = owns_data;
-            owner->byte_output = byte_output;
-            owner->wide_output = wide_output;
-            owner->size_output = size_output;
-            _rin_stdio_stream_lock_reset_closed(stream);
-            _rin_stdio_lock_table_leave();
-            _rin_stdio_ungetc_clear(index);
-            return stream;
-        }
+    owner = (RinStdioMemstreamOwner*)RIN_STDIO_MEMSTREAM_MALLOC(
+        sizeof(*owner));
+    if (!owner) {
+        errno = ENOMEM;
+        return NULL;
     }
+    memset(owner, 0, sizeof(*owner));
+    stream = _rin_stdio_stream_allocate(-1, mode, orientation, 0);
+    if (!stream) {
+        RIN_STDIO_MEMSTREAM_FREE(owner);
+        return NULL;
+    }
+    owner->stream = stream;
+    owner->data = data;
+    owner->capacity = capacity;
+    owner->length = 0u;
+    owner->position = 0u;
+    owner->kind = kind;
+    owner->owns_data = owns_data;
+    owner->byte_output = byte_output;
+    owner->wide_output = wide_output;
+    owner->size_output = size_output;
+    _rin_stdio_lock_table_enter();
+    owner->next = _rin_stdio_memstream_owners;
+    _rin_stdio_memstream_owners = owner;
     _rin_stdio_lock_table_leave();
-    errno = EMFILE;
-    return NULL;
+    return stream;
 }
 
 static int _rin_stdio_memstream_writable(const RinStdioMemstreamOwner* owner) {
@@ -417,6 +407,7 @@ int rin_stdio_memstream_flush(FILE* stream) {
 
 int rin_stdio_memstream_close(FILE* stream, int* handled) {
     RinStdioMemstreamOwner* owner = _rin_stdio_memstream_find(stream);
+    RinStdioMemstreamOwner** link;
     int result = 0;
     if (handled) *handled = owner != NULL;
     if (!owner) return 0;
@@ -432,16 +423,24 @@ int rin_stdio_memstream_close(FILE* stream, int* handled) {
     } else if (owner->owns_data && owner->data) {
         RIN_STDIO_MEMSTREAM_FREE(owner->data);
     }
-    owner->stream = NULL;
-    owner->data = NULL;
-    owner->capacity = 0u;
-    owner->length = 0u;
-    owner->position = 0u;
-    owner->kind = RIN_STDIO_MEMSTREAM_NONE;
-    owner->owns_data = 0;
-    owner->byte_output = NULL;
-    owner->wide_output = NULL;
-    owner->size_output = NULL;
+    _rin_stdio_lock_table_enter();
+    link = &_rin_stdio_memstream_owners;
+    while (*link && *link != owner) link = &(*link)->next;
+    if (*link == owner) {
+        *link = owner->next;
+        owner->stream = NULL;
+        owner->data = NULL;
+        owner->capacity = 0u;
+        owner->length = 0u;
+        owner->position = 0u;
+        owner->kind = RIN_STDIO_MEMSTREAM_NONE;
+        owner->owns_data = 0;
+        owner->byte_output = NULL;
+        owner->wide_output = NULL;
+        owner->size_output = NULL;
+    }
+    _rin_stdio_lock_table_leave();
+    RIN_STDIO_MEMSTREAM_FREE(owner);
     return result;
 }
 
