@@ -56,10 +56,11 @@ static inline int sysinfo(struct sysinfo* information) {
                         RIN_SYSTEM_INFO_SNAPSHOT_LAYOUT_LINUX_SYSINFO);
 }
 
-/* Return which Linux sysinfo metrics the kernel can report accurately.
- * This RinOS extension leaves struct sysinfo's Linux-compatible layout
- * unchanged. Bits clear in the result correspond to fields that sysinfo()
- * zero-fills because RinOS has no authoritative value for them. */
+/* Return validity bits for the RinSystemInfoSnapshotV1 fields. This query
+ * does not describe every field of Linux struct sysinfo: Linux sysinfo loads
+ * are populated from the scheduler, while LOADS_VALID is clear because the
+ * Rin V1 snapshot has no load fields. Unavailable fields in Linux sysinfo
+ * (shared/buffer RAM, swap, and high memory) are zero-filled. */
 static inline int rin_sysinfo_valid_metrics(uint32_t* valid_metrics_out) {
     RinSystemInfoSnapshotV1 snapshot = {0};
     if (valid_metrics_out == 0) {
