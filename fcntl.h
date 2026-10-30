@@ -157,37 +157,9 @@ struct f_owner_ex {
  * ═══════════════════════════════════════════════════════════════*/
 
 #define _FCNTL_MAX_FDS FD_SETSIZE
-/* Descriptor state belongs to the process, not to each translation unit
- * which happens to include this header.  Definitions live in
- * fcntl_runtime.c so open/fcntl/close helpers share one table. */
-extern int _fcntl_fd_flags[_FCNTL_MAX_FDS];
-extern int _fcntl_fl_flags[_FCNTL_MAX_FDS];
-extern int _fcntl_initialized;
-
-static inline void _fcntl_init(void) {
-    if (_fcntl_initialized) return;
-    for (int i = 0; i < _FCNTL_MAX_FDS; i++) {
-        _fcntl_fd_flags[i] = 0;
-        _fcntl_fl_flags[i] = O_RDWR;
-    }
-    _fcntl_initialized = 1;
-}
-
-static inline void _fcntl_track_new_fd(int fd, int fl_flags, int fd_flags) {
-    _fcntl_init();
-    if (fd >= 0 && fd < _FCNTL_MAX_FDS) {
-        _fcntl_fl_flags[fd] = fl_flags;
-        _fcntl_fd_flags[fd] = fd_flags;
-    }
-}
-
-static inline void _fcntl_track_close_fd(int fd) {
-    _fcntl_init();
-    if (fd >= 0 && fd < _FCNTL_MAX_FDS) {
-        _fcntl_fl_flags[fd] = O_RDWR;
-        _fcntl_fd_flags[fd] = 0;
-    }
-}
+/* The legacy descriptor-cache data symbols remain exported by the SDK v1
+ * runtime for binary compatibility. New headers intentionally expose no
+ * cache API: all descriptor state is obtained from the kernel owner. */
 
 /* Syscall results travel in the target-width intptr_t carrier.  Never route
  * a successful descriptor result through host `long`/`int` before checking its
@@ -213,9 +185,7 @@ static inline int _fcntl_result_to_int(intptr_t raw_result) {
 static inline void _fcntl_cancel_close_fd(void* argument) {
     const int fd = argument ? *(const int*)argument : -1;
     if (fd < 0) return;
-    if (_syscall1((uintptr_t)SYS_CLOSE,
-                  (uintptr_t)(intptr_t)fd) >= 0)
-        _fcntl_track_close_fd(fd);
+    (void)_syscall1((uintptr_t)SYS_CLOSE, (uintptr_t)(intptr_t)fd);
 }
 
 static inline int _fcntl_result_status_zero(intptr_t raw_result) {
@@ -320,7 +290,6 @@ static inline int _fcntl_dupfd_at_least(int fd, int minfd, int cloexec) {
     int command = cloexec ? F_DUPFD_CLOEXEC : F_DUPFD;
     int result;
 
-    _fcntl_init();
     if (minfd < 0) {
         errno = EINVAL;
         return -1;
@@ -328,12 +297,6 @@ static inline int _fcntl_dupfd_at_least(int fd, int minfd, int cloexec) {
 
     result = _fcntl_result_to_int(_RIN_FCNTL_SYSCALL3(
         SYS_FCNTL, (uintptr_t)fd, (uintptr_t)command, (uintptr_t)minfd));
-    if (result >= 0 && result < _FCNTL_MAX_FDS &&
-        fd >= 0 && fd < _FCNTL_MAX_FDS) {
-        _fcntl_fl_flags[result] = _fcntl_fl_flags[fd];
-        _fcntl_fd_flags[result] = cloexec ? FD_CLOEXEC : 0;
-    }
-
     return result;
 }
 
@@ -360,8 +323,6 @@ static inline int open(const char* pathname, int flags, ...) {
     if (fd < 0) {
         __rin_pthread_cancel_point_if_linked();
     } else {
-        _fcntl_track_new_fd(fd, flags,
-                            (flags & O_CLOEXEC) ? FD_CLOEXEC : 0);
         __rin_pthread_cancel_point_cleanup_if_linked(_fcntl_cancel_close_fd,
                                                       &fd);
     }
@@ -434,8 +395,6 @@ static inline int openat(int dirfd, const char* pathname, int flags, ...) {
         __rin_pthread_cancel_point_if_linked();
         return -1;
     }
-    _fcntl_track_new_fd((int)result, flags,
-                         (flags & O_CLOEXEC) ? FD_CLOEXEC : 0);
     {
         int fd = (int)result;
         __rin_pthread_cancel_point_cleanup_if_linked(_fcntl_cancel_close_fd,
@@ -466,8 +425,6 @@ static inline int rin_openat_beneath(int dirfd, const char* pathname, int flags,
         (uintptr_t)flags, (uintptr_t)mode);
     result = _fcntl_result_to_int(result);
     if (result < 0) return -1;
-    _fcntl_track_new_fd((int)result, flags,
-                         (flags & O_CLOEXEC) ? FD_CLOEXEC : 0);
     return (int)result;
 }
 
@@ -476,8 +433,6 @@ static inline int creat(const char* pathname, mode_t mode) {
 }
 
 static inline int fcntl(int fd, int cmd, ...) {
-    _fcntl_init();
-
     va_list ap;
     va_start(ap, cmd);
 
@@ -506,9 +461,6 @@ static inline int fcntl(int fd, int cmd, ...) {
             kernel_result = _RIN_FCNTL_SYSCALL3(
                 SYS_FCNTL, (uintptr_t)fd, (uintptr_t)F_GETFD, 0u);
             result = _fcntl_result_to_int(kernel_result);
-            if (result >= 0) {
-                _fcntl_fd_flags[fd] = result;
-            }
             break;
         }
 
@@ -525,9 +477,6 @@ static inline int fcntl(int fd, int cmd, ...) {
                     SYS_FCNTL, (uintptr_t)fd, (uintptr_t)F_SETFD,
                     (uintptr_t)flags);
                 result = _fcntl_result_to_int(kernel_result);
-                if (result >= 0) {
-                    _fcntl_fd_flags[fd] = flags;
-                }
             }
             break;
         }
@@ -541,7 +490,6 @@ static inline int fcntl(int fd, int cmd, ...) {
             result = _fcntl_result_to_int(_RIN_FCNTL_SYSCALL3(
                 (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
                 (uintptr_t)F_GETFL, 0u));
-            if (result >= 0) _fcntl_fl_flags[fd] = result;
             break;
 
         case F_SETFL: {
@@ -570,7 +518,6 @@ static inline int fcntl(int fd, int cmd, ...) {
                     (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
                     (uintptr_t)F_SETFL, (uintptr_t)new_flags);
                 result = _fcntl_result_status_zero(kernel_result);
-                if (result == 0) _fcntl_fl_flags[fd] = new_flags;
             }
             break;
         }
@@ -851,7 +798,6 @@ static inline int rin_mkdirat_open_dir(int dirfd, const char* pathname,
         if (result >= 0) errno = EOVERFLOW;
         return -1;
     }
-    _fcntl_track_new_fd((int)result, O_CLOEXEC, FD_CLOEXEC);
     return (int)result;
 }
 

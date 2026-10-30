@@ -648,9 +648,6 @@ static inline int close(int fd) {
     __rin_pthread_cancel_point_if_linked();
     int rc = _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
         SYS_CLOSE, (uintptr_t)(intptr_t)fd));
-    if (rc == 0) {
-        _fcntl_track_close_fd(fd);
-    }
     __rin_pthread_cancel_point_if_linked();
     return rc;
 }
@@ -670,7 +667,6 @@ static inline int posix_close(int fd, int flags) {
     int result = close(fd);
     int close_errno = errno;
     if (result != 0) {
-        if (close_errno == EINPROGRESS) _fcntl_track_close_fd(fd);
         errno = close_errno;
         return -1;
     }
@@ -686,17 +682,6 @@ static inline int close_range(unsigned int first, unsigned int last,
     int result = _rin_unistd_status(_RIN_UNISTD_SYSCALL3(
         SYS_CLOSE_RANGE, (uintptr_t)first, (uintptr_t)last,
         (uintptr_t)(unsigned int)flags));
-    if (result == 0 && first < _FCNTL_MAX_FDS) {
-        unsigned int end = last < _FCNTL_MAX_FDS
-            ? last : _FCNTL_MAX_FDS - 1u;
-        _fcntl_init();
-        for (unsigned int fd = first; fd <= end; ++fd) {
-            if (((unsigned int)flags & RIN_CLOSE_RANGE_FLAG_CLOEXEC) != 0u)
-                _fcntl_fd_flags[fd] |= FD_CLOEXEC;
-            else
-                _fcntl_track_close_fd((int)fd);
-        }
-    }
     return result;
 }
 
@@ -737,11 +722,6 @@ static inline int dup(int oldfd) {
         return -1;
     }
     rc = (int)raw;
-    _fcntl_init();
-    if (rc >= 0 && rc < _FCNTL_MAX_FDS && oldfd >= 0 && oldfd < _FCNTL_MAX_FDS) {
-        _fcntl_fl_flags[rc] = _fcntl_fl_flags[oldfd];
-        _fcntl_fd_flags[rc] = 0;
-    }
     return rc;
 }
 
@@ -756,35 +736,18 @@ static inline int dup2(int oldfd, int newfd) {
         return -1;
     }
     rc = (int)raw;
-    _fcntl_init();
-    if (rc >= 0 && rc < _FCNTL_MAX_FDS && oldfd >= 0 && oldfd < _FCNTL_MAX_FDS) {
-        if (oldfd != newfd) {
-            _fcntl_fl_flags[rc] = _fcntl_fl_flags[oldfd];
-            _fcntl_fd_flags[rc] = 0;
-        }
-    }
     return rc;
 }
 
 static inline int pipe(int pipefd[2]) {
     int rc = _rin_unistd_status(_RIN_UNISTD_SYSCALL2(
         SYS_PIPE, (uintptr_t)pipefd, 0u));
-    if (rc == 0 && pipefd) {
-        _fcntl_track_new_fd(pipefd[0], O_RDONLY, 0);
-        _fcntl_track_new_fd(pipefd[1], O_WRONLY, 0);
-    }
     return rc;
 }
 
 static inline int pipe2(int pipefd[2], int flags) {
     int rc = _rin_unistd_status(_RIN_UNISTD_SYSCALL2(
         SYS_PIPE, (uintptr_t)pipefd, (uintptr_t)(intptr_t)flags));
-    if (rc == 0 && pipefd) {
-        int status_flags = flags & O_NONBLOCK;
-        int fd_flags = (flags & O_CLOEXEC) ? FD_CLOEXEC : 0;
-        _fcntl_track_new_fd(pipefd[0], O_RDONLY | status_flags, fd_flags);
-        _fcntl_track_new_fd(pipefd[1], O_WRONLY | status_flags, fd_flags);
-    }
     return rc;
 }
 
