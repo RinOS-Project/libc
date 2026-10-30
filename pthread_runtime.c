@@ -227,7 +227,8 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
             /* A negative absolute clock deadline is already expired. Retry
              * the atomic acquisition check once before returning timeout,
              * and never pass an invalid absolute time to the futex ABI. */
-            if (abstime && abstime->tv_sec < 0) {
+            if (abstime && clock_id == CLOCK_MONOTONIC &&
+                abstime->tv_sec < 0) {
                 timed_out = 1;
                 continue;
             }
@@ -1174,7 +1175,8 @@ static int rin_pthread_mutex_timedlock_impl(
             if (c != 2)
                 c = __atomic_exchange_n(&mutex->locked, 2, __ATOMIC_ACQUIRE);
             while (c != 0) {
-                if (abstime->tv_sec < 0) {
+                if (clock_id == CLOCK_MONOTONIC &&
+                    abstime->tv_sec < 0) {
                     int unlocked = 0;
                     if (__atomic_compare_exchange_n(
                             &mutex->locked, &unlocked, 2, 0,
