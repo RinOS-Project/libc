@@ -29,9 +29,9 @@ extern "C" {
  *   - AT_CLKTCK: Get clock ticks per second
  *   - AT_RANDOM: Get address of 16 random bytes
  *
- * RinOS reports architecture-wide constants and obtains UID/GID values from
- * the versioned process credential snapshot. Loader-specific entries still
- * require a verified native auxiliary vector; unknown types fail with ENOENT.
+ * RinOS snapshots the validated startup auxiliary vector in crt0 before
+ * constructors run.  Values such as credentials therefore remain tied to
+ * the exec that created the image; absent types fail with ENOENT.
  */
 
 /* getauxval is already defined inline in linux/auxvec.h */

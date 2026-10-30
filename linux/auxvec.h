@@ -11,7 +11,7 @@
 #define _LINUX_AUXVEC_H
 
 #include "../errno.h"
-#include "../rin_account_compat.h"
+#include "../internal/posix_clock.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -206,54 +206,25 @@ typedef struct {
  * RinOS Auxiliary Vector Access
  * ═══════════════════════════════════════════════════════════════*/
 
-/* RinOS provides a minimal auxv for program initialization */
+/* The CRT validates and snapshots the kernel-provided auxiliary vector before
+ * constructors or application code run.  The snapshot lookup is supplied by
+ * the common app entry object. */
 #ifndef __ASSEMBLY__
 
-/* Get a value that RinOS can currently report without fabricating process
- * metadata. A zero return is disambiguated through errno, as with glibc. */
+/* Hosted tools and small ABI fixtures may use this header without the RinOS
+ * CRT.  In that case there is no startup snapshot and all lookups fail with
+ * ENOENT. */
+__attribute__((visibility("hidden")))
+int __rin_auxv_lookup(unsigned long type, unsigned long* value);
+
 static inline unsigned long getauxval(unsigned long type) {
-    switch (type) {
-        case AT_PAGESZ:
-            return 4096;
-        case AT_CLKTCK:
-            return 1000;  /* RinOS scheduler tick, also exposed by sysconf() */
-        case AT_HWCAP:
-            /* Conservative x86_64 architectural baseline. */
-            return HWCAP_X86_FPU | HWCAP_X86_MMX | HWCAP_X86_SSE |
-                   HWCAP_X86_SSE2 | HWCAP_X86_FXSR | HWCAP_X86_CMOV;
-        case AT_HWCAP2:
-            /* Do not claim optional instruction sets until the loader passes
-             * kernel-validated CPU/XSAVE state in a real auxiliary vector. */
-            return 0;
-        case AT_UID:
-        case AT_EUID:
-        case AT_GID:
-        case AT_EGID: {
-            __rin_credentials_v1 credentials;
-            int error = __rin_credentials_get(&credentials);
-            if (error != 0) {
-                errno = error;
-                return 0;
-            }
-            if (type == AT_UID) return credentials.uid;
-            if (type == AT_EUID) return credentials.effective_uid;
-            if (type == AT_GID) return credentials.gid;
-            return credentials.effective_gid;
-        }
-        case AT_SECURE: {
-            __rin_credentials_v1 credentials;
-            int error = __rin_credentials_get(&credentials);
-            if (error != 0) {
-                errno = error;
-                return 0;
-            }
-            return (credentials.flags &
-                    __RIN_CREDENTIALS_FLAG_SECURE_EXEC) != 0u ? 1u : 0u;
-        }
-        default:
-            errno = ENOENT;
-            return 0;
+    unsigned long value = 0u;
+    int result = __rin_auxv_lookup(type, &value);
+    if (result != 0) {
+        errno = result > 0 ? ENOENT : EIO;
+        return 0u;
     }
+    return value;
 }
 
 #endif /* !__ASSEMBLY__ */
