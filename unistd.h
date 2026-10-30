@@ -842,15 +842,13 @@ static inline int _rin_realpath_copy(char* destination, size_t capacity,
  * is deliberately not implemented through argv[0], a raw PID, or /proc. */
 static inline int rin_process_image_path_get(
     RinProcessImagePathResponseV1* response) {
-    intptr_t result;
     if (response == NULL) {
         errno = EINVAL;
         return -1;
     }
-    result = _rin_unistd_result(_RIN_UNISTD_SYSCALL2(
+    return _rin_unistd_status(_RIN_UNISTD_SYSCALL2(
         SYS_PROCESS_IMAGE_PATH_GET, (uintptr_t)response,
         (uintptr_t)sizeof(*response)));
-    return result < 0 ? -1 : 0;
 }
 
 /* Return the kernel-owned current executable allocation range for address
@@ -1322,15 +1320,13 @@ static inline pid_t tcgetpgrp(int fd)
  * background SIGTTOU behavior before changing terminal-owned state. */
 static inline int tcsetpgrp(int fd, pid_t process_group_id)
 {
-    intptr_t result;
     if (process_group_id <= 0) {
         errno = EINVAL;
         return -1;
     }
-    result = _rin_unistd_result(_RIN_UNISTD_SYSCALL3(
+    return _rin_unistd_status(_RIN_UNISTD_SYSCALL3(
         SYS_IOCTL, (uintptr_t)fd, (uintptr_t)TIOCSPGRP,
         (uintptr_t)&process_group_id));
-    return result < 0 ? -1 : 0;
 }
 
 static inline pid_t setsid(void)
@@ -1594,7 +1590,8 @@ static inline int execve(const char* pathname, char* const argv[], char* const e
     (void)exec_hooks_prepared;
     (void)syscall_errno;
 #endif
-    return normalized_result < 0 ? -1 : 0;
+    if (normalized_result >= 0) errno = EIO;
+    return -1;
 }
 
 static inline int fexecve(int fd, char* const argv[], char* const envp[]) {
