@@ -610,7 +610,7 @@ double complex casinh(double complex value) {
     }
     if (isnan(x) && isinf(y)) return cx_make(INFINITY, NAN);
     if (isinf(y))
-        return cx_make(INFINITY, copysign(M_PI_2, y));
+        return cx_make(copysign(INFINITY, x), copysign(M_PI_2, y));
     if (isnan(x) && y == 0.0) return cx_make(NAN, y);
     if (isnan(x) || isnan(y)) return cx_make(NAN, NAN);
     double complex rotated = cx_make(-cx_imag(value), cx_real(value));
