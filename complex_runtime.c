@@ -491,10 +491,11 @@ double complex ctanh(double complex value) {
     }
     if (isinf(y)) {
         cx_raise(FE_INVALID);
+        if (x == 0.0) return cx_make(x, NAN);
         return cx_make(NAN, NAN);
     }
     if (isnan(y)) {
-        if (x == 0.0) return cx_make(NAN, y);
+        if (x == 0.0) return cx_make(x, y);
         return cx_make(NAN, NAN);
     }
     if (isnan(x)) {
@@ -629,6 +630,7 @@ double complex cacosh(double complex value) {
         if (x > 0.0) return cx_make(INFINITY, copysign(0.0, y));
         return cx_make(INFINITY, copysign(M_PI, y));
     }
+    if (x == 0.0 && isnan(y)) return cx_make(NAN, M_PI_2);
     if (isnan(x) || isnan(y)) return cx_make(NAN, NAN);
     double scale, alpha_scaled;
     cx_ellipse(x, y, &scale, &alpha_scaled);
