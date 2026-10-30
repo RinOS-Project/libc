@@ -6,6 +6,11 @@
 
 #ifndef _STDLIB_H
 #define _STDLIB_H
+#if defined(__cplusplus) && !defined(RIN_FREESTANDING) && \
+    defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    defined(RINCXX_CSTDLIB_H)
+#define _RIN_STDLIB_HOSTED_CXX_OWNER
+#endif
 #if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
     __STDC_VERSION__ >= 202311L
 #ifndef __STDC_VERSION_STDLIB_H__
@@ -125,7 +130,8 @@ int __rin_stdlib_system_available(void);
 #endif
 #if !defined(RINSDK_SPLIT_BUILD) && \
     !defined(_RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER) && \
-    !defined(_RIN_STDLIB_HOSTED_C_OWNER)
+    !defined(_RIN_STDLIB_HOSTED_C_OWNER) && \
+    !defined(_RIN_STDLIB_HOSTED_CXX_OWNER)
 #include "internal/rin_system_owner.h"
 #endif
 #endif /* !MIDL_PASS */
@@ -1267,7 +1273,8 @@ static inline char* mkdtemp(char* tmpl) {
  * システム
  * ═══════════════════════════════════════════════════════════════*/
 
-#if !defined(_RIN_STDLIB_HOSTED_C_OWNER)
+#if !defined(_RIN_STDLIB_HOSTED_C_OWNER) && \
+    !defined(_RIN_STDLIB_HOSTED_CXX_OWNER)
 #ifndef MIDL_PASS
 #if defined(_RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER)
 /* Hosted C consumers use the platform CRT for process creation and command
