@@ -1624,6 +1624,13 @@ _RIN_STDIO_API char* fgets(char* s, int size, FILE* stream) {
     return result;
 }
 
+static inline void _rin_stdio_mark_stream_error(FILE* stream) {
+    if (!stream) return;
+    flockfile(stream);
+    stream->error = 1;
+    funlockfile(stream);
+}
+
 /* POSIX getline() over the same bounded FILE/fgetc implementation.  The
  * buffer is caller-owned and grows geometrically; no host stdio is involved.
  */
@@ -1633,6 +1640,7 @@ _RIN_STDIO_API ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
     char* replacement;
 
     if (!lineptr || !n || !stream) {
+        _rin_stdio_mark_stream_error(stream);
         errno = EINVAL;
         return (ssize_t)-1;
     }
@@ -1643,6 +1651,7 @@ _RIN_STDIO_API ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
         replacement = *lineptr ? (char*)realloc(*lineptr, capacity)
                                : (char*)malloc(capacity);
         if (!replacement) {
+            _rin_stdio_mark_stream_error(stream);
             errno = ENOMEM;
             return (ssize_t)-1;
         }
@@ -1667,6 +1676,7 @@ _RIN_STDIO_API ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
         }
         if (length >= (size_t)SSIZE_MAX) {
             (*lineptr)[length] = '\0';
+            stream->error = 1;
             errno = EOVERFLOW;
             funlockfile(stream);
             return (ssize_t)-1;
@@ -1676,12 +1686,16 @@ _RIN_STDIO_API ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
                 ? capacity * 2u
                 : (size_t)-1;
             if (next_capacity <= capacity || next_capacity < length + 2u) {
+                (*lineptr)[length] = '\0';
+                stream->error = 1;
                 errno = ENOMEM;
                 funlockfile(stream);
                 return (ssize_t)-1;
             }
             replacement = (char*)realloc(*lineptr, next_capacity);
             if (!replacement) {
+                (*lineptr)[length] = '\0';
+                stream->error = 1;
                 errno = ENOMEM;
                 funlockfile(stream);
                 return (ssize_t)-1;
@@ -1707,6 +1721,7 @@ _RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* 
     char* replacement;
 
     if (!lineptr || !n || !stream) {
+        _rin_stdio_mark_stream_error(stream);
         errno = EINVAL;
         return (ssize_t)-1;
     }
@@ -1717,6 +1732,7 @@ _RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* 
         replacement = *lineptr ? (char*)realloc(*lineptr, capacity)
                                : (char*)malloc(capacity);
         if (!replacement) {
+            _rin_stdio_mark_stream_error(stream);
             errno = ENOMEM;
             return (ssize_t)-1;
         }
@@ -1741,6 +1757,7 @@ _RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* 
         }
         if (length >= (size_t)SSIZE_MAX) {
             (*lineptr)[length] = '\0';
+            stream->error = 1;
             errno = EOVERFLOW;
             funlockfile(stream);
             return (ssize_t)-1;
@@ -1750,12 +1767,16 @@ _RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* 
                 ? capacity * 2u
                 : (size_t)-1;
             if (next_capacity <= capacity || next_capacity < length + 2u) {
+                (*lineptr)[length] = '\0';
+                stream->error = 1;
                 errno = ENOMEM;
                 funlockfile(stream);
                 return (ssize_t)-1;
             }
             replacement = (char*)realloc(*lineptr, next_capacity);
             if (!replacement) {
+                (*lineptr)[length] = '\0';
+                stream->error = 1;
                 errno = ENOMEM;
                 funlockfile(stream);
                 return (ssize_t)-1;
