@@ -189,6 +189,10 @@ static inline void _rin_dir_unpin(DIR* dirp) {
 }
 
 static inline int _rin_dir_lock(DIR* dirp) {
+    uint32_t expected = 0u;
+    if (__atomic_compare_exchange_n(&dirp->lock, &expected, 1u, 0,
+                                    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+        return 0;
     for (;;) {
         uint32_t previous = __atomic_exchange_n(&dirp->lock, 2u,
                                                 __ATOMIC_ACQUIRE);
