@@ -6,6 +6,8 @@
 #include "fcntl.h"
 #include "sys/ioctl.h"
 #include "sys/stat.h"
+#include "sys/wait.h"
+#include "signal.h"
 #include "unistd.h"
 
 #include <stdint.h>
@@ -158,4 +160,142 @@ char* ptsname(int fd)
     }
     errno = saved_errno;
     return path;
+}
+
+static void rin_pty_close_preserving_errno(int fd, int saved_errno)
+{
+    if (fd >= 0) (void)close(fd);
+    errno = saved_errno;
+}
+
+static void rin_pty_reap_failed_fork(pid_t child)
+{
+    int status;
+    if (child <= 0) return;
+    (void)kill(child, SIGKILL);
+    for (;;) {
+        pid_t result = waitpid(child, &status, 0);
+        if (result == child || (result < 0 && errno != EINTR)) return;
+    }
+}
+
+int openpty(int* master_fd_out, int* slave_fd_out, char* name,
+            const struct termios* terminal_attributes,
+            const struct winsize* window_size)
+{
+    char slave_path[RIN_PTY_PATH_CAPACITY];
+    int master_fd = -1;
+    int slave_fd = -1;
+    int error;
+
+    if (master_fd_out != NULL) *master_fd_out = -1;
+    if (slave_fd_out != NULL) *slave_fd_out = -1;
+    if (master_fd_out == NULL || slave_fd_out == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    master_fd = posix_openpt(O_RDWR | O_NOCTTY);
+    if (master_fd < 0) return -1;
+    if (grantpt(master_fd) != 0) {
+        error = errno;
+        rin_pty_close_preserving_errno(master_fd, error);
+        return -1;
+    }
+    if (unlockpt(master_fd) != 0) {
+        error = errno;
+        rin_pty_close_preserving_errno(master_fd, error);
+        return -1;
+    }
+    error = ptsname_r(master_fd, slave_path, sizeof(slave_path));
+    if (error != 0) {
+        rin_pty_close_preserving_errno(master_fd, error);
+        return -1;
+    }
+    slave_fd = open(slave_path, O_RDWR | O_NOCTTY);
+    if (slave_fd < 0) {
+        error = errno;
+        rin_pty_close_preserving_errno(master_fd, error);
+        return -1;
+    }
+    if (terminal_attributes != NULL &&
+        tcsetattr(slave_fd, TCSAFLUSH, terminal_attributes) != 0) {
+        error = errno;
+        (void)close(slave_fd);
+        rin_pty_close_preserving_errno(master_fd, error);
+        return -1;
+    }
+    if (window_size != NULL &&
+        ioctl(slave_fd, TIOCSWINSZ, window_size) != 0) {
+        error = errno;
+        (void)close(slave_fd);
+        rin_pty_close_preserving_errno(master_fd, error);
+        return -1;
+    }
+    if (name != NULL) {
+        size_t index = 0u;
+        do {
+            name[index] = slave_path[index];
+        } while (slave_path[index++] != '\0');
+    }
+    *master_fd_out = master_fd;
+    *slave_fd_out = slave_fd;
+    return 0;
+}
+
+int login_tty(int fd)
+{
+    struct termios attributes;
+    int target_fd;
+
+    /* セッション変更より前に、fdがTTYとして有効か検査する。 */
+    if (tcgetattr(fd, &attributes) != 0) return -1;
+    if (setsid() < 0) return -1;
+    if (ioctl(fd, TIOCSCTTY, 0) != 0) return -1;
+    for (target_fd = STDIN_FILENO; target_fd <= STDERR_FILENO; ++target_fd) {
+        if (dup2(fd, target_fd) < 0) return -1;
+    }
+    if (fd > STDERR_FILENO && close(fd) != 0) return -1;
+    return 0;
+}
+
+pid_t forkpty(int* master_fd_out, char* name,
+              const struct termios* terminal_attributes,
+              const struct winsize* window_size)
+{
+    int master_fd = -1;
+    int slave_fd = -1;
+    pid_t child;
+    int error;
+
+    if (master_fd_out != NULL) *master_fd_out = -1;
+    if (master_fd_out == NULL) {
+        errno = EINVAL;
+        return (pid_t)-1;
+    }
+    if (openpty(&master_fd, &slave_fd, name, terminal_attributes,
+                window_size) != 0)
+        return (pid_t)-1;
+
+    child = fork();
+    if (child < 0) {
+        error = errno;
+        (void)close(slave_fd);
+        rin_pty_close_preserving_errno(master_fd, error);
+        return (pid_t)-1;
+    }
+    if (child == 0) {
+        if (close(master_fd) != 0 || login_tty(slave_fd) != 0)
+            _exit(127);
+        return 0;
+    }
+
+    if (close(slave_fd) != 0) {
+        error = errno;
+        rin_pty_reap_failed_fork(child);
+        rin_pty_close_preserving_errno(master_fd, error);
+        return (pid_t)-1;
+    }
+    *master_fd_out = master_fd;
+    return child;
 }
