@@ -109,7 +109,10 @@ extern "C" {
 
 /* A thread handle may carry a kernel pointer in freestanding builds.  Keep
  * it target-word sized: `unsigned long` is only 32 bits on LLP64 hosts. */
+#ifndef _RIN_PTHREAD_T_DEFINED
+#define _RIN_PTHREAD_T_DEFINED
 typedef uintptr_t pthread_t;
+#endif
 typedef unsigned int pthread_key_t;
 
 /* `pthread_self` has no error return channel.  A malformed or failed
@@ -1260,6 +1263,9 @@ static inline int pthread_rwlockattr_setpshared(pthread_rwlockattr_t* attr,
     if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
                   pshared != PTHREAD_PROCESS_SHARED))
         return EINVAL;
+#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+    if (pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
+#endif
     attr->pshared = pshared;
     return 0;
 }
@@ -1587,40 +1593,6 @@ typedef uint64_t sigset_t;
 #ifndef NSIG
 #define NSIG 64
 #endif
-
-static inline int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset) {
-    intptr_t result;
-    int saved_errno = errno;
-    int error = 0;
-    if (set && how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK)
-        return EINVAL;
-    result = _RIN_PTHREAD_SIGMASK_SYSCALL4(
-        SYS_rt_sigprocmask, how, set, oldset, sizeof(sigset_t));
-    error = _rin_pthread_error_from_result(result);
-    errno = saved_errno;
-    return error;
-}
-
-/* pthread_kill - send signal to a thread */
-static inline int pthread_kill(pthread_t thread, int sig) {
-    intptr_t result;
-    intptr_t process_id;
-    int saved_errno = errno;
-    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL) return EINVAL;
-    process_id = _RIN_PTHREAD_SYSCALL0(SYS_GETPID);
-    if (process_id <= 0) {
-        int error = _rin_pthread_error_from_result(process_id);
-        errno = saved_errno;
-        return error;
-    }
-    result = _syscall3((uintptr_t)SYS_tgkill, (uintptr_t)process_id,
-                       (uintptr_t)thread, (uintptr_t)sig);
-    {
-        int error = _rin_pthread_error_from_result(result);
-        errno = saved_errno;
-        return error;
-    }
-}
 
 static inline int pthread_sigqueue(pthread_t thread, int sig,
                                    union sigval value) {
