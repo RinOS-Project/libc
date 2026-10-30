@@ -4,6 +4,14 @@
  * Minimal POSIX spawn compatibility for Ladybird/LibCore.
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_POSIX_SPAWN_SYSCALL6) && \
+    !defined(_RIN_POSIX_SPAWN_ACTION_SYSCALL6)
+#include_next <spawn.h>
+#else
+
 #ifndef _SPAWN_H
 #define _SPAWN_H
 
@@ -513,16 +521,24 @@ static inline int _rin_posix_spawn_validate(
     if (attr && (attr->flags & POSIX_SPAWN_SETPGROUP) != 0 &&
         attr->pgroup < 0)
         return EINVAL;
-    if (attr && (attr->flags & POSIX_SPAWN_SETSCHEDULER) != 0 &&
-        (!_rin_posix_spawn_scheduler_policy_supported(attr->sched_policy) ||
-         sched_get_priority_min(attr->sched_policy) < 0 ||
-         sched_get_priority_max(attr->sched_policy) < 0))
-        return EINVAL;
-    if (attr && (attr->flags & POSIX_SPAWN_SETSCHEDPARAM) != 0 &&
-        (!_rin_posix_spawn_scheduler_policy_supported(attr->sched_policy) ||
-         attr->sched_priority < sched_get_priority_min(attr->sched_policy) ||
-         attr->sched_priority > sched_get_priority_max(attr->sched_policy)))
-        return EINVAL;
+    if (attr && (attr->flags & (POSIX_SPAWN_SETSCHEDPARAM |
+                                POSIX_SPAWN_SETSCHEDULER)) != 0) {
+        int policy = attr->sched_policy;
+        if ((attr->flags & POSIX_SPAWN_SETSCHEDULER) == 0) {
+            policy = sched_getscheduler(0);
+            if (policy < 0) return errno != 0 ? errno : EINVAL;
+        }
+        if (!_rin_posix_spawn_scheduler_policy_supported(policy))
+            return EINVAL;
+        {
+            const int minimum = sched_get_priority_min(policy);
+            const int maximum = sched_get_priority_max(policy);
+            if (minimum < 0 || maximum < 0 ||
+                attr->sched_priority < minimum ||
+                attr->sched_priority > maximum)
+                return EINVAL;
+        }
+    }
     if (!file_actions)
         return 0;
     if (file_actions->state_cookie != _RIN_POSIX_SPAWN_ACTIONS_MAGIC ||
@@ -610,6 +626,9 @@ static inline int _rin_posix_spawn_attribute_action(
     }
     if ((attr->flags & POSIX_SPAWN_SETSCHEDPARAM) != 0) {
         wire.flags |= RIN_POSIX_SPAWN_ATTRIBUTE_SETSCHEDPARAM;
+    }
+    if ((attr->flags & (POSIX_SPAWN_SETSCHEDPARAM |
+                        POSIX_SPAWN_SETSCHEDULER)) != 0) {
         wire.sched_priority = (int32_t)attr->sched_priority;
     }
     if ((attr->flags & POSIX_SPAWN_SETSCHEDULER) != 0) {
@@ -841,3 +860,5 @@ static inline int posix_spawnp(
 #endif
 
 #endif /* _SPAWN_H */
+
+#endif /* hosted Linux delegates to its native spawn provider */
