@@ -1550,6 +1550,16 @@ int system(const char* command);
 #endif /* !MIDL_PASS */
 #endif
 
+#ifndef MIDL_PASS
+#ifdef __cplusplus
+extern "C" {
+#endif
+int getloadavg(double loadavg[], int nelem);
+#ifdef __cplusplus
+}
+#endif
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * マルチバイト/ワイド文字変換 (簡易実装)
  * ═══════════════════════════════════════════════════════════════*/

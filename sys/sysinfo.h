@@ -11,8 +11,9 @@
 extern "C" {
 #endif
 
-/* Linux-compatible public layout.  RinOS currently supplies uptime, RAM and
- * process count; unsupported load, swap, buffer and high-memory values are 0. */
+/* Linux-compatible public layout. RinOS supplies uptime, RAM, process count,
+ * and scheduler load averages; unsupported swap, buffer and high-memory
+ * values remain zero. */
 struct sysinfo {
     long uptime;
     unsigned long loads[3];
