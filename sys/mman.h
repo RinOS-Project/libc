@@ -4,6 +4,15 @@
  * メモリマッピング
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_MMAN_SYSCALL0) && !defined(_RIN_MMAN_SYSCALL1) && \
+    !defined(_RIN_MMAN_SYSCALL2) && !defined(_RIN_MMAN_SYSCALL3) && \
+    !defined(_RIN_MMAN_SYSCALL5) && !defined(_RIN_MMAN_SYSCALL6)
+#include_next <sys/mman.h>
+#else
+
 #ifndef _SYS_MMAN_H
 #define _SYS_MMAN_H
 
@@ -320,6 +329,11 @@ static inline void* mremap(void* old_addr, size_t old_size, size_t new_size,
 int shm_open(const char* name, int oflag, mode_t mode);
 int shm_unlink(const char* name);
 
+#ifndef MFD_CLOEXEC
+#define MFD_CLOEXEC 0x0001U
+#endif
+int memfd_create(const char* name, unsigned int flags);
+
 #ifdef __cplusplus
 }
 #endif
@@ -330,3 +344,5 @@ int shm_unlink(const char* name);
 #endif
 
 #endif /* _SYS_MMAN_H */
+
+#endif /* hosted Linux delegation */
