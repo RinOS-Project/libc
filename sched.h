@@ -348,7 +348,8 @@ static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_p
     RinThreadSchedParametersV2 parameters;
     intptr_t result;
     uint32_t thread_id;
-    if (!param || pid < 0) { errno = EINVAL; return -1; }
+    if (!param) { errno = EINVAL; return -1; }
+    if (pid < 0) { errno = ESRCH; return -1; }
     if ((uint64_t)pid > UINT32_MAX) { errno = EOVERFLOW; return -1; }
     thread_id = pid == 0 ? 0u : (uint32_t)pid;
     if (thread_id == 0u) {
