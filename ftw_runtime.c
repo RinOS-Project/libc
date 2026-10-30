@@ -28,11 +28,11 @@ typedef int (*RinFtwCallback3)(const char*, const struct stat*, int);
 typedef int (*RinFtwCallback4)(const char*, const struct stat*, int,
                                struct FTW*);
 
-typedef struct RinFtwNames {
-    char** values;
-    size_t count;
-    size_t capacity;
-} RinFtwNames;
+#if defined(RIN_FTW_HOST_TEST)
+typedef long RinFtwDirectoryCookie;
+#else
+typedef off64_t RinFtwDirectoryCookie;
+#endif
 
 typedef struct RinFtwAncestor {
     dev_t device;
@@ -106,58 +106,54 @@ static char* rin_ftw_copy(const char* text, size_t length) {
     return copy;
 }
 
-static void rin_ftw_names_clear(RinFtwNames* names) {
-    size_t index;
-    if (!names) return;
-    for (index = 0u; index < names->count; ++index) free(names->values[index]);
-    free(names->values);
-    names->values = NULL;
-    names->count = 0u;
-    names->capacity = 0u;
+static RinFtwDirectoryCookie rin_ftw_tell_directory(DIR* directory) {
+#if defined(RIN_FTW_HOST_TEST)
+    return (RinFtwDirectoryCookie)telldir(directory);
+#else
+    return (RinFtwDirectoryCookie)telldir64(directory);
+#endif
 }
 
-static int rin_ftw_names_append(RinFtwNames* names, const char* name,
-                                size_t length) {
-    char* copy;
-    if (names->count == names->capacity) {
-        size_t capacity = names->capacity ? names->capacity * 2u : 16u;
-        char** values;
-        if (capacity < names->capacity ||
-            capacity > ((size_t)-1) / sizeof(*values)) {
-            errno = ENOMEM;
-            return -1;
-        }
-        values = (char**)realloc(names->values, capacity * sizeof(*values));
-        if (!values) {
-            errno = ENOMEM;
-            return -1;
-        }
-        names->values = values;
-        names->capacity = capacity;
-    }
-    copy = rin_ftw_copy(name, length);
-    if (!copy) return -1;
-    names->values[names->count++] = copy;
-    return 0;
+static void rin_ftw_seek_directory(DIR* directory,
+                                   RinFtwDirectoryCookie cookie) {
+#if defined(RIN_FTW_HOST_TEST)
+    seekdir(directory, cookie);
+#else
+    seekdir64(directory, cookie);
+#endif
 }
 
-/* 0は一覧取得成功、1は読み取り不可、-1はその他のエラーを表す。
- * 子へ進む前にdirectory streamを閉じる。 */
-static int rin_ftw_read_names_stream(DIR* directory, RinFtwNames* names) {
+/* Return one name and its next directory cookie, then close the stream before
+ * descending. Reopening at the cookie keeps memory and open descriptors
+ * independent of directory fan-out and preserves ftw's fd limit. */
+static int rin_ftw_read_next_name_stream(
+    DIR* directory, int resume, RinFtwDirectoryCookie cookie,
+    char** name_out, RinFtwDirectoryCookie* next_cookie_out) {
     int read_error = 0;
     int close_error = 0;
+    int result = 2;
 
-    if (!directory || !names) {
+    if (name_out) *name_out = NULL;
+    if (!directory) {
         errno = EFAULT;
         return -1;
     }
-    names->values = NULL;
-    names->count = 0u;
-    names->capacity = 0u;
+    if (!name_out || !next_cookie_out) {
+        (void)closedir(directory);
+        errno = EFAULT;
+        return -1;
+    }
+    *next_cookie_out = cookie;
+    if (resume) {
+        errno = 0;
+        rin_ftw_seek_directory(directory, cookie);
+        if (errno != 0) read_error = errno;
+    }
 
-    for (;;) {
+    while (read_error == 0) {
         struct dirent* entry;
         size_t length = 0u;
+        RinFtwDirectoryCookie next_cookie;
         errno = 0;
         entry = readdir(directory);
         if (!entry) {
@@ -173,40 +169,61 @@ static int rin_ftw_read_names_stream(DIR* directory, RinFtwNames* names) {
             (length == 2u && entry->d_name[0] == '.' &&
              entry->d_name[1] == '.'))
             continue;
-        if (rin_ftw_names_append(names, entry->d_name, length) != 0) {
+        *name_out = rin_ftw_copy(entry->d_name, length);
+        if (!*name_out) {
             read_error = errno;
             break;
         }
+        errno = 0;
+        next_cookie = rin_ftw_tell_directory(directory);
+        if (next_cookie < 0 || (resume && next_cookie == cookie)) {
+            read_error = errno != 0 ? errno : EIO;
+            free(*name_out);
+            *name_out = NULL;
+            break;
+        }
+        *next_cookie_out = next_cookie;
+        result = 0;
+        break;
     }
 
     if (closedir(directory) != 0) close_error = errno;
     if (read_error != 0) {
-        rin_ftw_names_clear(names);
+        free(*name_out);
+        *name_out = NULL;
         errno = read_error;
         return read_error == EACCES ? 1 : -1;
     }
     if (close_error != 0) {
-        rin_ftw_names_clear(names);
+        free(*name_out);
+        *name_out = NULL;
         errno = close_error;
         return -1;
     }
-    return 0;
+    return result;
 }
 
-static int rin_ftw_read_names(const char* path, RinFtwNames* names) {
+static int rin_ftw_read_next_name(const char* path, int resume,
+                                  RinFtwDirectoryCookie cookie,
+                                  char** name_out,
+                                  RinFtwDirectoryCookie* next_cookie_out) {
     DIR* directory;
-    if (!path || !names) {
+    if (!path || !name_out || !next_cookie_out) {
         errno = EFAULT;
         return -1;
     }
     directory = opendir(path);
     if (!directory) return errno == EACCES ? 1 : -1;
-    return rin_ftw_read_names_stream(directory, names);
+    return rin_ftw_read_next_name_stream(directory, resume, cookie,
+                                          name_out, next_cookie_out);
 }
 
-static int rin_ftw_read_names_fd(int descriptor, RinFtwNames* names) {
+static int rin_ftw_read_next_name_fd(int descriptor, int resume,
+                                     RinFtwDirectoryCookie cookie,
+                                     char** name_out,
+                                     RinFtwDirectoryCookie* next_cookie_out) {
     DIR* directory;
-    if (descriptor < 0 || !names) {
+    if (descriptor < 0 || !name_out || !next_cookie_out) {
         if (descriptor >= 0) (void)close(descriptor);
         errno = EFAULT;
         return -1;
@@ -218,7 +235,8 @@ static int rin_ftw_read_names_fd(int descriptor, RinFtwNames* names) {
         errno = saved_errno;
         return saved_errno == EACCES ? 1 : -1;
     }
-    return rin_ftw_read_names_stream(directory, names);
+    return rin_ftw_read_next_name_stream(directory, resume, cookie,
+                                          name_out, next_cookie_out);
 }
 
 static char* rin_ftw_child_path(const char* parent, const char* child) {
@@ -493,6 +511,82 @@ static int rin_ftw_open_parent_path(const char* path, int fd_limit,
     return 0;
 }
 
+static int rin_ftw_reopen_physical_directory(
+    const char* path, int fd_limit, const RinFtwAncestor* ancestors,
+    const struct stat* expected_directory) {
+    struct stat expected_parent_storage;
+    const struct stat* expected_parent = NULL;
+    struct stat parent_status;
+    struct stat observed_status;
+    char leaf[NAME_MAX + 1u];
+    int parent_descriptor = -1;
+    int node_descriptor;
+    int result;
+
+    if (ancestors) {
+        unsigned char* bytes = (unsigned char*)&expected_parent_storage;
+        for (size_t index = 0u; index < sizeof(expected_parent_storage); ++index)
+            bytes[index] = 0u;
+        expected_parent_storage.st_dev = ancestors->device;
+        expected_parent_storage.st_ino = ancestors->inode;
+        expected_parent = &expected_parent_storage;
+    }
+    result = rin_ftw_open_parent_path(path, fd_limit, expected_parent,
+                                       &parent_descriptor, &parent_status,
+                                       leaf);
+    if (result != 0) return -1;
+    if (parent_descriptor < 0) {
+        return rin_ftw_open_directory_path(path, fd_limit,
+                                           expected_directory);
+    }
+    if (fd_limit < 2) {
+        (void)close(parent_descriptor);
+        errno = EMFILE;
+        return -1;
+    }
+    if (fstatat(parent_descriptor, leaf, &observed_status,
+                AT_SYMLINK_NOFOLLOW) != 0) {
+        int saved_errno = errno;
+        (void)close(parent_descriptor);
+        errno = saved_errno;
+        return -1;
+    }
+    if (!S_ISDIR(observed_status.st_mode) ||
+        !rin_ftw_same_object(&observed_status, expected_directory)) {
+        (void)close(parent_descriptor);
+        errno = EAGAIN;
+        return -1;
+    }
+    node_descriptor = openat(parent_descriptor, leaf,
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (node_descriptor < 0) {
+        int saved_errno = errno;
+        (void)close(parent_descriptor);
+        errno = saved_errno;
+        return -1;
+    }
+    if (fstat(node_descriptor, &observed_status) != 0) {
+        int saved_errno = errno;
+        (void)close(node_descriptor);
+        (void)close(parent_descriptor);
+        errno = saved_errno;
+        return -1;
+    }
+    if (!rin_ftw_same_object(&observed_status, expected_directory)) {
+        (void)close(node_descriptor);
+        (void)close(parent_descriptor);
+        errno = EAGAIN;
+        return -1;
+    }
+    if (close(parent_descriptor) != 0) {
+        int saved_errno = errno;
+        (void)close(node_descriptor);
+        errno = saved_errno;
+        return -1;
+    }
+    return node_descriptor;
+}
+
 /* FTW_PHYSは親directoryのidentityを確認したdescriptor相対走査を使う。 */
 static int rin_ftw_walk_physical(RinFtwState* state, const char* walk_path,
                                  const char* display_path, int level,
@@ -638,9 +732,12 @@ static int rin_ftw_walk_physical(RinFtwState* state, const char* walk_path,
     }
 
     {
-        RinFtwNames names;
         RinFtwAncestor current;
-        int read_result = rin_ftw_read_names_fd(node_descriptor, &names);
+        RinFtwDirectoryCookie cookie = 0;
+        RinFtwDirectoryCookie next_cookie = 0;
+        char* child_name = NULL;
+        int read_result = rin_ftw_read_next_name_fd(
+            node_descriptor, 0, cookie, &child_name, &next_cookie);
         node_descriptor = -1;
         if (read_result == 1)
             return rin_ftw_invoke_checked(state, display_path, walk_path,
@@ -650,26 +747,26 @@ static int rin_ftw_walk_physical(RinFtwState* state, const char* walk_path,
             result = rin_ftw_invoke_checked(state, display_path, walk_path,
                 &status, FTW_D, level, &parent_status);
             if (result != 0) {
-                rin_ftw_names_clear(&names);
+                free(child_name);
                 return result;
             }
         }
         current.device = status.st_dev;
         current.inode = status.st_ino;
         current.parent = ancestors;
-        for (size_t index = 0u; index < names.count; ++index) {
+        while (read_result == 0) {
             char* child_walk_path = rin_ftw_child_path(walk_path,
-                                                       names.values[index]);
+                                                       child_name);
             char* child_display_path;
             if (!child_walk_path) {
-                rin_ftw_names_clear(&names);
+                free(child_name);
                 return -1;
             }
             child_display_path = rin_ftw_child_path(display_path,
-                                                     names.values[index]);
+                                                     child_name);
             if (!child_display_path) {
                 free(child_walk_path);
-                rin_ftw_names_clear(&names);
+                free(child_name);
                 return -1;
             }
             result = level == INT_MAX
@@ -678,12 +775,21 @@ static int rin_ftw_walk_physical(RinFtwState* state, const char* walk_path,
                     child_display_path, level + 1, &current, 0);
             free(child_display_path);
             free(child_walk_path);
+            free(child_name);
+            child_name = NULL;
             if (result != 0) {
-                rin_ftw_names_clear(&names);
                 return result;
             }
+            cookie = next_cookie;
+            node_descriptor = rin_ftw_reopen_physical_directory(
+                walk_path, state->fd_limit, ancestors, &status);
+            if (node_descriptor < 0) return -1;
+            read_result = rin_ftw_read_next_name_fd(
+                node_descriptor, 1, cookie, &child_name, &next_cookie);
+            node_descriptor = -1;
+            if (read_result == 1) return -1;
+            if (read_result < 0) return -1;
         }
-        rin_ftw_names_clear(&names);
     }
     if (depth_first)
         return rin_ftw_invoke_checked(state, display_path, walk_path,
@@ -697,13 +803,14 @@ static int rin_ftw_walk(RinFtwState* state, const char* walk_path,
                         const char* display_path, int level,
                         const RinFtwAncestor* ancestors, int is_root) {
     struct stat status;
-    RinFtwNames names;
     int read_result;
     int depth_first = (state->flags & FTW_DEPTH) != 0;
     int physical = (state->flags & FTW_PHYS) != 0;
     int directory_cycle;
     int result;
-    size_t index;
+    RinFtwDirectoryCookie cookie = 0;
+    RinFtwDirectoryCookie next_cookie = 0;
+    char* child_name = NULL;
 
     if (physical)
         return rin_ftw_walk_physical(state, walk_path, display_path, level,
@@ -732,7 +839,8 @@ static int rin_ftw_walk(RinFtwState* state, const char* walk_path,
                               FTW_D, level);
     }
 
-    read_result = rin_ftw_read_names(walk_path, &names);
+    read_result = rin_ftw_read_next_name(walk_path, 0, cookie, &child_name,
+                                          &next_cookie);
     if (read_result == 1)
         return rin_ftw_invoke(state, display_path, walk_path, &status,
                               FTW_DNR, level);
@@ -742,7 +850,7 @@ static int rin_ftw_walk(RinFtwState* state, const char* walk_path,
         result = rin_ftw_invoke(state, display_path, walk_path, &status,
                                 FTW_D, level);
         if (result != 0) {
-            rin_ftw_names_clear(&names);
+            free(child_name);
             return result;
         }
     }
@@ -752,19 +860,19 @@ static int rin_ftw_walk(RinFtwState* state, const char* walk_path,
         current.device = status.st_dev;
         current.inode = status.st_ino;
         current.parent = ancestors;
-        for (index = 0u; index < names.count; ++index) {
+        while (read_result == 0) {
             char* child_walk_path = rin_ftw_child_path(walk_path,
-                                                        names.values[index]);
+                                                        child_name);
             char* child_display_path;
             if (!child_walk_path) {
-                rin_ftw_names_clear(&names);
+                free(child_name);
                 return -1;
             }
             child_display_path = rin_ftw_child_path(display_path,
-                                                      names.values[index]);
+                                                      child_name);
             if (!child_display_path) {
                 free(child_walk_path);
-                rin_ftw_names_clear(&names);
+                free(child_name);
                 return -1;
             }
             result = level == INT_MAX
@@ -773,13 +881,18 @@ static int rin_ftw_walk(RinFtwState* state, const char* walk_path,
                                level + 1, &current, 0);
             free(child_display_path);
             free(child_walk_path);
+            free(child_name);
+            child_name = NULL;
             if (result != 0) {
-                rin_ftw_names_clear(&names);
                 return result;
             }
+            cookie = next_cookie;
+            read_result = rin_ftw_read_next_name(walk_path, 1, cookie,
+                                                  &child_name, &next_cookie);
+            if (read_result == 1) return -1;
+            if (read_result < 0) return -1;
         }
     }
-    rin_ftw_names_clear(&names);
 
     if (depth_first)
         return rin_ftw_invoke(state, display_path, walk_path, &status,
