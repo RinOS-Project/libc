@@ -3,8 +3,9 @@
  * デバイス制御
  */
 
-#if !defined(RIN_FREESTANDING) && defined(__STDC_HOSTED__) && \
-    __STDC_HOSTED__ && (defined(__clang__) || defined(__GNUC__)) && \
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__clang__) || defined(__GNUC__)) && \
     !defined(_RIN_IOCTL_SYSCALL3)
 /* The host header below already provides struct termio; tell termio.h to
  * skip the RinOS definition so hosted termios.h consumers do not see a
