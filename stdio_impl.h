@@ -24,6 +24,7 @@
 #include "sys/syscall.h"
 #include "fcntl.h"
 #include "fcntl_flags.h"
+#include "termios.h"
 #include "stdlib.h"
 #include "string.h"
 #if defined(RIN_USERSPACE)
@@ -781,8 +782,29 @@ static int _stdio_files_used[_STDIO_MAX_FILES] = {1, 1, 1, 0};
 #define _RIN_STDIO_INTERNAL static inline
 #endif
 
-/* 各翻訳単位のinline実装で共有するプロセス単位の連番。 */
+/* Local kernel fallbacks include stdio_impl.h before the user-facing stdio
+ * declarations, so declare the implementation before helper calls. */
+_RIN_STDIO_API int fseek(FILE* stream, long offset, int whence);
+
+/* The product stdio owner supplies one process-wide counter.  SDK split
+ * objects only need a local fallback: they must not pull the product stdio
+ * owner into rincrt merely by including a header with inline fallbacks. */
+#if defined(RINSDK_SPLIT_BUILD)
+static inline uint32_t _rin_stdio_tmpnam_next_sequence(void) {
+    static volatile uint32_t sequence;
+    const uint32_t limit = (uint32_t)TMP_MAX;
+    uint32_t current = __atomic_load_n(&sequence, __ATOMIC_RELAXED);
+    for (;;) {
+        if (current >= limit) return UINT32_MAX;
+        if (__atomic_compare_exchange_n(&sequence, &current, current + 1u, 0,
+                                        __ATOMIC_RELAXED,
+                                        __ATOMIC_RELAXED))
+            return current;
+    }
+}
+#else
 uint32_t _rin_stdio_tmpnam_next_sequence(void);
+#endif
 
 /* FILE cannot grow without breaking the freestanding ABI, so explicit stream
  * locking lives in a bounded side table. The owner token is thread-local and
@@ -1144,6 +1166,17 @@ static FILE _stdin_file  = { 0, 0, 0, O_RDONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0,
 static FILE _stdout_file = { 1, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
 static FILE _stderr_file = { 2, 0, 0, O_WRONLY, NULL, 0, 0, 0, _IONBF, 0, 0u, 0, 0u, 0, 0 };
 #endif
+
+/* Standard streams select their default buffer on first I/O, when terminal
+ * status can be queried without changing the public FILE layout. */
+static unsigned char _rin_stdio_standard_buffer_pending[3] = {1u, 1u, 0u};
+
+/* Update streams reuse FILE.buf for input and output. Keep the active
+ * direction out of FILE so its public ABI remains unchanged. */
+#define _RIN_STDIO_IO_DIRECTION_NONE 0u
+#define _RIN_STDIO_IO_DIRECTION_READ 1u
+#define _RIN_STDIO_IO_DIRECTION_WRITE 2u
+static unsigned char _rin_stdio_io_direction[_STDIO_MAX_FILES];
 
 #ifdef stdin
 #undef stdin
@@ -1604,8 +1637,20 @@ static inline size_t _rin_stdio_buffer_position(const FILE* stream) {
     return stream ? stream->buf_pos : 0u;
 }
 
+static inline unsigned char _rin_stdio_get_io_direction(FILE* stream) {
+    int index = _rin_stdio_stream_index(stream);
+    return index >= 0 ? _rin_stdio_io_direction[index]
+                      : _RIN_STDIO_IO_DIRECTION_NONE;
+}
+
+static inline void _rin_stdio_set_io_direction(FILE* stream,
+                                                unsigned char direction) {
+    int index = _rin_stdio_stream_index(stream);
+    if (index >= 0) _rin_stdio_io_direction[index] = direction;
+}
+
 static inline int _rin_stdio_input_buffer_enabled(const FILE* stream) {
-    return stream && (stream->mode & O_ACCMODE) == O_RDONLY &&
+    return stream && (stream->mode & O_ACCMODE) != O_WRONLY &&
         stream->buf && stream->buf_size != 0u &&
         (stream->buf_mode == _IOFBF || stream->buf_mode == _IOLBF);
 }
@@ -1621,9 +1666,26 @@ static inline int _rin_stdio_input_buffer_valid(FILE* stream) {
 }
 
 static inline size_t _rin_stdio_input_buffer_unread(FILE* stream) {
+    if (_rin_stdio_get_io_direction(stream) != _RIN_STDIO_IO_DIRECTION_READ)
+        return 0u;
     if (!_rin_stdio_input_buffer_enabled(stream)) return 0u;
     if (!_rin_stdio_input_buffer_valid(stream)) return (size_t)-1;
     return stream->buf_end - stream->buf_pos;
+}
+
+static inline int _rin_stdio_standard_stream_index(FILE* stream) {
+    if (stream == &_stdin_file) return 0;
+    if (stream == &_stdout_file) return 1;
+    if (stream == &_stderr_file) return 2;
+    return -1;
+}
+
+static inline int _rin_stdio_stream_is_terminal(FILE* stream) {
+    struct termios attributes;
+    int saved_errno = errno;
+    int result = stream ? tcgetattr(stream->fd, &attributes) : -1;
+    errno = saved_errno;
+    return result == 0;
 }
 
 static inline void _rin_stdio_replace_buffer(FILE* stream,
@@ -1643,6 +1705,74 @@ static inline void _rin_stdio_replace_buffer(FILE* stream,
     if (previous_owned && previous_buffer) free(previous_buffer);
 }
 
+/* stdio buffering is an optimization: allocation failure leaves a valid
+ * unbuffered stream and does not turn fopen/fdopen into an allocation API. */
+static inline void _rin_stdio_install_default_buffer(FILE* stream, int mode) {
+    int saved_errno = errno;
+    unsigned char* buffer;
+    if (!stream) return;
+    if (mode == _IONBF) {
+        _rin_stdio_replace_buffer(stream, NULL, 0u, _IONBF, 0);
+        errno = saved_errno;
+        return;
+    }
+    buffer = (unsigned char*)malloc(BUFSIZ);
+    if (!buffer) {
+        _rin_stdio_replace_buffer(stream, NULL, 0u, _IONBF, 0);
+        errno = saved_errno;
+        return;
+    }
+    _rin_stdio_replace_buffer(stream, buffer, BUFSIZ, mode, 1);
+    errno = saved_errno;
+}
+
+static inline int _rin_stdio_default_buffer_mode(FILE* stream) {
+    if (stream == &_stderr_file) return _IONBF;
+    if (stream == &_stdout_file && _rin_stdio_stream_is_terminal(stream))
+        return _IOLBF;
+    return _IOFBF;
+}
+
+static inline void _rin_stdio_initialize_standard_buffer(FILE* stream) {
+    int index = _rin_stdio_standard_stream_index(stream);
+    if (index < 0 || !_rin_stdio_standard_buffer_pending[index]) return;
+    _rin_stdio_standard_buffer_pending[index] = 0u;
+    _rin_stdio_install_default_buffer(
+        stream, _rin_stdio_default_buffer_mode(stream));
+}
+
+/* A buffered update stream can have its descriptor beyond the next byte the
+ * caller will read. Rewind only when unread input or pushback exists, so
+ * non-seekable streams remain usable after a completely consumed read. */
+_RIN_STDIO_API int fseek(FILE* stream, long offset, int whence);
+
+static inline int _rin_stdio_sync_input_before_write(FILE* stream) {
+    size_t unread;
+    int stream_index;
+    unsigned char direction;
+    if (!stream) return 0;
+    if ((stream->mode & O_ACCMODE) == O_RDONLY) return 0;
+    direction = _rin_stdio_get_io_direction(stream);
+    if ((stream->mode & O_ACCMODE) == O_RDWR &&
+        direction == _RIN_STDIO_IO_DIRECTION_READ) {
+        unread = _rin_stdio_input_buffer_unread(stream);
+        if (unread == (size_t)-1) return -1;
+        stream_index = _rin_stdio_stream_index(stream);
+        if (unread != 0u ||
+            (stream_index >= 0 &&
+             _rin_stdio_ungetc_count(stream_index) != 0u)) {
+            if (fseek(stream, 0L, SEEK_CUR) != 0) return -1;
+        } else {
+            /* All prefetched bytes were consumed; discard the exhausted
+             * input window before reusing the storage for output. */
+            stream->buf_pos = 0u;
+            stream->buf_end = 0u;
+        }
+    }
+    _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_WRITE);
+    return 0;
+}
+
 static inline int _rin_stdio_flush_output_buffer(FILE* stream) {
     size_t consumed = 0u;
     size_t pending;
@@ -1650,7 +1780,9 @@ static inline int _rin_stdio_flush_output_buffer(FILE* stream) {
         errno = EINVAL;
         return -1;
     }
-    if (!_rin_stdio_output_buffer_enabled(stream)) return 0;
+    if (!_rin_stdio_output_buffer_enabled(stream) ||
+        _rin_stdio_get_io_direction(stream) == _RIN_STDIO_IO_DIRECTION_READ)
+        return 0;
     if (stream->buf_pos > stream->buf_size) {
         errno = EIO;
         stream->error = 1;
@@ -1695,6 +1827,12 @@ _RIN_STDIO_INTERNAL size_t _rin_stdio_write_buffered(FILE* stream,
     if (!stream || (!data && length != 0u)) {
         errno = EINVAL;
         if (stream) stream->error = 1;
+        if (failed) *failed = 1;
+        return 0u;
+    }
+    _rin_stdio_initialize_standard_buffer(stream);
+    if (_rin_stdio_sync_input_before_write(stream) != 0) {
+        stream->error = 1;
         if (failed) *failed = 1;
         return 0u;
     }
@@ -1856,7 +1994,9 @@ _RIN_STDIO_INTERNAL intptr_t _rin_stdio_read_block(FILE* stream,
     }
     if (length == 0u) return 0;
     if (!_rin_stdio_stream_is_readable(stream)) return -1;
+    _rin_stdio_initialize_standard_buffer(stream);
     if (!_rin_stdio_input_buffer_enabled(stream)) {
+        _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_READ);
         return _rin_stdio_read_backend(stream, output, length);
     }
     if (!_rin_stdio_input_buffer_valid(stream)) return -1;
@@ -1874,6 +2014,7 @@ _RIN_STDIO_INTERNAL intptr_t _rin_stdio_read_block(FILE* stream,
             return -1;
         }
         filled = (size_t)(uintptr_t)result;
+        _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_READ);
         stream->buf_pos = 0u;
         stream->buf_end = filled;
         available = stream->buf_end;
@@ -1907,6 +2048,7 @@ static inline int _rin_fgetc_unlocked(FILE* stream) {
     if (!_rin_stdio_stream_is_readable(stream)) return EOF;
     if (!_rin_stdio_claim_byte_orientation(stream)) return EOF;
     if (_rin_stdio_flush_output_buffer(stream) != 0) return EOF;
+    _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_READ);
     stream_index = _rin_stdio_stream_index(stream);
     if (stream_index >= 0 &&
         _rin_stdio_ungetc_pop(stream_index, &c)) {
@@ -2180,6 +2322,7 @@ static inline int _rin_ungetc_unlocked(int c, FILE* stream) {
     idx = _rin_stdio_stream_index(stream);
     if (idx < 0 || !_rin_stdio_claim_byte_orientation(stream) ||
         !_rin_stdio_ungetc_push(idx, (unsigned char)c)) return EOF;
+    _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_READ);
     stream->eof = 0;
     return (int)(unsigned char)c;
 }
@@ -2293,6 +2436,8 @@ _RIN_STDIO_API FILE* fopen(const char* path, const char* mode) {
             _rin_stdio_stream_lock_reset_closed(f);
             _rin_stdio_lock_table_leave();
             _rin_stdio_ungetc_clear(i);
+            _rin_stdio_set_io_direction(f, _RIN_STDIO_IO_DIRECTION_NONE);
+            _rin_stdio_install_default_buffer(f, _IOFBF);
             return f;
         }
     }
@@ -2347,6 +2492,7 @@ static inline int _rin_fclose_unlocked(FILE* stream) {
     stream->buf_end = 0u;
     stream->buf_mode = _IONBF;
     stream->buf_owned = 0;
+    _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_NONE);
     if (previous_owned && previous_buffer) free(previous_buffer);
 
     return (ret != 0 || flush_failed) ? EOF : 0;
@@ -2396,6 +2542,7 @@ static inline void _rin_freopen_discard_stream(FILE* stream, int stream_index) {
     stream->buf_end = 0u;
     stream->buf_mode = _IONBF;
     stream->orientation = 0;
+    _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_NONE);
     _rin_stdio_wide_pushback_clear(stream);
     stream->buf_owned = 0;
     (void)_rin_stdio_stream_lock_close_begin(stream);
@@ -2479,10 +2626,18 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     stream->buf_end = 0u;
     stream->buf_mode = _IONBF;
     stream->orientation = 0;
+    _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_NONE);
     _rin_stdio_wide_pushback_clear(stream);
     stream->buf_owned = 0;
     _rin_stdio_ungetc_clear(stream_index);
     if (previous_owned && previous_buffer) free(previous_buffer);
+    {
+        int standard_index = _rin_stdio_standard_stream_index(stream);
+        if (standard_index >= 0)
+            _rin_stdio_standard_buffer_pending[standard_index] = 0u;
+    }
+    _rin_stdio_install_default_buffer(
+        stream, _rin_stdio_default_buffer_mode(stream));
     return stream;
 }
 
@@ -2556,6 +2711,8 @@ _RIN_STDIO_API FILE* fdopen(int fd, const char* mode) {
             _rin_stdio_stream_lock_reset_closed(f);
             _rin_stdio_lock_table_leave();
             _rin_stdio_ungetc_clear(i);
+            _rin_stdio_set_io_direction(f, _RIN_STDIO_IO_DIRECTION_NONE);
+            _rin_stdio_install_default_buffer(f, _IOFBF);
             return f;
         }
     }
@@ -2567,14 +2724,14 @@ _RIN_STDIO_API FILE* fdopen(int fd, const char* mode) {
 _RIN_STDIO_API int fseek(FILE* stream, long offset, int whence);
 
 static inline int _rin_setvbuf_unlocked(FILE* stream, char* buf, int mode, size_t size) {
-    int input_stream;
+    size_t unread_input;
+    int standard_index;
     unsigned char* replacement;
     int replacement_owned = 0;
     if (!stream || (mode != _IOFBF && mode != _IOLBF && mode != _IONBF)) {
         errno = EINVAL;
         return -1;
     }
-    input_stream = (stream->mode & O_ACCMODE) == O_RDONLY;
     if (mode != _IONBF && size == 0u) {
         errno = EINVAL;
         return -1;
@@ -2583,9 +2740,9 @@ static inline int _rin_setvbuf_unlocked(FILE* stream, char* buf, int mode, size_
         errno = EOVERFLOW;
         return -1;
     }
-    if (input_stream && !_rin_stdio_input_buffer_valid(stream)) return -1;
-    if (input_stream && _rin_stdio_input_buffer_enabled(stream) &&
-        stream->buf_pos != stream->buf_end) {
+    unread_input = _rin_stdio_input_buffer_unread(stream);
+    if (unread_input == (size_t)-1) return -1;
+    if (unread_input != 0u) {
         /* Reconfiguration must first return prefetched bytes to the
          * descriptor position; otherwise it would silently discard input. */
         if (fseek(stream, 0L, SEEK_CUR) != 0) return -1;
@@ -2605,10 +2762,16 @@ static inline int _rin_setvbuf_unlocked(FILE* stream, char* buf, int mode, size_
     }
     if (mode == _IONBF) {
         _rin_stdio_replace_buffer(stream, NULL, 0u, _IONBF, 0);
+        standard_index = _rin_stdio_standard_stream_index(stream);
+        if (standard_index >= 0)
+            _rin_stdio_standard_buffer_pending[standard_index] = 0u;
         return 0;
     }
     _rin_stdio_replace_buffer(stream, replacement, size, mode,
                               replacement_owned);
+    standard_index = _rin_stdio_standard_stream_index(stream);
+    if (standard_index >= 0)
+        _rin_stdio_standard_buffer_pending[standard_index] = 0u;
     return 0;
 }
 
@@ -2651,7 +2814,9 @@ static inline size_t _rin_fread_unlocked(void* ptr, size_t size, size_t nmemb, F
     if (size == 0 || nmemb == 0) return 0;
     if (!_rin_stdio_stream_is_readable(stream)) return 0;
     if (!_rin_stdio_claim_byte_orientation(stream)) return 0;
+    _rin_stdio_initialize_standard_buffer(stream);
     if (_rin_stdio_flush_output_buffer(stream) != 0) return 0;
+    _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_READ);
     if (nmemb > (size_t)-1 / size) {
         errno = EOVERFLOW;
         stream->error = 1;
@@ -2713,6 +2878,11 @@ static inline size_t _rin_fwrite_unlocked(const void* ptr, size_t size, size_t n
         return 0;
     }
     total = size * nmemb;
+    _rin_stdio_initialize_standard_buffer(stream);
+    if (_rin_stdio_sync_input_before_write(stream) != 0) {
+        stream->error = 1;
+        return 0;
+    }
     if (_rin_stdio_output_buffer_enabled(stream)) {
         copied = _rin_stdio_write_buffered(stream, (const char*)ptr, total,
                                            NULL);
@@ -2805,6 +2975,7 @@ static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
     _rin_stdio_wide_pushback_clear(stream);
     stream->buf_pos = 0u;
     stream->buf_end = 0u;
+    _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_NONE);
     stream->eof = 0;
     return 0;
 }
@@ -2859,7 +3030,9 @@ static inline long _rin_ftell_unlocked(FILE* stream) {
         }
         position = (long)wide_position;
     }
-    if (_rin_stdio_output_buffer_enabled(stream)) {
+    if (_rin_stdio_output_buffer_enabled(stream) &&
+        _rin_stdio_get_io_direction(stream) ==
+            _RIN_STDIO_IO_DIRECTION_WRITE) {
         if (stream->buf_pos > (size_t)__LONG_MAX__ ||
             position > __LONG_MAX__ - (long)stream->buf_pos) {
             errno = EOVERFLOW;
@@ -2979,6 +3152,7 @@ static inline int _rin_fseeko64_unlocked(FILE* stream, off64_t offset,
     _rin_stdio_wide_pushback_clear(stream);
     stream->buf_pos = 0u;
     stream->buf_end = 0u;
+    _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_NONE);
     stream->eof = 0;
     return 0;
 }
@@ -3021,7 +3195,9 @@ static inline off64_t _rin_ftello64_unlocked(FILE* stream) {
             return (off64_t)-1;
         }
     }
-    if (_rin_stdio_output_buffer_enabled(stream)) {
+    if (_rin_stdio_output_buffer_enabled(stream) &&
+        _rin_stdio_get_io_direction(stream) ==
+            _RIN_STDIO_IO_DIRECTION_WRITE) {
         if (stream->buf_pos > (size_t)INT64_MAX ||
             position > INT64_MAX - (int64_t)stream->buf_pos) {
             errno = EOVERFLOW;
@@ -3161,9 +3337,14 @@ static inline int _rin_fflush_unlocked(FILE* stream) {
         if (rin_stdio_memstream_flush(stream) < 0) return EOF;
 #endif
         stream_index = _rin_stdio_stream_index(stream);
-        if (_rin_stdio_input_buffer_enabled(stream) ||
-            (stream_index >= 0 && _rin_stdio_ungetc_count(stream_index) != 0u))
-            return fseek(stream, 0L, SEEK_CUR) == 0 ? 0 : EOF;
+        {
+            size_t unread = _rin_stdio_input_buffer_unread(stream);
+            if (unread == (size_t)-1) return EOF;
+            if (unread != 0u ||
+                (stream_index >= 0 &&
+                 _rin_stdio_ungetc_count(stream_index) != 0u))
+                return fseek(stream, 0L, SEEK_CUR) == 0 ? 0 : EOF;
+        }
         return 0;
     }
     if (_rin_stdio_flush_output_buffer(stdout) != 0) failed = 1;
@@ -4465,6 +4646,119 @@ _RIN_STDIO_API int rename(const char* oldpath, const char* newpath) {
 }
 
 /* tmpfile - 一時ファイルを開く */
+/* renameat is declared by stdio.h for RinOS user processes. Keep the
+ * descriptor-relative operation backed by the native path-at syscall. */
+_RIN_STDIO_API int renameat(int olddirfd, const char* oldpath, int newdirfd,
+                            const char* newpath) {
+    return rin_renameat_inline(olddirfd, oldpath, newdirfd, newpath);
+}
+
+/* ctermid - 制御端末名 */
+_RIN_STDIO_API char* ctermid(char* s) {
+    static char name[] = "/dev/tty";
+    static const char tty[] = "/dev/tty";
+    size_t i;
+    if (s == NULL) return name;
+    for (i = 0u; i < sizeof(tty); ++i) s[i] = tty[i];
+    return s;
+}
+
+/* gets - 標準入力から1行読む (POSIX.1-2008ではobsolescentだが必須) */
+_RIN_STDIO_API char* gets(char* s) {
+    char* p = s;
+    int c;
+    if (!s) {
+        errno = EINVAL;
+        return NULL;
+    }
+    for (;;) {
+        c = getchar();
+        if (c == EOF) {
+            if (p == s) return NULL;
+            break;
+        }
+        if (c == '\n') break;
+        *p++ = (char)c;
+    }
+    *p = '\0';
+    return s;
+}
+
+static inline int _rin_stdio_vdprintf_write(int fd, const char* data,
+                                            size_t length) {
+    size_t written = 0u;
+    while (written < length) {
+        size_t chunk = length - written;
+        intptr_t result;
+        if (chunk > (size_t)_RIN_STDIO_MAX_SYSCALL_TRANSFER_BYTES)
+            chunk = (size_t)_RIN_STDIO_MAX_SYSCALL_TRANSFER_BYTES;
+        result = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
+            SYS_WRITE, (uintptr_t)fd, (uintptr_t)(data + written),
+            (uintptr_t)chunk));
+        if (result < 0) return -1;
+        if (result == 0 || (uintptr_t)result > (uintptr_t)chunk) {
+            errno = EIO;
+            return -1;
+        }
+        written += (size_t)result;
+    }
+    return 0;
+}
+
+/* vdprintf - fdへ書式出力 */
+_RIN_STDIO_API int vdprintf(int fd, const char* fmt, va_list ap) {
+    va_list copy;
+    int required;
+    int written;
+    char* buffer;
+    size_t capacity;
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    if (!fmt) {
+        errno = EINVAL;
+        return -1;
+    }
+    va_copy(copy, ap);
+    required = vsnprintf((char*)0, 0u, fmt, copy);
+    va_end(copy);
+    if (required < 0) return -1;
+    if ((size_t)required >= (size_t)-1) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    capacity = (size_t)required + 1u;
+    buffer = (char*)malloc(capacity);
+    if (!buffer) {
+        errno = ENOMEM;
+        return -1;
+    }
+    va_copy(copy, ap);
+    written = vsnprintf(buffer, capacity, fmt, copy);
+    va_end(copy);
+    if (written < 0 || written != required) {
+        free(buffer);
+        if (written >= 0) errno = EINVAL;
+        return -1;
+    }
+    if (_rin_stdio_vdprintf_write(fd, buffer, (size_t)written) != 0) {
+        free(buffer);
+        return -1;
+    }
+    free(buffer);
+    return written;
+}
+
+/* dprintf - fdへ書式出力 */
+_RIN_STDIO_API int dprintf(int fd, const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vdprintf(fd, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
 _RIN_STDIO_API FILE* tmpfile(void) {
     char name[] = "/tmp/rinXXXXXX";
     int fd = mkostemp(name, O_CLOEXEC);
@@ -4532,7 +4826,9 @@ _RIN_STDIO_API char* tmpnam(char* s) {
         if (fd >= 0) break;
         if (errno != EEXIST) return NULL;
     }
-    /* 排他的に予約してから解除し、同一プロセスでは連番を再利用しない。 */
+    /* Reserve exclusively while checking the candidate, then remove it before
+     * returning.  The monotonically allocated sequence prevents this process
+     * from returning an earlier successful name again. */
     result = _rin_stdio_syscall_result(
         _RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)fd));
     if (result < 0) {
