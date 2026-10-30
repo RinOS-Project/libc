@@ -103,10 +103,28 @@
 #ifndef _RIN_STDLIB_SYSTEM_WAITPID
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING
 #define _RIN_STDLIB_SYSTEM_WAITPID(pid, status, options) \
-    _RIN_STDLIB_SYSCALL3(SYS_WAIT, (pid), (status), (options))
+    waitpid((pid_t)(pid), (status), (int)(options))
 #else
 #define _RIN_STDLIB_SYSTEM_WAITPID(pid, status, options) \
     ((void)(pid), (void)(status), (void)(options), ((intptr_t)-ENOSYS))
+#endif
+#endif
+#ifndef _RIN_STDLIB_SYSTEM_WAITPID_RAW
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING
+#define _RIN_STDLIB_SYSTEM_WAITPID_RAW(pid, status, options) \
+    _RIN_STDLIB_SYSCALL3(SYS_WAIT, (pid), (status), (options))
+#else
+#define _RIN_STDLIB_SYSTEM_WAITPID_RAW(pid, status, options) \
+    ((void)(pid), (void)(status), (void)(options), ((intptr_t)-ENOSYS))
+#endif
+#endif
+#ifndef _RIN_STDLIB_SYSTEM_KILL_RAW
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING
+#define _RIN_STDLIB_SYSTEM_KILL_RAW(pid, signal_number) \
+    _RIN_STDLIB_SYSCALL2(SYS_KILL, (pid), (signal_number))
+#else
+#define _RIN_STDLIB_SYSTEM_KILL_RAW(pid, signal_number) \
+    ((void)(pid), (void)(signal_number), ((intptr_t)-ENOSYS))
 #endif
 #endif
 #ifndef _RIN_STDLIB_SYSTEM_EXIT
