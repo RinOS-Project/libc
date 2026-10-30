@@ -1,7 +1,16 @@
 /* SPDX-License-Identifier: MIT */
 
+#ifdef RIN_FTW_HOST_TEST
+#include <ftw.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <unistd.h>
+#else
 #include "ftw.h"
-
 #include "dirent.h"
 #include "errno.h"
 #include "fcntl.h"
@@ -9,6 +18,11 @@
 #include "pthread.h"
 #include "stdlib.h"
 #include "unistd.h"
+#endif
+
+#if defined(RIN_FTW_HOST_TEST) && !defined(OPEN_MAX)
+#define OPEN_MAX 4096
+#endif
 
 typedef int (*RinFtwCallback3)(const char*, const struct stat*, int);
 typedef int (*RinFtwCallback4)(const char*, const struct stat*, int,
