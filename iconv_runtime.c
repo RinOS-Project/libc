@@ -6,6 +6,19 @@
 #include "errno.h"
 #include "stdint.h"
 #include "../libunicode/rin_unicode.h"
+#if defined(RIN_ICONV_RUNTIME_TESTING)
+extern int rin_iconv_runtime_test_wait(volatile uint32_t* address,
+                                      uint32_t expected);
+extern int rin_iconv_runtime_test_wake(volatile uint32_t* address,
+                                      int count);
+#else
+#include "rin_atomic_wait.h"
+#define rin_iconv_runtime_test_wait(address, expected) \
+    rin_atomic_wait_u32((address), (expected), NULL)
+#define rin_iconv_runtime_test_wake(address, count) \
+    ((count) == 1 ? rin_atomic_notify_one_u32((address)) : \
+                    rin_atomic_notify_all_u32((address)))
+#endif
 
 #define RIN_ICONV_SLOT_COUNT 31u
 #define RIN_ICONV_SLOT_MASK  63u
@@ -37,6 +50,7 @@ typedef struct {
 
 static RinIconvDescriptor g_iconv_descriptors[RIN_ICONV_SLOT_COUNT];
 static uint32_t g_iconv_table_lock;
+static volatile uint32_t g_iconv_table_wait_sequence;
 
 static void rin_iconv_table_lock(void) {
     while (__sync_lock_test_and_set(&g_iconv_table_lock, 1u) != 0u) {
@@ -47,13 +61,25 @@ static void rin_iconv_table_unlock(void) {
     __sync_lock_release(&g_iconv_table_lock);
 }
 
-static void rin_iconv_descriptor_lock(RinIconvDescriptor* descriptor) {
-    while (__sync_lock_test_and_set(&descriptor->descriptor_lock, 1u) != 0u) {
+static int rin_iconv_descriptor_lock(RinIconvDescriptor* descriptor) {
+    uint32_t expected = 0u;
+    if (__atomic_compare_exchange_n(&descriptor->descriptor_lock, &expected,
+                                    1u, 0, __ATOMIC_ACQUIRE,
+                                    __ATOMIC_RELAXED))
+        return 0;
+    for (;;) {
+        uint32_t previous = __atomic_exchange_n(
+            &descriptor->descriptor_lock, 2u, __ATOMIC_ACQUIRE);
+        if (previous == 0u) return 0;
+        if (rin_iconv_runtime_test_wait(&descriptor->descriptor_lock, 2u) != 0)
+            return -1;
     }
 }
 
 static void rin_iconv_descriptor_unlock(RinIconvDescriptor* descriptor) {
-    __sync_lock_release(&descriptor->descriptor_lock);
+    if (__atomic_exchange_n(&descriptor->descriptor_lock, 0u,
+                            __ATOMIC_RELEASE) == 2u)
+        (void)rin_iconv_runtime_test_wake(&descriptor->descriptor_lock, 1);
 }
 
 static int rin_iconv_name_normalize(const char* name, char* output,
@@ -150,9 +176,19 @@ static RinIconvDescriptor* rin_iconv_pin(iconv_t opaque) {
 }
 
 static void rin_iconv_unpin(RinIconvDescriptor* descriptor) {
+    int wake_close = 0;
     rin_iconv_table_lock();
-    if (descriptor->pins != 0u) --descriptor->pins;
+    if (descriptor->pins != 0u) {
+        --descriptor->pins;
+        if (descriptor->closing && descriptor->pins == 0u) {
+            __atomic_add_fetch(&g_iconv_table_wait_sequence, 1u,
+                               __ATOMIC_RELEASE);
+            wake_close = 1;
+        }
+    }
     rin_iconv_table_unlock();
+    if (wake_close)
+        (void)rin_iconv_runtime_test_wake(&g_iconv_table_wait_sequence, -1);
 }
 
 iconv_t iconv_open(const char* tocode, const char* fromcode) {
@@ -350,7 +386,12 @@ size_t iconv(iconv_t opaque, char** input, size_t* input_left,
     size_t remaining_output = 0u;
     int reset_request;
     if (!descriptor) return (size_t)-1;
-    rin_iconv_descriptor_lock(descriptor);
+    if (rin_iconv_descriptor_lock(descriptor) != 0) {
+        int saved_errno = errno;
+        rin_iconv_unpin(descriptor);
+        errno = saved_errno;
+        return (size_t)-1;
+    }
     reset_request = input == NULL || *input == NULL;
     if (reset_request && output && !output_left)
         return rin_iconv_fail(descriptor, EINVAL, NULL, NULL, output, NULL,
@@ -453,9 +494,7 @@ int iconv_close(iconv_t opaque) {
         return -1;
     }
     descriptor->closing = 1u;
-    rin_iconv_table_unlock();
     for (;;) {
-        rin_iconv_table_lock();
         if (descriptor->pins == 0u) {
             descriptor->used = 0u;
             descriptor->closing = 0u;
@@ -469,6 +508,20 @@ int iconv_close(iconv_t opaque) {
             rin_iconv_table_unlock();
             return 0;
         }
+        uint32_t expected = __atomic_load_n(
+            &g_iconv_table_wait_sequence, __ATOMIC_RELAXED);
         rin_iconv_table_unlock();
+        if (rin_iconv_runtime_test_wait(&g_iconv_table_wait_sequence,
+                                        expected) != 0) {
+            int saved_errno = errno;
+            rin_iconv_table_lock();
+            if (descriptor->used && descriptor->token == token &&
+                descriptor->closing)
+                descriptor->closing = 0u;
+            rin_iconv_table_unlock();
+            errno = saved_errno;
+            return -1;
+        }
+        rin_iconv_table_lock();
     }
 }
