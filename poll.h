@@ -4,6 +4,13 @@
  * I/O多重化
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_POLL_SYSCALL5)
+#include_next <poll.h>
+#else
+
 #ifndef _POLL_H
 #define _POLL_H
 
@@ -501,3 +508,5 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
 #endif
 
 #endif /* _POLL_H */
+
+#endif /* hosted Linux delegates to its native poll provider */

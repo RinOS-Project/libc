@@ -3,6 +3,13 @@
  * Minimal filesystem statistics compatibility.
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_STATVFS_SYSCALL2)
+#include_next <sys/statvfs.h>
+#else
+
 #ifndef _SYS_STATVFS_H
 #define _SYS_STATVFS_H
 
@@ -143,3 +150,5 @@ static inline int statvfs(const char* path, struct statvfs* buf) {
 #endif
 
 #endif /* _SYS_STATVFS_H */
+
+#endif /* hosted Linux delegates to its native filesystem usage provider */

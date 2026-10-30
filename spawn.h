@@ -4,6 +4,14 @@
  * Minimal POSIX spawn compatibility for Ladybird/LibCore.
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_POSIX_SPAWN_SYSCALL6) && \
+    !defined(_RIN_POSIX_SPAWN_ACTION_SYSCALL6)
+#include_next <spawn.h>
+#else
+
 #ifndef _SPAWN_H
 #define _SPAWN_H
 
@@ -841,3 +849,5 @@ static inline int posix_spawnp(
 #endif
 
 #endif /* _SPAWN_H */
+
+#endif /* hosted Linux delegates to its native spawn provider */

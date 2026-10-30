@@ -4,6 +4,15 @@
  * ソケットAPI
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_SOCKET_SYSCALL1) && !defined(_RIN_SOCKET_SYSCALL2) && \
+    !defined(_RIN_SOCKET_SYSCALL3) && !defined(_RIN_SOCKET_SYSCALL4) && \
+    !defined(_RIN_SOCKET_SYSCALL5) && !defined(_RIN_SOCKET_SYSCALL6)
+#include_next <sys/socket.h>
+#else
+
 #ifndef _SYS_SOCKET_H
 #define _SYS_SOCKET_H
 
@@ -1002,3 +1011,5 @@ static inline int accept4(int sockfd, struct sockaddr* addr,
 #endif /* !MIDL_PASS */
 
 #endif /* _SYS_SOCKET_H */
+
+#endif /* hosted Linux delegates to its native socket provider */
