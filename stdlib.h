@@ -6,6 +6,13 @@
 
 #ifndef _STDLIB_H
 #define _STDLIB_H
+#if !defined(__cplusplus) && !defined(RIN_FREESTANDING) && \
+    defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    defined(__MINGW32__) && !defined(_INC_ERRNO)
+/* MinGW has no POSIX errno header owner for Rin's compatibility declarations.
+ * Select the compiler CRT's errno before this header installs any wrappers. */
+#include_next <errno.h>
+#endif
 #if defined(__cplusplus) && !defined(RIN_FREESTANDING) && \
     defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     defined(RINCXX_CSTDLIB_H)
@@ -424,6 +431,130 @@ int unsetenv(const char* name);
 int putenv(char* string);
 int clearenv(void);
 
+#elif defined(_RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER) && defined(__MINGW32__)
+/* MinGW's CRT provides getenv and putenv, while POSIX setenv/unsetenv/
+ * clearenv are absent. Keep the host CRT as the environment owner and adapt
+ * only the missing operations. Windows has no set-id secure-execution mode. */
+char* getenv(const char* name);
+extern int __cdecl _putenv(const char* string);
+extern int __cdecl _putenv_s(const char* name, const char* value);
+extern char*** __cdecl __p__environ(void);
+
+static inline char* secure_getenv(const char* name) {
+    return getenv(name);
+}
+
+static inline int _rin_hosted_environment_valid_name(const char* name) {
+    size_t index;
+    if (!name || name[0] == '\0') return 0;
+    for (index = 0u; name[index] != '\0'; ++index) {
+        if (name[index] == '=') return 0;
+    }
+    return 1;
+}
+
+static inline int setenv(const char* name, const char* value, int overwrite) {
+    int result;
+    if (!_rin_hosted_environment_valid_name(name) || !value) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!overwrite && getenv(name)) return 0;
+    result = _putenv_s(name, value);
+    if (result != 0) {
+        errno = result;
+        return -1;
+    }
+    return 0;
+}
+
+static inline int unsetenv(const char* name) {
+    int result;
+    if (!_rin_hosted_environment_valid_name(name)) {
+        errno = EINVAL;
+        return -1;
+    }
+    result = _putenv_s(name, "");
+    if (result != 0) {
+        errno = result;
+        return -1;
+    }
+    return 0;
+}
+
+static inline int putenv(char* string) {
+    int result;
+    if (!string) {
+        errno = EINVAL;
+        return -1;
+    }
+    result = _putenv(string);
+    if (result != 0) {
+        if (errno == 0) errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
+static inline int clearenv(void) {
+    char*** environment_address = __p__environ();
+    size_t removed;
+    if (!environment_address) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    /* _putenv_s may replace the environment block. Re-read it after every
+     * removal, and leave Windows drive-current-directory entries intact. */
+    for (removed = 0u; removed < 32768u; ++removed) {
+        char** environment = *environment_address;
+        size_t entry_index;
+        int found = 0;
+        if (!environment) return 0;
+
+        for (entry_index = 0u; entry_index < 32768u &&
+                                environment[entry_index]; ++entry_index) {
+            const char* entry = environment[entry_index];
+            size_t name_length = 0u;
+            char name[32768];
+            int result;
+            while (entry[name_length] != '\0' && entry[name_length] != '=') {
+                ++name_length;
+            }
+            /* Entries beginning with '=' encode per-drive working directories. */
+            if (entry[name_length] != '=' || name_length == 0u) continue;
+            if (name_length >= sizeof(name)) {
+                errno = E2BIG;
+                return -1;
+            }
+            for (size_t index = 0u; index < name_length; ++index) {
+                name[index] = entry[index];
+            }
+            name[name_length] = '\0';
+            result = _putenv_s(name, "");
+            if (result != 0) {
+                errno = result;
+                return -1;
+            }
+            found = 1;
+            break;
+        }
+        if (!found) return 0;
+    }
+    errno = E2BIG;
+    return -1;
+}
+
+#elif defined(_RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER)
+/* Hosted POSIX C programs use the native CRT's environment implementation.
+ * In particular, secure_getenv must retain the host's secure-execution check. */
+char* getenv(const char* name);
+char* secure_getenv(const char* name);
+int setenv(const char* name, const char* value, int overwrite);
+int unsetenv(const char* name);
+int putenv(char* string);
+int clearenv(void);
+
 #else
 /* ホスト環境用スタブ */
 static inline char* getenv(const char* name) {
@@ -452,7 +583,8 @@ static inline int putenv(char* string) {
 #endif /* !_MSVCRT_COMPAT */
 
 #if !defined(_MSVCRT_COMPAT) && !defined(_RIN_STDLIB_HOSTED_CXX_OWNER) && \
-    !(defined(RIN_FREESTANDING) && defined(RIN_USERSPACE))
+    !(defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)) && \
+    !defined(_RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER)
 static inline char* secure_getenv(const char* name) {
     return getenv(name);
 }
