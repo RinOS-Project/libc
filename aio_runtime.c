@@ -290,6 +290,7 @@ static void* rin_aio_callback_dispatcher(void* unused)
         pthread_cleanup_pop(1);
         pthread_cleanup_pop(0);
     }
+    return NULL;
 }
 
 static void rin_aio_notify(const RinAioNotification* notification)
