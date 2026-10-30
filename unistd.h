@@ -3221,6 +3221,9 @@ __attribute__((unused, noinline)) static void* sbrk(long increment) {
 #endif
 
 #include "sys/splice.h"
+/* POSIX.1-2024 places getentropy() in <unistd.h>. Keep its implementation in
+ * the shared sys/random.h header so both public include paths have one owner. */
+#include "sys/random.h"
 
 #ifdef __cplusplus
 }
