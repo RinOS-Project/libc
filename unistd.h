@@ -793,9 +793,11 @@ static inline char* getcwd(char* buf, size_t size) {
         errno = EINVAL;
         return NULL;
     }
-    ret = _rin_unistd_result(_RIN_UNISTD_SYSCALL2(
+    /* Pointer token: posixize only maps -errno, it never rejects the
+     * high-half addresses a 32-bit userspace legitimately returns. */
+    ret = __rin_syscall_posixize(_RIN_UNISTD_SYSCALL2(
         SYS_GETCWD, (uintptr_t)buf, (uintptr_t)size));
-    if (ret < 0) return NULL;
+    if (ret == -1) return NULL;
     /* The kernel returns the target buffer address on success and zero on
      * failure.  Require the exact pointer token so a malformed positive word
      * cannot turn an unsuccessful or unrelated copy-out into success. */
@@ -1108,7 +1110,7 @@ static inline char* realpath(const char* path, char* resolved_path) {
     }
 
     if (require_directory) {
-        struct stat final_status;
+        struct stat final_status = { 0 };
         if (stat(resolved, &final_status) < 0) goto fail;
         if (!S_ISDIR(final_status.st_mode)) {
             errno = ENOTDIR;
@@ -1246,10 +1248,10 @@ static inline int __rin_process_group_call(uint16_t operation,
     }
     request.target_pid = (uint32_t)target_pid;
     request.process_group_id = (uint32_t)process_group_id;
-    result = _rin_unistd_result(_RIN_UNISTD_SYSCALL2(
+    result = _RIN_UNISTD_SYSCALL2(
         SYS_PROCESS_GROUP_CALL, (uintptr_t)&request,
-        (uintptr_t)response));
-    return result < 0 ? -1 : 0;
+        (uintptr_t)response);
+    return _rin_unistd_status(result);
 }
 
 static inline pid_t getpgrp(void)
@@ -1595,6 +1597,24 @@ static inline int execve(const char* pathname, char* const argv[], char* const e
     return normalized_result < 0 ? -1 : 0;
 }
 
+static inline int fexecve(int fd, char* const argv[], char* const envp[]) {
+    struct stat file_info;
+    char target[4096u + 1u];
+    /* Same procfs-fd resolution as fstatvfs (helper shared from
+     * sys/statvfs.h included above): linked files execute through
+     * their resolved path with full execve validation and hooks.
+     * Unlinked fds and missing procfs surface as ENOENT; true
+     * kernel fd-exec is tracked separately. */
+    if (fstat(fd, &file_info) != 0) return -1;
+    if (!S_ISREG(file_info.st_mode)) {
+        errno = EACCES;
+        return -1;
+    }
+    if (__rin_statvfs_readlink_fd(fd, target, sizeof(target)) < 0)
+        return -1;
+    return execve(target, argv, envp);
+}
+
 #ifndef _RIN_UNISTD_EXECVE
 #define _RIN_UNISTD_EXECVE(pathname, arguments, environment) \
     execve((pathname), (arguments), (environment))
@@ -1667,6 +1687,8 @@ static inline gid_t getegid(void) {
         ? (gid_t)credentials.effective_gid : (gid_t)-1;
 }
 
+#ifndef __GETGROUPS_DEFINED
+#define __GETGROUPS_DEFINED
 static inline int getgroups(int size, gid_t list[]) {
     __rin_credentials_v1 credentials;
     uint32_t count;
@@ -1681,6 +1703,7 @@ static inline int getgroups(int size, gid_t list[]) {
         errno = EIO;
         return -1;
     }
+    if (size == 0) return (int)count;
     if ((int)count > size) {
         errno = EINVAL;
         return -1;
@@ -1693,6 +1716,7 @@ static inline int getgroups(int size, gid_t list[]) {
         list[index] = (gid_t)credentials.groups[index];
     return (int)count;
 }
+#endif /* __GETGROUPS_DEFINED */
 
 static inline int __rin_set_credential(uint16_t operation, uint32_t value) {
     __rin_credential_set_v1 request;
@@ -3147,9 +3171,11 @@ __attribute__((unused, noinline)) static void* sbrk(long increment) {
     /* The heap break is process-owned kernel state.  Use the relative owner
      * rather than caching a translation-unit-local value and issuing a racy
      * read/modify/write pair through SYS_BRK. */
-    result = _rin_unistd_result(_RIN_UNISTD_SYSCALL1(
+    /* Pointer token, see getcwd: posixize maps -errno without
+     * rejecting the high-half break a 32-bit process may own. */
+    result = __rin_syscall_posixize(_RIN_UNISTD_SYSCALL1(
         SYS_SBRK, (uintptr_t)(intptr_t)increment));
-    if (result < 0) return (void*)-1;
+    if (result == -1) return (void*)-1;
     return (void*)(uintptr_t)result;
 }
 
