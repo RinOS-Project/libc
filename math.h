@@ -516,8 +516,11 @@ static inline float fabsf(float x) {
 
 /* fmod - 浮動小数点剰余 */
 static inline double fmod(double x, double y) {
-    if (__builtin_isnan(x) || __builtin_isnan(y) || y == 0.0 ||
-        __builtin_isinf(x)) return NAN;
+    if (__builtin_isnan(x) || __builtin_isnan(y)) return NAN;
+    if (y == 0.0 || __builtin_isinf(x)) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (__builtin_isinf(y) || x == 0.0) return x;
 
     int ex = 0;
@@ -619,7 +622,10 @@ static inline float tanf(float x) {
 /* sqrt - 平方根 (Newton法) */
 static inline double sqrt(double x) {
     if (__builtin_isnan(x)) return x;
-    if (x < 0) return NAN;
+    if (x < 0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (__builtin_isinf(x) || x == 0) return x;
 
     int exponent = 0;
@@ -969,8 +975,14 @@ static inline float expf(float x) {
 /* log - 自然対数 (Newton法) */
 static inline double log(double x) {
     if (__builtin_isnan(x)) return x;
-    if (x == 0.0) return -HUGE_VAL;
-    if (x < 0.0) return NAN;
+    if (x == 0.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return -HUGE_VAL;
+    }
+    if (x < 0.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (__builtin_isinf(x)) return x;
     if (x == 1.0) return 0.0;
 
