@@ -16,6 +16,7 @@
 #include "sys/types.h"
 #include "sys/stat.h"
 #include "sys/syscall.h"
+#include "rin_atomic_wait.h"
 #include <rin/fs/dirent_abi.h>
 
 #ifdef __cplusplus
@@ -104,9 +105,12 @@ typedef struct {
     int eof;                        /* 終端フラグ */
     unsigned int magic;             /* 有効なストリームか */
     volatile uint32_t lock;         /* 同じストリームの操作を直列化 */
+    volatile uint32_t operation_state; /* active count + close bit */
 } DIR;
 
 #define _RIN_DIR_MAGIC 0x52444952u
+#define _RIN_DIR_CLOSING UINT32_C(0x80000000)
+#define _RIN_DIR_ACTIVE_MASK UINT32_C(0x7fffffff)
 
 #ifndef _RIN_DIRENT_SYSCALL1
 #define _RIN_DIRENT_SYSCALL1(number, arg1) \
@@ -146,19 +150,58 @@ static inline int _rin_dir_valid(const DIR* dirp) {
     return dirp && dirp->magic == _RIN_DIR_MAGIC && dirp->fd >= 0;
 }
 
-static inline void _rin_dir_lock(DIR* dirp) {
-    while (__atomic_exchange_n(&dirp->lock, 1u, __ATOMIC_ACQUIRE) != 0u) {
-        while (__atomic_load_n(&dirp->lock, __ATOMIC_RELAXED) != 0u) {
-#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || \
-    defined(_M_X64)
-            __asm__ volatile("pause" ::: "memory");
-#endif
+static inline void _rin_dir_unpin(DIR* dirp);
+
+static inline int _rin_dir_pin(DIR* dirp) {
+    uint32_t state;
+    if (!dirp) {
+        errno = EBADF;
+        return -1;
+    }
+    state = __atomic_load_n(&dirp->operation_state, __ATOMIC_ACQUIRE);
+    for (;;) {
+        if ((state & _RIN_DIR_CLOSING) != 0u ||
+            (state & _RIN_DIR_ACTIVE_MASK) == _RIN_DIR_ACTIVE_MASK) {
+            errno = (state & _RIN_DIR_CLOSING) != 0u ? EBADF : EOVERFLOW;
+            return -1;
         }
+        if (__atomic_compare_exchange_n(&dirp->operation_state, &state,
+                                        state + 1u, 0, __ATOMIC_ACQUIRE,
+                                        __ATOMIC_RELAXED))
+            break;
+    }
+    if (!_rin_dir_valid(dirp)) {
+        _rin_dir_unpin(dirp);
+        errno = EBADF;
+        return -1;
+    }
+    return 0;
+}
+
+static inline void _rin_dir_unpin(DIR* dirp) {
+    int saved_errno = errno;
+    uint32_t previous = __atomic_fetch_sub(&dirp->operation_state, 1u,
+                                           __ATOMIC_RELEASE);
+    if ((previous & _RIN_DIR_CLOSING) != 0u &&
+        (previous & _RIN_DIR_ACTIVE_MASK) == 1u)
+        (void)rin_atomic_notify_all_u32(&dirp->operation_state);
+    errno = saved_errno;
+}
+
+static inline int _rin_dir_lock(DIR* dirp) {
+    for (;;) {
+        uint32_t previous = __atomic_exchange_n(&dirp->lock, 2u,
+                                                __ATOMIC_ACQUIRE);
+        if (previous == 0u) return 0;
+        if (rin_atomic_wait_u32(&dirp->lock, 2u, NULL) != 0) return -1;
     }
 }
 
 static inline void _rin_dir_unlock(DIR* dirp) {
-    __atomic_store_n(&dirp->lock, 0u, __ATOMIC_RELEASE);
+    int saved_errno = errno;
+    if (__atomic_exchange_n(&dirp->lock, 0u, __ATOMIC_RELEASE) == 2u)
+        (void)rin_atomic_notify_one_u32(&dirp->lock);
+    errno = saved_errno;
 }
 
 static inline int _rin_dir_read_entry_locked(DIR* dirp,
@@ -301,6 +344,7 @@ static inline DIR* opendir(const char* name) {
     dir->eof = 0;
     dir->magic = _RIN_DIR_MAGIC;
     dir->lock = 0u;
+    dir->operation_state = 0u;
     return dir;
 }
 
@@ -337,19 +381,42 @@ static inline DIR* fdopendir(int fd) {
     dir->eof = 0;
     dir->magic = _RIN_DIR_MAGIC;
     dir->lock = 0u;
+    dir->operation_state = 0u;
     return dir;
 }
 
 static inline int closedir(DIR* dirp) {
     intptr_t result;
     int saved_errno = 0;
+    uint32_t state;
     if (!_rin_dir_valid(dirp)) {
         errno = EBADF;
         return -1;
     }
-
-    result = _rin_dir_status_result(
-        _RIN_DIRENT_SYSCALL1(SYS_CLOSE, (uintptr_t)dirp->fd));
+    state = __atomic_load_n(&dirp->operation_state, __ATOMIC_ACQUIRE);
+    for (;;) {
+        if ((state & _RIN_DIR_CLOSING) != 0u || !_rin_dir_valid(dirp)) {
+            errno = EBADF;
+            return -1;
+        }
+        if (__atomic_compare_exchange_n(&dirp->operation_state, &state,
+                                        state | _RIN_DIR_CLOSING, 0,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            break;
+    }
+    for (;;) {
+        state = __atomic_load_n(&dirp->operation_state, __ATOMIC_ACQUIRE);
+        if ((state & _RIN_DIR_ACTIVE_MASK) == 0u) break;
+        if (rin_atomic_wait_u32(&dirp->operation_state, state, NULL) != 0) {
+            saved_errno = errno;
+            (void)__atomic_fetch_and(&dirp->operation_state,
+                                     _RIN_DIR_ACTIVE_MASK, __ATOMIC_RELEASE);
+            errno = saved_errno;
+            return -1;
+        }
+    }
+    result = _RIN_DIRENT_SYSCALL1(SYS_CLOSE, (uintptr_t)dirp->fd);
+    result = _rin_dir_status_result(result);
     if (result < 0) saved_errno = errno;
     dirp->magic = 0;
     dirp->fd = -1;
@@ -364,28 +431,34 @@ static inline int closedir(DIR* dirp) {
 static inline struct dirent* readdir(DIR* dirp) {
     struct dirent* output;
     int result;
-    if (!_rin_dir_valid(dirp)) {
-        errno = EBADF;
+    if (_rin_dir_pin(dirp) < 0) return NULL;
+    if (_rin_dir_lock(dirp) < 0) {
+        int saved_errno = errno;
+        _rin_dir_unpin(dirp);
+        errno = saved_errno;
         return NULL;
     }
     output = &dirp->entry;
-    _rin_dir_lock(dirp);
     result = _rin_dir_read_entry_locked(dirp, output);
     _rin_dir_unlock(dirp);
+    _rin_dir_unpin(dirp);
     return result > 0 ? output : NULL;
 }
 
 static inline struct dirent64* readdir64(DIR* dirp) {
     struct dirent64* output;
     int result;
-    if (!_rin_dir_valid(dirp)) {
-        errno = EBADF;
+    if (_rin_dir_pin(dirp) < 0) return NULL;
+    if (_rin_dir_lock(dirp) < 0) {
+        int saved_errno = errno;
+        _rin_dir_unpin(dirp);
+        errno = saved_errno;
         return NULL;
     }
     output = &dirp->entry64;
-    _rin_dir_lock(dirp);
     result = _rin_dir_read_entry64_locked(dirp, output);
     _rin_dir_unlock(dirp);
+    _rin_dir_unpin(dirp);
     return result > 0 ? output : NULL;
 }
 
@@ -402,15 +475,21 @@ static inline int readdir_r(DIR* dirp, struct dirent* entry,
         errno = saved_errno;
         return EINVAL;
     }
-    if (!_rin_dir_valid(dirp)) {
+    if (_rin_dir_pin(dirp) < 0) {
+        error = errno ? errno : EBADF;
         errno = saved_errno;
-        return EBADF;
+        return error;
     }
-
-    _rin_dir_lock(dirp);
+    if (_rin_dir_lock(dirp) < 0) {
+        error = errno ? errno : EIO;
+        _rin_dir_unpin(dirp);
+        errno = saved_errno;
+        return error;
+    }
     read_result = _rin_dir_read_entry_locked(dirp, entry);
     error = read_result < 0 ? (errno ? errno : EIO) : 0;
     _rin_dir_unlock(dirp);
+    _rin_dir_unpin(dirp);
     errno = saved_errno;
     if (error != 0) return error;
     if (read_result > 0) *result = entry;
@@ -427,15 +506,21 @@ static inline int readdir64_r(DIR* dirp, struct dirent64* entry,
         errno = saved_errno;
         return EINVAL;
     }
-    if (!_rin_dir_valid(dirp)) {
+    if (_rin_dir_pin(dirp) < 0) {
+        error = errno ? errno : EBADF;
         errno = saved_errno;
-        return EBADF;
+        return error;
     }
-
-    _rin_dir_lock(dirp);
+    if (_rin_dir_lock(dirp) < 0) {
+        error = errno ? errno : EIO;
+        _rin_dir_unpin(dirp);
+        errno = saved_errno;
+        return error;
+    }
     read_result = _rin_dir_read_entry64_locked(dirp, entry);
     error = read_result < 0 ? (errno ? errno : EIO) : 0;
     _rin_dir_unlock(dirp);
+    _rin_dir_unpin(dirp);
     errno = saved_errno;
     if (error != 0) return error;
     if (read_result > 0) *result = entry;
@@ -626,28 +711,35 @@ static inline int _rin_dir_seek64_locked(DIR* dirp, int64_t offset,
 
 static inline void rewinddir(DIR* dirp) {
     int64_t position = 0;
-    if (!_rin_dir_valid(dirp)) {
-        errno = EBADF;
+    if (_rin_dir_pin(dirp) < 0) return;
+    if (_rin_dir_lock(dirp) < 0) {
+        int saved_errno = errno;
+        _rin_dir_unpin(dirp);
+        errno = saved_errno;
         return;
     }
-    _rin_dir_lock(dirp);
     if (_rin_dir_seek64_locked(dirp, 0, 0, &position) == 0)
         dirp->eof = 0;
     _rin_dir_unlock(dirp);
+    _rin_dir_unpin(dirp);
 }
 
 static inline off64_t telldir64(DIR* dirp) {
     int64_t position = 0;
-    if (!_rin_dir_valid(dirp)) {
-        errno = EBADF;
+    if (_rin_dir_pin(dirp) < 0) return -1;
+    if (_rin_dir_lock(dirp) < 0) {
+        int saved_errno = errno;
+        _rin_dir_unpin(dirp);
+        errno = saved_errno;
         return -1;
     }
-    _rin_dir_lock(dirp);
     if (_rin_dir_seek64_locked(dirp, 0, 1, &position) < 0) {
         _rin_dir_unlock(dirp);
+        _rin_dir_unpin(dirp);
         return -1;
     }
     _rin_dir_unlock(dirp);
+    _rin_dir_unpin(dirp);
     if (position < 0) {
         errno = EIO;
         return -1;
@@ -673,14 +765,17 @@ static inline long telldir(DIR* dirp) {
 
 static inline void seekdir64(DIR* dirp, off64_t loc) {
     int64_t position = 0;
-    if (!_rin_dir_valid(dirp)) {
-        errno = EBADF;
+    if (_rin_dir_pin(dirp) < 0) return;
+    if (_rin_dir_lock(dirp) < 0) {
+        int saved_errno = errno;
+        _rin_dir_unpin(dirp);
+        errno = saved_errno;
         return;
     }
-    _rin_dir_lock(dirp);
     if (_rin_dir_seek64_locked(dirp, (int64_t)loc, 0, &position) == 0)
         dirp->eof = 0;
     _rin_dir_unlock(dirp);
+    _rin_dir_unpin(dirp);
 }
 
 #if defined(__RIN_FILE_OFFSET_BITS64)
@@ -694,11 +789,11 @@ static inline void seekdir(DIR* dirp, long loc) {
 #endif
 
 static inline int dirfd(DIR* dirp) {
-    if (!_rin_dir_valid(dirp)) {
-        errno = EBADF;
-        return -1;
-    }
-    return dirp->fd;
+    int descriptor;
+    if (_rin_dir_pin(dirp) < 0) return -1;
+    descriptor = dirp->fd;
+    _rin_dir_unpin(dirp);
+    return descriptor;
 }
 
 #ifdef __cplusplus
