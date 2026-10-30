@@ -415,6 +415,8 @@ static inline int _rin_unistd_status(intptr_t result) {
 #define _SC_XOPEN_UUCP                      1056
 #define _SC_XOPEN_VERSION                   1057
 #define _SC_XOPEN_LEGACY                    1058
+#define _SC_RIN_PROCESS_GROUPS_MAX          1059 /* kernel-global process-group slots */
+#define _SC_RIN_PROCESS_GROUP_MEMBERS_MAX   1060 /* kernel-global tracked processes */
 
 /* pathconf/fpathconf定数 */
 #define _PC_LINK_MAX            0
@@ -2017,6 +2019,10 @@ static inline long sysconf(int name) {
             return LOGIN_NAME_MAX;
         case _SC_NGROUPS_MAX:
             return NGROUPS_MAX;
+        case _SC_RIN_PROCESS_GROUPS_MAX:
+            return 64;
+        case _SC_RIN_PROCESS_GROUP_MEMBERS_MAX:
+            return 256;
         case _SC_TZNAME_MAX:
             return TZNAME_MAX;
         case _SC_TTY_NAME_MAX:
