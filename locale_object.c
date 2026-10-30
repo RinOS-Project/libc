@@ -12,7 +12,7 @@
 #endif
 
 #define RIN_LOCALE_OBJECT_MAGIC UINT32_C(0x434f4c52)
-#define RIN_LOCALE_OBJECT_VERSION UINT32_C(0x00010000)
+#define RIN_LOCALE_OBJECT_VERSION UINT32_C(0x00020000)
 
 #define RIN_LOCALE_KIND_C 1u
 #define RIN_LOCALE_KIND_EN_US_UTF8 2u
@@ -38,7 +38,10 @@ struct RinLocaleObject {
     uint32_t magic;
     uint32_t version;
     uint8_t categories[6];
-    uint8_t reserved[10];
+    /* A zero entry selects the catalog default. Nonzero entries store the
+     * explicit Unicode numbering-system enum plus one. */
+    uint8_t numbering_overrides[6];
+    uint8_t reserved[4];
 };
 
 _Static_assert(sizeof(struct RinLocaleObject) == 24u,
@@ -69,8 +72,26 @@ static int locale_equal(const char* left, const char* right) {
     return *left == *right;
 }
 
-static int locale_kind_from_name(const char* name, uint8_t* kind) {
-    if (!name || !kind) return 0;
+static const char* locale_kind_name(uint8_t kind) {
+    static const char* const legacy_names[] = {
+        NULL, "C", "en_US.UTF-8", "en_US", "ja_JP.UTF-8", "ja_JP",
+        "de_DE.UTF-8", "de_DE", "fr_FR.UTF-8", "fr_FR",
+        "es_ES.UTF-8", "es_ES", "it_IT.UTF-8", "it_IT",
+        "pt_BR.UTF-8", "pt_BR", "es_MX.UTF-8", "es_MX",
+        "pt_PT.UTF-8", "pt_PT"
+    };
+    if (kind < sizeof(legacy_names) / sizeof(legacy_names[0]))
+        return legacy_names[kind];
+    if (kind < 20u) return NULL;
+    return rin_unicode_locale_catalog_name((uint8_t)(kind - 20u));
+}
+
+static int locale_kind_from_name(const char* name, uint8_t* kind,
+                                 uint8_t* numbering_override) {
+    uint8_t catalog_index;
+    uint8_t parsed_override;
+    if (!name || !kind || !numbering_override) return 0;
+    *numbering_override = 0u;
     if (locale_equal(name, "C") || locale_equal(name, "POSIX"))
         *kind = RIN_LOCALE_KIND_C;
     else if (locale_equal(name, "en_US.UTF-8"))
@@ -109,8 +130,15 @@ static int locale_kind_from_name(const char* name, uint8_t* kind) {
         *kind = RIN_LOCALE_KIND_PT_PT_UTF8;
     else if (locale_equal(name, "pt_PT"))
         *kind = RIN_LOCALE_KIND_PT_PT;
-    else
-        return 0;
+    else {
+        if (!rin_unicode_locale_object_resolve(name, &catalog_index,
+                                               &parsed_override) ||
+            (unsigned)catalog_index + 20u > UINT8_MAX)
+            return 0;
+        *kind = (uint8_t)(20u + catalog_index);
+        *numbering_override = parsed_override;
+        return 1;
+    }
     return 1;
 }
 
@@ -123,8 +151,10 @@ static int locale_object_valid(locale_t locale) {
         return 0;
     }
     for (index = 0u; index < 6u; ++index) {
-        if (locale->categories[index] < RIN_LOCALE_KIND_C ||
-            locale->categories[index] > RIN_LOCALE_KIND_PT_PT) {
+        uint8_t kind = locale->categories[index];
+        if (kind < RIN_LOCALE_KIND_C || !locale_kind_name(kind) ||
+            !rin_unicode_locale_numbering_override_valid(
+                locale->numbering_overrides[index])) {
             return 0;
         }
     }
@@ -147,15 +177,18 @@ static int locale_apply_name(struct RinLocaleObject* locale,
                              const char* name) {
     uint32_t index;
     uint8_t kind = 0u;
-    if (name[0] != '\0' && !locale_kind_from_name(name, &kind)) return 0;
+    uint8_t numbering_override = 0u;
     for (index = 0u; index < 6u; ++index) {
+        const char* selected_name;
         if ((category_mask & (1 << index)) == 0) continue;
-        if (name[0] == '\0') {
-            const char* environment_name =
-                rin_locale_environment_name((int)index);
-            if (!locale_kind_from_name(environment_name, &kind)) return 0;
-        }
+        selected_name = name[0] == '\0'
+            ? rin_locale_environment_name((int)index) : name;
+        if (!selected_name ||
+            !locale_kind_from_name(selected_name, &kind,
+                                   &numbering_override))
+            return 0;
         locale->categories[index] = kind;
+        locale->numbering_overrides[index] = numbering_override;
     }
     return 1;
 }
@@ -206,11 +239,23 @@ locale_t duplocale(locale_t locale) {
     if (locale == LC_GLOBAL_LOCALE) {
         locale_object_c(&result);
         for (index = 0u; index < 6u; ++index) {
-            if (!locale_kind_from_name(rin_locale_name((int)index),
-                                       &result.categories[index])) {
+            uint8_t catalog_index;
+            uint8_t numbering_override;
+            uint8_t ignored_override;
+            const char* catalog_name;
+            if (!rin_unicode_locale_object_current((int)index,
+                    &catalog_index, &numbering_override)) {
                 errno = ENOENT;
                 return NULL;
             }
+            catalog_name = rin_unicode_locale_catalog_name(catalog_index);
+            if (!catalog_name ||
+                !locale_kind_from_name(catalog_name,
+                    &result.categories[index], &ignored_override)) {
+                errno = ENOENT;
+                return NULL;
+            }
+            result.numbering_overrides[index] = numbering_override;
         }
     } else {
         if (!locale_object_valid(locale)) {
@@ -300,7 +345,38 @@ static int locale_global_test(int character, uint32_t operation) {
     }
 }
 
+static int locale_kind_catalog_index(uint8_t kind, uint8_t* index_out) {
+    const char* name;
+    uint8_t numbering_override;
+    if (!index_out) return 0;
+    if (kind >= 20u) {
+        *index_out = (uint8_t)(kind - 20u);
+        return rin_unicode_locale_catalog_name(*index_out) != NULL;
+    }
+    name = locale_kind_name(kind);
+    return name && rin_unicode_locale_object_resolve(
+        name, index_out, &numbering_override);
+}
+
+static const char* locale_kind_codeset(uint8_t kind) {
+    uint8_t catalog_index;
+    if (!locale_kind_catalog_index(kind, &catalog_index)) return NULL;
+    return rin_unicode_locale_catalog_codeset(catalog_index);
+}
+
+static int locale_kind_is_c(uint8_t kind) {
+    const char* name;
+    if (kind == RIN_LOCALE_KIND_C) return 1;
+    name = locale_kind_name(kind);
+    return name && (locale_equal(name, "C") || locale_equal(name, "POSIX"));
+}
+
 static int locale_kind_is_utf8(uint8_t kind) {
+    if (kind >= 20u) {
+        const char* codeset = locale_kind_codeset(kind);
+        return codeset && (locale_equal(codeset, "UTF-8") ||
+                           locale_equal(codeset, "UTF8"));
+    }
     return kind == RIN_LOCALE_KIND_EN_US_UTF8 ||
            kind == RIN_LOCALE_KIND_JA_JP_UTF8 ||
            kind == RIN_LOCALE_KIND_DE_DE_UTF8 ||
@@ -322,7 +398,7 @@ static int locale_global_narrow_ascii_only(void) {
 static int locale_narrow_ascii_only(locale_t locale) {
     if (locale == LC_GLOBAL_LOCALE) return locale_global_narrow_ascii_only();
     if (!locale_object_valid(locale)) return 1;
-    return locale->categories[LC_CTYPE] == RIN_LOCALE_KIND_C ||
+    return locale_kind_is_c(locale->categories[LC_CTYPE]) ||
            locale_kind_is_utf8(locale->categories[LC_CTYPE]);
 }
 
@@ -333,7 +409,7 @@ static int locale_ctype_is_c(locale_t locale) {
         return !name || locale_equal(name, "C") || locale_equal(name, "POSIX");
     }
     return !locale_object_valid(locale) ||
-           locale->categories[LC_CTYPE] == RIN_LOCALE_KIND_C;
+           locale_kind_is_c(locale->categories[LC_CTYPE]);
 }
 
 static int locale_unicode_wide_test(uint32_t character,
@@ -538,8 +614,11 @@ static int locale_codeset_is_ascii(locale_t locale) {
         return !codeset || locale_equal(codeset, "ASCII") ||
                locale_equal(codeset, "US-ASCII");
     }
-    return !locale_object_valid(locale) ||
-           locale->categories[LC_CTYPE] == RIN_LOCALE_KIND_C;
+    if (!locale_object_valid(locale)) return 1;
+    if (locale_kind_is_c(locale->categories[LC_CTYPE])) return 1;
+    codeset = locale_kind_codeset(locale->categories[LC_CTYPE]);
+    return !codeset || locale_equal(codeset, "ASCII") ||
+           locale_equal(codeset, "US-ASCII");
 }
 
 static int locale_conversion_state(locale_t locale,
@@ -888,7 +967,7 @@ static int locale_collate_is_c(locale_t locale) {
         return !name || locale_equal(name, "C") || locale_equal(name, "POSIX");
     }
     if (!locale_object_valid(locale)) return 1;
-    return locale->categories[LC_COLLATE] == RIN_LOCALE_KIND_C;
+    return locale_kind_is_c(locale->categories[LC_COLLATE]);
 }
 
 static int locale_compare_bytes(const char* left, const char* right) {
