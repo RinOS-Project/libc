@@ -3,6 +3,13 @@
  * BSD互換時間関数
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_TIME_SETITIMER) && !defined(_RIN_TIME_GETITIMER)
+#include_next <sys/time.h>
+#else
+
 #ifndef _SYS_TIME_H
 #define _SYS_TIME_H
 
@@ -201,3 +208,5 @@ struct timezone {
 #include "../utime.h"
 
 #endif /* _SYS_TIME_H */
+
+#endif /* hosted Linux delegates to its native interval-timer provider */
