@@ -4,6 +4,13 @@
  * I/O多重化
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_POLL_SYSCALL5)
+#include_next <poll.h>
+#else
+
 #ifndef _POLL_H
 #define _POLL_H
 
@@ -406,23 +413,21 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     __rin_select_clear_sets(readfds, writefds, exceptfds);
 
     for (nfds_t i = 0u; i < npfds; ++i) {
-        int fd_ready = 0;
         if (readfds && (pfds[i].events & POLLIN) != 0 &&
             (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
             FD_SET(pfds[i].fd, readfds);
-            fd_ready = 1;
+            ++ready_count;
         }
         if (writefds && (pfds[i].events & POLLOUT) != 0 &&
             (pfds[i].revents & (POLLOUT | POLLERR)) != 0) {
             FD_SET(pfds[i].fd, writefds);
-            fd_ready = 1;
+            ++ready_count;
         }
         if (exceptfds && (pfds[i].events & POLLPRI) != 0 &&
             (pfds[i].revents & POLLPRI) != 0) {
             FD_SET(pfds[i].fd, exceptfds);
-            fd_ready = 1;
+            ++ready_count;
         }
-        if (fd_ready) ++ready_count;
     }
 
     free(pfds);
@@ -462,23 +467,21 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
         }
         __rin_select_clear_sets(readfds, writefds, exceptfds);
         for (nfds_t i = 0u; i < npfds; ++i) {
-            int fd_ready = 0;
             if (readfds && (pfds[i].events & POLLIN) != 0 &&
                 (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
                 FD_SET(pfds[i].fd, readfds);
-                fd_ready = 1;
+                ++ready_count;
             }
             if (writefds && (pfds[i].events & POLLOUT) != 0 &&
                 (pfds[i].revents & (POLLOUT | POLLERR)) != 0) {
                 FD_SET(pfds[i].fd, writefds);
-                fd_ready = 1;
+                ++ready_count;
             }
             if (exceptfds && (pfds[i].events & POLLPRI) != 0 &&
                 (pfds[i].revents & POLLPRI) != 0) {
                 FD_SET(pfds[i].fd, exceptfds);
-                fd_ready = 1;
+                ++ready_count;
             }
-            if (fd_ready) ++ready_count;
         }
         free(pfds);
         return ready_count;
@@ -501,3 +504,5 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
 #endif
 
 #endif /* _POLL_H */
+
+#endif /* hosted Linux delegates to its native poll provider */
