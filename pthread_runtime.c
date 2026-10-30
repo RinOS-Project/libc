@@ -300,6 +300,12 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
 #define _RIN_PTHREAD_RUNTIME_SELF() pthread_self()
 #endif
 
+/* Cancellation points in blocking waits.  Host tests override this to
+ * observe delivery without unwinding out of the test process. */
+#ifndef _RIN_PTHREAD_RUNTIME_TESTCANCEL
+#define _RIN_PTHREAD_RUNTIME_TESTCANCEL() pthread_testcancel()
+#endif
+
 #define PROT_NONE      0x00
 #define PROT_READ      0x01
 #define PROT_WRITE     0x02
@@ -923,7 +929,7 @@ static int rin_pthread_join_impl(pthread_t thread, void** retval) {
     int detached = 0;
     if (retval) *retval = NULL;
     if (thread == 0u) return ESRCH;
-    pthread_testcancel();
+    _RIN_PTHREAD_RUNTIME_TESTCANCEL();
 
     rin_thread_stack_lock_acquire();
     rin_thread_stack_rec_t* rec = rin_thread_stack_find_locked(thread);
@@ -934,25 +940,17 @@ static int rin_pthread_join_impl(pthread_t thread, void** retval) {
         return EINVAL;
     }
 
-    /* SYS_THREAD_JOIN has no timeout form.  Poll liveness in short bounded
-     * sleeps so deferred cancellation remains observable while a join waits;
-     * the final join syscall still owns the single reap operation. */
-    for (;;) {
-        int probe = pthread_kill(thread, 0);
-        if (probe == ESRCH) break;
-        if (probe != 0) return probe;
-        {
-            struct timespec pause = {0, 10000000L};
-            (void)nanosleep(&pause, NULL);
-        }
-        pthread_testcancel();
-    }
-
+    /* SYS_THREAD_JOIN blocks until the target exits and owns the single
+     * reap operation.  No liveness polling: the kernel parks the joiner on
+     * the join-event cookie and a pending cancel signal interrupts the wait
+     * with EINTR, which reaches the cancellation point below.  With
+     * cancellation disabled the point holds the request and EINTR is
+     * reported so the caller may rejoin. */
     {
         intptr_t ret = _RIN_PTHREAD_RUNTIME_JOIN(thread);
         if (ret != 0) {
             if (rin_pthread_syscall_error(ret) == EINTR) {
-                pthread_testcancel();
+                _RIN_PTHREAD_RUNTIME_TESTCANCEL();
                 return EINTR;
             }
             return rin_pthread_syscall_error(ret);
