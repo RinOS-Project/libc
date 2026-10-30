@@ -45,6 +45,18 @@ static int rin_semaphore_status(intptr_t result)
     return -1;
 }
 
+int sem_clockwait(sem_t* semaphore, clockid_t clock_id,
+                  const struct timespec* abstime)
+{
+    return __rin_sem_clockwait_impl(semaphore, clock_id, abstime);
+}
+
+int sem_timedwait(sem_t* semaphore, const struct timespec* abstime)
+{
+    return sem_clockwait(semaphore, CLOCK_REALTIME, abstime);
+}
+
+
 sem_t* sem_open(const char* name, int oflag, ...)
 {
     uint32_t kernel_flags = 0u;

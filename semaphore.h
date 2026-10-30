@@ -55,6 +55,7 @@ _Static_assert(offsetof(sem_t, waiters) == sizeof(int),
  * process-shared in the high bit of the waiter count. */
 #define RIN_SEM_PSHARED_FLAG RIN_POSIX_SEMAPHORE_WAITERS_SHARED_FLAG
 #define RIN_SEM_WAITER_MASK  RIN_POSIX_SEMAPHORE_WAITERS_COUNT_MASK
+#define RIN_SEM_REALTIME_RECHECK_NS UINT64_C(50000000)
 
 static inline uint32_t rin_sem_state_load(const sem_t* sem) {
     return __atomic_load_n((const uint32_t*)&sem->waiters, __ATOMIC_ACQUIRE);
@@ -231,26 +232,43 @@ static inline int sem_trywait(sem_t* sem) {
     }
 }
 
-/* セマフォのタイムアウト付きデクリメント */
-static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
+/* POSIX absolute-clock semaphore wait.  Named and unnamed semaphores share
+ * this futex path; the waiter state selects a private or shared futex key. */
+static inline int __rin_sem_clockwait_impl(
+    sem_t* sem, clockid_t clock_id, const struct timespec* abstime) {
     __rin_pthread_cancel_point_if_linked();
-    if (!sem || !abstime) {
+    if (!sem || (clock_id != CLOCK_REALTIME &&
+                 clock_id != CLOCK_MONOTONIC)) {
         errno = EINVAL;
         return -1;
     }
 
-    while (1) {
+    for (;;) {
         int val = __atomic_load_n(&sem->value, __ATOMIC_RELAXED);
         if (val > 0) {
-            if (__atomic_compare_exchange_n(&sem->value, &val, val - 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            if (__atomic_compare_exchange_n(&sem->value, &val, val - 1, 0,
+                                            __ATOMIC_ACQUIRE,
+                                            __ATOMIC_RELAXED))
                 return 0;
-            }
             continue;
         }
 
-        if (abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
+        /* As with sem_timedwait(), an available token succeeds without
+         * inspecting the caller's timeout object. */
+        if (!abstime || abstime->tv_nsec < 0 ||
             abstime->tv_nsec >= 1000000000L) {
             errno = EINVAL;
+            return -1;
+        }
+#if !defined(RIN_TIME_ABI64)
+        if (clock_id == CLOCK_REALTIME && abstime->tv_sec < 0) {
+            errno = EINVAL;
+            return -1;
+        }
+#endif
+        if (clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
+            if (sem_trywait(sem) == 0) return 0;
+            errno = ETIMEDOUT;
             return -1;
         }
 
@@ -261,7 +279,9 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
 
         val = __atomic_load_n(&sem->value, __ATOMIC_RELAXED);
         if (val > 0) {
-            if (__atomic_compare_exchange_n(&sem->value, &val, val - 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            if (__atomic_compare_exchange_n(&sem->value, &val, val - 1, 0,
+                                            __ATOMIC_ACQUIRE,
+                                            __ATOMIC_RELAXED)) {
                 rin_sem_waiter_remove(sem);
                 return 0;
             }
@@ -269,11 +289,46 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
             continue;
         }
 
+        struct timespec relative_timeout;
+        const struct timespec* timeout = abstime;
+        int operation = rin_sem_futex_operation(sem, FUTEX_WAIT_BITSET);
+        int use_relative_timeout = 0;
+        if (clock_id == CLOCK_REALTIME)
+            operation |= FUTEX_CLOCK_REALTIME;
+#if defined(RIN_TIME_ABI64)
+        if (clock_id == CLOCK_REALTIME) {
+            int deadline_error = _rin_time_realtime_deadline_relative(
+                abstime, &relative_timeout, &use_relative_timeout);
+            if (deadline_error == ETIMEDOUT) {
+                rin_sem_waiter_remove(sem);
+                if (sem_trywait(sem) == 0) return 0;
+                errno = ETIMEDOUT;
+                return -1;
+            }
+            if (deadline_error != 0) {
+                rin_sem_waiter_remove(sem);
+                errno = deadline_error;
+                return -1;
+            }
+            if (use_relative_timeout) {
+                /* The relative fallback is needed only for negative realtime
+                 * epochs. Recheck the wall clock periodically so a clock
+                 * adjustment cannot stretch the original absolute deadline. */
+                if (relative_timeout.tv_sec > 0 ||
+                    (uint64_t)relative_timeout.tv_nsec >
+                        RIN_SEM_REALTIME_RECHECK_NS) {
+                    relative_timeout.tv_sec = 0;
+                    relative_timeout.tv_nsec =
+                        (long)RIN_SEM_REALTIME_RECHECK_NS;
+                }
+                operation = rin_sem_futex_operation(sem, FUTEX_WAIT);
+                timeout = &relative_timeout;
+            }
+        }
+#endif
         long ret = _RIN_SEMAPHORE_FUTEX_BITSET(
-            &sem->value,
-            rin_sem_futex_operation(
-                sem, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME),
-            0, abstime, FUTEX_BITSET_MATCH_ANY);
+            &sem->value, operation, 0, timeout,
+            FUTEX_BITSET_MATCH_ANY);
         __rin_pthread_cancel_point_cleanup_if_linked(
             rin_sem_cancel_waiter_cleanup, sem);
         rin_sem_waiter_remove(sem);
@@ -281,9 +336,8 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
         if (ret < 0) {
             int err = errno;
             if (err == ETIMEDOUT) {
-                /* A post can race with the timeout wake; take a token if it
-                 * is already available before reporting the deadline. */
                 if (sem_trywait(sem) == 0) return 0;
+                if (use_relative_timeout) continue;
                 errno = ETIMEDOUT;
                 return -1;
             }
@@ -297,6 +351,11 @@ static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
         }
     }
 }
+
+/* Out-of-line public entry points are exported by semaphore_runtime.c. */
+int sem_clockwait(sem_t* sem, clockid_t clock_id,
+                  const struct timespec* abstime);
+int sem_timedwait(sem_t* sem, const struct timespec* abstime);
 
 /* セマフォのインクリメント (V操作/post) */
 static inline int sem_post(sem_t* sem) {
