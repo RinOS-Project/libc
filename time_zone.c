@@ -57,7 +57,14 @@ typedef struct {
     RinTimeZoneRule end;
     int remote;
     char remote_id[RIN_TZ_TEXT_MAX + 1u];
+    const char* standard_name_snapshot;
+    const char* daylight_name_snapshot;
 } RinTimeZone;
+
+typedef struct RinTimeZoneNameSnapshot {
+    struct RinTimeZoneNameSnapshot* next;
+    char value[RIN_TZ_NAME_MAX + 1u];
+} RinTimeZoneNameSnapshot;
 
 typedef struct {
     const char* text;
@@ -65,9 +72,13 @@ typedef struct {
 } RinTimeZoneParser;
 
 static RinTimeZone rin_time_zone = {
-    "UTC", "UTC", 0, 0, 0, {0}, {0}, 0, ""
+    "UTC", "UTC", 0, 0, 0, {0}, {0}, 0, "", "UTC", "UTC"
 };
 static volatile unsigned char rin_time_zone_lock;
+/* tm_zone has no release hook. Keep each distinct abbreviation immutable
+ * for the process lifetime so previously returned struct tm values remain
+ * safe after a later tzset() or timezone preference change. */
+static RinTimeZoneNameSnapshot* rin_time_zone_name_snapshots;
 static RinTimeZoneSystemProvider rin_time_zone_system_provider;
 static void* rin_time_zone_system_provider_context;
 static unsigned char rin_time_zone_system_provider_bound;
@@ -76,8 +87,6 @@ static unsigned int rin_time_zone_cache_environment_generation;
 static unsigned int rin_time_zone_cache_system_generation;
 static unsigned char rin_time_zone_cache_source;
 static unsigned char rin_time_zone_cache_valid;
-static char rin_time_zone_standard_name[RIN_TZ_NAME_MAX + 1u] = "UTC";
-static char rin_time_zone_daylight_name[RIN_TZ_NAME_MAX + 1u] = "UTC";
 
 /* Standard hosted `struct tm` has no tm_gmtoff/tm_zone fields.  Keep the
  * public layout unchanged and provide a small, allocation-free sidecar for
@@ -145,8 +154,8 @@ static RIN_TIME_ZONE_THREAD_LOCAL struct tm rin_time_zone_tm_buffer;
 #undef RIN_TIME_ZONE_THREAD_LOCAL
 
 char* tzname[2] = {
-    rin_time_zone_standard_name,
-    rin_time_zone_daylight_name
+    "UTC",
+    "UTC"
 };
 long timezone;
 int daylight;
@@ -257,6 +266,87 @@ static void rin_time_zone_copy(char* output, const char* input,
         ++index;
     }
     output[index] = '\0';
+}
+
+static RinTimeZoneNameSnapshot* rin_time_zone_find_name_locked(
+    const char* name) {
+    RinTimeZoneNameSnapshot* current = rin_time_zone_name_snapshots;
+    while (current) {
+        size_t index = 0u;
+        while (current->value[index] == name[index] && name[index] != '\0')
+            ++index;
+        if (current->value[index] == name[index]) return current;
+        current = current->next;
+    }
+    return NULL;
+}
+
+static int rin_time_zone_snapshot_names(RinTimeZone* zone) {
+    RinTimeZoneNameSnapshot* standard_candidate;
+    RinTimeZoneNameSnapshot* daylight_candidate = NULL;
+    RinTimeZoneNameSnapshot* standard_snapshot;
+    RinTimeZoneNameSnapshot* daylight_snapshot;
+    int names_match = 1;
+    size_t index = 0u;
+
+    if (!zone) {
+        errno = EINVAL;
+        return 0;
+    }
+    standard_candidate = (RinTimeZoneNameSnapshot*)malloc(
+        sizeof(*standard_candidate));
+    if (!standard_candidate) {
+        errno = ENOMEM;
+        return 0;
+    }
+    standard_candidate->next = NULL;
+    rin_time_zone_copy(standard_candidate->value, zone->standard_name,
+                       sizeof(standard_candidate->value));
+    while (zone->standard_name[index] != '\0' &&
+           zone->daylight_name[index] != '\0' &&
+           zone->standard_name[index] == zone->daylight_name[index])
+        ++index;
+    names_match = zone->standard_name[index] == zone->daylight_name[index];
+    if (!names_match) {
+        daylight_candidate = (RinTimeZoneNameSnapshot*)malloc(
+            sizeof(*daylight_candidate));
+        if (!daylight_candidate) {
+            free(standard_candidate);
+            errno = ENOMEM;
+            return 0;
+        }
+        daylight_candidate->next = NULL;
+        rin_time_zone_copy(daylight_candidate->value, zone->daylight_name,
+                           sizeof(daylight_candidate->value));
+    }
+
+    rin_time_zone_acquire();
+    standard_snapshot = rin_time_zone_find_name_locked(zone->standard_name);
+    if (!standard_snapshot) {
+        standard_snapshot = standard_candidate;
+        standard_candidate = NULL;
+        standard_snapshot->next = rin_time_zone_name_snapshots;
+        rin_time_zone_name_snapshots = standard_snapshot;
+    }
+    if (names_match) {
+        daylight_snapshot = standard_snapshot;
+    } else {
+        daylight_snapshot =
+            rin_time_zone_find_name_locked(zone->daylight_name);
+        if (!daylight_snapshot) {
+            daylight_snapshot = daylight_candidate;
+            daylight_candidate = NULL;
+            daylight_snapshot->next = rin_time_zone_name_snapshots;
+            rin_time_zone_name_snapshots = daylight_snapshot;
+        }
+    }
+    rin_time_zone_release();
+
+    free(standard_candidate);
+    free(daylight_candidate);
+    zone->standard_name_snapshot = standard_snapshot->value;
+    zone->daylight_name_snapshot = daylight_snapshot->value;
+    return 1;
 }
 
 static int rin_time_zone_snapshot_environment(
@@ -922,6 +1012,7 @@ static int rin_time_zone_refresh(void) {
             }
             if (current_generation != system_generation) continue;
         }
+        if (!rin_time_zone_snapshot_names(&candidate)) return 0;
         rin_time_zone_acquire();
         if (source == RIN_TIME_ZONE_CACHE_SOURCE_BOUND_PROVIDER &&
             (!rin_time_zone_system_provider_bound ||
@@ -930,12 +1021,12 @@ static int rin_time_zone_refresh(void) {
             continue;
         }
         rin_time_zone = candidate;
-        rin_time_zone_copy(rin_time_zone_standard_name,
-                           candidate.standard_name,
-                           sizeof(rin_time_zone_standard_name));
-        rin_time_zone_copy(rin_time_zone_daylight_name,
-                           candidate.daylight_name,
-                           sizeof(rin_time_zone_daylight_name));
+        __atomic_store_n(&tzname[0],
+                         (char*)candidate.standard_name_snapshot,
+                         __ATOMIC_RELEASE);
+        __atomic_store_n(&tzname[1],
+                         (char*)candidate.daylight_name_snapshot,
+                         __ATOMIC_RELEASE);
         timezone = -candidate.standard_offset;
         daylight = candidate.has_daylight;
         rin_time_zone_cache_valid = (unsigned char)(cacheable != 0);
@@ -1128,7 +1219,7 @@ static int rin_time_zone_is_daylight(const RinTimeZone* zone, time_t epoch,
         return 1;
     }
     if (!rin_time_split(epoch, zone->standard_offset, 0,
-                        rin_time_zone_standard_name, &standard)) return 0;
+                        zone->standard_name_snapshot, &standard)) return 0;
     year = (int64_t)standard.tm_year + 1900;
     /* n365 can land in the next calendar year, so inspect adjacent seasons. */
     for (delta = -1; delta <= 1; ++delta) {
@@ -1177,7 +1268,8 @@ static int rin_time_local_with_zone(const RinTimeZone* zone, time_t epoch,
                                         &offset_minutes, &is_daylight))
             return 0;
         offset = (long)offset_minutes * 60L;
-        zone_name = is_daylight ? zone->daylight_name : zone->standard_name;
+        zone_name = is_daylight ? zone->daylight_name_snapshot
+                                : zone->standard_name_snapshot;
         return rin_time_split(epoch, offset, is_daylight, zone_name, output);
     }
     if (!rin_time_zone_is_daylight(zone, epoch, &is_daylight)) return 0;
@@ -1185,8 +1277,8 @@ static int rin_time_local_with_zone(const RinTimeZone* zone, time_t epoch,
                           is_daylight ? zone->daylight_offset
                                       : zone->standard_offset,
                           is_daylight,
-                          is_daylight ? rin_time_zone_daylight_name
-                                      : rin_time_zone_standard_name,
+                          is_daylight ? zone->daylight_name_snapshot
+                                      : zone->standard_name_snapshot,
                           output);
 }
 
