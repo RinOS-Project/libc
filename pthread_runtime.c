@@ -159,6 +159,22 @@ static void rin_pthread_mutex_robust_owner_release(pthread_mutex_t* mutex,
                   NULL, 0);
 }
 
+/* True when the absolute deadline has already passed on clock_id. Timed
+ * waits re-check this after a wakeup whose scheduling may have crossed
+ * the deadline (the EINTR/resume race): without the check, a mutex
+ * released only after the deadline turns into a successful
+ * post-deadline acquire. A clock read failure cannot prove expiry, so
+ * it preserves the historical retry behavior. */
+static int rin_pthread_mutex_abs_deadline_expired(
+    clockid_t clock_id, const struct timespec* abstime) {
+    struct timespec now;
+    if (!abstime) return 0;
+    if (clock_gettime(clock_id, &now) != 0) return 0;
+    return now.tv_sec > abstime->tv_sec ||
+           (now.tv_sec == abstime->tv_sec &&
+            now.tv_nsec >= abstime->tv_nsec);
+}
+
 static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                                         pthread_t owner, int type,
                                         int try_only,
@@ -250,6 +266,14 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
             if (wait_error == ETIMEDOUT && abstime) {
                 /* An unlock can race with the deadline; retry acquisition
                  * before deciding that the timed operation has failed. */
+                timed_out = 1;
+                continue;
+            }
+            if (abstime && (wait_error == 0 || wait_error == EINTR) &&
+                rin_pthread_mutex_abs_deadline_expired(clock_id,
+                                                       abstime)) {
+                /* Resumed (EINTR/spurious wake) past the deadline: same
+                 * single acquisition retry as an ETIMEDOUT wake. */
                 timed_out = 1;
                 continue;
             }
@@ -1191,6 +1215,10 @@ static int rin_pthread_mutex_timedlock_impl(
                     2, abstime, FUTEX_BITSET_MATCH_ANY);
                 int wait_error = rin_pthread_futex_wait_error(wait_result,
                                                                errno);
+                if ((wait_error == 0 || wait_error == EINTR) &&
+                    rin_pthread_mutex_abs_deadline_expired(clock_id,
+                                                           abstime))
+                    return ETIMEDOUT;
                 if (wait_error == EINTR) {
                     c = __atomic_exchange_n(&mutex->locked, 2,
                                             __ATOMIC_ACQUIRE);
