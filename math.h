@@ -662,7 +662,6 @@ static inline double pow(double base, double exponent) {
                   magnitude < 9007199254740992.0 &&
                   trunc(magnitude / 2.0) * 2.0 != magnitude;
 
-    if (!integral_exp && base < 0.0) return NAN;
     if (__builtin_isinf(exponent)) {
         double abs_base = fabs(base);
         if (abs_base == 1.0) return 1.0;
@@ -674,7 +673,12 @@ static inline double pow(double base, double exponent) {
         double result = neg_exp ? 0.0 : INFINITY;
         return (negative_base && odd_exp) ? -result : result;
     }
+    if (!integral_exp && base < 0.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (base == 0.0) {
+        if (neg_exp) (void)feraiseexcept(FE_DIVBYZERO);
         double result = neg_exp ? INFINITY : 0.0;
         return (negative_base && odd_exp) ? -result : result;
     }
@@ -949,8 +953,14 @@ static inline double exp(double x) {
     if (__builtin_isnan(x)) return x;
     if (__builtin_isinf(x)) return x > 0.0 ? INFINITY : 0.0;
     /* Binary64 overflow/underflow boundaries. */
-    if (x > 709.782712893384) return HUGE_VAL;
-    if (x < -745.133219101941) return 0.0;
+    if (x > 709.782712893384) {
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return HUGE_VAL;
+    }
+    if (x < -745.133219101941) {
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+        return 0.0;
+    }
 
     /* Reduce to a small interval around zero, then rescale by 2^k. */
     int k = (int)(x / M_LN2 + (x >= 0.0 ? 0.5 : -0.5));
@@ -1032,8 +1042,14 @@ static inline float log2f(float x) {
 /* log1p - log(1 + x) より精度の高い実装 */
 static inline double log1p(double x) {
     if (__builtin_isnan(x)) return x;
-    if (x == -1.0) return -HUGE_VAL;
-    if (x < -1.0) return NAN;
+    if (x == -1.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return -HUGE_VAL;
+    }
+    if (x < -1.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (__builtin_isinf(x)) return x;
     if (x == 0.0) return x;
     /* Below half an ulp at one, the quadratic correction cannot affect a
@@ -1093,7 +1109,10 @@ static inline float expm1f(float x) {
 /* asin - 逆正弦 (Taylor展開) */
 static inline double asin(double x) {
     if (__builtin_isnan(x)) return x;
-    if (x < -1.0 || x > 1.0) return NAN;
+    if (x < -1.0 || x > 1.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (x == 1.0) return M_PI / 2.0;
     if (x == -1.0) return -M_PI / 2.0;
 
@@ -1272,9 +1291,18 @@ static inline float acoshf(float x) {
 /* atanh - 逆双曲線正接 */
 static inline double atanh(double x) {
     if (__builtin_isnan(x)) return x;
-    if (x == 1.0) return INFINITY;
-    if (x == -1.0) return -INFINITY;
-    if (x < -1.0 || x > 1.0) return NAN;
+    if (x == 1.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return INFINITY;
+    }
+    if (x == -1.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return -INFINITY;
+    }
+    if (x < -1.0 || x > 1.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (fabs(x) < 1e-10) return x;
     if (fabs(x) < 0.5) {
         /* atanh(x) = (log1p(x)-log1p(-x))/2; keeping the two log1p terms
