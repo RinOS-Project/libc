@@ -562,11 +562,25 @@ static inline struct cmsghdr* __rin_cmsg_nxthdr(
     return (struct cmsghdr*)((unsigned char*)message->msg_control + offset);
 }
 
-#define _RIN_CMSG_ALIGN(len) __rin_cmsg_align_size((size_t)(len))
+#define _RIN_CMSG_ALIGN(len) \
+    ((size_t)(len) > SIZE_MAX - (sizeof(size_t) - 1u) \
+         ? SIZE_MAX \
+         : (((size_t)(len) + (sizeof(size_t) - 1u)) & \
+            ~(sizeof(size_t) - 1u)))
 #define CMSG_ALIGN(len) _RIN_CMSG_ALIGN(len)
-#define CMSG_SPACE(len) __rin_cmsg_space_size((size_t)(len))
-#define CMSG_LEN(len) __rin_cmsg_len_size((size_t)(len))
-#define CMSG_DATA(cmsg) ((unsigned char*)(cmsg) + _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)))
+#define CMSG_SPACE(len) \
+    (_RIN_CMSG_ALIGN(len) > \
+             SIZE_MAX - _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) \
+         ? SIZE_MAX \
+         : _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) + \
+               _RIN_CMSG_ALIGN(len))
+#define CMSG_LEN(len) \
+    ((size_t)(len) > \
+             SIZE_MAX - _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) \
+         ? SIZE_MAX \
+         : _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) + (size_t)(len))
+#define CMSG_DATA(cmsg) \
+    ((unsigned char*)(cmsg) + _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)))
 #define CMSG_FIRSTHDR(msg) \
     (((msg) && (msg)->msg_control && \
       (msg)->msg_controllen >= sizeof(struct cmsghdr)) \
