@@ -46,15 +46,17 @@ extern RIN_PWD_THREAD_LOCAL __rin_passwd_runtime_state_v1
     __rin_passwd_runtime_state;
 
 static inline int __rin_pwd_uid_negative(uid_t uid) {
+#if defined(RIN_SYS_TYPES_UNSIGNED_ID)
+    (void)uid;
+    return 0;
+#else
     union {
         uid_t value;
         int signed_value;
     } bits;
     bits.value = uid;
-    /* uid_t is a 32-bit signed target type or a 32-bit hosted unsigned type;
-     * examining the same-width representation avoids a tautological
-     * unsigned comparison while retaining the target's negative rejection. */
     return sizeof(uid_t) == sizeof(int) && bits.signed_value < 0;
+#endif
 }
 
 /* Non-reentrant passwd queries return pointers into private scratch.  Keep

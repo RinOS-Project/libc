@@ -31,8 +31,9 @@ extern "C" {
 
 /* プロセス/ユーザー関連 */
 typedef int            pid_t;      /* プロセスID */
-typedef int            uid_t;      /* ユーザーID */
-typedef int            gid_t;      /* グループID */
+typedef uint32_t       uid_t;      /* ユーザーID */
+typedef uint32_t       gid_t;      /* グループID */
+#define RIN_SYS_TYPES_UNSIGNED_ID 1
 typedef unsigned int   id_t;       /* 汎用ID */
 
 /* ファイル関連 */
