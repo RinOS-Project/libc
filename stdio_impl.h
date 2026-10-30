@@ -128,7 +128,9 @@ static inline int _rin_stdio_append_large_fixed_integer(
                                          reversed[--count]) != 0)
                 return -1;
     }
-    while (limb_count > 1u) {
+    /* The highest limb was emitted above; skip it before walking down. */
+    --limb_count;
+    while (limb_count > 0u) {
         char reversed[9];
         uint32_t value = decimal_limb[--limb_count];
         for (uint32_t index = 0u; index < 9u; ++index) {
@@ -3373,20 +3375,24 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                     ftmp = format_allocation;
                 }
 
-                /* Handle special values */
-                /* Check for NaN: NaN != NaN */
-                if (val != val) {
+                /* Classify special values without doing arithmetic on them.
+                 * In particular, inf - inf is invalid and must not set
+                 * FE_INVALID merely because printf is rendering infinity. */
+                if (__builtin_isnan(val)) {
                     special_value = 1;
+                    if (__builtin_signbit(val) &&
+                        (size_t)fi + 1u < fcapacity)
+                        ftmp[fi++] = '-';
                     const char* ns = "nan";
                     if (*fmt == 'F' || *fmt == 'E' || *fmt == 'G' ||
                         *fmt == 'A') ns = "NAN";
                     while (*ns && (size_t)fi + 1u < fcapacity)
                         ftmp[fi++] = *ns++;
                 } else {
-                    /* Finite magnitude is never evidence of infinity.  For
-                     * IEEE values x-x is zero for every finite x and NaN for
-                     * infinity; NaN was handled by the preceding branch. */
-                    const int is_inf = val != 0.0L && (val - val) != 0.0L;
+                    /* Do not infer infinity from magnitude or x-x: arithmetic
+                     * classification raises FE_INVALID for infinity and may
+                     * disturb the caller's floating-point environment. */
+                    const int is_inf = __builtin_isinf(val);
                     if (is_inf) {
                         special_value = 1;
                         if (val < 0 && (size_t)fi + 1u < fcapacity)
@@ -3429,6 +3435,8 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                         int scientific = (*fmt == 'e' || *fmt == 'E');
                         const int general = (*fmt == 'g' || *fmt == 'G');
                         int scientific_exponent = 0;
+                        int rounding_precision;
+                        int general_power_of_ten = 0;
                         if (scientific || general) {
                             rin_stdio_format_fp_t normalized = val;
                             if (normalized != 0.0) {
@@ -3449,6 +3457,19 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                             }
                             if (scientific) val = normalized;
                         }
+
+                        /* %g precision counts significant digits.  Round at
+                         * the number of fractional places that will actually
+                         * be emitted, rather than at the significant-digit
+                         * count itself. */
+                        if (scientific)
+                            rounding_precision = general ? prec - 1 : prec;
+                        else if (general)
+                            rounding_precision =
+                                prec - (scientific_exponent + 1);
+                        else
+                            rounding_precision = prec;
+                        if (rounding_precision < 0) rounding_precision = 0;
 
                         /* Separate integer and fractional parts */
                         unsigned long long ipart = 0u;
@@ -3480,11 +3501,46 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
 
                             /* Round the fractional part */
                             rin_stdio_format_fp_t round_add = 0.5;
-                            for (int k = 0; k < prec && round_add != 0.0; k++)
+                            for (int k = 0; k < rounding_precision &&
+                                 round_add != 0.0; k++)
                                 round_add /= 10.0;
-                            frac += round_add;
-                            if (frac >= 1.0) { ipart++; frac -= 1.0; }
-                            if (scientific && ipart >= 10u) {
+                            rin_stdio_format_fp_t round_probe = frac;
+                            unsigned int last_digit =
+                                (unsigned int)(ipart % 10u);
+                            for (int k = 0; k < rounding_precision; ++k) {
+                                round_probe *= 10.0;
+                                last_digit = (unsigned int)round_probe;
+                                if (last_digit > 9u) last_digit = 9u;
+                                round_probe -= (rin_stdio_format_fp_t)last_digit;
+                            }
+                            round_probe *= 10.0;
+                            unsigned int guard_digit =
+                                (unsigned int)round_probe;
+                            if (guard_digit > 9u) guard_digit = 9u;
+                            round_probe -= (rin_stdio_format_fp_t)guard_digit;
+                            int round_up = guard_digit > 5u ||
+                                (guard_digit == 5u &&
+                                 (round_probe > 0.0L ||
+                                  (last_digit & 1u) != 0u));
+                            if (round_up) frac += round_add;
+                            int rounded_integer_carry = frac >= 1.0;
+                            if (rounded_integer_carry) {
+                                ipart++;
+                                frac -= 1.0;
+                            }
+                            if (general && rounded_integer_carry &&
+                                ipart == 10u) {
+                                /* Re-evaluate %g's notation after rounding.
+                                 * A carry may move a value across either the
+                                 * precision boundary or the -4 exponent edge. */
+                                ipart = 1u;
+                                frac = 0.0;
+                                ++scientific_exponent;
+                                scientific = scientific_exponent >= prec ||
+                                             scientific_exponent < -4;
+                                if (!scientific)
+                                    general_power_of_ten = 1;
+                            } else if (scientific && ipart >= 10u) {
                                 /* Rounding 9.99... across the decade boundary
                                  * must carry into the scientific exponent. */
                                 ipart = 1u;
@@ -3492,21 +3548,46 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                                 ++scientific_exponent;
                             }
 
-                            /* Integer part to string (reverse) */
-                            char itmp[24]; int ii = 0;
-                            if (ipart == 0) { itmp[ii++] = '0'; }
-                            else {
-                                while (ipart > 0 && ii < 23) {
-                                    itmp[ii++] = '0' + (int)(ipart % 10);
-                                    ipart /= 10;
+                            if (general_power_of_ten) {
+                                if (scientific_exponent >= 0) {
+                                    if ((size_t)fi + 1u < fcapacity)
+                                        ftmp[fi++] = '1';
+                                    for (int zero = 0;
+                                         zero < scientific_exponent &&
+                                         (size_t)fi + 1u < fcapacity;
+                                         ++zero)
+                                        ftmp[fi++] = '0';
+                                } else {
+                                    if ((size_t)fi + 1u < fcapacity)
+                                        ftmp[fi++] = '0';
+                                    if ((size_t)fi + 1u < fcapacity)
+                                        ftmp[fi++] = '.';
+                                    for (int zero = 0;
+                                         zero < -scientific_exponent - 1 &&
+                                         (size_t)fi + 1u < fcapacity;
+                                         ++zero)
+                                        ftmp[fi++] = '0';
+                                    if ((size_t)fi + 1u < fcapacity)
+                                        ftmp[fi++] = '1';
                                 }
+                            } else {
+                                /* Integer part to string (reverse) */
+                                char itmp[24]; int ii = 0;
+                                if (ipart == 0) { itmp[ii++] = '0'; }
+                                else {
+                                    while (ipart > 0 && ii < 23) {
+                                        itmp[ii++] = '0' + (int)(ipart % 10);
+                                        ipart /= 10;
+                                    }
+                                }
+                                while (ii-- > 0 &&
+                                       (size_t)fi + 1u < fcapacity)
+                                    ftmp[fi++] = itmp[ii];
                             }
-                            while (ii-- > 0 &&
-                                   (size_t)fi + 1u < fcapacity)
-                                ftmp[fi++] = itmp[ii];
                         }
 
                         /* Decimal point and fractional digits */
+                        if (!general_power_of_ten) {
                         int fractional_precision = scientific
                             ? (general ? (prec > 0 ? prec - 1 : 0) : prec)
                             : prec;
@@ -3550,6 +3631,7 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                             while (exponent_size-- > 0 &&
                                    (size_t)fi + 1u < fcapacity)
                                 ftmp[fi++] = exponent_digits[exponent_size];
+                        }
                         }
                         if (general && !alternate) {
                             if (scientific) {
