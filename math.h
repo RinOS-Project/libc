@@ -2103,7 +2103,22 @@ static inline double fma(double x, double y, double z) {
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
-    if (a.nan || b.nan || c.nan) return x + y + z;
+    if (a.nan || b.nan || c.nan) {
+        /* Never route NaN through x + y + z: rounding the finite
+         * operands first can raise spurious INEXACT/OVERFLOW/UNDERFLOW.
+         * Propagate the first NaN operand quietized; signal INVALID
+         * only when a signaling NaN is present. */
+        union { double value; unsigned long long bits; } nan_operand;
+        int signaling = (a.nan && (a.significand & (1ULL << 51)) == 0u) ||
+            (b.nan && (b.significand & (1ULL << 51)) == 0u) ||
+            (c.nan && (c.significand & (1ULL << 51)) == 0u);
+        if (a.nan) nan_operand.value = x;
+        else if (b.nan) nan_operand.value = y;
+        else nan_operand.value = z;
+        if (signaling) (void)feraiseexcept(FE_INVALID);
+        result.bits = nan_operand.bits | (1ULL << 51);
+        return result.value;
+    }
     if (a.infinity || b.infinity) {
         if (c.infinity && ((a.negative ^ b.negative) != c.negative)) {
             (void)feraiseexcept(FE_INVALID);
@@ -2127,7 +2142,22 @@ static inline float fmaf(float x, float y, float z) {
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
-    if (a.nan || b.nan || c.nan) return x + y + z;
+    if (a.nan || b.nan || c.nan) {
+        /* Never route NaN through x + y + z: rounding the finite
+         * operands first can raise spurious INEXACT/OVERFLOW/UNDERFLOW.
+         * Propagate the first NaN operand quietized; signal INVALID
+         * only when a signaling NaN is present. */
+        union { float value; unsigned int bits; } nan_operand;
+        int signaling = (a.nan && (a.significand & (1ULL << 22)) == 0u) ||
+            (b.nan && (b.significand & (1ULL << 22)) == 0u) ||
+            (c.nan && (c.significand & (1ULL << 22)) == 0u);
+        if (a.nan) nan_operand.value = x;
+        else if (b.nan) nan_operand.value = y;
+        else nan_operand.value = z;
+        if (signaling) (void)feraiseexcept(FE_INVALID);
+        result.bits = (unsigned int)(nan_operand.bits | (1u << 22));
+        return result.value;
+    }
     if (a.infinity || b.infinity) {
         if (c.infinity && ((a.negative ^ b.negative) != c.negative)) {
             (void)feraiseexcept(FE_INVALID);
