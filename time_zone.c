@@ -6,6 +6,13 @@
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
     defined(RIN_USERSPACE) && RIN_USERSPACE
 #include "internal/rin_environment_runtime.h"
+#else
+extern char** __rin_env_read_begin(unsigned int* epoch_out)
+    __attribute__((weak));
+extern void __rin_env_read_end(unsigned int epoch) __attribute__((weak));
+extern char* __rin_env_get_from_snapshot(char** snapshot, const char* name)
+    __attribute__((weak));
+extern unsigned int __rin_env_generation(void) __attribute__((weak));
 #endif
 #include "string.h"
 #include "time.h"
@@ -64,6 +71,11 @@ static volatile unsigned char rin_time_zone_lock;
 static RinTimeZoneSystemProvider rin_time_zone_system_provider;
 static void* rin_time_zone_system_provider_context;
 static unsigned char rin_time_zone_system_provider_bound;
+static unsigned int rin_time_zone_system_provider_generation;
+static unsigned int rin_time_zone_cache_environment_generation;
+static unsigned int rin_time_zone_cache_system_generation;
+static unsigned char rin_time_zone_cache_source;
+static unsigned char rin_time_zone_cache_valid;
 static char rin_time_zone_standard_name[RIN_TZ_NAME_MAX + 1u] = "UTC";
 static char rin_time_zone_daylight_name[RIN_TZ_NAME_MAX + 1u] = "UTC";
 
@@ -87,10 +99,43 @@ static volatile unsigned char rin_cxx_tm_timezone_lock;
 
 extern int rin_system_timezone_get(char* output, size_t capacity)
     __attribute__((weak));
+extern unsigned int rin_system_timezone_generation(void)
+    __attribute__((weak));
 extern int rin_system_timezone_offset(const char* zone,
                                       int64_t epoch_seconds,
                                       int* offset_minutes,
                                       int* in_dst) __attribute__((weak));
+
+enum {
+    RIN_TIME_ZONE_CACHE_SOURCE_ENVIRONMENT = 1u,
+    RIN_TIME_ZONE_CACHE_SOURCE_BOUND_PROVIDER = 2u,
+    RIN_TIME_ZONE_CACHE_SOURCE_SYSTEM_PROVIDER = 3u,
+    RIN_TIME_ZONE_CACHE_SOURCE_UTC_FALLBACK = 4u
+};
+
+static int rin_time_zone_environment_generation(unsigned int* generation_out) {
+    if (!generation_out) return 0;
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    defined(RIN_USERSPACE) && RIN_USERSPACE
+    *generation_out = __rin_env_generation();
+    return 1;
+#else
+    if (!__rin_env_generation) return 0;
+    *generation_out = __rin_env_generation();
+    return 1;
+#endif
+}
+
+static int rin_time_zone_read_system_generation(
+    unsigned int* generation_out) {
+    unsigned int generation;
+    if (!generation_out || !rin_system_timezone_generation) return 0;
+    generation = rin_system_timezone_generation();
+    /* The runtime contract reserves zero for an unavailable query. */
+    if (generation == 0u) return 0;
+    *generation_out = generation;
+    return 1;
+}
 #if defined(__cplusplus)
 #define RIN_TIME_ZONE_THREAD_LOCAL thread_local
 #else
@@ -214,88 +259,136 @@ static void rin_time_zone_copy(char* output, const char* input,
     output[index] = '\0';
 }
 
-static int rin_time_zone_snapshot_environment(char output[RIN_TZ_TEXT_MAX + 1u]) {
+static int rin_time_zone_snapshot_environment(
+    char output[RIN_TZ_TEXT_MAX + 1u], unsigned int* environment_generation,
+    unsigned int* system_generation, unsigned char* source_out,
+    int* cacheable_out) {
+    unsigned int environment_epoch = 0u;
+    unsigned int provider_generation = 0u;
+    char** environment = NULL;
     const char* value;
     RinTimeZoneSystemProvider provider = NULL;
     void* provider_context = NULL;
+    unsigned int bound_generation = 0u;
     size_t length = 0u;
-#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
-    defined(RIN_USERSPACE) && RIN_USERSPACE
-    unsigned int environment_epoch;
-    char** environment = __rin_env_read_begin(&environment_epoch);
-    value = __rin_env_get_from_snapshot(environment, "TZ");
-#else
-    value = getenv("TZ");
-#endif
+    int cacheable = 0;
+    int environment_snapshot_available = 0;
+    int environment_generation_available = 0;
+
+    if (!environment_generation || !system_generation || !source_out ||
+        !cacheable_out) {
+        errno = EINVAL;
+        return 0;
+    }
     for (size_t index = 0u; index <= RIN_TZ_TEXT_MAX; ++index)
         output[index] = '\0';
+
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
     defined(RIN_USERSPACE) && RIN_USERSPACE
+    environment = __rin_env_read_begin(&environment_epoch);
+    environment_snapshot_available = 1;
+    environment_generation_available = 1;
+    value = __rin_env_get_from_snapshot(environment, "TZ");
+#else
+    if (__rin_env_read_begin && __rin_env_read_end &&
+        __rin_env_get_from_snapshot) {
+        environment = __rin_env_read_begin(&environment_epoch);
+        environment_snapshot_available = 1;
+        environment_generation_available = 1;
+        value = __rin_env_get_from_snapshot(environment, "TZ");
+    } else {
+        value = getenv("TZ");
+        environment_generation_available =
+            rin_time_zone_environment_generation(&environment_epoch);
+    }
+#endif
     if (value) {
         if (value[0] == '\0') value = "UTC0";
         while (length <= RIN_TZ_TEXT_MAX && value[length] != '\0') ++length;
         if (length <= RIN_TZ_TEXT_MAX)
             for (size_t index = 0u; index < length; ++index)
                 output[index] = value[index];
-        __rin_env_read_end(environment_epoch);
+        if (environment_snapshot_available)
+            __rin_env_read_end(environment_epoch);
         if (length > RIN_TZ_TEXT_MAX) {
             errno = EOVERFLOW;
             return 0;
         }
+        *environment_generation = environment_epoch;
+        *system_generation = 0u;
+        *source_out = RIN_TIME_ZONE_CACHE_SOURCE_ENVIRONMENT;
+        *cacheable_out = environment_generation_available;
         return 1;
     }
-    __rin_env_read_end(environment_epoch);
-#endif
-    if (!value) {
-        rin_time_zone_acquire();
-        if (rin_time_zone_system_provider_bound) {
-            provider = rin_time_zone_system_provider;
-            provider_context = rin_time_zone_system_provider_context;
+    if (environment_snapshot_available)
+        __rin_env_read_end(environment_epoch);
+    *environment_generation = environment_epoch;
+
+    rin_time_zone_acquire();
+    if (rin_time_zone_system_provider_bound) {
+        provider = rin_time_zone_system_provider;
+        provider_context = rin_time_zone_system_provider_context;
+        bound_generation = rin_time_zone_system_provider_generation;
+    }
+    rin_time_zone_release();
+    if (provider) {
+        if (!provider(output, RIN_TZ_TEXT_MAX + 1u, provider_context)) {
+            errno = EINVAL;
+            return 0;
         }
-        rin_time_zone_release();
-        if (provider) {
-            if (!provider(output, RIN_TZ_TEXT_MAX + 1u, provider_context)) {
-                errno = EINVAL;
-                return 0;
-            }
-            while (length <= RIN_TZ_TEXT_MAX && output[length] != '\0') ++length;
+        while (length <= RIN_TZ_TEXT_MAX && output[length] != '\0') ++length;
+        if (length > RIN_TZ_TEXT_MAX) {
+            errno = EOVERFLOW;
+            return 0;
+        }
+        *system_generation = bound_generation;
+        *source_out = RIN_TIME_ZONE_CACHE_SOURCE_BOUND_PROVIDER;
+        *cacheable_out = environment_generation_available;
+        return 1;
+    }
+    if (rin_system_timezone_get) {
+        unsigned int before_generation = 0u;
+        unsigned int after_generation = 0u;
+        int has_generation =
+            rin_time_zone_read_system_generation(&before_generation);
+        if (rin_system_timezone_get(output, RIN_TZ_TEXT_MAX + 1u)) {
+            while (length <= RIN_TZ_TEXT_MAX && output[length] != '\0')
+                ++length;
             if (length > RIN_TZ_TEXT_MAX) {
                 errno = EOVERFLOW;
                 return 0;
             }
-            return 1;
-        }
-        if (rin_system_timezone_get) {
-            if (rin_system_timezone_get(output, RIN_TZ_TEXT_MAX + 1u)) {
-                while (length <= RIN_TZ_TEXT_MAX && output[length] != '\0')
-                    ++length;
-                if (length > RIN_TZ_TEXT_MAX) {
-                    errno = EOVERFLOW;
+            if (has_generation) {
+                if (!rin_time_zone_read_system_generation(
+                        &after_generation) ||
+                    before_generation != after_generation) {
+                    errno = EAGAIN;
                     return 0;
                 }
-                return 1;
+                provider_generation = after_generation;
+                cacheable = environment_generation_available;
             }
-            /* A missing or unreadable system owner is a UTC-safe fallback. */
-            value = "UTC0";
-        } else {
-            value = "UTC0";
+            *system_generation = provider_generation;
+            *source_out = RIN_TIME_ZONE_CACHE_SOURCE_SYSTEM_PROVIDER;
+            *cacheable_out = cacheable;
+            return 1;
         }
+        /* Retry a failed provider on the next conversion; never cache its
+         * fallback as if it were the current machine preference. */
+        for (size_t index = 0u; index < 5u; ++index) output[index] = "UTC0"[index];
+        *system_generation = 0u;
+        *source_out = RIN_TIME_ZONE_CACHE_SOURCE_UTC_FALLBACK;
+        *cacheable_out = 0;
+        return 1;
     }
-#if !defined(RIN_FREESTANDING) || !RIN_FREESTANDING || \
-    !defined(RIN_USERSPACE) || !RIN_USERSPACE
-    else if (value[0] == '\0') {
-        /* POSIX defines an explicitly empty TZ as UTC.  It must not silently
-         * turn into the machine-wide provider merely because the provider is
-         * installed. */
-        value = "UTC0";
-    }
-#endif
-    while (length <= RIN_TZ_TEXT_MAX && value[length] != '\0') ++length;
-    if (length > RIN_TZ_TEXT_MAX) {
-        errno = EOVERFLOW;
-        return 0;
-    }
-    for (size_t index = 0u; index < length; ++index) output[index] = value[index];
+
+    output[0] = 'U';
+    output[1] = 'T';
+    output[2] = 'C';
+    output[3] = '0';
+    *system_generation = 0u;
+    *source_out = RIN_TIME_ZONE_CACHE_SOURCE_UTC_FALLBACK;
+    *cacheable_out = environment_generation_available;
     return 1;
 }
 
@@ -314,6 +407,10 @@ int rin_time_zone_bind_system_provider(RinTimeZoneSystemProvider provider,
     rin_time_zone_system_provider = provider;
     rin_time_zone_system_provider_context = context;
     rin_time_zone_system_provider_bound = 1u;
+    ++rin_time_zone_system_provider_generation;
+    if (rin_time_zone_system_provider_generation == 0u)
+        ++rin_time_zone_system_provider_generation;
+    rin_time_zone_cache_valid = 0u;
     rin_time_zone_release();
     return 0;
 }
@@ -796,19 +893,62 @@ static int rin_time_zone_refresh(void) {
     char text[RIN_TZ_TEXT_MAX + 1u];
     RinTimeZone candidate;
     int saved_errno = errno;
-    if (!rin_time_zone_snapshot_environment(text) ||
-        !rin_time_zone_parse(text, &candidate)) return 0;
-    rin_time_zone_acquire();
-    rin_time_zone = candidate;
-    rin_time_zone_copy(rin_time_zone_standard_name, candidate.standard_name,
-                       sizeof(rin_time_zone_standard_name));
-    rin_time_zone_copy(rin_time_zone_daylight_name, candidate.daylight_name,
-                       sizeof(rin_time_zone_daylight_name));
-    timezone = -candidate.standard_offset;
-    daylight = candidate.has_daylight;
-    rin_time_zone_release();
-    errno = saved_errno;
-    return 1;
+    unsigned int environment_generation;
+    unsigned int system_generation;
+    unsigned char source;
+    int cacheable;
+    for (unsigned int attempt = 0u; attempt < 3u; ++attempt) {
+        unsigned int current_environment_generation;
+        int have_current_environment_generation;
+        if (!rin_time_zone_snapshot_environment(
+                text, &environment_generation, &system_generation, &source,
+                &cacheable) ||
+            !rin_time_zone_parse(text, &candidate))
+            return 0;
+        have_current_environment_generation =
+            rin_time_zone_environment_generation(
+                &current_environment_generation);
+        if (have_current_environment_generation &&
+            current_environment_generation != environment_generation)
+            continue;
+        if (!have_current_environment_generation) cacheable = 0;
+        if (source == RIN_TIME_ZONE_CACHE_SOURCE_SYSTEM_PROVIDER &&
+            cacheable) {
+            unsigned int current_generation;
+            if (!rin_time_zone_read_system_generation(
+                    &current_generation)) {
+                errno = EAGAIN;
+                return 0;
+            }
+            if (current_generation != system_generation) continue;
+        }
+        rin_time_zone_acquire();
+        if (source == RIN_TIME_ZONE_CACHE_SOURCE_BOUND_PROVIDER &&
+            (!rin_time_zone_system_provider_bound ||
+             rin_time_zone_system_provider_generation != system_generation)) {
+            rin_time_zone_release();
+            continue;
+        }
+        rin_time_zone = candidate;
+        rin_time_zone_copy(rin_time_zone_standard_name,
+                           candidate.standard_name,
+                           sizeof(rin_time_zone_standard_name));
+        rin_time_zone_copy(rin_time_zone_daylight_name,
+                           candidate.daylight_name,
+                           sizeof(rin_time_zone_daylight_name));
+        timezone = -candidate.standard_offset;
+        daylight = candidate.has_daylight;
+        rin_time_zone_cache_valid = (unsigned char)(cacheable != 0);
+        rin_time_zone_cache_environment_generation =
+            environment_generation;
+        rin_time_zone_cache_system_generation = system_generation;
+        rin_time_zone_cache_source = source;
+        rin_time_zone_release();
+        errno = saved_errno;
+        return 1;
+    }
+    errno = EAGAIN;
+    return 0;
 }
 
 void tzset(void) {
@@ -1051,11 +1191,70 @@ static int rin_time_local_with_zone(const RinTimeZone* zone, time_t epoch,
 }
 
 static int rin_time_zone_snapshot(RinTimeZone* output) {
-    if (!rin_time_zone_refresh()) return 0;
-    rin_time_zone_acquire();
-    *output = rin_time_zone;
-    rin_time_zone_release();
-    return 1;
+    if (!output) {
+        errno = EINVAL;
+        return 0;
+    }
+    for (unsigned int attempt = 0u; attempt < 3u; ++attempt) {
+        unsigned int environment_generation = 0u;
+        unsigned int system_generation = 0u;
+        unsigned char source = 0u;
+        int have_environment_generation =
+            rin_time_zone_environment_generation(&environment_generation);
+        int cached = 0;
+        rin_time_zone_acquire();
+        if (have_environment_generation && rin_time_zone_cache_valid &&
+            rin_time_zone_cache_environment_generation ==
+                environment_generation) {
+            source = rin_time_zone_cache_source;
+            system_generation = rin_time_zone_cache_system_generation;
+            if (source == RIN_TIME_ZONE_CACHE_SOURCE_ENVIRONMENT ||
+                source == RIN_TIME_ZONE_CACHE_SOURCE_BOUND_PROVIDER ||
+                (source == RIN_TIME_ZONE_CACHE_SOURCE_UTC_FALLBACK &&
+                 !rin_system_timezone_get)) {
+                *output = rin_time_zone;
+                cached = 1;
+            }
+        }
+        rin_time_zone_release();
+        if (cached) return 1;
+        if (source == RIN_TIME_ZONE_CACHE_SOURCE_SYSTEM_PROVIDER) {
+            unsigned int current_generation;
+            int have_system_generation =
+                rin_time_zone_read_system_generation(&current_generation);
+            if (have_system_generation &&
+                current_generation == system_generation &&
+                rin_time_zone_environment_generation(
+                    &environment_generation) &&
+                environment_generation ==
+                    rin_time_zone_cache_environment_generation) {
+                rin_time_zone_acquire();
+                if (rin_time_zone_cache_valid &&
+                    rin_time_zone_cache_source == source &&
+                    rin_time_zone_cache_environment_generation ==
+                        environment_generation &&
+                    rin_time_zone_cache_system_generation ==
+                        system_generation) {
+                    *output = rin_time_zone;
+                    cached = 1;
+                }
+                rin_time_zone_release();
+                if (cached) return 1;
+            }
+            if (!rin_time_zone_refresh()) return 0;
+            rin_time_zone_acquire();
+            *output = rin_time_zone;
+            rin_time_zone_release();
+            return 1;
+        }
+        if (!rin_time_zone_refresh()) return 0;
+        rin_time_zone_acquire();
+        *output = rin_time_zone;
+        rin_time_zone_release();
+        return 1;
+    }
+    errno = EAGAIN;
+    return 0;
 }
 
 struct tm* gmtime_r(const time_t* timer, struct tm* result) {

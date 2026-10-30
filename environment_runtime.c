@@ -47,15 +47,14 @@ char** __rin_env_read_begin(unsigned int* epoch_out) {
     unsigned int epoch;
     if (!epoch_out) return NULL;
     for (;;) {
-        epoch = __atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE) & 1u;
-        __atomic_fetch_add(&g_environment_readers[epoch], 1u,
+        epoch = __atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE);
+        __atomic_fetch_add(&g_environment_readers[epoch & 1u], 1u,
                            __ATOMIC_ACQ_REL);
-        if ((__atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE) & 1u) ==
-            epoch) {
+        if (__atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE) == epoch) {
             *epoch_out = epoch;
             return __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
         }
-        __atomic_fetch_sub(&g_environment_readers[epoch], 1u,
+        __atomic_fetch_sub(&g_environment_readers[epoch & 1u], 1u,
                            __ATOMIC_RELEASE);
     }
 }
@@ -63,6 +62,10 @@ char** __rin_env_read_begin(unsigned int* epoch_out) {
 void __rin_env_read_end(unsigned int epoch) {
     __atomic_fetch_sub(&g_environment_readers[epoch & 1u], 1u,
                        __ATOMIC_RELEASE);
+}
+
+unsigned int __rin_env_generation(void) {
+    return __atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE);
 }
 
 static size_t environment_length(const char* string) {
@@ -216,9 +219,10 @@ static void environment_reclaim(char** survivor) {
 
 static void environment_synchronize_and_reclaim(char** survivor) {
     unsigned int old_epoch =
-        __atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE) & 1u;
-    __atomic_store_n(&g_environment_epoch, old_epoch ^ 1u, __ATOMIC_RELEASE);
-    while (__atomic_load_n(&g_environment_readers[old_epoch],
+        __atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE);
+    __atomic_store_n(&g_environment_epoch, old_epoch + 1u,
+                     __ATOMIC_RELEASE);
+    while (__atomic_load_n(&g_environment_readers[old_epoch & 1u],
                            __ATOMIC_ACQUIRE) != 0u)
         __asm__ volatile("pause" ::: "memory");
     environment_reclaim(survivor);
@@ -229,9 +233,10 @@ static int environment_publish(char** expected, char** replacement) {
     if (!__atomic_compare_exchange_n(&environ, &expected, replacement, 0,
                                      __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
         return 0;
-    old_epoch = __atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE) & 1u;
-    __atomic_store_n(&g_environment_epoch, old_epoch ^ 1u, __ATOMIC_RELEASE);
-    while (__atomic_load_n(&g_environment_readers[old_epoch],
+    old_epoch = __atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE);
+    __atomic_store_n(&g_environment_epoch, old_epoch + 1u,
+                     __ATOMIC_RELEASE);
+    while (__atomic_load_n(&g_environment_readers[old_epoch & 1u],
                            __ATOMIC_ACQUIRE) != 0u)
         __asm__ volatile("pause" ::: "memory");
     environment_reclaim(replacement);
