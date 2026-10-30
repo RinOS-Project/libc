@@ -842,13 +842,32 @@ static inline int _rin_realpath_copy(char* destination, size_t capacity,
  * is deliberately not implemented through argv[0], a raw PID, or /proc. */
 static inline int rin_process_image_path_get(
     RinProcessImagePathResponseV1* response) {
+    uint32_t index;
     if (response == NULL) {
         errno = EINVAL;
         return -1;
     }
-    return _rin_unistd_status(_RIN_UNISTD_SYSCALL2(
-        SYS_PROCESS_IMAGE_PATH_GET, (uintptr_t)response,
-        (uintptr_t)sizeof(*response)));
+    if (_rin_unistd_status(_RIN_UNISTD_SYSCALL2(
+            SYS_PROCESS_IMAGE_PATH_GET, (uintptr_t)response,
+            (uintptr_t)sizeof(*response)) != 0)
+        return -1;
+    if (response->struct_size != sizeof(*response) ||
+        response->version != RIN_PROCESS_IMAGE_PATH_ABI_VERSION ||
+        response->flags != RIN_PROCESS_IMAGE_PATH_FLAG_AUTHENTICATED ||
+        response->reserved0 != 0u || response->length == 0u ||
+        response->length >= sizeof(response->path) ||
+        response->path[response->length] != '\0' ||
+        response->reserved[0] != 0u || response->reserved[1] != 0u) {
+        errno = EIO;
+        return -1;
+    }
+    for (index = 0u; index < response->length; ++index) {
+        if (response->path[index] == '\0') {
+            errno = EIO;
+            return -1;
+        }
+    }
+    return 0;
 }
 
 /* Return the kernel-owned current executable allocation range for address
