@@ -530,6 +530,16 @@ static inline int kill(int pid, int sig) {
         _RIN_SIGNAL_SYSCALL2(SYS_KILL, pid, sig));
 }
 
+static inline int killpg(int pgrp, int sig) {
+    if (pgrp < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    return kill(pgrp == 0 ? 0 : -pgrp, sig);
+}
+
+/* POSIX declares these thread entry points in both signal.h and pthread.h. */
+
 static inline int sigqueue(int pid, int signum, union sigval value) {
     siginfo_t information;
     intptr_t result;

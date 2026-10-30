@@ -12,6 +12,7 @@
 #include "sys/socket.h"
 #include "sys/un.h"
 #include "netinet/in.h"
+#include "arpa/inet.h"
 #include "string.h"
 #include "stdlib.h"
 #include "stdio.h"
@@ -77,6 +78,17 @@ struct protoent {
     char*  p_name;       /* プロトコル名 */
     char** p_aliases;    /* エイリアス一覧 */
     int    p_proto;      /* プロトコル番号 */
+};
+
+/* ═══════════════════════════════════════════════════════════════
+ * netent構造体 - ネットワーク情報
+ * ═══════════════════════════════════════════════════════════════*/
+
+struct netent {
+    char*    n_name;         /* ネットワーク名 */
+    char**   n_aliases;      /* エイリアス一覧 */
+    int      n_addrtype;     /* アドレスタイプ (AF_INET) */
+    uint32_t n_net;          /* ネットワーク番号 (ホストバイトオーダー) */
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -164,6 +176,18 @@ typedef struct __rin_netdb_runtime_state_v1 {
     FILE* protocol_file;
     long protocol_file_offset;
     int protocol_stayopen;
+    FILE* host_file;
+    long host_file_offset;
+    int host_stayopen;
+    struct in6_addr host_addr6;
+    char network_name[RIN_NETDB_DATABASE_NAME_MAX];
+    char network_alias_storage[RIN_NETDB_DATABASE_MAX_ALIASES]
+                             [RIN_NETDB_DATABASE_NAME_MAX];
+    char* network_aliases[RIN_NETDB_DATABASE_MAX_ALIASES + 1u];
+    struct netent network_result;
+    FILE* network_file;
+    long network_file_offset;
+    int network_stayopen;
 } __rin_netdb_runtime_state_v1;
 
 extern RIN_NETDB_THREAD_LOCAL __rin_netdb_runtime_state_v1
@@ -547,7 +571,7 @@ static inline int _netdb_resolved_system_error_status(
 static inline int _netdb_parse_service_port(const char* service,
                                              int socket_type,
                                              uint16_t* port_out) {
-    _NetdbServiceRecord record;
+    _NetdbServiceRecord record = { 0 };
     uint32_t port = 0u;
     const char* cursor;
     int lookup_status;
@@ -1117,11 +1141,9 @@ static inline int getaddrinfo(const char* node, const char* service,
     int unspec_dual = 0;
     int mapped_ipv4_primary = 0;
     char canon_buf[256];
-    char secondary_canon[256];
     memset(address, 0, sizeof(address));
     memset(secondary_address, 0, sizeof(secondary_address));
     canon_buf[0] = '\0';
-    secondary_canon[0] = '\0';
     uint16_t port;
     int resolved_locally = 0;
     {
@@ -1847,6 +1869,234 @@ static inline void herror(const char* s) {
 #ifdef __cplusplus
 }
 #endif
+
+/* ═══════════════════════════════════════════════════════════════
+ * Re-entrant (_r) forms.  These share the static implementation,
+ * then copy the published entry into the caller buffer, so they
+ * must follow the non-re-entrant definitions above.
+ * ══════════════════════════════════════════════════════════════*/
+
+/* The re-entrant lookups share the static implementation, then copy the
+ * published entry into the caller buffer.  Publication uses thread-local
+ * state and the copy happens before returning, so no static storage
+ * escapes. */
+static inline int getservbyname_r(const char* name, const char* proto,
+                                  struct servent* ret, char* buf,
+                                  size_t buflen, struct servent** result)
+{
+    struct servent* found;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (name == NULL || ret == NULL) return EINVAL;
+    found = getservbyname(name, proto);
+    if (found == NULL) return errno != 0 ? errno : ENOENT;
+    return _netdb_pack_servent(buf, buflen, found, ret, result);
+}
+
+static inline int getservbyport_r(int port, const char* proto,
+                                  struct servent* ret, char* buf,
+                                  size_t buflen, struct servent** result)
+{
+    struct servent* found;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (ret == NULL) return EINVAL;
+    found = getservbyport(port, proto);
+    if (found == NULL) return errno != 0 ? errno : ENOENT;
+    return _netdb_pack_servent(buf, buflen, found, ret, result);
+}
+
+static inline int getservent_r(struct servent* ret, char* buf, size_t buflen,
+                               struct servent** result)
+{
+    int saved_errno = errno;
+    struct servent* found;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (ret == NULL) return EINVAL;
+    found = getservent();
+    if (found == NULL) return errno == saved_errno ? ENOENT : errno;
+    return _netdb_pack_servent(buf, buflen, found, ret, result);
+}
+
+static inline int getprotobyname_r(const char* name, struct protoent* ret,
+                                   char* buf, size_t buflen,
+                                   struct protoent** result)
+{
+    struct protoent* found;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (name == NULL || ret == NULL) return EINVAL;
+    found = getprotobyname(name);
+    if (found == NULL) return errno != 0 ? errno : ENOENT;
+    return _netdb_pack_protoent(buf, buflen, found, ret, result);
+}
+
+static inline int getprotobynumber_r(int proto, struct protoent* ret,
+                                     char* buf, size_t buflen,
+                                     struct protoent** result)
+{
+    struct protoent* found;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (ret == NULL) return EINVAL;
+    found = getprotobynumber(proto);
+    if (found == NULL) return errno != 0 ? errno : ENOENT;
+    return _netdb_pack_protoent(buf, buflen, found, ret, result);
+}
+
+static inline int getprotoent_r(struct protoent* ret, char* buf,
+                                size_t buflen, struct protoent** result)
+{
+    int saved_errno = errno;
+    struct protoent* found;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (ret == NULL) return EINVAL;
+    found = getprotoent();
+    if (found == NULL) return errno == saved_errno ? ENOENT : errno;
+    return _netdb_pack_protoent(buf, buflen, found, ret, result);
+}
+
+static inline int gethostbyname_r(const char* name, struct hostent* ret,
+                                  char* buf, size_t buflen,
+                                  struct hostent** result, int* h_errnop)
+{
+    struct hostent* found;
+    int pack_status;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (name == NULL || ret == NULL || h_errnop == NULL) return EINVAL;
+    found = gethostbyname(name);
+    if (found == NULL) {
+        *h_errnop = h_errno;
+        return errno != 0 ? errno : ENOENT;
+    }
+    pack_status = _netdb_pack_hostent(buf, buflen, found, ret, result);
+    if (pack_status != 0) {
+        *h_errnop = NO_RECOVERY;
+        return pack_status;
+    }
+    *h_errnop = 0;
+    return 0;
+}
+
+static inline int gethostbyaddr_r(const void* addr, socklen_t len, int type,
+                                  struct hostent* ret, char* buf,
+                                  size_t buflen, struct hostent** result,
+                                  int* h_errnop)
+{
+    struct hostent* found;
+    int pack_status;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (addr == NULL || ret == NULL || h_errnop == NULL) return EINVAL;
+    found = gethostbyaddr(addr, len, type);
+    if (found == NULL) {
+        *h_errnop = h_errno;
+        return errno != 0 ? errno : ENOENT;
+    }
+    pack_status = _netdb_pack_hostent(buf, buflen, found, ret, result);
+    if (pack_status != 0) {
+        *h_errnop = NO_RECOVERY;
+        return pack_status;
+    }
+    *h_errnop = 0;
+    return 0;
+}
+
+static inline int gethostent_r(struct hostent* ret, char* buf, size_t buflen,
+                               struct hostent** result, int* h_errnop)
+{
+    int saved_errno = errno;
+    struct hostent* found;
+    int pack_status;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (ret == NULL || h_errnop == NULL) return EINVAL;
+    found = gethostent();
+    if (found == NULL) {
+        *h_errnop = h_errno;
+        return errno == saved_errno ? ENOENT : errno;
+    }
+    pack_status = _netdb_pack_hostent(buf, buflen, found, ret, result);
+    if (pack_status != 0) {
+        *h_errnop = NO_RECOVERY;
+        return pack_status;
+    }
+    *h_errnop = 0;
+    return 0;
+}
+
+static inline int getnetbyname_r(const char* name, struct netent* ret,
+                                 char* buf, size_t buflen,
+                                 struct netent** result, int* h_errnop)
+{
+    struct netent* found;
+    int pack_status;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (name == NULL || ret == NULL || h_errnop == NULL) return EINVAL;
+    found = getnetbyname(name);
+    if (found == NULL) {
+        *h_errnop = h_errno;
+        return errno != 0 ? errno : ENOENT;
+    }
+    pack_status = _netdb_pack_netent(buf, buflen, found, ret, result);
+    if (pack_status != 0) {
+        *h_errnop = NO_RECOVERY;
+        return pack_status;
+    }
+    *h_errnop = 0;
+    return 0;
+}
+
+static inline int getnetbyaddr_r(uint32_t net, int type, struct netent* ret,
+                                 char* buf, size_t buflen,
+                                 struct netent** result, int* h_errnop)
+{
+    struct netent* found;
+    int pack_status;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (ret == NULL || h_errnop == NULL) return EINVAL;
+    found = getnetbyaddr(net, type);
+    if (found == NULL) {
+        *h_errnop = h_errno;
+        return errno != 0 ? errno : ENOENT;
+    }
+    pack_status = _netdb_pack_netent(buf, buflen, found, ret, result);
+    if (pack_status != 0) {
+        *h_errnop = NO_RECOVERY;
+        return pack_status;
+    }
+    *h_errnop = 0;
+    return 0;
+}
+
+static inline int getnetent_r(struct netent* ret, char* buf, size_t buflen,
+                              struct netent** result, int* h_errnop)
+{
+    int saved_errno = errno;
+    struct netent* found;
+    int pack_status;
+    if (result == NULL) return EINVAL;
+    *result = NULL;
+    if (ret == NULL || h_errnop == NULL) return EINVAL;
+    found = getnetent();
+    if (found == NULL) {
+        *h_errnop = h_errno;
+        return errno == saved_errno ? ENOENT : errno;
+    }
+    pack_status = _netdb_pack_netent(buf, buflen, found, ret, result);
+    if (pack_status != 0) {
+        *h_errnop = NO_RECOVERY;
+        return pack_status;
+    }
+    *h_errnop = 0;
+    return 0;
+}
+
 
 #undef _netdb_addr
 #undef _netdb_addr_list

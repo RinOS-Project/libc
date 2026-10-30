@@ -56,6 +56,10 @@ typedef long double double_t;
 #define M_SQRT2 1.41421356237309504880
 #endif
 
+/* lgamma/tgamma write the sign of the gamma result here.  Unlike errno
+ * this is a single process-global integer, not per-thread state. */
+extern int signgam;
+
 /* 分類マクロ定数 */
 #define FP_NAN       0
 #define FP_INFINITE  1
@@ -869,12 +873,20 @@ static inline long lroundf(float x) {
     return __rin_math_lround_to_long((double)roundf(x));
 }
 
+static inline long lroundl(long double x) {
+    return __rin_math_lround_to_long(round((double)x));
+}
+
 static inline long long llround(double x) {
     return __rin_math_lround_to_ll(round(x));
 }
 
 static inline long long llroundf(float x) {
     return __rin_math_lround_to_ll((double)roundf(x));
+}
+
+static inline long long llroundl(long double x) {
+    return __rin_math_lround_to_ll(round((double)x));
 }
 
 /* trunc - 0方向への切り捨て */
@@ -1000,6 +1012,316 @@ static inline double log10(double x) {
 
 static inline float log10f(float x) {
     return (float)log10((double)x);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * POSIX.1-2008 completions: erf, erfc, lgamma, tgamma, remquo.
+ * Self-contained (no libm): Taylor series (|x| <= 1), Lentz
+ * continued fraction (erfc tails), Stirling series with Bernoulli
+ * numbers B2..B10 (lgamma).  Error reporting is fenv-only,
+ * matching the rest of this header.  Edge semantics (NaN /
+ * signed zero / infinities / poles / signgam / *quo on error)
+ * were probed against glibc and mirror it, including lgamma NaN
+ * raising FE_INVALID and tgamma preserving signgam.
+ * ═══════════════════════════════════════════════════════════════ */
+
+/* 2/sqrt(pi) and 1/sqrt(pi), correctly rounded. */
+#define __RIN_MATH_2_SQRT_PI 1.12837916709551257390
+#define __RIN_MATH_1_SQRT_PI 0.56418958354775628695
+
+static inline double __rin_math_erf_taylor(double x) {
+    /* erf(x) = 2/sqrt(pi) * sum_n (-1)^n x^(2n+1) / (n! (2n+1)).
+     * Called with |x| <= 1, where cancellation is negligible. */
+    double x2 = x * x;
+    double term = x;
+    double sum = x;
+    for (int n = 1; n <= 60; n++) {
+        term *= -x2 * (2.0 * n - 1.0) / ((double)n * (2.0 * n + 1.0));
+        sum += term;
+        if (term == 0.0 || fabs(term) < 1e-17 * fabs(sum)) break;
+    }
+    return __RIN_MATH_2_SQRT_PI * sum;
+}
+
+static inline double __rin_math_erfc_lentz(double x) {
+    /* Laplace continued fraction in Lentz-modified form, x > 0:
+     *   erfc(x) = x e^(-x^2)/sqrt(pi) * CF
+     *   CF = 1/(x^2+ (1/2)/(1+ 1/(x^2+ (3/2)/(1+ ...)))),
+     * numerators n/2, denominators alternating x^2, 1.
+     * Converges for x >= 1 in about 20 iterations.  Raises nothing;
+     * the erfc wrapper reports underflow for tiny results. */
+    double x2 = x * x;
+    double tiny = 1e-300;
+    double f = tiny;
+    double c = tiny;
+    double d = 0.0;
+    for (int n = 1; n <= 500; n++) {
+        double a = (n == 1) ? 1.0 : (double)(n - 1) / 2.0;
+        double b = (n % 2 == 1) ? x2 : 1.0;
+        d = b + a * d;
+        if (d == 0.0) d = tiny;
+        d = 1.0 / d;
+        c = b + a / c;
+        if (c == 0.0) c = tiny;
+        double cd = c * d;
+        f *= cd;
+        if (fabs(cd - 1.0) < 1e-16) break;
+    }
+    return x * exp(-x2) * __RIN_MATH_1_SQRT_PI * f;
+}
+
+static inline void __rin_math_scrub_spurious_uf(int entry_uf,
+                                                 double r) {
+    /* Taylor/Lentz intermediates can underflow while the final
+     * result is perfectly normal; glibc leaks no such underflow.
+     * Genuine tiny results and pre-existing flags are preserved. */
+    if (!entry_uf && r != 0.0 && fabs(r) >= __DBL_MIN__)
+        feclearexcept(FE_UNDERFLOW);
+}
+
+static inline double erf(double x) {
+    if (__builtin_isnan(x)) return x;
+    if (__builtin_isinf(x)) return x > 0.0 ? 1.0 : -1.0;
+    int entry_uf = fetestexcept(FE_UNDERFLOW);
+    double ax = fabs(x);
+    double e;
+    if (ax <= 1.5) {
+        e = __rin_math_erf_taylor(ax);
+    } else {
+        e = 1.0 - __rin_math_erfc_lentz(ax);
+    }
+    double r = __builtin_signbit(x) ? -e : e;
+    __rin_math_scrub_spurious_uf(entry_uf, r);
+    return r;
+}
+
+static inline float erff(float x) {
+    return (float)erf((double)x);
+}
+
+static inline long double erfl(long double x) {
+    return (long double)erf((double)x);
+}
+
+static inline double erfc(double x) {
+    if (__builtin_isnan(x)) return x;
+    if (__builtin_isinf(x)) return x > 0.0 ? 0.0 : 2.0;
+    int entry_uf = fetestexcept(FE_UNDERFLOW);
+    double ax = fabs(x);
+    double e;
+    if (ax <= 1.5) {
+        e = 1.0 - __rin_math_erf_taylor(ax);
+    } else {
+        e = __rin_math_erfc_lentz(ax);
+        if (x >= 0.0 && (e == 0.0 || e < __DBL_MIN__)) {
+            /* Tiny positive result: glibc raises underflow here. */
+            (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+        }
+    }
+    double r = x >= 0.0 ? e : 2.0 - e;
+    __rin_math_scrub_spurious_uf(entry_uf, r);
+    return r;
+}
+
+static inline float erfcf(float x) {
+    return (float)erfc((double)x);
+}
+
+static inline long double erfcl(long double x) {
+    return (long double)erfc((double)x);
+}
+
+static inline double lgamma(double x) {
+    /* Stirling series: lgamma(y) = (y-1/2) ln y - y + ln(2pi)/2
+     *   + 1/(12y) - 1/(360y^3) + 1/(1260y^5) - 1/(1680y^7)
+     *   + 1/(1188y^9),
+     * from B2=1/6, B4=-1/30, B6=1/42, B8=-1/30, B10=5/66
+     * (each verified against zeta(2n)).  Positive arguments are
+     * lifted to y >= 12 (truncation ~3e-14); negatives use the
+     * reflection formula; poles and edge classes mirror glibc. */
+    if (__builtin_isnan(x)) {
+        signgam = 1;
+        return x;
+    }
+    if (__builtin_isinf(x)) {
+        signgam = 1;
+        if (x > 0.0) return x;
+        return HUGE_VAL;
+    }
+    if (x == 0.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        signgam = __builtin_signbit(x) ? -1 : 1;
+        return HUGE_VAL;
+    }
+    if (x == 1.0 || x == 2.0) {
+        /* Gamma(1) = Gamma(2) = 1: exact zero, no exceptions. */
+        signgam = 1;
+        return 0.0;
+    }
+    if (x < 0.0) {
+        double fl = floor(x);
+        if (x == fl) {
+            (void)feraiseexcept(FE_DIVBYZERO);
+            signgam = 1;
+            return HUGE_VAL;
+        }
+        /* lgamma(x) = ln pi - ln sin(pi frac) - lgamma(1-x);
+         * sign(Gamma(x)) = sign(sin(pi x)) = (-1)^floor(x).
+         * fmod keeps the parity exact past 2^53 (long would not). */
+        double frac = x - fl;
+        /* sin(pi f) = sin(pi (1-f)): fold to [0, 1/2] so near-pole
+         * arguments stay tiny and the Taylor series keeps full
+         * precision instead of cancelling at pi. */
+        double folded = (frac > 0.5) ? 1.0 - frac : frac;
+        double s = sin(3.14159265358979323846 * folded);
+        double g = lgamma(1.0 - x);
+        signgam = (fmod(fl, 2.0) != 0.0) ? -1 : 1;
+        if (__builtin_isnan(g)) return g;
+        return 1.14472988584940017414 - log(s) - g;
+    }
+    double y = x;
+    double shift = 0.0;
+    while (y < 12.0) {
+        shift -= log(y);
+        y += 1.0;
+    }
+    double inv = 1.0 / y;
+    double series;
+    if (inv < 1e-150) {
+        /* Higher powers underflow to literal zero here; inv/12 is
+         * the complete series, computed without spurious underflow. */
+        series = inv * (1.0 / 12.0);
+    } else {
+        double inv2 = inv * inv;
+        series = inv * (1.0 / 12.0 + inv2 * (-1.0 / 360.0 +
+            inv2 * (1.0 / 1260.0 + inv2 * (-1.0 / 1680.0 +
+            inv2 * (1.0 / 1188.0)))));
+    }
+    double r = (y - 0.5) * log(y) - y + 0.91893853320467274178 + series;
+    r += shift;
+    signgam = 1;
+    if (__builtin_isinf(r) && r > 0.0) {
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return HUGE_VAL;
+    }
+    return r;
+}
+
+static inline float lgammaf(float x) {
+    return (float)lgamma((double)x);
+}
+
+static inline long double lgammal(long double x) {
+    return (long double)lgamma((double)x);
+}
+
+static inline double tgamma(double x) {
+    /* Gamma via exp of the sign-preserving lgamma; signgam is saved
+     * and restored because glibc's tgamma leaves it untouched. */
+    if (__builtin_isnan(x)) return x;
+    if (__builtin_isinf(x)) {
+        if (x > 0.0) return x;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (x == 0.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return __builtin_signbit(x) ? -HUGE_VAL : HUGE_VAL;
+    }
+    if (x < 0.0 && x == floor(x)) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (x == 1.0) return 1.0;
+    int saved = signgam;
+    double g = lgamma(x);
+    int s = signgam;
+    signgam = saved;
+    if (__builtin_isnan(g)) return NAN;
+    if (__builtin_isinf(g) && g > 0.0) {
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return s > 0 ? HUGE_VAL : -HUGE_VAL;
+    }
+    double r = exp(g);
+    if (__builtin_isinf(r)) {
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return s > 0 ? HUGE_VAL : -HUGE_VAL;
+    }
+    if (fabs(r) < __DBL_MIN__) {
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+        return s > 0 ? r : -r;
+    }
+    return s > 0 ? r : -r;
+}
+
+static inline float tgammaf(float x) {
+    return (float)tgamma((double)x);
+}
+
+static inline long double tgammal(long double x) {
+    return (long double)tgamma((double)x);
+}
+
+static inline double remquo(double x, double y, int *quo) {
+    /* Bitwise-identical remainder to remainder(); *quo holds the
+     * round-half-even quotient's sign and low 3 bits.  On invalid
+     * inputs *quo is left untouched (glibc behavior); quotients
+     * past 2^1024 also store 0 (unrepresentable in binary64). */
+    if (__builtin_isnan(x) || __builtin_isnan(y)) return NAN;
+    if (y == 0.0 || __builtin_isinf(x)) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (__builtin_isinf(y)) {
+        if (quo) *quo = 0;
+        return x;
+    }
+    double rem = fmod(x, y);
+    if (__builtin_isnan(rem)) return rem;
+    double qd = x / y;
+    double n0 = trunc(qd);
+    double half = 0.5 * fabs(y);
+    double magnitude = fabs(rem);
+    int adjust = magnitude > half;
+    if (magnitude == half) {
+        /* IEEE remainder chooses the even nearest quotient on a tie. */
+        if (__builtin_isfinite(qd)) {
+            double absolute = fabs(qd);
+            double lower = trunc(absolute);
+            double fraction = absolute - lower;
+            if (fraction == 0.5)
+                adjust = trunc(lower / 2.0) * 2.0 != lower;
+        }
+    }
+    /* Quotient/rounding consistency: when qd rounded to an integer
+     * (qd == n0), the true quotient is within half an ulp of n0, so
+     * n0 is already correctly rounded even though fmod trunc-side
+     * remainder exceeds half.  The remainder keeps its own adjust. */
+    int adjust_quo = (qd == n0) ? 0 : adjust;
+    if (quo) {
+        if (!__builtin_isfinite(n0)) {
+            *quo = 0;
+        } else {
+            /* glibc folds the truncated quotient, then adds the
+             * rounding increment unfolded (hence quo can be +-8). */
+            double folded = fmod(n0, 8.0);
+            int q = (int)folded;
+            if (adjust_quo)
+                q += (__builtin_signbit(x) ==
+                      __builtin_signbit(y)) ? 1 : -1;
+            *quo = q;
+        }
+    }
+    if (!adjust) return rem;
+    return __builtin_signbit(x) ? rem + fabs(y) : rem - fabs(y);
+}
+
+static inline float remquof(float x, float y, int *quo) {
+    return (float)remquo((double)x, (double)y, quo);
+}
+
+static inline long double remquol(long double x, long double y, int *quo) {
+    return (long double)remquo((double)x, (double)y, quo);
 }
 
 /* log2 - 2を底とする対数 */
@@ -1599,19 +1921,30 @@ static inline double __rin_math_round_even(double x) {
 
 static inline double __rin_math_round_mode(double x) {
     double truncated;
+    double r;
     switch (fegetround()) {
     case FE_DOWNWARD:
         truncated = trunc(x);
-        return x < truncated ? truncated - 1.0 : truncated;
+        r = x < truncated ? truncated - 1.0 : truncated;
+        break;
     case FE_UPWARD:
         truncated = trunc(x);
-        return x > truncated ? truncated + 1.0 : truncated;
+        r = x > truncated ? truncated + 1.0 : truncated;
+        break;
     case FE_TOWARDZERO:
-        return trunc(x);
+        r = trunc(x);
+        break;
     case FE_TONEAREST:
     default:
-        return __rin_math_round_even(x);
+        r = __rin_math_round_even(x);
+        break;
     }
+    /* IEEE 754: round-to-integral raises inexact when it changes
+     * the value (quiet NaN and infinities pass through silently).
+     * nearbyint below suppresses this again (C99 7.12.9.3). */
+    if (__builtin_isfinite(x) && r != x)
+        (void)feraiseexcept(FE_INEXACT);
+    return r;
 }
 
 static inline double rint(double x) {
@@ -1635,22 +1968,43 @@ static inline long lrintf(float x) {
     return __rin_math_lround_to_long(__rin_math_round_mode((double)x));
 }
 
+static inline long lrintl(long double x) {
+    return __rin_math_lround_to_long(__rin_math_round_mode((double)x));
+}
+
 /* llrint - 四捨五入してlong longへ */
 static inline long long llrint(double x) {
     return __rin_math_lround_to_ll(__rin_math_round_mode(x));
 }
 
+static inline long long llrintf(float x) {
+    return __rin_math_lround_to_ll(__rin_math_round_mode((double)x));
+}
+
+static inline long long llrintl(long double x) {
+    return __rin_math_lround_to_ll(__rin_math_round_mode((double)x));
+}
+
 /* nearbyint - 現在の丸めモードで整数へ（FE例外なし） */
 static inline double nearbyint(double x) {
-    return rint(x);
+    int had = fetestexcept(FE_INEXACT);
+    double r = rint(x);
+    if (!had) feclearexcept(FE_INEXACT);
+    return r;
 }
 
 static inline float nearbyintf(float x) {
-    return rintf(x);
+    int had = fetestexcept(FE_INEXACT);
+    float r = rintf(x);
+    if (!had) feclearexcept(FE_INEXACT);
+    return r;
 }
 
 static inline long double nearbyintl(long double x) {
-    return rintl(x);
+    int had = fetestexcept(FE_INEXACT);
+    long double r = rintl(x);
+    if (!had) feclearexcept(FE_INEXACT);
+    return r;
 }
 
 /* remainder - IEEE剰余 */

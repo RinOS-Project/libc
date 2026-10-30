@@ -179,6 +179,9 @@ struct winsize {
 #define SIOCSPGRP   0x8902
 #define FIOGETOWN   0x8903
 #define SIOCGPGRP   0x8904
+/* sockatmark(3) request code.  The classifier below passes its
+ * out-param int* through the pointer class. */
+#define SIOCATMARK  0x8905
 
 /* ネットワークインターフェースioctlはkernel handler未実装のため公開しない。
  * 列挙にはgetifaddrs()/if_nameindex()を使用する。 */
@@ -287,6 +290,7 @@ _rin_ioctl_get_argument_kind(unsigned long request) {
         case TIOCGETD:
         case TIOCGSID:
         case FIOASYNC:
+        case SIOCATMARK: /* sockatmark(3) out-param */
             return _RIN_IOCTL_ARGUMENT_POINTER;
 
         default:

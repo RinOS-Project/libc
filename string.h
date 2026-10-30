@@ -136,6 +136,7 @@ int strncmp(const char* s1, const char* s2, size_t n);
 char* strchr(const char* s, int c);
 char* strrchr(const char* s, int c);
 char* strstr(const char* haystack, const char* needle);
+char* stpcpy(char* dest, const char* src);
 #else
 RIN_STRING_INLINE size_t strlen(const char* s) {
     size_t len = 0;
@@ -154,6 +155,12 @@ RIN_STRING_INLINE char* strncpy(char* dest, const char* src, size_t n) {
     while (n && (*d++ = *src++)) n--;
     while (n--) *d++ = '\0';
     return dest;
+}
+
+RIN_STRING_INLINE char* stpcpy(char* dest, const char* src) {
+    char* d = dest;
+    while ((*d++ = *src++));
+    return d - 1;
 }
 
 RIN_STRING_INLINE char* strcat(char* dest, const char* src) {

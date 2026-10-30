@@ -1106,6 +1106,14 @@ static inline char* realpath(const char* path, char* resolved_path) {
             pending = next_pending;
             next_pending = NULL;
             cursor = 0u;
+            if (prefix_length != 0u || link_target[0] == '/') {
+                /* Absolute restart: the prefix already carries the
+                 * resolved directory, so re-walking it would duplicate
+                 * components (relative targets keep the directory). */
+                resolved[0] = '/';
+                resolved[1] = '\0';
+                resolved_length = 1u;
+            }
             continue;
         }
 

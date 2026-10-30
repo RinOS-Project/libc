@@ -848,6 +848,21 @@ static inline ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags,
     return result;
 }
 
+/* sockatmark is implemented with the native ioctl ABI.  Include its
+ * declaration and inline syscall wrapper before defining sockatmark; the
+ * reciprocal include is guarded by _SYS_IOCTL_H. */
+static inline int ioctl(int fd, unsigned long request, ...);
+#include "ioctl.h"
+#ifndef SIOCATMARK
+#define SIOCATMARK 0x8905
+#endif
+
+static inline int sockatmark(int fd) {
+    int mark = 0;
+    if (ioctl(fd, SIOCATMARK, &mark) < 0) return -1;
+    return mark != 0 ? 1 : 0;
+}
+
 static inline int shutdown(int sockfd, int how) {
     return __rin_socket_status_result(
         _RIN_SOCKET_SYSCALL2(SYS_SOCK_SHUTDOWN, sockfd, how));
