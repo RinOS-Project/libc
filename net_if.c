@@ -282,7 +282,8 @@ int rin_net_addrconfig_snapshot(int* ipv4_configured,
         return -1;
     for (index = 0u; index < snapshot.count; ++index) {
         const uint16_t flags = snapshot.interfaces[index].flags;
-        if ((flags & RIN_NET_IFADDRS_INTERFACE_FLAG_IPV4_CONFIGURED) != 0u)
+        if ((flags & RIN_NET_IFADDRS_INTERFACE_FLAG_IPV4_CONFIGURED) != 0u &&
+            snapshot.interfaces[index].ipv4_address[0] != 127u)
             *ipv4_configured = 1;
         if ((flags & RIN_NET_IFADDRS_INTERFACE_FLAG_IPV6_CONFIGURED) != 0u)
             *ipv6_configured = 1;
