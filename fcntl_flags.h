@@ -53,6 +53,9 @@
 #ifndef O_CLOEXEC
 #define O_CLOEXEC   0x0200
 #endif
+#ifndef O_CLOFORK
+#define O_CLOFORK   0x20000
+#endif
 #ifndef O_DIRECTORY
 #define O_DIRECTORY 0x0400
 #endif

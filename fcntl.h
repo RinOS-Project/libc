@@ -64,6 +64,7 @@ extern "C" {
 
 /* ファイルディスクリプタフラグ */
 #define FD_CLOEXEC  1   /* exec時にクローズ */
+#define FD_CLOFORK  2   /* fork時に子へ継承しない */
 
 /* ロックタイプ */
 #define F_RDLCK     0   /* 読み取りロック */
@@ -94,6 +95,7 @@ struct flock {
  * ═══════════════════════════════════════════════════════════════*/
 
 #define F_DUPFD_CLOEXEC 1030 /* F_DUPFDと同様だがCLOEXECを設定 */
+#define F_DUPFD_CLOFORK 1031 /* F_DUPFDと同様だがCLOFORKを設定 */
 #define F_SETOWN        8    /* シグナル送信先プロセスを設定 */
 #define F_GETOWN        9    /* シグナル送信先プロセスを取得 */
 #define F_SETSIG        10   /* シグナル番号を設定 */
@@ -286,8 +288,7 @@ static inline int _fcntl_lock64_flock64(int fd, int command,
     return result;
 }
 
-static inline int _fcntl_dupfd_at_least(int fd, int minfd, int cloexec) {
-    int command = cloexec ? F_DUPFD_CLOEXEC : F_DUPFD;
+static inline int _fcntl_dupfd_at_least(int fd, int minfd, int command) {
     int result;
 
     if (minfd < 0) {
@@ -441,13 +442,19 @@ static inline int fcntl(int fd, int cmd, ...) {
     switch (cmd) {
         case F_DUPFD: {
             int minfd = va_arg(ap, int);
-            result = _fcntl_dupfd_at_least(fd, minfd, 0);
+            result = _fcntl_dupfd_at_least(fd, minfd, F_DUPFD);
             break;
         }
 
         case F_DUPFD_CLOEXEC: {
             int minfd = va_arg(ap, int);
-            result = _fcntl_dupfd_at_least(fd, minfd, 1);
+            result = _fcntl_dupfd_at_least(fd, minfd, F_DUPFD_CLOEXEC);
+            break;
+        }
+
+        case F_DUPFD_CLOFORK: {
+            int minfd = va_arg(ap, int);
+            result = _fcntl_dupfd_at_least(fd, minfd, F_DUPFD_CLOFORK);
             break;
         }
 
@@ -469,7 +476,7 @@ static inline int fcntl(int fd, int cmd, ...) {
             if (fd < 0 || fd >= _FCNTL_MAX_FDS) {
                 errno = EBADF;
                 result = -1;
-            } else if ((flags & ~FD_CLOEXEC) != 0) {
+            } else if ((flags & ~(FD_CLOEXEC | FD_CLOFORK)) != 0) {
                 errno = EINVAL;
                 result = -1;
             } else {
@@ -841,7 +848,8 @@ static inline int rin_mkdirat_beneath(int dirfd, const char* pathname,
     return _fcntl_result_status_zero(result);
 }
 
-static inline int renameat(int olddirfd, const char* oldpath, int newdirfd, const char* newpath) {
+static inline int rin_renameat_inline(int olddirfd, const char* oldpath,
+                                      int newdirfd, const char* newpath) {
     RinPathAtCallV1 call;
     if (!oldpath || !newpath) {
         errno = EFAULT;
