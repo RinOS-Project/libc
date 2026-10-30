@@ -4,7 +4,12 @@
  */
 
 #if !defined(RIN_FREESTANDING) && defined(__STDC_HOSTED__) && \
-    __STDC_HOSTED__ && (defined(__clang__) || defined(__GNUC__))
+    __STDC_HOSTED__ && (defined(__clang__) || defined(__GNUC__)) && \
+    !defined(_RIN_IOCTL_SYSCALL3)
+/* The host header below already provides struct termio; tell termio.h to
+ * skip the RinOS definition so hosted termios.h consumers do not see a
+ * redefinition. */
+#define RIN_LIBC_SYS_IOCTL_HOST_DELEGATED 1
 #include_next <sys/ioctl.h>
 #else
 
@@ -179,8 +184,8 @@ struct winsize {
 #define SIOCSPGRP   0x8902
 #define FIOGETOWN   0x8903
 #define SIOCGPGRP   0x8904
-/* sockatmark(3) request code.  The classifier below passes its
- * out-param int* through the pointer class. */
+/* sockatmark() query.  The kernel TCP urgent-pointer owner is tracked
+ * separately; until it exists the ioctl reports the request as unhandled. */
 #define SIOCATMARK  0x8905
 
 /* ネットワークインターフェースioctlはkernel handler未実装のため公開しない。
