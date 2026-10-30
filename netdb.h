@@ -1671,6 +1671,9 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
             return _netdb_resolved_gai_error(transact_status);
         }
     }
+    if (!rin_resolved_getnameinfo_status_valid(header.status)) {
+        return EAI_FAIL;
+    }
     if (header.status == EAI_SYSTEM)
         return _netdb_resolved_system_error_status(&header, outbuf);
     if (header.status != 0 && header.status != EAI_NONAME)
