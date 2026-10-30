@@ -203,6 +203,10 @@ static inline int waitid(idtype_t idtype, id_t id, siginfo_t* infop,
                 return -1;
             }
             break;
+        case P_PIDFD:
+            /* The kernel resolves this selector as an FD and reports EBADF
+             * for values that cannot name a PIDFD. */
+            break;
         default:
             errno = EINVAL;
             return -1;
