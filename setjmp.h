@@ -1,5 +1,11 @@
 ﻿#ifndef _SETJMP_H
 #define _SETJMP_H
+#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
+    __STDC_VERSION__ >= 202311L
+#ifndef __STDC_VERSION_SETJMP_H__
+#define __STDC_VERSION_SETJMP_H__ 202311L
+#endif
+#endif
 
 #if !defined(RIN_FREESTANDING) && defined(__STDC_HOSTED__) && \
     __STDC_HOSTED__ && (defined(__clang__) || defined(__GNUC__))

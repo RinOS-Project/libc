@@ -5,6 +5,12 @@
 
 #ifndef _MATH_H
 #define _MATH_H
+#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
+    __STDC_VERSION__ >= 202311L
+#ifndef __STDC_VERSION_MATH_H__
+#define __STDC_VERSION_MATH_H__ 202311L
+#endif
+#endif
 
 #include "stddef.h"
 #include "float.h"

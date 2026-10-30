@@ -5,6 +5,12 @@
 
 #ifndef _STDDEF_H
 #define _STDDEF_H
+#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
+    __STDC_VERSION__ >= 202311L
+#ifndef __STDC_VERSION_STDDEF_H__
+#define __STDC_VERSION_STDDEF_H__ 202311L
+#endif
+#endif
 
 /* Use compiler built-in types for portability.  MSVC does not expose the
  * GNU/Clang spelling, so retain the actual target-width ABI explicitly. */

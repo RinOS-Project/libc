@@ -3,6 +3,12 @@
 
 #ifndef _RIN_UCHAR_H
 #define _RIN_UCHAR_H
+#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
+    __STDC_VERSION__ >= 202311L
+#ifndef __STDC_VERSION_UCHAR_H__
+#define __STDC_VERSION_UCHAR_H__ 202311L
+#endif
+#endif
 
 #include "stddef.h"
 #include "stdint.h"
