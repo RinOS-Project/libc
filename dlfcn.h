@@ -288,64 +288,6 @@ static inline unsigned int _rin_dl_retained_add(void* handle,
     return RIN_RTLD_NEXT_HANDLE_CAPACITY;
 }
 
-/* Check the authenticated process catalog without asking the loader to load
- * anything.  RTLD_NOLOAD depends on this distinction: a successful lookup
- * must acquire an existing object handle, while a missing name must not grow
- * the dynamic graph as a side effect. */
-static inline int _rin_dl_inventory_contains(const char* name) {
-    RinDlInventoryRecordV1 record;
-    unsigned long index;
-    unsigned long expected_count = 0UL;
-    unsigned long long expected_generation = 0ULL;
-    unsigned long long expected_adds = 0ULL;
-    unsigned long long expected_subs = 0ULL;
-    int fetch_result;
-
-    if (!name || name[0] == '\0') {
-        errno = EINVAL;
-        return -1;
-    }
-    for (index = 0UL; index < RIN_DLINVENTORY_V1_NAME_CAPACITY; ++index) {
-        if (name[index] == '\0') break;
-    }
-    if (index == 0UL || index == RIN_DLINVENTORY_V1_NAME_CAPACITY) {
-        errno = EINVAL;
-        return -1;
-    }
-
-#if !(defined(RIN_FREESTANDING) && RIN_FREESTANDING) && \
-    !defined(RIN_DYNLINK_CUSTOM_SYSCALL2)
-    errno = ENOSYS;
-    return -1;
-#endif
-
-    for (index = 0UL; ; ++index) {
-        fetch_result = __rin_dl_inventory_fetch(index, &record);
-        if (fetch_result == 1) break;
-        if (fetch_result != 0) return -1;
-        if (index == 0UL) {
-            expected_count = record.record_count;
-            expected_generation = record.launch_generation;
-            expected_adds = record.add_count;
-            expected_subs = record.sub_count;
-        } else if (record.record_count != expected_count ||
-                   record.launch_generation != expected_generation ||
-                   record.add_count != expected_adds ||
-                   record.sub_count != expected_subs) {
-            errno = EIO;
-            return -1;
-        }
-        if (index >= expected_count) {
-            errno = EIO;
-            return -1;
-        }
-        if (_rin_dl_name_equal(record.name, name)) return 1;
-        if (index + 1UL == expected_count) break;
-    }
-    errno = ENOENT;
-    return 0;
-}
-
 /* Resolve RTLD_NEXT from the call site rather than guessing a global symbol.
  * RinOS publishes a generation-consistent inventory in load order; the
  * address immediately after the dlsym call identifies the image that owns
@@ -526,23 +468,10 @@ static inline void* dlopen(const char* filename, int flags) {
         return RIN_RTLD_MAIN;
     }
 
-    if ((flags & RTLD_NOLOAD) != 0) {
-        const int loaded = _rin_dl_inventory_contains(filename);
-        if (loaded <= 0) {
-            if (loaded == 0)
-                _dl_set_error("dlopen: library is not loaded");
-            else if (errno == ENOSYS)
-                _dl_set_error("dlopen: loaded-library inventory unavailable");
-            else
-                _dl_set_error("dlopen: cannot inspect loaded libraries");
-            return NULL;
-        }
-    }
-
-    void* handle = (flags & (RTLD_GLOBAL | RTLD_DEEPBIND)) != 0
-        ? dynlink_load_flags(filename,
-                             (unsigned int)(flags &
-                                             (RTLD_GLOBAL | RTLD_DEEPBIND)))
+    const unsigned int loader_flags = (unsigned int)(flags &
+        (RTLD_GLOBAL | RTLD_DEEPBIND | RTLD_NOLOAD));
+    void* handle = loader_flags != 0u
+        ? dynlink_load_flags(filename, loader_flags)
         : dynlink_load(filename);
     if (!handle) {
         _dl_set_error("dlopen: failed to load library");
