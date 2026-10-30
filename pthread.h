@@ -242,9 +242,8 @@ typedef struct {
 
 #define PTHREAD_ONCE_INIT 0
 
-/* RinOS implements deferred POSIX cancellation.  Asynchronous cancellation
- * would require an unwind-safe activation ABI that is not part of the
- * product contract; callers requesting it receive ENOTSUP. */
+/* RinOS supports deferred cancellation at cancellation points and
+ * asynchronous cancellation through its SIGCANCEL delivery path. */
 #define PTHREAD_CANCEL_ENABLE        0
 #define PTHREAD_CANCEL_DISABLE       1
 #define PTHREAD_CANCEL_DEFERRED      0
