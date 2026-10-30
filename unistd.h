@@ -506,6 +506,22 @@ static inline int _rin_unistd_status(intptr_t result) {
 /* Keep scalar I/O requests within the kernel's bounded transfer size. */
 #define _RIN_UNISTD_POSITIONAL_IO_MAX 16777216u
 
+static inline void swab(const void* src, void* dest, ssize_t n) {
+    const unsigned char* s = (const unsigned char*)src;
+    unsigned char* d = (unsigned char*)dest;
+    ssize_t i;
+    if (n <= 0) return;
+    if (!s || !d) {
+        errno = EFAULT;
+        return;
+    }
+    for (i = 0; i + 1 < n; i += 2) {
+        unsigned char a = s[i];
+        d[i] = s[i + 1];
+        d[i + 1] = a;
+    }
+}
+
 static inline ssize_t read(int fd, void* buf, size_t count) {
     if (count > (size_t)SSIZE_MAX) {
         errno = EINVAL;
@@ -1470,6 +1486,19 @@ static inline pid_t fork(void) {
     return (pid_t)result;
 }
 
+/* The kernel uses copy-on-write plus a generation-bound parent wait for
+ * vfork().  Keep this wrapper free of fork/atfork hooks: the child may only
+ * execute or exit before the original parent resumes. */
+static inline pid_t vfork(void) {
+    intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_VFORK));
+    if (result < 0) return (pid_t)-1;
+    if ((uintptr_t)result > (uintptr_t)INT_MAX) {
+        errno = EOVERFLOW;
+        return (pid_t)-1;
+    }
+    return (pid_t)result;
+}
+
 /* Return the generation-stable identity cookie for a process visible in the
  * caller's process namespace.  CoreCLR uses this as its transport/semaphore
  * disambiguation key because RinOS deliberately has no procfs start-time
@@ -1638,6 +1667,33 @@ static inline gid_t getegid(void) {
         ? (gid_t)credentials.effective_gid : (gid_t)-1;
 }
 
+static inline int getgroups(int size, gid_t list[]) {
+    __rin_credentials_v1 credentials;
+    uint32_t count;
+    uint32_t index;
+    if (size < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (__rin_get_credentials(&credentials) != 0) return -1;
+    count = credentials.group_count;
+    if (count > __RIN_CREDENTIALS_MAX_GROUPS) {
+        errno = EIO;
+        return -1;
+    }
+    if ((int)count > size) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (size != 0 && list == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    for (index = 0u; index < count; ++index)
+        list[index] = (gid_t)credentials.groups[index];
+    return (int)count;
+}
+
 static inline int __rin_set_credential(uint16_t operation, uint32_t value) {
     __rin_credential_set_v1 request;
     __rin_account_zero(&request, sizeof(request));
@@ -1684,6 +1740,7 @@ static inline int setgid(gid_t gid) {
 #endif
     return __rin_set_credential(__RIN_CREDENTIAL_SET_GID, (uint32_t)gid);
 }
+
 static inline int setegid(gid_t egid) {
 #if !defined(RIN_SYS_TYPES_UNSIGNED_ID)
     if ((int64_t)egid < 0) {
@@ -1695,7 +1752,6 @@ static inline int setegid(gid_t egid) {
 #endif
     return __rin_set_credential(__RIN_CREDENTIAL_SET_EGID, (uint32_t)egid);
 }
-
 #endif /* !RIN_LIBC_NO_ACCOUNT_COMPAT */
 
 /* ═══════════════════════════════════════════════════════════════

@@ -13,6 +13,7 @@
 #include "../errno.h"
 #endif
 #include "../stdint.h"
+#include "../internal/time_type.h"
 
 /* The SDK deliberately keeps legacy SYS_* aliases opt-in for C++ consumers.
  * RinOS libc is itself a legacy C/C++ implementation and its public wrapper
@@ -103,6 +104,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_brk             SYS_BRK
 #define SYS_exit            SYS_EXIT
 #define SYS_fork            SYS_FORK
+#define SYS_vfork           SYS_VFORK
 #define SYS_execve          SYS_EXEC
 #define SYS_wait4           SYS_WAIT4
 #define SYS_getrusage       SYS_GETRUSAGE
@@ -150,7 +152,11 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_futex           RIN_HOST_LINUX_SYS_FUTEX
 #else
 #define SYS_sched_yield     SYS_SCHED_YIELD
+#if defined(RIN_TIME_BITS) && RIN_TIME_BITS == 32
 #define SYS_futex           SYS_FUTEX
+#else
+#define SYS_futex           RIN_SYS_FUTEX_TIME64
+#endif
 #endif
 #define SYS_clone           SYS_CLONE
 #define SYS_getcpu          SYS_GETCPU
@@ -165,6 +171,7 @@ typedef struct rin_thread_stack_info_v1 {
  * retained for source inspection use the separate LINUX_NR_* prefix. */
 #define __NR_exit           SYS_EXIT        /* 0 */
 #define __NR_fork           SYS_FORK
+#define __NR_vfork          SYS_VFORK
 #define __NR_read           SYS_READ        /* 22 */
 #define __NR_write          SYS_WRITE       /* 23 */
 #define __NR_open           SYS_OPEN        /* 20 */
