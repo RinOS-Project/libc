@@ -406,21 +406,23 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     __rin_select_clear_sets(readfds, writefds, exceptfds);
 
     for (nfds_t i = 0u; i < npfds; ++i) {
+        int fd_ready = 0;
         if (readfds && (pfds[i].events & POLLIN) != 0 &&
             (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
             FD_SET(pfds[i].fd, readfds);
-            ++ready_count;
+            fd_ready = 1;
         }
         if (writefds && (pfds[i].events & POLLOUT) != 0 &&
             (pfds[i].revents & (POLLOUT | POLLERR)) != 0) {
             FD_SET(pfds[i].fd, writefds);
-            ++ready_count;
+            fd_ready = 1;
         }
         if (exceptfds && (pfds[i].events & POLLPRI) != 0 &&
             (pfds[i].revents & POLLPRI) != 0) {
             FD_SET(pfds[i].fd, exceptfds);
-            ++ready_count;
+            fd_ready = 1;
         }
+        if (fd_ready) ++ready_count;
     }
 
     free(pfds);
@@ -460,21 +462,23 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
         }
         __rin_select_clear_sets(readfds, writefds, exceptfds);
         for (nfds_t i = 0u; i < npfds; ++i) {
+            int fd_ready = 0;
             if (readfds && (pfds[i].events & POLLIN) != 0 &&
                 (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
                 FD_SET(pfds[i].fd, readfds);
-                ++ready_count;
+                fd_ready = 1;
             }
             if (writefds && (pfds[i].events & POLLOUT) != 0 &&
                 (pfds[i].revents & (POLLOUT | POLLERR)) != 0) {
                 FD_SET(pfds[i].fd, writefds);
-                ++ready_count;
+                fd_ready = 1;
             }
             if (exceptfds && (pfds[i].events & POLLPRI) != 0 &&
                 (pfds[i].revents & POLLPRI) != 0) {
                 FD_SET(pfds[i].fd, exceptfds);
-                ++ready_count;
+                fd_ready = 1;
             }
+            if (fd_ready) ++ready_count;
         }
         free(pfds);
         return ready_count;
