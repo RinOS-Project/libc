@@ -5,12 +5,6 @@
 
 #ifndef _STRING_H
 #define _STRING_H
-#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
-    __STDC_VERSION__ >= 202311L
-#ifndef __STDC_VERSION_STRING_H__
-#define __STDC_VERSION_STRING_H__ 202311L
-#endif
-#endif
 
 #include "stddef.h"
 #if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
@@ -540,55 +534,6 @@ RIN_STRING_INLINE int strerror_r(int errnum, char* buf, size_t buflen) {
     buf[copied] = '\0';
     return copied == length ? 0 : ERANGE;
 }
-
-/* POSIX.1-2024 bounded string copy interfaces.  A size of zero does not
- * access the destination; both functions return the full source length even
- * when the destination is truncated. */
-#ifndef strlcpy
-#ifdef RIN_STRING_IMPLEMENTATION
-size_t strlcpy(char* destination, const char* source, size_t size);
-#else
-RIN_STRING_INLINE size_t strlcpy(char* destination, const char* source,
-                                 size_t size) {
-    size_t source_length = 0u;
-    size_t copied = 0u;
-    while (source[source_length] != '\0') ++source_length;
-    if (size != 0u) {
-        while (copied < size - 1u && source[copied] != '\0') {
-            destination[copied] = source[copied];
-            ++copied;
-        }
-        destination[copied] = '\0';
-    }
-    return source_length;
-}
-#endif
-#endif
-
-#ifndef strlcat
-#ifdef RIN_STRING_IMPLEMENTATION
-size_t strlcat(char* destination, const char* source, size_t size);
-#else
-RIN_STRING_INLINE size_t strlcat(char* destination, const char* source,
-                                 size_t size) {
-    size_t destination_length = 0u;
-    size_t source_length = 0u;
-    size_t copied = 0u;
-    while (destination_length < size && destination[destination_length] != '\0')
-        ++destination_length;
-    while (source[source_length] != '\0') ++source_length;
-    if (destination_length == size) return size + source_length;
-    while (copied < size - destination_length - 1u &&
-           source[copied] != '\0') {
-        destination[destination_length + copied] = source[copied];
-        ++copied;
-    }
-    destination[destination_length + copied] = '\0';
-    return destination_length + source_length;
-}
-#endif
-#endif
-
 
 #ifdef __cplusplus
 }

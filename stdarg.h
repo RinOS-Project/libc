@@ -5,12 +5,6 @@
 
 #ifndef _STDARG_H
 #define _STDARG_H
-#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
-    __STDC_VERSION__ >= 202311L
-#ifndef __STDC_VERSION_STDARG_H__
-#define __STDC_VERSION_STDARG_H__ 202311L
-#endif
-#endif
 
 typedef __builtin_va_list va_list;
 typedef __builtin_va_list __gnuc_va_list;

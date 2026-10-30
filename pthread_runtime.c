@@ -227,8 +227,7 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
             /* A negative absolute clock deadline is already expired. Retry
              * the atomic acquisition check once before returning timeout,
              * and never pass an invalid absolute time to the futex ABI. */
-            if (abstime && clock_id == CLOCK_MONOTONIC &&
-                abstime->tv_sec < 0) {
+            if (abstime && abstime->tv_sec < 0) {
                 timed_out = 1;
                 continue;
             }
@@ -1175,8 +1174,7 @@ static int rin_pthread_mutex_timedlock_impl(
             if (c != 2)
                 c = __atomic_exchange_n(&mutex->locked, 2, __ATOMIC_ACQUIRE);
             while (c != 0) {
-                if (clock_id == CLOCK_MONOTONIC &&
-                    abstime->tv_sec < 0) {
+                if (abstime->tv_sec < 0) {
                     int unlocked = 0;
                     if (__atomic_compare_exchange_n(
                             &mutex->locked, &unlocked, 2, 0,
@@ -1521,12 +1519,12 @@ static int rin_pthread_cond_timedwait_impl(
     if (result == 0) cancel_wait_registered = 1;
     while (result == 0 &&
            __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-        /* FUTEX_WAIT_BITSET rejects negative monotonic deadlines as EINVAL,
-         * but an absolute deadline before monotonic time zero has expired. */
-        if (cond->clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
+#if !defined(RIN_TIME_ABI64)
+        if (abstime->tv_sec < 0) {
             result = ETIMEDOUT;
             break;
         }
+#endif
         int operation = FUTEX_WAIT_BITSET |
             (cond->clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
         struct timespec relative_timeout;

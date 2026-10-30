@@ -5,12 +5,6 @@
 
 #ifndef _FENV_H
 #define _FENV_H
-#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
-    __STDC_VERSION__ >= 202311L
-#ifndef __STDC_VERSION_FENV_H__
-#define __STDC_VERSION_FENV_H__ 202311L
-#endif
-#endif
 
 #ifdef __cplusplus
 extern "C" {

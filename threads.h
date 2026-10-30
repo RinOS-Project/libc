@@ -142,10 +142,27 @@ static inline int mtx_timedlock(mtx_t* mutex, const struct timespec* deadline)
 {
     int error;
     if (!mutex || !deadline) return thrd_error;
-    /* The pthread owner uses the kernel's absolute-deadline futex wait. */
+#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+    if (deadline->tv_sec < 0 || deadline->tv_nsec < 0 ||
+        deadline->tv_nsec >= 1000000000L)
+        return thrd_error;
+    for (;;) {
+        struct timespec now;
+        error = pthread_mutex_trylock(mutex);
+        if (error == 0) return thrd_success;
+        if (error != EBUSY) return thrd_error;
+        if (clock_gettime(CLOCK_REALTIME, &now) != 0) return thrd_error;
+        if (now.tv_sec > deadline->tv_sec ||
+            (now.tv_sec == deadline->tv_sec &&
+             now.tv_nsec >= deadline->tv_nsec))
+            return thrd_timedout;
+        sched_yield();
+    }
+#else
     error = pthread_mutex_timedlock(mutex, deadline);
     if (error == 0) return thrd_success;
     return error == ETIMEDOUT ? thrd_timedout : thrd_error;
+#endif
 }
 
 static inline int mtx_trylock(mtx_t* mutex)

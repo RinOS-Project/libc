@@ -4,14 +4,6 @@
  * プロセス終了情報
  */
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
-    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
-    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
-    !defined(_RIN_WAIT_SYSCALL3) && !defined(_RIN_WAIT_SYSCALL4) && \
-    !defined(_RIN_WAITID_SYSCALL4)
-#include_next <sys/wait.h>
-#else
-
 #ifndef _SYS_WAIT_H
 #define _SYS_WAIT_H
 
@@ -316,5 +308,3 @@ static inline pid_t wait4(pid_t pid, int* wstatus, int options, struct rusage* r
 #endif
 
 #endif /* _SYS_WAIT_H */
-
-#endif /* hosted Linux delegates to its native wait provider */

@@ -1,11 +1,5 @@
 #ifndef _INTTYPES_H
 #define _INTTYPES_H
-#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
-    __STDC_VERSION__ >= 202311L
-#ifndef __STDC_VERSION_INTTYPES_H__
-#define __STDC_VERSION_INTTYPES_H__ 202311L
-#endif
-#endif
 
 #include "stdint.h"
 #include "stdlib.h"  /* For strtoll, strtoull */

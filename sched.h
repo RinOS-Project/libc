@@ -4,6 +4,22 @@
  * プロセススケジューリング (カーネルsched.c連携)
  */
 
+#ifndef RIN_LIBC_SCHED_H
+#define RIN_LIBC_SCHED_H
+
+/* hosted POSIX環境では、型と宣言をhost CRTのscheduler実装に揃える。
+ * RinOS syscall APIはfreestandingまたは明示的なhook指定時に使う。 */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__unix__) || defined(__APPLE__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_SCHED_SYSCALL0) && \
+    !defined(_RIN_SCHED_SYSCALL1) && \
+    !defined(_RIN_SCHED_SYSCALL2) && \
+    !defined(_RIN_SCHED_SYSCALL3)
+#include_next <sched.h>
+#else
+
 #ifndef _SCHED_H
 #define _SCHED_H
 
@@ -530,6 +546,7 @@ static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
     uint32_t milliseconds = 0u;
     int result;
+    if (pid < 0) { errno = ESRCH; return -1; }
     result = platform_thread_sched_rr_interval(
         (void*)(pid == 0 ? (uintptr_t)platform_thread_current_tid()
                          : (uintptr_t)pid),
@@ -615,3 +632,6 @@ static inline int sched_getcpu(void) {
 #undef RIN_SCHED_CUSTOM_SYSCALL_HOOK
 
 #endif /* _SCHED_H */
+
+#endif /* hosted POSIX scheduler delegation */
+#endif /* RIN_LIBC_SCHED_H */

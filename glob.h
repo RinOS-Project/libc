@@ -274,32 +274,20 @@ static inline int _rin_glob_wide_class(const char* name, size_t length,
     return iswctype((wint_t)value, descriptor) != 0;
 }
 
+/* Return -2 when the active locale has a multi-character collating element
+ * that this bounded matcher cannot represent as one filename character. */
 static inline int _rin_glob_class_symbol(const char* start,
                                          const char* end,
-                                         char encoded[NAME_MAX + 1u],
+                                         char encoded[5],
                                          wchar_t* value)
 {
+    const char* after;
     size_t length = (size_t)(end - start);
     if (length == 0u) return -1;
-    if (length > NAME_MAX) return -1;
-    {
-        const char* cursor = start;
-        const char* after;
-        char first_character[5];
-        if (_rin_glob_decode_character(cursor, &after, first_character,
-                                       value) != 0 || after > end)
-            return -1;
-        while (after < end) {
-            wchar_t ignored;
-            char character[5];
-            cursor = after;
-            if (_rin_glob_decode_character(cursor, &after, character,
-                                           &ignored) != 0 || after > end)
-                return -1;
-        }
-    }
-    memcpy(encoded, start, length);
-    encoded[length] = '\0';
+    if (length > 4u) return -2;
+    if (_rin_glob_decode_character(start, &after, encoded, value) != 0)
+        return -1;
+    if (after != end) return -2;
     return 0;
 }
 
@@ -313,25 +301,13 @@ static inline int _rin_glob_class_match(const char** pattern,
     int negate = 0;
     int matched = 0;
     int have_item = 0;
-    int value_is_single_character = 0;
     if (value_consumed) *value_consumed = value_length;
-    if (value_bytes && value_length != 0u) {
-        const char* after_value;
-        char encoded_value[5];
-        wchar_t decoded_value;
-        if (_rin_glob_decode_character(value_bytes, &after_value,
-                                       encoded_value, &decoded_value) == 0 &&
-            after_value == value_bytes + value_length) {
-            value = decoded_value;
-            value_is_single_character = 1;
-        }
-    }
     if (*cursor == '^' || *cursor == '!') {
         negate = 1;
         ++cursor;
     }
     while (*cursor != '\0' && (*cursor != ']' || !have_item)) {
-        char first[NAME_MAX + 1u];
+        char first[5];
         wchar_t first_value;
         const char* after_first;
 
@@ -353,8 +329,7 @@ static inline int _rin_glob_class_match(const char** pattern,
                 int class_result = _rin_glob_wide_class(
                     item_start, (size_t)(item_end - item_start), value);
                 if (class_result < 0) return -1;
-                if (value_bytes && value_is_single_character && class_result)
-                    matched = 1;
+                if (value_bytes && class_result) matched = 1;
                 cursor = item_end + 2u;
                 have_item = 1;
                 continue;
@@ -378,7 +353,7 @@ static inline int _rin_glob_class_match(const char** pattern,
         }
         have_item = 1;
         if (*cursor == '-' && cursor[1] != '\0' && cursor[1] != ']') {
-            char last[NAME_MAX + 1u];
+            char last[5];
             wchar_t last_value;
             const char* character;
             const char* after_last;
@@ -419,12 +394,7 @@ static inline int _rin_glob_class_match(const char** pattern,
     }
     if (*cursor != ']' || !have_item) return -1;
     *pattern = cursor + 1u;
-    /* This locale layer does not expose an inventory of every collating
-     * element. Do not let a negated class consume an arbitrary multi-character
-     * suffix; named collating/equivalence elements can still match explicitly. */
-    if (negate)
-        return value_is_single_character ? !matched : 0;
-    return matched;
+    return negate ? !matched : matched;
 }
 
 static inline int _rin_glob_component_validate(const char* pattern, int flags)
@@ -465,182 +435,124 @@ static inline int _rin_glob_component_allows_period(const char* pattern,
     return class_result > 0;
 }
 
-/* A glob bracket may consume a collating element containing several active
- * locale characters. Memoize by pattern and byte offsets so those variable
- * length transitions remain bounded and '*' does not rescan suffixes. */
-static inline int _rin_glob_component_match_at(
-    const char* pattern, size_t pattern_length, const char* value,
-    size_t value_length, size_t pattern_offset, size_t value_offset,
-    int flags, unsigned char* memo, size_t memo_stride,
-    size_t* operations, int* failure)
+static inline void _rin_glob_match_epsilon_closure(
+    const char* pattern, size_t pattern_length, unsigned char* states,
+    size_t* operations)
 {
-    size_t memo_index = pattern_offset * memo_stride + value_offset;
-    unsigned char* state = &memo[memo_index];
-    int matched = 0;
-    if (*state == 2u) return 0;
-    if (*state == 3u) return 1;
-    if (*operations == 0u) {
-        *failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
-        return 0;
+    for (size_t index = 0u; index < pattern_length; ++index) {
+        if (*operations == 0u) return;
+        --*operations;
+        if (!states[index] || pattern[index] != '*') continue;
+        while (index + 1u < pattern_length &&
+               pattern[index + 1u] == '*')
+            ++index;
+        states[index + 1u] = 1u;
     }
-    --*operations;
-    if (*state == 1u) return 0;
-    *state = 1u;
-
-    if (pattern_offset == pattern_length) {
-        matched = value_offset == value_length;
-    } else if (pattern[pattern_offset] == '*') {
-        const char* next_value;
-        char encoded[5];
-        wchar_t ignored;
-        if (_rin_glob_component_match_at(
-                pattern, pattern_length, value, value_length,
-                pattern_offset + 1u, value_offset, flags, memo,
-                memo_stride, operations, failure)) {
-            matched = 1;
-        } else if (*failure == 0 && value_offset < value_length) {
-            if (_rin_glob_decode_character(value + value_offset, &next_value,
-                                           encoded, &ignored) != 0) {
-                *failure = -1;
-            } else {
-                matched = _rin_glob_component_match_at(
-                    pattern, pattern_length, value, value_length,
-                    pattern_offset, (size_t)(next_value - value), flags,
-                    memo, memo_stride, operations, failure);
-            }
-        }
-    } else if (pattern[pattern_offset] == '?') {
-        if (value_offset < value_length) {
-            const char* next_value;
-            char encoded[5];
-            wchar_t ignored;
-            if (_rin_glob_decode_character(value + value_offset, &next_value,
-                                           encoded, &ignored) != 0) {
-                *failure = -1;
-            } else {
-                matched = _rin_glob_component_match_at(
-                    pattern, pattern_length, value, value_length,
-                    pattern_offset + 1u, (size_t)(next_value - value), flags,
-                    memo, memo_stride, operations, failure);
-            }
-        }
-    } else if (pattern[pattern_offset] == '[') {
-        const char* class_end = pattern + pattern_offset + 1u;
-        size_t atom_end;
-        if (_rin_glob_class_match(&class_end, 0, flags, NULL, 0u, NULL) < 0) {
-            *failure = -1;
-        } else {
-            atom_end = (size_t)(class_end - pattern);
-            for (size_t candidate_end = value_offset;
-                 candidate_end < value_length && *failure == 0;) {
-                const char* next_candidate;
-                char encoded[5];
-                char candidate[NAME_MAX + 1u];
-                wchar_t first_value;
-                size_t candidate_length;
-                size_t pattern_cost = pattern_length - pattern_offset;
-                size_t consumed = 0u;
-                int class_result;
-                if (_rin_glob_decode_character(
-                        value + candidate_end, &next_candidate, encoded,
-                        &first_value) != 0) {
-                    *failure = -1;
-                    break;
-                }
-                candidate_end = (size_t)(next_candidate - value);
-                candidate_length = candidate_end - value_offset;
-                if (pattern_cost > *operations) {
-                    *failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
-                    break;
-                }
-                *operations -= pattern_cost;
-                memcpy(candidate, value + value_offset, candidate_length);
-                candidate[candidate_length] = '\0';
-                class_end = pattern + pattern_offset + 1u;
-                class_result = _rin_glob_class_match(
-                    &class_end, first_value, flags, candidate,
-                    candidate_length, &consumed);
-                if (class_result < 0) {
-                    *failure = -1;
-                    break;
-                }
-                if (class_result > 0 && consumed == candidate_length &&
-                    _rin_glob_component_match_at(
-                        pattern, pattern_length, value, value_length,
-                        atom_end, candidate_end, flags, memo, memo_stride,
-                        operations, failure)) {
-                    matched = 1;
-                    break;
-                }
-            }
-        }
-    } else if (value_offset < value_length) {
-        const char* literal = pattern + pattern_offset;
-        const char* after_literal;
-        const char* after_value;
-        char literal_encoded[5];
-        char value_encoded[5];
-        wchar_t ignored;
-        if (pattern[pattern_offset] == '\\' &&
-            !(flags & GLOB_NOESCAPE)) {
-            if (pattern_offset + 1u >= pattern_length) {
-                *failure = -1;
-            } else {
-                literal = pattern + pattern_offset + 1u;
-            }
-        }
-        if (*failure == 0 &&
-            (_rin_glob_decode_character(literal, &after_literal,
-                                        literal_encoded, &ignored) != 0 ||
-             _rin_glob_decode_character(value + value_offset, &after_value,
-                                        value_encoded, &ignored) != 0)) {
-            *failure = -1;
-        } else if (*failure == 0) {
-            size_t literal_length = (size_t)(after_literal - literal);
-            size_t atom_end = (size_t)(after_literal - pattern);
-            if (literal == pattern + pattern_offset &&
-                pattern[pattern_offset] == '\\' &&
-                !(flags & GLOB_NOESCAPE))
-                atom_end = pattern_offset + 1u + literal_length;
-            if (literal_length == (size_t)(after_value - (value + value_offset)) &&
-                memcmp(literal, value + value_offset, literal_length) == 0)
-                matched = _rin_glob_component_match_at(
-                    pattern, pattern_length, value, value_length, atom_end,
-                    (size_t)(after_value - value), flags, memo, memo_stride,
-                    operations, failure);
-        }
-    }
-
-    *state = matched ? 3u : 2u;
-    return matched;
 }
 
+/* Match one path component with a bounded NFA/DP. The two state rows are
+ * indexed by pattern byte offsets; input transitions advance by one active
+ * locale character, so '?' and bracket expressions keep their multibyte
+ * semantics while '*' never recursively explores every suffix. */
 static inline int _rin_glob_component_match_bounded(
     const char* pattern, const char* value, int flags)
 {
+    unsigned char current[NAME_MAX + 2u] = {0};
+    unsigned char next[NAME_MAX + 2u] = {0};
     size_t pattern_length;
     size_t value_length;
-    size_t memo_stride;
-    size_t memo_size;
     size_t operations = _RIN_GLOB_MATCH_OPERATION_BUDGET;
-    unsigned char* memo;
-    int failure = 0;
-    int matched;
+    const char* value_cursor;
 
     if (!pattern || !value) return -1;
     pattern_length = _rin_glob_strlen(pattern);
     value_length = _rin_glob_strlen(value);
     if (pattern_length > NAME_MAX || value_length > NAME_MAX) return -1;
-    memo_stride = value_length + 1u;
-    memo_size = (pattern_length + 1u) * memo_stride;
-    memo = (unsigned char*)malloc(memo_size);
-    if (!memo) return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
-    memset(memo, 0, memo_size);
-    matched = _rin_glob_component_match_at(
-        pattern, pattern_length, value, value_length, 0u, 0u, flags, memo,
-        memo_stride, &operations, &failure);
-    free(memo);
-    return failure != 0 ? failure : matched;
+
+    current[0] = 1u;
+    _rin_glob_match_epsilon_closure(pattern, pattern_length, current,
+                                    &operations);
+    if (operations == 0u) return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+    value_cursor = value;
+    while (*value_cursor != '\0') {
+        const char* next_value;
+        char encoded[5];
+        wchar_t wide_value;
+        size_t value_character_length;
+        if (_rin_glob_decode_character(value_cursor, &next_value, encoded,
+                                       &wide_value) != 0)
+            return 0;
+        value_character_length = (size_t)(next_value - value_cursor);
+        memset(next, 0, sizeof(next));
+
+        for (size_t pattern_index = 0u;
+             pattern_index < pattern_length; ++pattern_index) {
+            size_t atom_end;
+            size_t state_cost = 1u;
+            int atom_matches = 0;
+            if (!current[pattern_index]) continue;
+            if (operations == 0u)
+                return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+            --operations;
+
+            if (pattern[pattern_index] == '*') {
+                next[pattern_index] = 1u;
+                continue;
+            }
+            atom_end = pattern_index;
+            if (pattern[pattern_index] == '?') {
+                atom_end = pattern_index + 1u;
+                atom_matches = 1;
+            } else if (pattern[pattern_index] == '[') {
+                const char* class_end = pattern + pattern_index + 1u;
+                size_t consumed = 0u;
+                int class_result = _rin_glob_class_match(
+                    &class_end, wide_value, flags, encoded,
+                    value_character_length, &consumed);
+                atom_end = (size_t)(class_end - pattern);
+                state_cost += atom_end - pattern_index;
+                atom_matches = class_result > 0 &&
+                               consumed == value_character_length;
+                if (class_result < 0)
+                    return class_result == -2 ? -2 : -1;
+            } else {
+                const char* literal = pattern + pattern_index;
+                const char* after_literal;
+                char literal_encoded[5];
+                wchar_t ignored;
+                if (pattern[pattern_index] == '\\' &&
+                    !(flags & GLOB_NOESCAPE)) {
+                    if (pattern_index + 1u >= pattern_length) return -1;
+                    literal = pattern + pattern_index + 1u;
+                }
+                if (_rin_glob_decode_character(literal, &after_literal,
+                                               literal_encoded,
+                                               &ignored) != 0)
+                    return -1;
+                atom_end = (size_t)(after_literal - pattern);
+                if (literal != pattern + pattern_index)
+                    atom_end = (size_t)(after_literal - pattern);
+                state_cost += atom_end - pattern_index;
+                atom_matches = atom_end - (size_t)(literal - pattern) ==
+                                   value_character_length &&
+                               memcmp(literal, value_cursor,
+                                      value_character_length) == 0;
+            }
+
+            if (state_cost > operations)
+                return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+            operations -= state_cost;
+            if (atom_matches) next[atom_end] = 1u;
+        }
+        _rin_glob_match_epsilon_closure(pattern, pattern_length, next,
+                                        &operations);
+        if (operations == 0u)
+            return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+        memcpy(current, next, pattern_length + 1u);
+        value_cursor = next_value;
+    }
+
+    return current[pattern_length] ? 1 : 0;
 }
 
 static inline int _rin_glob_component_match(const char* pattern,
