@@ -500,6 +500,10 @@ static inline int _rin_posix_spawn_capture_search_path(
     return result;
 }
 
+#ifndef _RIN_POSIX_SPAWN_GETSCHEDULER
+#define _RIN_POSIX_SPAWN_GETSCHEDULER(pid) sched_getscheduler(pid)
+#endif
+
 static inline int _rin_posix_spawn_validate(
     const posix_spawn_file_actions_t* file_actions,
     const posix_spawnattr_t* attr)
@@ -525,7 +529,7 @@ static inline int _rin_posix_spawn_validate(
                                 POSIX_SPAWN_SETSCHEDULER)) != 0) {
         int policy = attr->sched_policy;
         if ((attr->flags & POSIX_SPAWN_SETSCHEDULER) == 0) {
-            policy = sched_getscheduler(0);
+            policy = _RIN_POSIX_SPAWN_GETSCHEDULER(0);
             if (policy < 0) return errno != 0 ? errno : EINVAL;
         }
         if (!_rin_posix_spawn_scheduler_policy_supported(policy))

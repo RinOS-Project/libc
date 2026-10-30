@@ -849,7 +849,7 @@ static inline int rin_process_image_path_get(
     }
     if (_rin_unistd_status(_RIN_UNISTD_SYSCALL2(
             SYS_PROCESS_IMAGE_PATH_GET, (uintptr_t)response,
-            (uintptr_t)sizeof(*response)) != 0)
+            (uintptr_t)sizeof(*response))) != 0)
         return -1;
     if (response->struct_size != sizeof(*response) ||
         response->version != RIN_PROCESS_IMAGE_PATH_ABI_VERSION ||
