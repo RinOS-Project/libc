@@ -32,6 +32,10 @@
 #include "signal.h"
 #define _RIN_STDLIB_HAS_SIGNAL_API 1
 #endif
+#if !defined(__cplusplus) && !defined(RIN_FREESTANDING) && \
+    defined(__STDC_HOSTED__) && __STDC_HOSTED__
+#define _RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER
+#endif
 #ifndef MIDL_PASS
 #include "rin_aligned_alloc_meta.h"
 #include "sys/syscall.h"
@@ -119,7 +123,9 @@ int __rin_stdlib_system_available(void);
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
 #include "internal/rin_environment_runtime.h"
 #endif
-#if !defined(RINSDK_SPLIT_BUILD)
+#if !defined(RINSDK_SPLIT_BUILD) && \
+    !defined(_RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER) && \
+    !defined(_RIN_STDLIB_HOSTED_C_OWNER)
 #include "internal/rin_system_owner.h"
 #endif
 #endif /* !MIDL_PASS */
@@ -1263,8 +1269,12 @@ static inline char* mkdtemp(char* tmpl) {
 
 #if !defined(_RIN_STDLIB_HOSTED_C_OWNER)
 #ifndef MIDL_PASS
-#if defined(RINSDK_SPLIT_BUILD)
-/* SDK libraries are linked independently from libc's process owner. */
+#if defined(_RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER)
+/* Hosted C consumers use the platform CRT for process creation and command
+ * execution.  Freestanding targets retain the RinOS shell lifecycle owner. */
+int system(const char* command);
+#elif defined(RINSDK_SPLIT_BUILD)
+/* The split SDK links this declaration to the libc process owner. */
 int system(const char* command);
 #else
 static inline int system(const char* command) {
@@ -1348,6 +1358,7 @@ static inline size_t wcstombs(char* dest, const wchar_t* src, size_t n) {
 
 #undef _RIN_STDLIB_HOSTED_C_OWNER
 #undef _RIN_STDLIB_HOSTED_CXX_OWNER
+#undef _RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER
 
 #ifdef __cplusplus
 }
