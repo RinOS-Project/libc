@@ -50,9 +50,13 @@ static inline int rin_child_pidfd_terminate_and_wait(int* pidfd_inout) {
     int pidfd;
     int saved_error = 0;
     int status = 0;
+    int signal_result;
     if (pidfd_inout == NULL || *pidfd_inout < 0) return 0;
     pidfd = *pidfd_inout;
-    if (pidfd_send_signal(pidfd, SIGKILL, NULL, 0u) != 0 && errno != ESRCH)
+    do {
+        signal_result = pidfd_send_signal(pidfd, SIGKILL, NULL, 0u);
+    } while (signal_result != 0 && errno == EINTR);
+    if (signal_result != 0 && errno != ESRCH)
         saved_error = errno != 0 ? errno : EIO;
     if (rin_child_pidfd_wait_status(pidfd, &status) != 0 &&
         errno != ECHILD && saved_error == 0)
