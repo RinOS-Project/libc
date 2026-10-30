@@ -142,6 +142,10 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_rt_sigsuspend   SYS_RT_SIGSUSPEND
 #define SYS_tgkill          SYS_TGKILL
 #define SYS_ppoll           SYS_PPOLL
+#define SYS_fanotify_init   SYS_FANOTIFY_INIT
+#define SYS_fanotify_mark   SYS_FANOTIFY_MARK
+#define __NR_fanotify_init  SYS_FANOTIFY_INIT
+#define __NR_fanotify_mark  SYS_FANOTIFY_MARK
 
 /* Thread-related syscalls */
 #define SYS_gettid          SYS_GETTID
