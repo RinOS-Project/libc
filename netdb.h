@@ -1095,7 +1095,8 @@ static inline int getaddrinfo(const char* node, const char* service,
                               &service_length) != 0) {
         return EAI_SERVICE;
     }
-    node_missing = node == NULL || node_length == 0u;
+    node_missing = node == NULL;
+    if (node != NULL && node_length == 0u) return EAI_NONAME;
     if (node_missing && service_length == 0u) return EAI_NONAME;
     if ((flags & AI_CANONNAME) != 0 && node_missing) return EAI_BADFLAGS;
     if ((flags & AI_NUMERICSERV) != 0 &&
