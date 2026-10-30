@@ -1706,31 +1706,19 @@ static inline gid_t getegid(void) {
 #ifndef __GETGROUPS_DEFINED
 #define __GETGROUPS_DEFINED
 static inline int getgroups(int size, gid_t list[]) {
-    __rin_credentials_v1 credentials;
-    uint32_t count;
-    uint32_t index;
+    RinSupplementaryGroupsUserV2 request;
     if (size < 0) {
         errno = EINVAL;
         return -1;
     }
-    if (__rin_get_credentials(&credentials) != 0) return -1;
-    count = credentials.group_count;
-    if (count > __RIN_CREDENTIALS_MAX_GROUPS) {
-        errno = EIO;
-        return -1;
-    }
-    if (size == 0) return (int)count;
-    if ((int)count > size) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (size != 0 && list == NULL) {
-        errno = EFAULT;
-        return -1;
-    }
-    for (index = 0u; index < count; ++index)
-        list[index] = (gid_t)credentials.groups[index];
-    return (int)count;
+    __rin_account_zero(&request, sizeof(request));
+    request.struct_size = sizeof(request);
+    request.version = __RIN_SUPPLEMENTARY_GROUPS_USER_VERSION;
+    request.operation = __RIN_SUPPLEMENTARY_GROUPS_OPERATION_GET;
+    request.group_count = (uint32_t)size;
+    request.groups_address = (uint64_t)(uintptr_t)list;
+    return __rin_group_count_result(_RIN_CREDENTIAL_SYSCALL1(
+        RIN_SYS_CREDENTIAL_GROUPS_SET, &request));
 }
 #endif /* __GETGROUPS_DEFINED */
 
