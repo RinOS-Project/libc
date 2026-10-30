@@ -627,6 +627,7 @@ static inline int __rin_dl_inventory_fetch(unsigned long index,
         record->name_length >= RIN_DLINVENTORY_V1_NAME_CAPACITY ||
         record->name[record->name_length] != '\0' ||
         record->load_address == 0u || record->mapped_size == 0u ||
+        record->mapped_size > UINT64_MAX - record->load_address ||
         record->program_headers != 0u || record->program_header_count != 0u ||
         record->tls_data != 0u || record->tls_module_id != 0u ||
         (!legacy_rll &&
@@ -646,6 +647,41 @@ static inline int __rin_dl_inventory_fetch(unsigned long index,
             return -1;
         }
     }
+    return 0;
+}
+
+/* 認証済みRIN image範囲を一件返す。成功は0、一覧が空なら1、失敗は-1。 */
+static inline int rin_dl_image_range_get(unsigned long index,
+                                         RinDlImageRangeV1* range) {
+    RinDlInventoryRecordV1 record;
+    unsigned long byte_index;
+    int fetch_result;
+    if (!range) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (byte_index = 0UL; byte_index < sizeof(*range); ++byte_index)
+        ((unsigned char*)range)[byte_index] = 0u;
+    fetch_result = __rin_dl_inventory_fetch(index, &record);
+    if (fetch_result != 0) return fetch_result;
+    if (index > UINT32_MAX || record.record_count == 0u ||
+        record.record_count > RIN_DLINVENTORY_V1_MAX_RECORDS ||
+        record.launch_generation == 0u || record.load_address == 0u ||
+        record.mapped_size == 0u ||
+        record.mapped_size > UINT64_MAX - record.load_address) {
+        errno = EIO;
+        return -1;
+    }
+    range->struct_size = (uint32_t)sizeof(*range);
+    range->version = RIN_DLINVENTORY_RANGE_ABI_VERSION;
+    range->flags = RIN_DLINVENTORY_RANGE_FLAG_AUTHENTICATED;
+    if (record.flags == RIN_DLINVENTORY_V1_FLAG_MAIN_IMAGE)
+        range->flags |= RIN_DLINVENTORY_RANGE_FLAG_MAIN_IMAGE;
+    range->generation = record.launch_generation;
+    range->image_base = record.load_address;
+    range->image_size = record.mapped_size;
+    range->record_index = record.record_index;
+    range->record_count = record.record_count;
     return 0;
 }
 
