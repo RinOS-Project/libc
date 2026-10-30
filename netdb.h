@@ -1375,7 +1375,8 @@ static inline int getaddrinfo(const char* node, const char* service,
                 memcpy(ipv4_address, address, sizeof(ipv4_address));
                 _netdb_map_ipv4_address(address, ipv4_address);
                 result_family = AF_INET6;
-            } else if (lookup_status == EAI_NONAME &&
+            } else if ((lookup_status == EAI_NONAME ||
+                        lookup_status == EAI_NODATA) &&
                        lookup_family == AF_INET6 &&
                        (flags & AI_V4MAPPED) != 0 && ipv4_configured) {
                 uint8_t ipv4_address[RIN_RESOLVED_IPV6_ADDRESS_BYTES];
