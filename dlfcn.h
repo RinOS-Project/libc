@@ -5,6 +5,18 @@
  * カーネルdynlink.c連携 (RLL形式対応)
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__unix__) || defined(__APPLE__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_DYNLINK_SYSCALL0) && \
+    !defined(_RIN_DYNLINK_SYSCALL1) && \
+    (!defined(_RIN_DYNLINK_SYSCALL2) || \
+     defined(RIN_DYNLINK_SYSCALL2_DEFAULT_HOOK)) && \
+    !defined(_RIN_DYNLINK_SYSCALL3)
+#include_next <dlfcn.h>
+#else
+
 #ifndef _DLFCN_H
 #define _DLFCN_H
 
@@ -902,3 +914,5 @@ static inline int dl_add_search_path(const char* path) {
 #undef RIN_DYNLINK_CUSTOM_SYSCALL2
 
 #endif /* _DLFCN_H */
+
+#endif /* hosted POSIX dynamic-loader delegation */
