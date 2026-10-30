@@ -272,7 +272,7 @@ __attribute__((noreturn)) static inline void _Exit(int status) {
 __attribute__((noreturn)) static inline void abort(void) {
     /* Debug: output abort message with stack trace via serial */
     const char* msg = "[ABORT] libc abort() called\n";
-    _RIN_STDLIB_SYSCALL2(110, (uintptr_t)msg, (uintptr_t)29u);
+    _RIN_STDLIB_SYSCALL2(110, (uintptr_t)msg, (uintptr_t)28u);
 
     /* A failed stack query or malformed frame chain only suppresses the
      * optional trace; it must never make abort itself fault. */
