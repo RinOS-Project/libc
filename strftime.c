@@ -1,6 +1,14 @@
 /* SPDX-License-Identifier: MIT */
 
+#define strptime __rin_strptime_inline
+#if defined(RIN_USERSPACE)
+#define strptime_l __rin_strptime_l_inline
+#endif
 #include "time.h"
+#undef strptime
+#if defined(RIN_USERSPACE)
+#undef strptime_l
+#endif
 #include "../libunicode/rin_unicode.h"
 
 #define RIN_STRFTIME_FORMAT_MAX (1024u * 1024u)
@@ -487,5 +495,16 @@ size_t strftime_l(char* destination, size_t maximum, const char* format,
         return 0u;
     }
     return rin_strftime_run(destination, maximum, format, value, locale);
+}
+#endif
+
+char* strptime(const char* input, const char* format, struct tm* value) {
+    return __rin_strptime_inline(input, format, value);
+}
+
+#if defined(RIN_USERSPACE)
+char* strptime_l(const char* input, const char* format, struct tm* value,
+                 locale_t locale) {
+    return __rin_strptime_l_inline(input, format, value, locale);
 }
 #endif
