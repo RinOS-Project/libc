@@ -204,6 +204,15 @@ void* realloc(void* ptr, size_t size);
 #endif
 void* reallocarray(void* ptr, size_t nmemb, size_t size);
 size_t memalignment(const void* ptr);
+#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
+    __STDC_VERSION__ >= 202311L
+int strfromd(char* restrict s, size_t n, const char* restrict format,
+             double fp);
+int strfromf(char* restrict s, size_t n, const char* restrict format,
+             float fp);
+int strfroml(char* restrict s, size_t n, const char* restrict format,
+             long double fp);
+#endif
 #ifndef free
 void free(void* ptr);
 #endif
