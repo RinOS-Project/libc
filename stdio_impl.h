@@ -796,6 +796,10 @@ typedef struct _RinStdioStreamOwner {
     unsigned char ungetc_valid[5];
     unsigned char* ungetc_spill;
     size_t ungetc_spill_count;
+    /* Wide input conversion state belongs to the stream owner, not FILE's
+     * public ABI. It survives short reads and EAGAIN between fgetwc calls. */
+    uint32_t wide_decode_state;
+    uint32_t wide_decode_codepoint;
     uintptr_t lock_owner;
     uint32_t lock_depth;
     volatile uint32_t lock_wait_seq;
@@ -922,6 +926,23 @@ static inline _RinStdioStreamOwner* _rin_stdio_stream_owner(FILE* stream) {
         owner = __atomic_load_n(&owner->next, __ATOMIC_ACQUIRE);
     }
     return NULL;
+}
+
+_RIN_STDIO_INTERNAL void _rin_stdio_wide_decode_state_get(
+    FILE* stream, uint32_t* state_out, uint32_t* codepoint_out) {
+    _RinStdioStreamOwner* owner = _rin_stdio_stream_owner(stream);
+    if (state_out != NULL)
+        *state_out = owner != NULL ? owner->wide_decode_state : 0u;
+    if (codepoint_out != NULL)
+        *codepoint_out = owner != NULL ? owner->wide_decode_codepoint : 0u;
+}
+
+_RIN_STDIO_INTERNAL void _rin_stdio_wide_decode_state_set(
+    FILE* stream, uint32_t state, uint32_t codepoint) {
+    _RinStdioStreamOwner* owner = _rin_stdio_stream_owner(stream);
+    if (owner == NULL) return;
+    owner->wide_decode_state = state;
+    owner->wide_decode_codepoint = codepoint;
 }
 
 static inline int _rin_stdio_stream_index(FILE* stream) {
@@ -1838,6 +1859,8 @@ static inline FILE* _rin_stdio_stream_allocate(int fd, unsigned int flags,
         owner->file.wide_pushback_second = 0u;
         owner->file.wide_pushback_second_valid = 0;
         owner->file.buf_owned = 0;
+        owner->wide_decode_state = 0u;
+        owner->wide_decode_codepoint = 0u;
         _rin_stdio_lock_table_leave();
         if (fresh) {
             free(fresh);
@@ -2642,6 +2665,7 @@ static inline int _rin_fclose_unlocked(FILE* stream) {
     }
     _rin_stdio_ungetc_clear(stream);
     _rin_stdio_wide_pushback_clear(stream);
+    _rin_stdio_wide_decode_state_set(stream, 0u, 0u);
     previous_buffer = stream->buf;
     previous_owned = stream->buf_owned;
     stream->buf = NULL;
@@ -2697,6 +2721,7 @@ static inline void _rin_freopen_discard_stream(FILE* stream) {
     (void)_rin_stdio_stream_lock_close_begin(stream);
     _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_NONE);
     _rin_stdio_wide_pushback_clear(stream);
+    _rin_stdio_wide_decode_state_set(stream, 0u, 0u);
     stream->buf_owned = 0;
     _rin_stdio_ungetc_clear(stream);
     if (previous_owned && previous_buffer) free(previous_buffer);
@@ -2790,6 +2815,7 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     stream->orientation = 0;
     _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_NONE);
     _rin_stdio_wide_pushback_clear(stream);
+    _rin_stdio_wide_decode_state_set(stream, 0u, 0u);
     stream->buf_owned = 0;
     _rin_stdio_ungetc_clear(stream);
     if (previous_owned && previous_buffer) free(previous_buffer);
@@ -3112,6 +3138,7 @@ static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
     }
     if (stream_index >= 0) _rin_stdio_ungetc_clear(stream);
     _rin_stdio_wide_pushback_clear(stream);
+    _rin_stdio_wide_decode_state_set(stream, 0u, 0u);
     stream->buf_pos = 0u;
     stream->buf_end = 0u;
     _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_NONE);
@@ -3289,6 +3316,7 @@ static inline int _rin_fseeko64_unlocked(FILE* stream, off64_t offset,
     }
     if (stream_index >= 0) _rin_stdio_ungetc_clear(stream);
     _rin_stdio_wide_pushback_clear(stream);
+    _rin_stdio_wide_decode_state_set(stream, 0u, 0u);
     stream->buf_pos = 0u;
     stream->buf_end = 0u;
     _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_NONE);

@@ -1449,14 +1449,18 @@ static int _rin_fwide_unlocked(FILE* stream, int mode) {
 }
 
 static wint_t _rin_fgetwc_unlocked(FILE* stream) {
-    rin_unicode_mbstate_t state = {0u, 0u};
+    rin_unicode_mbstate_t state;
     uint32_t codepoint = 0u;
     unsigned int byte_index;
+    int state_pending;
     if (!stream) {
         errno = EINVAL;
         return WEOF;
     }
     if (!_rin_stdio_claim_wide_orientation(stream)) return WEOF;
+    _rin_stdio_wide_decode_state_get(
+        stream, &state.state, &state.codepoint);
+    state_pending = state.state != 0u || state.codepoint != 0u;
     {
         uint32_t value;
         if (_rin_stdio_wide_pushback_pop(stream, &value)) {
@@ -1475,9 +1479,10 @@ static wint_t _rin_fgetwc_unlocked(FILE* stream) {
         }
         if (count == 0) {
             stream->eof = 1;
-            if (byte_index != 0u) {
+            if (byte_index != 0u || state_pending) {
                 errno = EILSEQ;
                 stream->error = 1;
+                _rin_stdio_wide_decode_state_set(stream, 0u, 0u);
             }
             return WEOF;
         }
@@ -1495,12 +1500,16 @@ static wint_t _rin_fgetwc_unlocked(FILE* stream) {
         if (conversion == (size_t)-1) {
             errno = EILSEQ;
             stream->error = 1;
+            _rin_stdio_wide_decode_state_set(stream, 0u, 0u);
             return WEOF;
         }
+        _rin_stdio_wide_decode_state_set(
+            stream, state.state, state.codepoint);
         if (conversion != (size_t)-2) return (wint_t)codepoint;
     }
     errno = EILSEQ;
     stream->error = 1;
+    _rin_stdio_wide_decode_state_set(stream, 0u, 0u);
     return WEOF;
 }
 
