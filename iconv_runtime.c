@@ -367,17 +367,6 @@ size_t iconv(iconv_t opaque, char** input, size_t* input_left,
         remaining_output = *output_left;
     }
     if (reset_request) {
-        if (output && output_left &&
-            descriptor->output_encoding == RIN_ICONV_ENCODING_UTF16) {
-            if (!output_cursor || remaining_output < 2u)
-                return rin_iconv_fail(descriptor, E2BIG, NULL, NULL, output,
-                                      output_left, NULL, 0u, output_cursor,
-                                      remaining_output);
-            output_cursor[0] = (char)0xfe;
-            output_cursor[1] = (char)0xff;
-            output_cursor += 2u;
-            remaining_output -= 2u;
-        }
         rin_iconv_reset_state(descriptor);
         if (output && output_left) {
             *output = output_cursor;
