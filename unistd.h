@@ -1380,7 +1380,7 @@ static inline int __rin_fork_complete_local(int fork_succeeded,
 }
 #endif
 
-static inline pid_t fork(void) {
+static inline pid_t __rin_fork_with_pidfd(int* pidfd_out) {
 #if !defined(MIDL_PASS)
     int allocator_fork_prepared = 0;
     int fork_hooks_prepared = 0;
@@ -1391,6 +1391,7 @@ static inline pid_t fork(void) {
 #endif
 #endif
     intptr_t result;
+    if (pidfd_out != NULL) *pidfd_out = -1;
 #if !defined(MIDL_PASS)
 #if !defined(RINSDK_SPLIT_BUILD)
     if (__rin_pthread_atfork_prepare != NULL) {
@@ -1430,7 +1431,9 @@ static inline pid_t fork(void) {
         allocator_fork_prepared = 1;
     }
 #endif
-    result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_FORK));
+    result = _rin_unistd_result(pidfd_out != NULL
+        ? _RIN_UNISTD_SYSCALL1(SYS_FORK_PIDFD, (uintptr_t)pidfd_out)
+        : _RIN_UNISTD_SYSCALL0(SYS_FORK));
     if (result < 0) {
 #if !defined(MIDL_PASS)
         int fork_errno = errno;
@@ -1474,6 +1477,11 @@ static inline pid_t fork(void) {
 #endif
         return -1;
     }
+    if (result > 0 && pidfd_out != NULL && *pidfd_out < 0) {
+        /* syscallは子の公開とpidfdの登録を一体で行う契約。 */
+        errno = EIO;
+        return -1;
+    }
 #if !defined(MIDL_PASS)
     {
         int complete_result = __rin_fork_complete_local(
@@ -1502,6 +1510,10 @@ static inline pid_t fork(void) {
     }
 #endif
     return (pid_t)result;
+}
+
+static inline pid_t fork(void) {
+    return __rin_fork_with_pidfd(NULL);
 }
 
 /* POSIX.1-2024 _Fork。通常のforkと同じgeneration付きkernel処理を使い、

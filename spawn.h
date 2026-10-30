@@ -442,6 +442,14 @@ static inline int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t* a
               (uintptr_t)(count), (uintptr_t)(flags))
 #endif
 
+#ifndef _RIN_POSIX_SPAWN_PIDFD_SYSCALL6
+#define _RIN_POSIX_SPAWN_PIDFD_SYSCALL6(path, argv, envp, actions, count, request) \
+    _syscall6((uintptr_t)SYS_SPAWN_PROCESS_ACTIONS_PIDFD, \
+              (uintptr_t)(path), (uintptr_t)(argv), (uintptr_t)(envp), \
+              (uintptr_t)(actions), (uintptr_t)(count), \
+              (uintptr_t)(request))
+#endif
+
 #ifndef _RIN_POSIX_SPAWN_GETENV
 #define _RIN_POSIX_SPAWN_GETENV(name) secure_getenv(name)
 #endif
@@ -698,7 +706,8 @@ static inline int _rin_posix_spawn_build_actions(
 static inline int _rin_posix_spawn_direct(
     pid_t* pid, const char* path,
     const posix_spawn_file_actions_t* file_actions,
-    const posix_spawnattr_t* attr, char* const argv[], char* const envp[])
+    const posix_spawnattr_t* attr, char* const argv[], char* const envp[],
+    int* pidfd_out)
 {
     intptr_t result;
     int validation;
@@ -708,7 +717,9 @@ static inline int _rin_posix_spawn_direct(
     char* const* environment = envp;
     _rin_posix_spawn_file_action_t* wire_actions = NULL;
     uintptr_t wire_action_count = 0u;
+    RinPosixSpawnPidFdRequestV1 pidfd_request = {0};
 
+    if (pidfd_out != NULL) *pidfd_out = -1;
     if (!pid || !path)
         return EINVAL;
     validation = _rin_posix_spawn_bounded_string_length(
@@ -730,11 +741,23 @@ static inline int _rin_posix_spawn_direct(
 
     if (!environment)
         environment = __rin_unistd_environment_snapshot(&environment_epoch);
-    result = _RIN_POSIX_SPAWN_ACTION_SYSCALL6(
-        path, argv, environment,
-        wire_action_count != 0u ? wire_actions : NULL,
-        wire_action_count,
-        spawn_flags);
+    if (pidfd_out != NULL) {
+        pidfd_request.struct_size =
+            (uint32_t)sizeof(pidfd_request);
+        pidfd_request.version = RIN_POSIX_SPAWN_PIDFD_REQUEST_VERSION;
+        pidfd_request.spawn_flags = (uint32_t)spawn_flags;
+        pidfd_request.pidfd = -1;
+        result = _RIN_POSIX_SPAWN_PIDFD_SYSCALL6(
+            path, argv, environment,
+            wire_action_count != 0u ? wire_actions : NULL,
+            wire_action_count, &pidfd_request);
+    } else {
+        result = _RIN_POSIX_SPAWN_ACTION_SYSCALL6(
+            path, argv, environment,
+            wire_action_count != 0u ? wire_actions : NULL,
+            wire_action_count,
+            spawn_flags);
+    }
     free(wire_actions);
     if (!envp)
         __rin_unistd_environment_release(environment_epoch);
@@ -742,8 +765,22 @@ static inline int _rin_posix_spawn_direct(
         return (int)-result;
     if (result <= 0 || result > 0x7fffffffL)
         return EIO;
+    if (pidfd_out != NULL) {
+        if (pidfd_request.pidfd < 0) return EIO;
+        *pidfd_out = pidfd_request.pidfd;
+    }
     *pid = (pid_t)result;
     return 0;
+}
+
+static inline int rin_posix_spawn_pidfd(
+    pid_t* pid, int* pidfd_out, const char* path,
+    const posix_spawn_file_actions_t* file_actions,
+    const posix_spawnattr_t* attr, char* const argv[], char* const envp[])
+{
+    if (pidfd_out == NULL) return EINVAL;
+    return _rin_posix_spawn_direct(
+        pid, path, file_actions, attr, argv, envp, pidfd_out);
 }
 
 static inline int posix_spawn(
@@ -752,7 +789,7 @@ static inline int posix_spawn(
     const posix_spawnattr_t* attr, char* const argv[], char* const envp[])
 {
     return _rin_posix_spawn_direct(
-        pid, path, file_actions, attr, argv, envp);
+        pid, path, file_actions, attr, argv, envp, NULL);
 }
 
 static inline int posix_spawnp(
@@ -785,7 +822,7 @@ static inline int posix_spawnp(
         return validation;
     if (strchr(file, '/'))
         return _rin_posix_spawn_direct(
-            pid, file, file_actions, attr, argv, envp);
+            pid, file, file_actions, attr, argv, envp, NULL);
 
     validation = _rin_posix_spawn_capture_search_path(
         &path_storage, &search_path,
@@ -831,7 +868,8 @@ static inline int posix_spawnp(
             }
             memcpy(candidate + offset, file, file_len + 1u);
             result = _rin_posix_spawn_direct(
-                pid, candidate, file_actions, attr, argv, spawn_environment);
+                pid, candidate, file_actions, attr, argv, spawn_environment,
+                NULL);
             if (result == 0) {
                 free(candidate);
                 free(path_storage);

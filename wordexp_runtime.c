@@ -8,6 +8,7 @@
 #include "string.h"
 #include "sys/wait.h"
 #include "unistd.h"
+#include "internal/rin_child_pidfd.h"
 
 #define WORDEXP_VALID_FLAGS \
     (WRDE_APPEND | WRDE_DOOFFS | WRDE_NOCMD | WRDE_REUSE | \
@@ -656,16 +657,20 @@ static int wordexp_validate_fragment(const char* text, size_t length,
     return 0;
 }
 
-static int wordexp_wait_child(pid_t child, int* status_out) {
-    intptr_t waited;
-    do {
-        waited = _rin_unistd_result(_RIN_WAIT_SYSCALL3(
-            SYS_WAIT, (uintptr_t)(intptr_t)child, (uintptr_t)status_out, 0u));
-    } while (waited < 0 && errno == EINTR);
-    if (waited < 0) return wordexp_spawn_error(errno);
-    if (waited != (intptr_t)child) {
-        errno = EIO;
+static int wordexp_wait_child(int* child_pidfd, int* status_out) {
+    int wait_result;
+    int saved_error;
+    if (child_pidfd == NULL || *child_pidfd < 0) {
+        errno = EINVAL;
         return WRDE_NOSYS;
+    }
+    wait_result = rin_child_pidfd_wait_status(*child_pidfd, status_out);
+    saved_error = errno;
+    (void)close(*child_pidfd);
+    *child_pidfd = -1;
+    if (wait_result != 0) {
+        errno = saved_error != 0 ? saved_error : EIO;
+        return wordexp_spawn_error(errno);
     }
     return 0;
 }
@@ -680,10 +685,11 @@ static int wordexp_shell_run(char* script, int capture, int show_errors,
     size_t output_length = 0u;
     size_t output_capacity = 0u;
     pid_t child;
+    int child_pidfd = -1;
 
     if (capture && pipe2(pipe_fds, O_CLOEXEC) != 0)
         return wordexp_spawn_error(errno);
-    child = fork();
+    child = rin_child_fork_pidfd(&child_pidfd);
     if (child < 0) {
         int saved_error = errno;
         if (pipe_fds[0] >= 0) (void)close(pipe_fds[0]);
@@ -738,18 +744,15 @@ static int wordexp_shell_run(char* script, int capture, int show_errors,
             if (count < 0) {
                 if (errno == EINTR) continue;
                 result = wordexp_spawn_error(errno);
-                (void)kill(child, SIGKILL);
                 break;
             }
             if ((size_t)count >
                 (size_t)WORDEXP_MAX_OUTPUT_BYTES - output_length) {
                 result = WRDE_NOSPACE;
-                (void)kill(child, SIGKILL);
                 break;
             }
             if ((size_t)count > (size_t)-1 - output_length) {
                 result = WRDE_NOSPACE;
-                (void)kill(child, SIGKILL);
                 break;
             }
             if (output_length + (size_t)count > output_capacity) {
@@ -768,7 +771,6 @@ static int wordexp_shell_run(char* script, int capture, int show_errors,
                 next_output = (char*)realloc(output, next_capacity);
                 if (!next_output) {
                     result = WRDE_NOSPACE;
-                    (void)kill(child, SIGKILL);
                     break;
                 }
                 output = next_output;
@@ -780,11 +782,11 @@ static int wordexp_shell_run(char* script, int capture, int show_errors,
         (void)close(pipe_fds[0]);
     }
     if (result != 0) {
-        (void)wordexp_wait_child(child, &status);
+        (void)rin_child_pidfd_terminate_and_wait(&child_pidfd);
         free(output);
         return result;
     }
-    result = wordexp_wait_child(child, &status);
+    result = wordexp_wait_child(&child_pidfd, &status);
     if (result != 0) {
         free(output);
         return result;

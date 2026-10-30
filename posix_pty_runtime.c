@@ -9,6 +9,7 @@
 #include "sys/wait.h"
 #include "signal.h"
 #include "unistd.h"
+#include "internal/rin_child_pidfd.h"
 
 #include <stdint.h>
 
@@ -168,15 +169,9 @@ static void rin_pty_close_preserving_errno(int fd, int saved_errno)
     errno = saved_errno;
 }
 
-static void rin_pty_reap_failed_fork(pid_t child)
+static void rin_pty_reap_failed_fork(int* child_pidfd)
 {
-    int status;
-    if (child <= 0) return;
-    (void)kill(child, SIGKILL);
-    for (;;) {
-        pid_t result = waitpid(child, &status, 0);
-        if (result == child || (result < 0 && errno != EINTR)) return;
-    }
+    (void)rin_child_pidfd_terminate_and_wait(child_pidfd);
 }
 
 int openpty(int* master_fd_out, int* slave_fd_out, char* name,
@@ -265,6 +260,7 @@ pid_t forkpty(int* master_fd_out, char* name,
 {
     int master_fd = -1;
     int slave_fd = -1;
+    int child_pidfd = -1;
     pid_t child;
     int error;
 
@@ -277,7 +273,7 @@ pid_t forkpty(int* master_fd_out, char* name,
                 window_size) != 0)
         return (pid_t)-1;
 
-    child = fork();
+    child = rin_child_fork_pidfd(&child_pidfd);
     if (child < 0) {
         error = errno;
         (void)close(slave_fd);
@@ -292,10 +288,11 @@ pid_t forkpty(int* master_fd_out, char* name,
 
     if (close(slave_fd) != 0) {
         error = errno;
-        rin_pty_reap_failed_fork(child);
+        rin_pty_reap_failed_fork(&child_pidfd);
         rin_pty_close_preserving_errno(master_fd, error);
         return (pid_t)-1;
     }
+    (void)close(child_pidfd);
     *master_fd_out = master_fd;
     return child;
 }
