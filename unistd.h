@@ -639,6 +639,11 @@ static inline ssize_t pwrite64(int fd, const void* buf, size_t count,
     return _rin_unistd_positional_io(fd, buf, count, (int64_t)offset, 1);
 }
 
+#ifndef POSIX_CLOSE_RESTART
+/* RinOS closes descriptors synchronously and never restarts close on signals. */
+#define POSIX_CLOSE_RESTART 0
+#endif
+
 static inline int close(int fd) {
     __rin_pthread_cancel_point_if_linked();
     int rc = _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
@@ -656,6 +661,25 @@ static inline int close(int fd) {
 #ifndef CLOSE_RANGE_UNSHARE
 #define CLOSE_RANGE_UNSHARE RIN_CLOSE_RANGE_FLAG_UNSHARE
 #endif
+
+/* POSIX.1-2024 posix_close(). POSIX_CLOSE_RESTART is zero on RinOS, so
+ * the syscall completes atomically with respect to signal delivery. Invalid
+ * flags are reported only after close has succeeded; EBADF and other close
+ * errors therefore retain precedence. */
+static inline int posix_close(int fd, int flags) {
+    int result = close(fd);
+    int close_errno = errno;
+    if (result != 0) {
+        if (close_errno == EINPROGRESS) _fcntl_track_close_fd(fd);
+        errno = close_errno;
+        return -1;
+    }
+    if (flags != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
 
 static inline int close_range(unsigned int first, unsigned int last,
                               int flags) {
