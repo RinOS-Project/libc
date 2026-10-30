@@ -25,6 +25,7 @@
 #endif
 #endif
 
+
 #include "stddef.h"
 #include "stdint.h"
 #include "limits.h"
@@ -404,6 +405,7 @@ extern char* rin_getenv(const char* name);
 extern int   rin_setenv(const char* name, const char* value, int overwrite);
 extern int   rin_unsetenv(const char* name);
 extern int   rin_putenv(char* string);
+extern int   rin_clearenv(void);
 
 static inline char* getenv(const char* name) {
     return rin_getenv(name);
@@ -590,8 +592,12 @@ static inline char* secure_getenv(const char* name) {
 }
 
 static inline int clearenv(void) {
+#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+    return rin_clearenv();
+#else
     if (environ) environ[0] = NULL;
     return 0;
+#endif
 }
 #endif /* !_MSVCRT_COMPAT */
 
@@ -980,8 +986,9 @@ static inline int posix_memalign(void** memptr, size_t alignment, size_t size) {
     return 0;
 }
 
-/* POSIX string duplication: share runtime symbols when string.h is
- * already present or when building the userspace libc. */
+/* POSIX string duplication.  A standalone freestanding stdlib.h keeps the
+ * inline fallback; userspace and mixed string.h/stdlib.h includes share the
+ * external declaration from the string API/runtime owner. */
 #if (defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)) || \
     defined(RIN_STRING_DUP_EXTERNAL_DECLARED) || \
     defined(RIN_STRING_RUNTIME_IMPLEMENTATION)
@@ -991,7 +998,7 @@ char* strndup(const char* string, size_t size);
 #else
 static inline size_t _strdup_strlen(const char* string) {
     size_t length = 0u;
-    while (string[length] != 0) ++length;
+    while (string[length] != '\0') ++length;
     return length;
 }
 
@@ -1001,9 +1008,15 @@ static inline char* strdup(const char* string) {
     char* copy;
     if (!string) return NULL;
     length = _strdup_strlen(string);
-    if (length == SIZE_MAX) { errno = ENOMEM; return NULL; }
+    if (length == SIZE_MAX) {
+        errno = ENOMEM;
+        return NULL;
+    }
     copy = (char*)malloc(length + 1u);
-    if (!copy) { errno = ENOMEM; return NULL; }
+    if (!copy) {
+        errno = ENOMEM;
+        return NULL;
+    }
     for (size_t index = 0u; index <= length; ++index)
         copy[index] = string[index];
     return copy;
@@ -1014,13 +1027,19 @@ static inline char* strndup(const char* string, size_t size) {
     size_t length = 0u;
     char* copy;
     if (!string) return NULL;
-    while (length < size && string[length] != 0) ++length;
-    if (length == SIZE_MAX) { errno = ENOMEM; return NULL; }
+    while (length < size && string[length] != '\0') ++length;
+    if (length == SIZE_MAX) {
+        errno = ENOMEM;
+        return NULL;
+    }
     copy = (char*)malloc(length + 1u);
-    if (!copy) { errno = ENOMEM; return NULL; }
+    if (!copy) {
+        errno = ENOMEM;
+        return NULL;
+    }
     for (size_t index = 0u; index < length; ++index)
         copy[index] = string[index];
-    copy[length] = 0;
+    copy[length] = '\0';
     return copy;
 }
 #define RIN_STRING_DUP_INLINE_AVAILABLE 1
@@ -1408,12 +1427,14 @@ static inline char* mkdtemp(char* tmpl) {
 #if !defined(_RIN_STDLIB_HOSTED_C_OWNER) && \
     !defined(_RIN_STDLIB_HOSTED_CXX_OWNER)
 #ifndef MIDL_PASS
-#if defined(_RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER)
+#if !defined(__cplusplus) && !defined(RIN_FREESTANDING) && \
+    defined(__STDC_HOSTED__) && __STDC_HOSTED__
 /* Hosted C consumers use the platform CRT for process creation and command
- * execution.  Freestanding targets retain the RinOS shell lifecycle owner. */
+ * execution.  Keep the RinOS system() owner exclusively in freestanding
+ * targets, where the shell lifecycle is backed by RinOS syscalls. */
 int system(const char* command);
 #elif defined(RINSDK_SPLIT_BUILD)
-/* The split SDK links this declaration to the libc process owner. */
+/* SDK libraries are linked independently from libc's process owner. */
 int system(const char* command);
 #else
 static inline int system(const char* command) {
