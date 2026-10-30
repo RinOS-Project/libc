@@ -42,6 +42,55 @@ extern int* __errno_location(void);
  * エラーコード定義 (POSIX準拠)
  * ═══════════════════════════════════════════════════════════════*/
 
+/* In a freestanding RinOS build these values define the target ABI even when
+ * a host compiler's standard headers were force-included for a hosted test. */
+#undef EADDRINUSE
+#undef EADDRNOTAVAIL
+#undef EAFNOSUPPORT
+#undef EALREADY
+#undef EBADMSG
+#undef ECANCELED
+#undef ECONNABORTED
+#undef ECONNREFUSED
+#undef ECONNRESET
+#undef EDEADLK
+#undef EDESTADDRREQ
+#undef EHOSTUNREACH
+#undef EIDRM
+#undef EILSEQ
+#undef EINPROGRESS
+#undef EISCONN
+#undef ELOOP
+#undef EMSGSIZE
+#undef ENAMETOOLONG
+#undef ENETDOWN
+#undef ENETRESET
+#undef ENETUNREACH
+#undef ENOBUFS
+#undef ENODATA
+#undef ENOLCK
+#undef ENOLINK
+#undef ENOMSG
+#undef ENOPROTOOPT
+#undef ENOSR
+#undef ENOSTR
+#undef ENOSYS
+#undef ENOTCONN
+#undef ENOTEMPTY
+#undef ENOTRECOVERABLE
+#undef ENOTSOCK
+#undef ENOTSUP
+#undef EOPNOTSUPP
+#undef EOVERFLOW
+#undef EOWNERDEAD
+#undef EPROTO
+#undef EPROTONOSUPPORT
+#undef EPROTOTYPE
+#undef ETIME
+#undef ETIMEDOUT
+#undef ETXTBSY
+#undef EWOULDBLOCK
+
 /* 操作/権限エラー */
 #define EPERM           1   /* Operation not permitted */
 #define ENOENT          2   /* No such file or directory */
