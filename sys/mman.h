@@ -90,7 +90,7 @@ static inline int __rin_mman_zero_result(intptr_t result)
 #define MAP_SHARED      0x01   /* 他プロセスと共有 */
 #define MAP_PRIVATE     0x02   /* プライベートコピーオンライト */
 #define MAP_FIXED       0x10   /* 指定アドレスに配置 */
-#define MAP_FIXED_NOREPLACE 0x08000000 /* 既存マッピングを置換せず固定配置 */
+#define MAP_FIXED_NOREPLACE 0x00100000 /* 既存マッピングを置換せず固定配置 */
 #define MAP_ANONYMOUS   0x20   /* ファイルなし (メモリのみ) */
 #define MAP_ANON        MAP_ANONYMOUS
 #define MAP_GROWSDOWN   0x100  /* スタック用 (下方向に拡張) */
@@ -104,6 +104,19 @@ static inline int __rin_mman_zero_result(intptr_t result)
 
 /* mmap失敗時の戻り値 */
 #define MAP_FAILED ((void*)-1)
+
+/* The Rin mmap syscall ABI kept NOREPLACE at its original private bit.
+ * Translate the Linux-facing libc flag at the wrapper boundary so existing
+ * binaries that use the Rin syscall bit remain compatible. */
+#define __RIN_MMAN_MAP_NOREPLACE_ABI 0x08000000
+static inline int __rin_mman_syscall_flags(int flags)
+{
+    if ((flags & MAP_FIXED_NOREPLACE) != 0) {
+        flags &= ~MAP_FIXED_NOREPLACE;
+        flags |= __RIN_MMAN_MAP_NOREPLACE_ABI;
+    }
+    return flags;
+}
 
 static inline void* __rin_mman_pointer_result(intptr_t result)
 {
@@ -169,6 +182,7 @@ static inline void* mmap(void* addr, size_t length, int prot, int flags,
     intptr_t ret;
     /* Linux keeps MAP_DENYWRITE for compatibility but ignores it. */
     flags &= ~MAP_DENYWRITE;
+    flags = __rin_mman_syscall_flags(flags);
     if ((flags & MAP_ANONYMOUS) == 0 && fd < 0) {
         errno = EBADF;
         return MAP_FAILED;
@@ -201,6 +215,7 @@ static inline void* mmap64(void* addr, size_t length, int prot, int flags,
 
     /* Keep mmap64 consistent with mmap for the ignored legacy flag. */
     flags &= ~MAP_DENYWRITE;
+    flags = __rin_mman_syscall_flags(flags);
     if (offset < 0) {
         errno = EINVAL;
         return MAP_FAILED;
