@@ -91,6 +91,8 @@ static int mq_error_from_result(int32_t result, uint32_t operation,
     case RIN_ERROR_INTEGRITY: errno = EIO; break;
     case RIN_ERROR_BUFFER_TOO_SMALL: errno = EMSGSIZE; break;
     case RIN_ERROR_TABLE_FULL: errno = EMFILE; break;
+    case RIN_ERROR_SYSTEM_TABLE_FULL: errno = ENFILE; break;
+    case RIN_ERROR_OVERFLOW: errno = EOVERFLOW; break;
     case RIN_ERROR_LIMIT_EXCEEDED:
         errno = operation == RIN_LIBC_SDK_IPC_POSIX_MQ_OPEN
                     ? ENOSPC : EOVERFLOW;
