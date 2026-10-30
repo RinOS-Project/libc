@@ -88,22 +88,20 @@ static unsigned int rin_time_zone_cache_system_generation;
 static unsigned char rin_time_zone_cache_source;
 static unsigned char rin_time_zone_cache_valid;
 
-/* Standard hosted `struct tm` has no tm_gmtoff/tm_zone fields.  Keep the
- * public layout unchanged and provide a small, allocation-free sidecar for
- * C++ locale facets.  The owner is intentionally bounded: exhaustion makes
- * a `%z`/`%Z` parse fail atomically instead of evicting metadata for another
- * live object. */
-#define RIN_CXX_TM_TIMEZONE_SLOTS 32u
+/* Standard hosted `struct tm` has no tm_gmtoff/tm_zone fields. Keep its public
+ * layout unchanged and hold C++ locale metadata in an explicitly owned list.
+ * The caller releases an entry when its tm object's lifetime ends and copies
+ * it explicitly when copying the tm value. */
 #define RIN_CXX_TM_TIMEZONE_HAS_OFFSET 1u
 #define RIN_CXX_TM_TIMEZONE_HAS_NAME 2u
-typedef struct RinCxxTmTimezoneSlot {
+typedef struct RinCxxTmTimezoneEntry {
+    struct RinCxxTmTimezoneEntry* next;
     const void* value;
     long offset;
     unsigned flags;
     char zone[64];
-} RinCxxTmTimezoneSlot;
-static RinCxxTmTimezoneSlot rin_cxx_tm_timezone_slots[
-    RIN_CXX_TM_TIMEZONE_SLOTS];
+} RinCxxTmTimezoneEntry;
+static RinCxxTmTimezoneEntry* rin_cxx_tm_timezone_entries;
 static volatile unsigned char rin_cxx_tm_timezone_lock;
 
 extern int rin_system_timezone_get(char* output, size_t capacity)
@@ -174,44 +172,65 @@ static void rin_cxx_tm_timezone_acquire(void) {
     }
 }
 
-static void rin_cxx_tm_timezone_release(void) {
+static void rin_cxx_tm_timezone_unlock(void) {
     __atomic_clear(&rin_cxx_tm_timezone_lock, __ATOMIC_RELEASE);
 }
 
+int rin_cxx_tm_timezone_release(const void* value);
+
 int rin_cxx_tm_timezone_get(const void* value, long* offset, char* zone,
                             size_t zone_capacity, unsigned* flags) {
-    unsigned index;
+    RinCxxTmTimezoneEntry* entry;
     if (!value || !flags || (zone && zone_capacity == 0u)) return 0;
     *flags = 0u;
     if (offset) *offset = 0L;
     if (zone) zone[0] = '\0';
     rin_cxx_tm_timezone_acquire();
-    for (index = 0u; index < RIN_CXX_TM_TIMEZONE_SLOTS; ++index) {
-        RinCxxTmTimezoneSlot const* slot = &rin_cxx_tm_timezone_slots[index];
+    for (entry = rin_cxx_tm_timezone_entries; entry != NULL;
+         entry = entry->next) {
         size_t length = 0u;
-        if (slot->value != value) continue;
-        if (offset) *offset = slot->offset;
-        *flags = slot->flags;
-        while (length < sizeof(slot->zone) && slot->zone[length] != '\0')
+        if (entry->value != value) continue;
+        if (offset) *offset = entry->offset;
+        *flags = entry->flags;
+        while (length < sizeof(entry->zone) && entry->zone[length] != '\0')
             ++length;
         if (zone) {
             if (length + 1u > zone_capacity) {
-                rin_cxx_tm_timezone_release();
+                rin_cxx_tm_timezone_unlock();
                 return 0;
             }
-            memcpy(zone, slot->zone, length + 1u);
+            memcpy(zone, entry->zone, length + 1u);
         }
-        rin_cxx_tm_timezone_release();
+        rin_cxx_tm_timezone_unlock();
         return 1;
     }
-    rin_cxx_tm_timezone_release();
+    rin_cxx_tm_timezone_unlock();
     return 0;
+}
+
+int rin_cxx_tm_timezone_release(const void* value) {
+    RinCxxTmTimezoneEntry** link;
+    RinCxxTmTimezoneEntry* removed = NULL;
+    if (!value) return 0;
+    rin_cxx_tm_timezone_acquire();
+    link = &rin_cxx_tm_timezone_entries;
+    while (*link != NULL) {
+        if ((*link)->value == value) {
+            removed = *link;
+            *link = removed->next;
+            break;
+        }
+        link = &(*link)->next;
+    }
+    rin_cxx_tm_timezone_unlock();
+    free(removed);
+    return 1;
 }
 
 int rin_cxx_tm_timezone_set(const void* value, unsigned flags, long offset,
                             const char* zone) {
-    unsigned index;
-    unsigned free_index = RIN_CXX_TM_TIMEZONE_SLOTS;
+    RinCxxTmTimezoneEntry* replacement;
+    RinCxxTmTimezoneEntry* entry;
     size_t length = 0u;
     if (!value || (flags & ~(RIN_CXX_TM_TIMEZONE_HAS_OFFSET |
                              RIN_CXX_TM_TIMEZONE_HAS_NAME)) != 0u ||
@@ -219,6 +238,7 @@ int rin_cxx_tm_timezone_set(const void* value, unsigned flags, long offset,
          (offset < -86340L || offset > 86340L || offset % 60L != 0L)) ||
         ((flags & RIN_CXX_TM_TIMEZONE_HAS_NAME) != 0u &&
          (!zone || zone[0] == '\0'))) return 0;
+    if (flags == 0u) return rin_cxx_tm_timezone_release(value);
     if (zone) {
         while (length < 64u && zone[length] != '\0') {
             unsigned char current = (unsigned char)zone[length];
@@ -227,25 +247,86 @@ int rin_cxx_tm_timezone_set(const void* value, unsigned flags, long offset,
         }
         if (length >= 64u) return 0;
     }
-    rin_cxx_tm_timezone_acquire();
-    for (index = 0u; index < RIN_CXX_TM_TIMEZONE_SLOTS; ++index) {
-        if (rin_cxx_tm_timezone_slots[index].value == value) break;
-        if (!rin_cxx_tm_timezone_slots[index].value &&
-            free_index == RIN_CXX_TM_TIMEZONE_SLOTS) free_index = index;
-    }
-    if (index == RIN_CXX_TM_TIMEZONE_SLOTS) index = free_index;
-    if (index == RIN_CXX_TM_TIMEZONE_SLOTS) {
-        rin_cxx_tm_timezone_release();
-        return 0;
-    }
-    rin_cxx_tm_timezone_slots[index].value = value;
-    rin_cxx_tm_timezone_slots[index].offset = offset;
-    rin_cxx_tm_timezone_slots[index].flags = flags;
-    memset(rin_cxx_tm_timezone_slots[index].zone, 0,
-           sizeof(rin_cxx_tm_timezone_slots[index].zone));
+    replacement = (RinCxxTmTimezoneEntry*)malloc(sizeof(*replacement));
+    if (replacement == NULL) return 0;
+    replacement->next = NULL;
+    replacement->value = value;
+    replacement->offset = offset;
+    replacement->flags = flags;
+    memset(replacement->zone, 0, sizeof(replacement->zone));
     if (zone && length != 0u)
-        memcpy(rin_cxx_tm_timezone_slots[index].zone, zone, length);
-    rin_cxx_tm_timezone_release();
+        memcpy(replacement->zone, zone, length);
+
+    rin_cxx_tm_timezone_acquire();
+    for (entry = rin_cxx_tm_timezone_entries; entry != NULL;
+         entry = entry->next) {
+        if (entry->value != value) continue;
+        entry->offset = replacement->offset;
+        entry->flags = replacement->flags;
+        memcpy(entry->zone, replacement->zone, sizeof(entry->zone));
+        rin_cxx_tm_timezone_unlock();
+        free(replacement);
+        return 1;
+    }
+    replacement->next = rin_cxx_tm_timezone_entries;
+    rin_cxx_tm_timezone_entries = replacement;
+    rin_cxx_tm_timezone_unlock();
+    return 1;
+}
+
+int rin_cxx_tm_timezone_copy(void* destination, const void* source) {
+    RinCxxTmTimezoneEntry* replacement;
+    RinCxxTmTimezoneEntry* source_entry;
+    RinCxxTmTimezoneEntry* destination_entry;
+    RinCxxTmTimezoneEntry** link;
+    RinCxxTmTimezoneEntry* removed = NULL;
+    if (!destination || !source) return 0;
+    if (destination == source) return 1;
+    replacement = (RinCxxTmTimezoneEntry*)malloc(sizeof(*replacement));
+    if (replacement == NULL) return 0;
+
+    rin_cxx_tm_timezone_acquire();
+    source_entry = rin_cxx_tm_timezone_entries;
+    while (source_entry != NULL && source_entry->value != source)
+        source_entry = source_entry->next;
+    if (source_entry == NULL) {
+        link = &rin_cxx_tm_timezone_entries;
+        while (*link != NULL) {
+            if ((*link)->value == destination) {
+                removed = *link;
+                *link = removed->next;
+                break;
+            }
+            link = &(*link)->next;
+        }
+        rin_cxx_tm_timezone_unlock();
+        free(replacement);
+        free(removed);
+        return 1;
+    }
+
+    replacement->next = NULL;
+    replacement->value = destination;
+    replacement->offset = source_entry->offset;
+    replacement->flags = source_entry->flags;
+    memcpy(replacement->zone, source_entry->zone,
+           sizeof(replacement->zone));
+    destination_entry = rin_cxx_tm_timezone_entries;
+    while (destination_entry != NULL &&
+           destination_entry->value != destination)
+        destination_entry = destination_entry->next;
+    if (destination_entry != NULL) {
+        destination_entry->offset = replacement->offset;
+        destination_entry->flags = replacement->flags;
+        memcpy(destination_entry->zone, replacement->zone,
+               sizeof(destination_entry->zone));
+        rin_cxx_tm_timezone_unlock();
+        free(replacement);
+        return 1;
+    }
+    replacement->next = rin_cxx_tm_timezone_entries;
+    rin_cxx_tm_timezone_entries = replacement;
+    rin_cxx_tm_timezone_unlock();
     return 1;
 }
 
@@ -1350,12 +1431,15 @@ static int rin_time_zone_snapshot(RinTimeZone* output) {
 }
 
 struct tm* gmtime_r(const time_t* timer, struct tm* result) {
+    struct tm candidate;
     int saved_errno = errno;
     if (!timer || !result) {
         errno = EINVAL;
         return NULL;
     }
-    if (!rin_time_split(*timer, 0, 0, "UTC", result)) return NULL;
+    if (!rin_time_split(*timer, 0, 0, "UTC", &candidate)) return NULL;
+    (void)rin_cxx_tm_timezone_release(result);
+    *result = candidate;
     errno = saved_errno;
     return result;
 }
@@ -1366,13 +1450,16 @@ struct tm* gmtime(const time_t* timer) {
 
 struct tm* localtime_r(const time_t* timer, struct tm* result) {
     RinTimeZone zone;
+    struct tm candidate;
     int saved_errno = errno;
     if (!timer || !result) {
         errno = EINVAL;
         return NULL;
     }
     if (!rin_time_zone_snapshot(&zone) ||
-        !rin_time_local_with_zone(&zone, *timer, result)) return NULL;
+        !rin_time_local_with_zone(&zone, *timer, &candidate)) return NULL;
+    (void)rin_cxx_tm_timezone_release(result);
+    *result = candidate;
     errno = saved_errno;
     return result;
 }
