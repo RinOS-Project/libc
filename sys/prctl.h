@@ -4,6 +4,14 @@
  * Process control - full implementation for RinOS
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_PRCTL_SYSCALL5) && \
+    !defined(_RIN_PRCTL_NAME_SYSCALL1)
+#include_next <sys/prctl.h>
+#else
+
 #ifndef _SYS_PRCTL_H
 #define _SYS_PRCTL_H
 
@@ -17,6 +25,13 @@
 #ifndef _RIN_PRCTL_NAME_SYSCALL1
 #define _RIN_PRCTL_NAME_SYSCALL1(number, argument) \
     _syscall1((uintptr_t)(number), (uintptr_t)(argument))
+#endif
+#ifndef _RIN_PRCTL_SYSCALL5
+#define _RIN_PRCTL_SYSCALL5(number, argument1, argument2, argument3, argument4, \
+                            argument5) \
+    _syscall5((uintptr_t)(number), (uintptr_t)(argument1), \
+              (uintptr_t)(argument2), (uintptr_t)(argument3), \
+              (uintptr_t)(argument4), (uintptr_t)(argument5))
 #endif
 
 #ifdef __cplusplus
@@ -259,8 +274,8 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_TSC || option == PR_GET_TSC ||
         option == PR_SET_PDEATHSIG || option == PR_GET_PDEATHSIG ||
         option == PR_SET_DUMPABLE || option == PR_GET_DUMPABLE) {
-        result = _syscall5(SYS_PRCTL, (uintptr_t)option, arg2, arg3,
-                           arg4, arg5);
+        result = _RIN_PRCTL_SYSCALL5(SYS_PRCTL, (uintptr_t)option, arg2,
+                                     arg3, arg4, arg5);
         if (result < 0) {
             uintptr_t error = (uintptr_t)0 - (uintptr_t)result;
             errno = error != 0u && error <= (uintptr_t)4095u
@@ -317,3 +332,5 @@ static inline int prctl(int option, ...) {
 #endif
 
 #endif /* _SYS_PRCTL_H */
+
+#endif /* hosted Linux delegation */
