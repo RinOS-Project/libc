@@ -20,6 +20,7 @@ struct if_nameindex {
 #ifndef IFF_UP
 #define IFF_UP        0x0001u
 #define IFF_BROADCAST 0x0002u
+#define IFF_POINTOPOINT 0x0010u
 #define IFF_LOOPBACK  0x0008u
 #define IFF_RUNNING   0x0040u
 #define IFF_MULTICAST 0x1000u

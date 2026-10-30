@@ -149,17 +149,17 @@ int rin_net_get_icmp_global_statistics_v2(
     return 0;
 }
 
-static int netif_snapshot(RinNetIfaddrsSnapshotListV1* snapshot)
+static int netif_snapshot(RinNetIfaddrsSnapshotListV2* snapshot)
 {
     if (snapshot == NULL) {
         errno = EINVAL;
         return -1;
     }
     memset(snapshot, 0, sizeof(*snapshot));
-    if (syscall(RIN_SYS_NETWORK_INTERFACE_IFADDRS_SNAPSHOT_V1,
+    if (syscall(RIN_SYS_NETWORK_INTERFACE_IFADDRS_SNAPSHOT_V2,
                 snapshot) != 0)
         return -1;
-    if (!rin_net_ifaddrs_snapshot_list_v1_valid(snapshot)) {
+    if (!rin_net_ifaddrs_snapshot_list_v2_valid(snapshot)) {
         errno = EPROTO;
         return -1;
     }
@@ -167,14 +167,14 @@ static int netif_snapshot(RinNetIfaddrsSnapshotListV1* snapshot)
 }
 
 int rin_net_get_interface_ifaddrs_snapshot(
-    RinNetIfaddrsSnapshotListV1* output)
+    RinNetIfaddrsSnapshotListV2* output)
 {
     return netif_snapshot(output);
 }
 
 unsigned int if_nametoindex(const char* ifname)
 {
-    RinNetIfaddrsSnapshotListV1 snapshot;
+    RinNetIfaddrsSnapshotListV2 snapshot;
     unsigned int index;
 
     if (!ifname) {
@@ -188,9 +188,9 @@ unsigned int if_nametoindex(const char* ifname)
     if (netif_snapshot(&snapshot) != 0)
         return 0u;
     for (index = 0u; index < snapshot.count; ++index) {
-        const RinNetIfaddrsInterfaceV1* entry = &snapshot.interfaces[index];
-        if (strcmp(ifname, entry->ifname) == 0)
-            return (unsigned int)entry->interface_id;
+        const RinNetIfaddrsInterfaceV2* entry = &snapshot.interfaces[index];
+        if (strcmp(ifname, entry->addresses.ifname) == 0)
+            return (unsigned int)entry->addresses.interface_id;
     }
     errno = ENXIO;
     return 0u;
@@ -198,7 +198,7 @@ unsigned int if_nametoindex(const char* ifname)
 
 char* if_indextoname(unsigned int ifindex, char* ifname)
 {
-    RinNetIfaddrsSnapshotListV1 snapshot;
+    RinNetIfaddrsSnapshotListV2 snapshot;
     unsigned int index;
 
     if (!ifname || ifindex == 0u) {
@@ -208,9 +208,9 @@ char* if_indextoname(unsigned int ifindex, char* ifname)
     if (netif_snapshot(&snapshot) != 0)
         return (char*)0;
     for (index = 0u; index < snapshot.count; ++index) {
-        const RinNetIfaddrsInterfaceV1* entry = &snapshot.interfaces[index];
-        if (entry->interface_id == (uint64_t)ifindex) {
-            memcpy(ifname, entry->ifname, IF_NAMESIZE);
+        const RinNetIfaddrsInterfaceV2* entry = &snapshot.interfaces[index];
+        if (entry->addresses.interface_id == (uint64_t)ifindex) {
+            memcpy(ifname, entry->addresses.ifname, IF_NAMESIZE);
             return ifname;
         }
     }
@@ -220,7 +220,7 @@ char* if_indextoname(unsigned int ifindex, char* ifname)
 
 struct if_nameindex* if_nameindex(void)
 {
-    RinNetIfaddrsSnapshotListV1 snapshot;
+    RinNetIfaddrsSnapshotListV2 snapshot;
     struct if_nameindex* result;
     char* next_name;
     size_t names_size = 0u;
@@ -230,7 +230,7 @@ struct if_nameindex* if_nameindex(void)
     if (netif_snapshot(&snapshot) != 0)
         return (struct if_nameindex*)0;
     for (index = 0u; index < snapshot.count; ++index) {
-        size_t length = strlen(snapshot.interfaces[index].ifname);
+        size_t length = strlen(snapshot.interfaces[index].addresses.ifname);
         if (length == 0u || length >= IF_NAMESIZE ||
             names_size > SIZE_MAX - length - 1u) {
             errno = EPROTO;
@@ -250,11 +250,11 @@ struct if_nameindex* if_nameindex(void)
     }
     next_name = (char*)result + entries_size;
     for (index = 0u; index < snapshot.count; ++index) {
-        const RinNetIfaddrsInterfaceV1* entry = &snapshot.interfaces[index];
-        size_t length = strlen(entry->ifname) + 1u;
-        result[index].if_index = (unsigned int)entry->interface_id;
+        const RinNetIfaddrsInterfaceV2* entry = &snapshot.interfaces[index];
+        size_t length = strlen(entry->addresses.ifname) + 1u;
+        result[index].if_index = (unsigned int)entry->addresses.interface_id;
         result[index].if_name = next_name;
-        memcpy(next_name, entry->ifname, length);
+        memcpy(next_name, entry->addresses.ifname, length);
         next_name += length;
     }
     result[snapshot.count].if_index = 0u;
@@ -270,7 +270,7 @@ void if_freenameindex(struct if_nameindex* list)
 int rin_net_addrconfig_snapshot(int* ipv4_configured,
                                 int* ipv6_configured)
 {
-    RinNetIfaddrsSnapshotListV1 snapshot;
+    RinNetIfaddrsSnapshotListV2 snapshot;
     unsigned int index;
     if (ipv4_configured == NULL || ipv6_configured == NULL) {
         errno = EINVAL;
@@ -281,10 +281,15 @@ int rin_net_addrconfig_snapshot(int* ipv4_configured,
     if (netif_snapshot(&snapshot) != 0)
         return -1;
     for (index = 0u; index < snapshot.count; ++index) {
-        const uint16_t flags = snapshot.interfaces[index].flags;
-        if ((flags & RIN_NET_IFADDRS_INTERFACE_FLAG_IPV4_CONFIGURED) != 0u)
+        const RinNetIfaddrsInterfaceV2* interface =
+            &snapshot.interfaces[index];
+        const uint16_t flags = interface->addresses.flags;
+        if ((flags & RIN_NET_IFADDRS_INTERFACE_FLAG_IPV4_CONFIGURED) != 0u &&
+            interface->addresses.ipv4_address[0] != 127u)
             *ipv4_configured = 1;
-        if ((flags & RIN_NET_IFADDRS_INTERFACE_FLAG_IPV6_CONFIGURED) != 0u)
+        if (interface->interface_type !=
+                RIN_NET_IFADDRS_V2_INTERFACE_LOOPBACK &&
+            (flags & RIN_NET_IFADDRS_INTERFACE_FLAG_IPV6_CONFIGURED) != 0u)
             *ipv6_configured = 1;
     }
     return 0;

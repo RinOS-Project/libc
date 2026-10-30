@@ -10,29 +10,54 @@
 #include "rin_net_interface_snapshot.h"
 
 #define RIN_IFADDRS_MAX_ENTRIES \
-    (RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES * \
+    (RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2 * \
      (RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES + 1u))
 
 typedef struct RinIfaddrsStorage {
     struct ifaddrs entries[RIN_IFADDRS_MAX_ENTRIES];
-    char names[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES][IF_NAMESIZE];
-    struct sockaddr_in addresses4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES];
-    struct sockaddr_in netmasks4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES];
-    struct sockaddr_in6 addresses6[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES]
+    char names[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2][IF_NAMESIZE];
+    struct sockaddr_in addresses4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2];
+    struct sockaddr_in netmasks4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2];
+    struct sockaddr_in broadcast4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2];
+    struct sockaddr_in peer4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2];
+    struct sockaddr_in6 addresses6[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2]
                                   [RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES];
-    struct sockaddr_in6 netmasks6[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES]
+    struct sockaddr_in6 netmasks6[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2]
                                   [RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES];
 } RinIfaddrsStorage;
 
 static unsigned int rin_ifaddrs_interface_flags(
-    const RinNetIfaddrsInterfaceV1* interface)
+    const RinNetIfaddrsInterfaceV2* interface)
 {
-    unsigned int flags = IFF_UP | IFF_MULTICAST;
-    if ((interface->flags & RIN_NET_IFADDRS_INTERFACE_FLAG_LINK_UP) != 0u)
+    unsigned int flags = 0u;
+    if ((interface->flags & RIN_NET_IFADDRS_V2_FLAG_ADMIN_UP) != 0u)
+        flags |= IFF_UP;
+    if ((interface->capabilities & RIN_NET_IFADDRS_V2_CAP_BROADCAST) != 0u)
+        flags |= IFF_BROADCAST;
+    if ((interface->capabilities & RIN_NET_IFADDRS_V2_CAP_MULTICAST) != 0u)
+        flags |= IFF_MULTICAST;
+    if ((interface->flags & RIN_NET_IFADDRS_V2_FLAG_LINK_UP) != 0u)
         flags |= IFF_RUNNING;
-    if (strcmp(interface->ifname, "lo") == 0)
+    if (interface->interface_type == RIN_NET_IFADDRS_V2_INTERFACE_LOOPBACK)
         flags |= IFF_LOOPBACK;
+    if (interface->interface_type ==
+        RIN_NET_IFADDRS_V2_INTERFACE_POINT_TO_POINT)
+        flags |= IFF_POINTOPOINT;
     return flags;
+}
+
+static unsigned int rin_ifaddrs_ipv4_prefix_length(const uint8_t mask[4])
+{
+    unsigned int prefix = 0u;
+    unsigned int index;
+    for (index = 0u; index < 4u; ++index) {
+        uint8_t bit;
+        for (bit = 0x80u; bit != 0u; bit >>= 1u) {
+            if ((mask[index] & bit) == 0u) return prefix;
+            ++prefix;
+        }
+    }
+    return prefix;
 }
 
 static void rin_ifaddrs_set_netmask6(struct sockaddr_in6* mask,
@@ -47,7 +72,7 @@ static void rin_ifaddrs_set_netmask6(struct sockaddr_in6* mask,
 
 int getifaddrs(struct ifaddrs** ifap)
 {
-    RinNetIfaddrsSnapshotListV1 snapshot;
+    RinNetIfaddrsSnapshotListV2 snapshot;
     RinIfaddrsStorage* storage;
     unsigned int count = 0u;
     unsigned int interface_index;
@@ -69,14 +94,15 @@ int getifaddrs(struct ifaddrs** ifap)
     }
     for (interface_index = 0u; interface_index < snapshot.count;
          ++interface_index) {
-        const RinNetIfaddrsInterfaceV1* source =
+        const RinNetIfaddrsInterfaceV2* source =
             &snapshot.interfaces[interface_index];
+        const RinNetIfaddrsInterfaceV1* addresses = &source->addresses;
         const unsigned int flags = rin_ifaddrs_interface_flags(source);
         unsigned int address_index;
         unsigned int interface_entries = 0u;
-        memcpy(storage->names[interface_index], source->ifname, IF_NAMESIZE);
+        memcpy(storage->names[interface_index], addresses->ifname, IF_NAMESIZE);
 
-        if ((source->flags &
+        if ((addresses->flags &
              RIN_NET_IFADDRS_INTERFACE_FLAG_IPV4_CONFIGURED) != 0u) {
             struct ifaddrs* entry = &storage->entries[count++];
             struct sockaddr_in* address =
@@ -88,14 +114,34 @@ int getifaddrs(struct ifaddrs** ifap)
             entry->ifa_addr = (struct sockaddr*)address;
             entry->ifa_netmask = (struct sockaddr*)netmask;
             address->sin_family = AF_INET;
-            memcpy(&address->sin_addr.s_addr, source->ipv4_address, 4u);
+            memcpy(&address->sin_addr.s_addr, addresses->ipv4_address, 4u);
             netmask->sin_family = AF_INET;
-            memcpy(&netmask->sin_addr.s_addr, source->ipv4_netmask, 4u);
+            memcpy(&netmask->sin_addr.s_addr, addresses->ipv4_netmask, 4u);
+            if ((source->capabilities &
+                 RIN_NET_IFADDRS_V2_CAP_POINT_TO_POINT) != 0u) {
+                struct sockaddr_in* peer = &storage->peer4[interface_index];
+                peer->sin_family = AF_INET;
+                memcpy(&peer->sin_addr.s_addr, source->ipv4_peer, 4u);
+                entry->ifa_dstaddr = (struct sockaddr*)peer;
+            } else if ((source->capabilities &
+                        RIN_NET_IFADDRS_V2_CAP_BROADCAST) != 0u &&
+                       rin_ifaddrs_ipv4_prefix_length(
+                           addresses->ipv4_netmask) <= 30u) {
+                struct sockaddr_in* broadcast =
+                    &storage->broadcast4[interface_index];
+                broadcast->sin_family = AF_INET;
+                for (unsigned int byte = 0u; byte < 4u; ++byte)
+                    ((uint8_t*)&broadcast->sin_addr.s_addr)[byte] =
+                        addresses->ipv4_address[byte] |
+                        (uint8_t)~addresses->ipv4_netmask[byte];
+                entry->ifa_broadaddr = (struct sockaddr*)broadcast;
+            }
             ++interface_entries;
         }
-        for (address_index = 0u; address_index < source->address_count;
+        for (address_index = 0u; address_index < addresses->address_count;
              ++address_index) {
-            const uint8_t* source_address = source->addresses6[address_index];
+            const uint8_t* source_address =
+                addresses->addresses6[address_index];
             struct ifaddrs* entry = &storage->entries[count++];
             struct sockaddr_in6* address =
                 &storage->addresses6[interface_index][address_index];
@@ -106,12 +152,13 @@ int getifaddrs(struct ifaddrs** ifap)
             entry->ifa_addr = (struct sockaddr*)address;
             entry->ifa_netmask = (struct sockaddr*)netmask;
             address->sin6_family = AF_INET6;
-            if (source->address_flags6[address_index] ==
+            if (addresses->address_flags6[address_index] ==
                 RIN_NET_IFADDRS_ADDRESS_FLAG_LINK_LOCAL)
-                address->sin6_scope_id = (uint32_t)source->interface_id;
+                address->sin6_scope_id =
+                    (uint32_t)addresses->interface_id;
             memcpy(address->sin6_addr.s6_addr, source_address, 16u);
             rin_ifaddrs_set_netmask6(
-                netmask, source->prefix_lengths6[address_index]);
+                netmask, addresses->prefix_lengths6[address_index]);
             ++interface_entries;
         }
         if (interface_entries == 0u) {
