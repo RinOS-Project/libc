@@ -248,6 +248,13 @@ void free_aligned_sized(void* ptr, size_t alignment, size_t size);
 size_t malloc_usable_size(void* ptr);
 #endif
 
+/* The static inline implementation lives in unistd.h.  This userland
+ * declaration preserves the POSIX stdlib.h entry point without imposing a
+ * function definition requirement on kernel-only consumers of stdlib.h. */
+#if defined(RIN_USERSPACE) && RIN_USERSPACE
+static char* realpath(const char* path, char* resolved_path);
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * プロセス制御
  * ═══════════════════════════════════════════════════════════════*/
@@ -861,20 +868,56 @@ static inline long double strtold(const char* s, char** endptr) {
 #endif /* C++ <cstdlib> freestanding bridge */
 #endif /* !_STDLIB_SKIP_INLINE_DEFS - 数値変換 */
 
-/* libc++'s locale adapters use the POSIX locale-aware conversion entrypoints.
- * RinOS currently has one UTF-8 numeric grammar, so these wrappers preserve
- * the conversion contract while accepting the selected locale object. */
+/* Locale-explicit integer conversions use the selected LC_CTYPE for their
+ * leading whitespace. The integer digit and base grammar is shared. */
 #if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+static inline const char* rin_integer_l_skip_locale_space(
+    const char* input, locale_t locale) {
+    const char* cursor = input;
+    if (!cursor) return cursor;
+    while (*cursor != '\0' &&
+           rin_locale_ctype_test(locale, (unsigned char)*cursor,
+                                 RIN_LOCALE_CTYPE_SPACE))
+        ++cursor;
+    return cursor;
+}
+
+/* If conversion fails, strto* specifies the original input for endptr even
+ * though these wrappers pass the parser a pointer after locale whitespace. */
+static inline long strtol_l(const char* s, char** endptr, int base,
+                            locale_t locale) {
+    const char* input = rin_integer_l_skip_locale_space(s, locale);
+    char* parsed_end = (char*)0;
+    long result = strtol(input, &parsed_end, base);
+    if (endptr) *endptr = parsed_end == input ? (char*)s : parsed_end;
+    return result;
+}
+
+static inline unsigned long strtoul_l(const char* s, char** endptr, int base,
+                                      locale_t locale) {
+    const char* input = rin_integer_l_skip_locale_space(s, locale);
+    char* parsed_end = (char*)0;
+    unsigned long result = strtoul(input, &parsed_end, base);
+    if (endptr) *endptr = parsed_end == input ? (char*)s : parsed_end;
+    return result;
+}
+
 static inline long long strtoll_l(const char* s, char** endptr, int base,
                                   locale_t locale) {
-    (void)locale;
-    return strtoll(s, endptr, base);
+    const char* input = rin_integer_l_skip_locale_space(s, locale);
+    char* parsed_end = (char*)0;
+    long long result = strtoll(input, &parsed_end, base);
+    if (endptr) *endptr = parsed_end == input ? (char*)s : parsed_end;
+    return result;
 }
 
 static inline unsigned long long strtoull_l(const char* s, char** endptr,
                                             int base, locale_t locale) {
-    (void)locale;
-    return strtoull(s, endptr, base);
+    const char* input = rin_integer_l_skip_locale_space(s, locale);
+    char* parsed_end = (char*)0;
+    unsigned long long result = strtoull(input, &parsed_end, base);
+    if (endptr) *endptr = parsed_end == input ? (char*)s : parsed_end;
+    return result;
 }
 
 static inline float strtof_l(const char* s, char** endptr, locale_t locale) {
