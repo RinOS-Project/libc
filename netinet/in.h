@@ -165,6 +165,7 @@ struct in_pktinfo {
 #define IPV6_PKTINFO        50
 #define IPV6_RECVHOPLIMIT   51
 #define IPV6_HOPLIMIT       52
+#define IPV6_DONTFRAG       62
 
 struct in6_pktinfo {
     struct in6_addr ipi6_addr;
