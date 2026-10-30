@@ -6,6 +6,13 @@
 
 #ifndef _WCHAR_H
 #define _WCHAR_H
+#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
+    __STDC_VERSION__ >= 202311L
+#ifndef __STDC_VERSION_WCHAR_H__
+#define __STDC_VERSION_WCHAR_H__ 202311L
+#endif
+#endif
+
 
 #include "stddef.h"
 #include "stdint.h"
@@ -579,6 +586,23 @@ typedef struct rin_wc_integer_result {
     int overflow;
 } rin_wc_integer_result;
 
+typedef int (*rin_wc_integer_space_test)(wint_t character,
+                                         const void* context);
+
+static inline int rin_wc_integer_current_space(wint_t character,
+                                                const void* context) {
+    (void)context;
+    return iswspace(character);
+}
+
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+static inline int rin_wc_integer_locale_space(wint_t character,
+                                               const void* context) {
+    return rin_locale_wide_ctype_test(
+        (locale_t)context, (uint32_t)character, RIN_LOCALE_CTYPE_SPACE);
+}
+#endif
+
 static inline int rin_wc_integer_digit(wchar_t value) {
     if (value >= L'0' && value <= L'9') return (int)(value - L'0');
     if (value >= L'a' && value <= L'z') return (int)(value - L'a') + 10;
@@ -586,9 +610,10 @@ static inline int rin_wc_integer_digit(wchar_t value) {
     return -1;
 }
 
-static inline rin_wc_integer_result rin_wc_integer_parse(
+static inline rin_wc_integer_result rin_wc_integer_parse_with_space(
     const wchar_t* nptr, int base, unsigned long long positive_limit,
-    unsigned long long negative_limit) {
+    unsigned long long negative_limit,
+    rin_wc_integer_space_test space_test, const void* space_context) {
     rin_wc_integer_result result;
     const wchar_t* original = nptr;
     const wchar_t* cursor;
@@ -609,7 +634,7 @@ static inline rin_wc_integer_result rin_wc_integer_parse(
         return result;
     }
     cursor = nptr;
-    while (iswspace((wint_t)*cursor)) ++cursor;
+    while (space_test((wint_t)*cursor, space_context)) ++cursor;
     if (*cursor == L'-') {
         result.negative = 1;
         ++cursor;
@@ -670,11 +695,28 @@ static inline rin_wc_integer_result rin_wc_integer_parse(
     return result;
 }
 
-static inline long wcstol(const wchar_t* nptr, wchar_t** endptr, int base) {
-    const unsigned long long positive_limit = (unsigned long long)LONG_MAX;
-    const unsigned long long negative_limit = positive_limit + 1ULL;
-    rin_wc_integer_result parsed = rin_wc_integer_parse(
-        nptr, base, positive_limit, negative_limit);
+static inline rin_wc_integer_result rin_wc_integer_parse(
+    const wchar_t* nptr, int base, unsigned long long positive_limit,
+    unsigned long long negative_limit) {
+    return rin_wc_integer_parse_with_space(
+        nptr, base, positive_limit, negative_limit,
+        rin_wc_integer_current_space, (const void*)0);
+}
+
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+static inline rin_wc_integer_result rin_wc_integer_parse_locale(
+    const wchar_t* nptr, int base, unsigned long long positive_limit,
+    unsigned long long negative_limit, locale_t locale) {
+    return rin_wc_integer_parse_with_space(
+        nptr, base, positive_limit, negative_limit,
+        rin_wc_integer_locale_space, (const void*)locale);
+}
+#endif
+
+static inline long rin_wc_integer_result_long(rin_wc_integer_result parsed,
+                                               wchar_t** endptr) {
+    const unsigned long long negative_limit =
+        (unsigned long long)LONG_MAX + 1ULL;
     if (endptr) *endptr = (wchar_t*)parsed.end;
     if (!parsed.any) return 0L;
     if (parsed.overflow) return parsed.negative ? LONG_MIN : LONG_MAX;
@@ -685,11 +727,10 @@ static inline long wcstol(const wchar_t* nptr, wchar_t** endptr, int base) {
     return (long)parsed.magnitude;
 }
 
-static inline long long wcstoll(const wchar_t* nptr, wchar_t** endptr, int base) {
-    const unsigned long long positive_limit = (unsigned long long)LLONG_MAX;
-    const unsigned long long negative_limit = positive_limit + 1ULL;
-    rin_wc_integer_result parsed = rin_wc_integer_parse(
-        nptr, base, positive_limit, negative_limit);
+static inline long long rin_wc_integer_result_long_long(
+    rin_wc_integer_result parsed, wchar_t** endptr) {
+    const unsigned long long negative_limit =
+        (unsigned long long)LLONG_MAX + 1ULL;
     if (endptr) *endptr = (wchar_t*)parsed.end;
     if (!parsed.any) return 0LL;
     if (parsed.overflow) return parsed.negative ? LLONG_MIN : LLONG_MAX;
@@ -700,26 +741,89 @@ static inline long long wcstoll(const wchar_t* nptr, wchar_t** endptr, int base)
     return (long long)parsed.magnitude;
 }
 
+static inline unsigned long rin_wc_integer_result_ulong(
+    rin_wc_integer_result parsed, wchar_t** endptr) {
+    if (endptr) *endptr = (wchar_t*)parsed.end;
+    if (!parsed.any) return 0UL;
+    if (parsed.overflow) return ULONG_MAX;
+    return parsed.negative
+        ? 0UL - (unsigned long)parsed.magnitude
+        : (unsigned long)parsed.magnitude;
+}
+
+static inline unsigned long long rin_wc_integer_result_ulong_long(
+    rin_wc_integer_result parsed, wchar_t** endptr) {
+    if (endptr) *endptr = (wchar_t*)parsed.end;
+    if (!parsed.any) return 0ULL;
+    if (parsed.overflow) return ULLONG_MAX;
+    return parsed.negative ? 0ULL - parsed.magnitude : parsed.magnitude;
+}
+
+static inline long wcstol(const wchar_t* nptr, wchar_t** endptr, int base) {
+    const unsigned long long positive_limit = (unsigned long long)LONG_MAX;
+    const unsigned long long negative_limit = positive_limit + 1ULL;
+    rin_wc_integer_result parsed = rin_wc_integer_parse(
+        nptr, base, positive_limit, negative_limit);
+    return rin_wc_integer_result_long(parsed, endptr);
+}
+
+static inline long long wcstoll(const wchar_t* nptr, wchar_t** endptr, int base) {
+    const unsigned long long positive_limit = (unsigned long long)LLONG_MAX;
+    const unsigned long long negative_limit = positive_limit + 1ULL;
+    rin_wc_integer_result parsed = rin_wc_integer_parse(
+        nptr, base, positive_limit, negative_limit);
+    return rin_wc_integer_result_long_long(parsed, endptr);
+}
+
 static inline unsigned long wcstoul(const wchar_t* nptr, wchar_t** endptr, int base) {
     rin_wc_integer_result parsed = rin_wc_integer_parse(
         nptr, base, (unsigned long long)ULONG_MAX,
         (unsigned long long)ULONG_MAX);
-    if (endptr) *endptr = (wchar_t*)parsed.end;
-    if (!parsed.any) return 0UL;
-    if (parsed.overflow) return ULONG_MAX;
-    return parsed.negative ? (unsigned long)(0UL - (unsigned long)parsed.magnitude)
-                           : (unsigned long)parsed.magnitude;
+    return rin_wc_integer_result_ulong(parsed, endptr);
 }
 
 static inline unsigned long long wcstoull(const wchar_t* nptr, wchar_t** endptr,
                                           int base) {
     rin_wc_integer_result parsed = rin_wc_integer_parse(
         nptr, base, ULLONG_MAX, ULLONG_MAX);
-    if (endptr) *endptr = (wchar_t*)parsed.end;
-    if (!parsed.any) return 0ULL;
-    if (parsed.overflow) return ULLONG_MAX;
-    return parsed.negative ? 0ULL - parsed.magnitude : parsed.magnitude;
+    return rin_wc_integer_result_ulong_long(parsed, endptr);
 }
+
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+static inline long wcstol_l(const wchar_t* nptr, wchar_t** endptr, int base,
+                            locale_t locale) {
+    const unsigned long long positive_limit = (unsigned long long)LONG_MAX;
+    const unsigned long long negative_limit = positive_limit + 1ULL;
+    rin_wc_integer_result parsed = rin_wc_integer_parse_locale(
+        nptr, base, positive_limit, negative_limit, locale);
+    return rin_wc_integer_result_long(parsed, endptr);
+}
+
+static inline unsigned long wcstoul_l(const wchar_t* nptr, wchar_t** endptr,
+                                      int base, locale_t locale) {
+    rin_wc_integer_result parsed = rin_wc_integer_parse_locale(
+        nptr, base, (unsigned long long)ULONG_MAX,
+        (unsigned long long)ULONG_MAX, locale);
+    return rin_wc_integer_result_ulong(parsed, endptr);
+}
+
+static inline long long wcstoll_l(const wchar_t* nptr, wchar_t** endptr,
+                                  int base, locale_t locale) {
+    const unsigned long long positive_limit = (unsigned long long)LLONG_MAX;
+    const unsigned long long negative_limit = positive_limit + 1ULL;
+    rin_wc_integer_result parsed = rin_wc_integer_parse_locale(
+        nptr, base, positive_limit, negative_limit, locale);
+    return rin_wc_integer_result_long_long(parsed, endptr);
+}
+
+static inline unsigned long long wcstoull_l(const wchar_t* nptr,
+                                            wchar_t** endptr, int base,
+                                            locale_t locale) {
+    rin_wc_integer_result parsed = rin_wc_integer_parse_locale(
+        nptr, base, ULLONG_MAX, ULLONG_MAX, locale);
+    return rin_wc_integer_result_ulong_long(parsed, endptr);
+}
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * マルチバイト/ワイド文字変換 (追加関数)
