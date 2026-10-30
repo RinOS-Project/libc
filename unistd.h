@@ -83,6 +83,12 @@
 #ifndef _POSIX_ASYNCHRONOUS_IO
 #define _POSIX_ASYNCHRONOUS_IO 200809L
 #endif
+#ifndef _POSIX_CLOCK_SELECTION
+#define _POSIX_CLOCK_SELECTION 200809L
+#endif
+#ifndef _POSIX_MONOTONIC_CLOCK
+#define _POSIX_MONOTONIC_CLOCK 200809L
+#endif
 #ifndef _POSIX_THREADS
 #define _POSIX_THREADS 200809L
 #endif
@@ -2053,8 +2059,6 @@ static inline long sysconf(int name) {
         case _SC_REALTIME_SIGNALS:
         case _SC_REGEXP:
         case _SC_SEMAPHORES:
-        case _SC_CLOCK_SELECTION:
-        case _SC_MONOTONIC_CLOCK:
         case _SC_TIMERS:
         case _SC_BC_BASE_MAX:
         case _SC_BC_DIM_MAX:
@@ -2124,6 +2128,8 @@ static inline long sysconf(int name) {
             return -1;
         case _SC_THREAD_ROBUST_PRIO_INHERIT:
             return 200809L;
+        case _SC_CLOCK_SELECTION:
+        case _SC_MONOTONIC_CLOCK:
         case _SC_SYNCHRONIZED_IO:
         case _SC_FSYNC:
         case _SC_MAPPED_FILES:
