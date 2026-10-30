@@ -350,12 +350,11 @@ static inline int _rin_glob_class_match(const char** pattern,
                 ++item_end;
             if (*item_end == '\0' || item_end == item_start) return -1;
             if (delimiter == ':') {
-                int class_result = value_is_single_character ?
-                    _rin_glob_wide_class(
-                        item_start, (size_t)(item_end - item_start), value) :
-                    0;
+                int class_result = _rin_glob_wide_class(
+                    item_start, (size_t)(item_end - item_start), value);
                 if (class_result < 0) return -1;
-                if (value_bytes && class_result) matched = 1;
+                if (value_bytes && value_is_single_character && class_result)
+                    matched = 1;
                 cursor = item_end + 2u;
                 have_item = 1;
                 continue;
