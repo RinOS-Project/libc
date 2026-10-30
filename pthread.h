@@ -1154,12 +1154,6 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* 
             result = ETIMEDOUT;
             break;
         }
-#if !defined(RIN_TIME_ABI64)
-        if (abstime->tv_sec < 0) {
-            result = ETIMEDOUT;
-            break;
-        }
-#endif
         int operation = FUTEX_WAIT_BITSET |
             (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
              FUTEX_PRIVATE_FLAG) |

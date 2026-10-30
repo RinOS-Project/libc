@@ -1527,12 +1527,6 @@ static int rin_pthread_cond_timedwait_impl(
             result = ETIMEDOUT;
             break;
         }
-#if !defined(RIN_TIME_ABI64)
-        if (abstime->tv_sec < 0) {
-            result = ETIMEDOUT;
-            break;
-        }
-#endif
         int operation = FUTEX_WAIT_BITSET |
             (cond->clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
         struct timespec relative_timeout;
