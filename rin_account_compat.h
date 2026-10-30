@@ -7,6 +7,7 @@
 #include "stddef.h"
 #include "stdint.h"
 #include "rin/abi.h"
+#include "rin/contract_abi.h"
 #include "sys/syscall.h"
 
 #define __RIN_CREDENTIALS_VERSION_1 1u
@@ -186,6 +187,46 @@ static inline int __rin_credentials_get(__rin_credentials_v1* credentials)
         if (credentials->reserved[left] != 0u) return EIO;
     }
     return 0;
+}
+
+static inline int __rin_getres_ids(uint32_t kind, uint64_t real_output,
+                                   uint64_t effective_output,
+                                   uint64_t saved_output)
+{
+    RinCredentialGetResV1 query;
+    int error;
+    __rin_account_zero(&query, sizeof(query));
+    query.struct_size = sizeof(query);
+    query.version = RIN_CREDENTIAL_GETRES_VERSION_1;
+    query.kind = kind;
+    query.real_id_output = real_output;
+    query.effective_id_output = effective_output;
+    query.saved_id_output = saved_output;
+    error = __rin_account_errno(_RIN_CREDENTIAL_SYSCALL1(
+        RIN_SYS_CREDENTIALS_GETRES, &query));
+    if (error != 0) {
+        errno = error;
+        return -1;
+    }
+    return 0;
+}
+
+static inline int getresuid(uid_t* real_uid, uid_t* effective_uid,
+                            uid_t* saved_uid)
+{
+    return __rin_getres_ids(RIN_CREDENTIAL_GETRES_KIND_UID,
+        (uint64_t)(uintptr_t)real_uid,
+        (uint64_t)(uintptr_t)effective_uid,
+        (uint64_t)(uintptr_t)saved_uid);
+}
+
+static inline int getresgid(gid_t* real_gid, gid_t* effective_gid,
+                            gid_t* saved_gid)
+{
+    return __rin_getres_ids(RIN_CREDENTIAL_GETRES_KIND_GID,
+        (uint64_t)(uintptr_t)real_gid,
+        (uint64_t)(uintptr_t)effective_gid,
+        (uint64_t)(uintptr_t)saved_gid);
 }
 
 static inline int __rin_account_validate_info(const __rin_account_info_v1* info)
