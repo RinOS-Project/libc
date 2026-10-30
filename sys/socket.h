@@ -916,7 +916,7 @@ static inline intptr_t __rin_socket_mmsg_call(
     struct timespec* timeout) {
     if (receive)
         return _RIN_SOCKET_SYSCALL5(
-            SYS_RECVMMSG, sockfd, messages, count, flags, timeout);
+            SYS_RECVMMSG_WAIT_V1, sockfd, messages, count, flags, timeout);
     return _RIN_SOCKET_SYSCALL4(
         SYS_SENDMMSG, sockfd, messages, count, flags);
 }
