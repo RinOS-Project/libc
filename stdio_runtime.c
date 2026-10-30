@@ -211,6 +211,7 @@ static intptr_t _rin_stdio_memstream_write_bytes(
         if (copied != length) {
             errno = ENOSPC;
             owner->stream->error = 1;
+            if (copied == 0u) return -1;
         }
         return (intptr_t)copied;
     }

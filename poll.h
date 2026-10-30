@@ -149,8 +149,12 @@ static inline int __rin_select_build_pollfds(
                 if (next_capacity > (nfds_t)nfds)
                     next_capacity = (nfds_t)nfds;
             }
-            if (next_capacity <= capacity ||
-                (size_t)next_capacity > SIZE_MAX / sizeof(*pollfds)) {
+            if (next_capacity <= capacity
+#if SIZE_MAX <= UINT32_MAX
+                || (uint64_t)next_capacity *
+                       (uint64_t)sizeof(*pollfds) > (uint64_t)SIZE_MAX
+#endif
+                ) {
                 if (pollfds != local_pollfds) free(pollfds);
                 errno = EOVERFLOW;
                 return -1;

@@ -31,6 +31,13 @@
 #include "rin_atomic_wait.h"
 #endif
 
+#ifndef RIN_STDIO_STREAM_OWNER_MALLOC
+#define RIN_STDIO_STREAM_OWNER_MALLOC(size) malloc(size)
+#endif
+#ifndef RIN_STDIO_STREAM_OWNER_FREE
+#define RIN_STDIO_STREAM_OWNER_FREE(pointer) free(pointer)
+#endif
+
 /* Keep this primitive local: RinCompiler's freestanding profile does not
  * provide compiler-specific signbit builtins. */
 static inline int _rin_stdio_double_signbit(double value) {
@@ -1775,14 +1782,14 @@ static inline FILE* _rin_stdio_stream_allocate(int fd, unsigned int flags,
         if (owner) {
             if (!_rin_stdio_stream_generation_advance_locked(owner)) {
                 _rin_stdio_lock_table_leave();
-                if (fresh) free(fresh);
+                if (fresh) RIN_STDIO_STREAM_OWNER_FREE(fresh);
                 errno = EOVERFLOW;
                 return NULL;
             }
             owner->active = 1u;
         } else if (active_count >= (size_t)STREAM_MAX) {
             _rin_stdio_lock_table_leave();
-            if (fresh) free(fresh);
+            if (fresh) RIN_STDIO_STREAM_OWNER_FREE(fresh);
             errno = EMFILE;
             return NULL;
         } else if (fresh) {
@@ -1791,7 +1798,7 @@ static inline FILE* _rin_stdio_stream_allocate(int fd, unsigned int flags,
             owner->stream = &owner->file;
             if (!_rin_stdio_stream_generation_advance_locked(owner)) {
                 _rin_stdio_lock_table_leave();
-                free(owner);
+                RIN_STDIO_STREAM_OWNER_FREE(owner);
                 errno = EOVERFLOW;
                 return NULL;
             }
@@ -1801,7 +1808,8 @@ static inline FILE* _rin_stdio_stream_allocate(int fd, unsigned int flags,
             _rin_stdio_stream_owners_tail = owner;
         } else {
             _rin_stdio_lock_table_leave();
-            fresh = (_RinStdioStreamOwner*)malloc(sizeof(*fresh));
+            fresh = (_RinStdioStreamOwner*)
+                RIN_STDIO_STREAM_OWNER_MALLOC(sizeof(*fresh));
             if (!fresh) {
                 errno = ENOMEM;
                 return NULL;
