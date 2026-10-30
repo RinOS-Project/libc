@@ -2024,9 +2024,9 @@ static inline long sysconf(int name) {
         case _SC_NGROUPS_MAX:
             return NGROUPS_MAX;
         case _SC_RIN_PROCESS_GROUPS_MAX:
-            return 64;
+            return RIN_PROCESS_GROUP_SYSTEM_MAX_GROUPS;
         case _SC_RIN_PROCESS_GROUP_MEMBERS_MAX:
-            return 256;
+            return RIN_PROCESS_GROUP_SYSTEM_MAX_MEMBERS;
         case _SC_RIN_MQUEUE_MAX_QUEUES:
             return RIN_POSIX_MQ_MAX_QUEUES;
         case _SC_RIN_MQUEUE_MAX_DESCRIPTORS:
