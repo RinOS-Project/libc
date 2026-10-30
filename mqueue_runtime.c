@@ -292,6 +292,10 @@ static int mq_wait_ready(mqd_t queue, uint32_t events,
             return 0;
         }
         if (result != RIN_ERROR_TIMEOUT) {
+            if (result == RIN_ERROR_CANCELLED) {
+                errno = EINTR;
+                return -1;
+            }
             (void)mq_error_from_result(result,
                                        RIN_LIBC_SDK_IPC_WAIT_MANY, 0);
             return -1;
