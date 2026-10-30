@@ -919,7 +919,7 @@ static inline int rin_process_memory_info_get(
     return 0;
 }
 
-static inline char* realpath(const char* path, char* resolved_path) {
+static inline char* _rin_realpath_inline(const char* path, char* resolved_path) {
     enum { RIN_REALPATH_MAX_SYMLINKS = 40, RIN_REALPATH_PENDING_CAPACITY = PATH_MAX * 2 };
     char* pending = NULL;
     char* next_pending = NULL;
