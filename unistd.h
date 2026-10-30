@@ -1679,6 +1679,18 @@ static inline int setgid(gid_t gid) {
 #endif
     return __rin_set_credential(__RIN_CREDENTIAL_SET_GID, (uint32_t)gid);
 }
+static inline int setegid(gid_t egid) {
+#if !defined(RIN_SYS_TYPES_UNSIGNED_ID)
+    if ((int64_t)egid < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+#else
+    (void)egid;
+#endif
+    return __rin_set_credential(__RIN_CREDENTIAL_SET_EGID, (uint32_t)egid);
+}
+
 #endif /* !RIN_LIBC_NO_ACCOUNT_COMPAT */
 
 /* ═══════════════════════════════════════════════════════════════
