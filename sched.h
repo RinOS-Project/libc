@@ -302,7 +302,7 @@ static inline int sched_getscheduler(pid_t pid) {
         SCHED_OTHER, 0, 0u};
     intptr_t result;
     uint32_t thread_id;
-    if (pid < 0) { errno = ESRCH; return -1; }
+    if (pid < 0) { errno = EINVAL; return -1; }
     if ((uint64_t)pid > UINT32_MAX) { errno = EOVERFLOW; return -1; }
     if (pid == 0) {
         result = __rin_syscall_posixize(
@@ -327,7 +327,7 @@ static inline int sched_getscheduler(pid_t pid) {
     }
     return parameters.policy;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    if (pid < 0) { errno = ESRCH; return -1; }
+    if (pid < 0) { errno = EINVAL; return -1; }
     void* task = rin_sched_task_get((int)pid);
     if (!task && pid == 0) {
         /* 現在のタスクを取得 */
@@ -349,7 +349,7 @@ static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_p
     intptr_t result;
     uint32_t thread_id;
     if (!param) { errno = EINVAL; return -1; }
-    if (pid < 0) { errno = ESRCH; return -1; }
+    if (pid < 0) { errno = EINVAL; return -1; }
     if ((uint64_t)pid > UINT32_MAX) { errno = EOVERFLOW; return -1; }
     thread_id = pid == 0 ? 0u : (uint32_t)pid;
     if (thread_id == 0u) {
@@ -373,7 +373,7 @@ static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_p
     return 0;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
     if (!param) { errno = EINVAL; return -1; }
-    if (pid < 0) { errno = ESRCH; return -1; }
+    if (pid < 0) { errno = EINVAL; return -1; }
     if (!_rin_sched_policy_priority_valid(policy, param->sched_priority)) {
         errno = EINVAL;
         return -1;
@@ -408,7 +408,7 @@ static inline int sched_getparam(pid_t pid, struct sched_param* param) {
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
     intptr_t result;
     uint32_t thread_id = pid == 0 ? 0u : (uint32_t)pid;
-    if (pid < 0) { errno = ESRCH; return -1; }
+    if (pid < 0) { errno = EINVAL; return -1; }
     if ((uint64_t)pid > UINT32_MAX) { errno = EOVERFLOW; return -1; }
     if (thread_id == 0u) {
         result = _rin_sched_result(_RIN_SCHED_SYSCALL0(SYS_GETTID));
@@ -425,7 +425,7 @@ static inline int sched_getparam(pid_t pid, struct sched_param* param) {
     if (result != 0) { errno = EIO; return -1; }
     return 0;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    if (pid < 0) { errno = ESRCH; return -1; }
+    if (pid < 0) { errno = EINVAL; return -1; }
     void* task = rin_sched_task_get((int)pid);
     if (!task && pid == 0) {
         task = rin_sched_task_current();
@@ -458,7 +458,7 @@ static inline int sched_setparam(pid_t pid, const struct sched_param* param) {
     if (policy < 0) return -1;
     return sched_setscheduler(pid, policy, param);
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    if (pid < 0) { errno = ESRCH; return -1; }
+    if (pid < 0) { errno = EINVAL; return -1; }
     void* task = rin_sched_task_get((int)pid);
     if (!task && pid == 0) {
         task = rin_sched_task_current();
@@ -527,7 +527,7 @@ static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
     uint32_t milliseconds = 0u;
     intptr_t result;
     uint32_t thread_id = pid == 0 ? 0u : (uint32_t)pid;
-    if (pid < 0) { errno = ESRCH; return -1; }
+    if (pid < 0) { errno = EINVAL; return -1; }
     if ((uint64_t)pid > UINT32_MAX) { errno = EOVERFLOW; return -1; }
     if (thread_id == 0u) {
         result = _rin_sched_result(_RIN_SCHED_SYSCALL0(SYS_GETTID));
@@ -547,7 +547,7 @@ static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
     uint32_t milliseconds = 0u;
     int result;
-    if (pid < 0) { errno = ESRCH; return -1; }
+    if (pid < 0) { errno = EINVAL; return -1; }
     result = platform_thread_sched_rr_interval(
         (void*)(pid == 0 ? (uintptr_t)platform_thread_current_tid()
                          : (uintptr_t)pid),
