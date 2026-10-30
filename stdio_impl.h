@@ -3883,7 +3883,7 @@ _RIN_STDIO_API int rename(const char* oldpath, const char* newpath) {
 /* tmpfile - 一時ファイルを開く */
 _RIN_STDIO_API FILE* tmpfile(void) {
     char name[] = "/tmp/rinXXXXXX";
-    int fd = mkstemp(name);
+    int fd = mkostemp(name, O_CLOEXEC);
     FILE* stream;
     if (fd < 0) return NULL;
     intptr_t unlink_result = _rin_stdio_syscall_result(
