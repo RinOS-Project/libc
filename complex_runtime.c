@@ -568,7 +568,7 @@ double complex catan(double complex value) {
     double absolute_x = fabs(x), absolute_y = fabs(y);
     double scale = absolute_x >= absolute_y ? absolute_x : absolute_y;
     double real, ratio, imaginary;
-    if (isnan(x) && isinf(y)) return cx_make(NAN, y);
+    if (isnan(x) && isinf(y)) return cx_make(NAN, copysign(0.0, y));
     if (isinf(x) || isinf(y))
         return cx_make(copysign(M_PI_2, x), copysign(0.0, y));
     if (isnan(x) || isnan(y)) return cx_make(NAN, NAN);
