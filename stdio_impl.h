@@ -1944,6 +1944,12 @@ _RIN_STDIO_INTERNAL size_t _rin_stdio_write_buffered(FILE* stream,
         if (failed) *failed = 1;
         return 0u;
     }
+    if ((stream->mode & O_ACCMODE) == O_RDONLY) {
+        errno = EBADF;
+        stream->error = 1;
+        if (failed) *failed = 1;
+        return 0u;
+    }
     _rin_stdio_initialize_standard_buffer(stream);
     if (_rin_stdio_sync_input_before_write(stream) != 0) {
         stream->error = 1;
