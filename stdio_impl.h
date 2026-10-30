@@ -2271,91 +2271,11 @@ static inline void _rin_stdio_mark_stream_error(FILE* stream) {
     funlockfile(stream);
 }
 
-/* POSIX getline() over the same bounded FILE/fgetc implementation.  The
- * buffer is caller-owned and grows geometrically; no host stdio is involved.
+/* POSIX getline()/getdelim() share one bounded FILE/fgetc implementation.
+ * The buffer is caller-owned and grows geometrically; no host stdio is used.
  */
-_RIN_STDIO_API ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
-    size_t capacity;
-    size_t length = 0u;
-    char* replacement;
-
-    if (!lineptr || !n || !stream) {
-        _rin_stdio_mark_stream_error(stream);
-        errno = EINVAL;
-        return (ssize_t)-1;
-    }
-
-    capacity = *n;
-    if (!*lineptr || capacity < 2u) {
-        capacity = capacity < 128u ? 128u : capacity;
-        replacement = *lineptr ? (char*)realloc(*lineptr, capacity)
-                               : (char*)malloc(capacity);
-        if (!replacement) {
-            _rin_stdio_mark_stream_error(stream);
-            errno = ENOMEM;
-            return (ssize_t)-1;
-        }
-        *lineptr = replacement;
-        *n = capacity;
-    }
-
-    flockfile(stream);
-    for (;;) {
-        int c = _rin_fgetc_unlocked(stream);
-        if (c == EOF) {
-            if (stream->error) {
-                (*lineptr)[length] = '\0';
-                funlockfile(stream);
-                return (ssize_t)-1;
-            }
-            if (length == 0u) {
-                funlockfile(stream);
-                return (ssize_t)-1;
-            }
-            break;
-        }
-        if (length >= (size_t)SSIZE_MAX) {
-            (*lineptr)[length] = '\0';
-            stream->error = 1;
-            errno = EOVERFLOW;
-            funlockfile(stream);
-            return (ssize_t)-1;
-        }
-        if (length + 1u >= capacity) {
-            size_t next_capacity = capacity <= ((size_t)-1 / 2u)
-                ? capacity * 2u
-                : (size_t)-1;
-            if (next_capacity <= capacity || next_capacity < length + 2u) {
-                (*lineptr)[length] = '\0';
-                stream->error = 1;
-                errno = ENOMEM;
-                funlockfile(stream);
-                return (ssize_t)-1;
-            }
-            replacement = (char*)realloc(*lineptr, next_capacity);
-            if (!replacement) {
-                (*lineptr)[length] = '\0';
-                stream->error = 1;
-                errno = ENOMEM;
-                funlockfile(stream);
-                return (ssize_t)-1;
-            }
-            *lineptr = replacement;
-            *n = capacity = next_capacity;
-        }
-        (*lineptr)[length++] = (char)c;
-        if (c == '\n')
-            break;
-    }
-    (*lineptr)[length] = '\0';
-    funlockfile(stream);
-    return (ssize_t)length;
-}
-
-/* POSIX getdelim() using the same bounded FILE/fgetc implementation as
- * getline().  Keep the delimiter as an int so callers can pass any unsigned
- * char value as well as EOF-compatible values. */
-_RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* stream) {
+static inline ssize_t _rin_stdio_getdelim(char** lineptr, size_t* n,
+                                          int delimiter, FILE* stream) {
     size_t capacity;
     size_t length = 0u;
     char* replacement;
@@ -2431,6 +2351,16 @@ _RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* 
     (*lineptr)[length] = '\0';
     funlockfile(stream);
     return (ssize_t)length;
+}
+
+_RIN_STDIO_API ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
+    return _rin_stdio_getdelim(lineptr, n, '\n', stream);
+}
+
+/* The delimiter is an int so every unsigned-byte value remains representable. */
+_RIN_STDIO_API ssize_t getdelim(char** lineptr, size_t* n, int delimiter,
+                                FILE* stream) {
+    return _rin_stdio_getdelim(lineptr, n, delimiter, stream);
 }
 
 /* ungetc - C17 guarantees one byte; this bounded owner accepts 4 KiB. */
