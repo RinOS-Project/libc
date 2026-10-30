@@ -10,23 +10,34 @@ int _fcntl_initialized = 0;
 static int rin_shm_name_path(const char* name,
                              char path[sizeof("/dev/shm/") + NAME_MAX]) {
     static const char prefix[] = "/dev/shm/";
+    char name_copy[NAME_MAX + 2u];
     size_t length = 0u;
     if (!name || name[0] != '/' || name[1] == '\0') {
         errno = EINVAL;
         return -1;
     }
-    while (length <= NAME_MAX + 1u && name[length] != '\0') ++length;
+    /* Single bounded pass over caller memory: every check and the
+     * path build below observe the stable copy. */
+    while (length <= NAME_MAX + 1u) {
+        name_copy[length] = name[length];
+        if (name_copy[length] == '\0') break;
+        ++length;
+    }
+    if (name_copy[0] != '/' || name_copy[1] == '\0') {
+        errno = EINVAL;
+        return -1;
+    }
     if (length > NAME_MAX + 1u) {
         errno = ENAMETOOLONG;
         return -1;
     }
-    if ((length == 2u && name[1] == '.') ||
-        (length == 3u && name[1] == '.' && name[2] == '.')) {
+    if ((length == 2u && name_copy[1] == '.') ||
+        (length == 3u && name_copy[1] == '.' && name_copy[2] == '.')) {
         errno = EINVAL;
         return -1;
     }
     for (size_t index = 1u; index < length; ++index) {
-        if (name[index] == '/') {
+        if (name_copy[index] == '/') {
             errno = EINVAL;
             return -1;
         }
@@ -35,7 +46,7 @@ static int rin_shm_name_path(const char* name,
     for (size_t index = 0u; index < prefix_length; ++index)
         path[index] = prefix[index];
     for (size_t index = 1u; index < length; ++index)
-        path[prefix_length + index - 1u] = name[index];
+        path[prefix_length + index - 1u] = name_copy[index];
     path[prefix_length + length - 1u] = '\0';
     return 0;
 }
