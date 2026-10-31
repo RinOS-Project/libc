@@ -89,8 +89,9 @@ extern "C" {
 #define PR_CAP_AMBIENT      47  /* Ambient capabilities */
 
 /* Linux capability sets are deliberately unavailable.  Their prctl options
- * return ENOTSUP, while capget/capset syscall numbers remain unregistered and
- * return ENOSYS; RinOS capabilities are not translated into Linux bits. */
+ * return ENOTSUP; capget/capset have no RinOS syscall entrypoint.  LINUX_NR_*
+ * values are source-compatibility constants, not dispatch numbers.  RinOS
+ * capabilities are not translated into Linux bits. */
 #define RIN_LINUX_CAPABILITY_SETS_SUPPORTED 0
 #define RIN_LINUX_PRCTL_CAPABILITY_OPTIONS_SUPPORTED 0
 #define PR_SVE_SET_VL       50  /* Set SVE vector length */
