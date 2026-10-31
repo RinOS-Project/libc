@@ -142,7 +142,7 @@ static inline int mtx_timedlock(mtx_t* mutex, const struct timespec* deadline)
 {
     int error;
     if (!mutex || !deadline) return thrd_error;
-    /* The pthread owner uses the kernel's absolute-deadline futex wait. */
+    /* Both pthread owners use an absolute CLOCK_REALTIME wait. */
     error = pthread_mutex_timedlock(mutex, deadline);
     if (error == 0) return thrd_success;
     return error == ETIMEDOUT ? thrd_timedout : thrd_error;

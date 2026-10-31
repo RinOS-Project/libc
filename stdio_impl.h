@@ -2720,10 +2720,6 @@ static inline void _rin_freopen_discard_stream(FILE* stream) {
     unsigned char* previous_buffer = stream->buf;
     int previous_owned = stream->buf_owned;
 
-    _rin_stdio_lock_table_enter();
-    (void)_rin_stdio_stream_generation_advance_locked(
-        _rin_stdio_stream_owner(stream));
-    _rin_stdio_lock_table_leave();
     stream->fd = -1;
     stream->eof = 0;
     stream->error = 1;
@@ -2747,15 +2743,18 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     unsigned int flags;
     intptr_t new_fd;
     int stream_index;
-#if defined(RIN_USERSPACE)
-    int memstream_handled = 0;
-#endif
     unsigned char* previous_buffer;
     int previous_owned;
     if (!stream || !path) {
         errno = EINVAL;
         return NULL;
     }
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
+        errno = EBADF;
+        return NULL;
+    }
+#endif
     stream_index = _rin_stdio_stream_index(stream);
     if (stream_index < 0) {
         errno = EINVAL;
@@ -2764,16 +2763,8 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     /* POSIX requires freopen() to attempt a flush, but to ignore a flush
      * failure and continue closing/reopening the stream. */
     (void)_rin_stdio_flush_output_buffer(stream);
-#if defined(RIN_USERSPACE)
-    /* Detach memory-stream ownership after publishing its final buffer/size.
-     * This also releases fmemopen-owned storage before any later error path. */
-    (void)rin_stdio_memstream_close(stream, &memstream_handled);
-#endif
     if (_rin_stdio_parse_mode(mode, &flags) != 0) {
         int saved_errno = errno;
-#if defined(RIN_USERSPACE)
-        if (!memstream_handled)
-#endif
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
         _rin_freopen_discard_stream(stream);
         errno = saved_errno;
@@ -2781,9 +2772,6 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     }
     /* POSIX freopen() closes the old descriptor before opening the new path.
      * This also lets the replacement reuse its descriptor-table slot. */
-#if defined(RIN_USERSPACE)
-    if (!memstream_handled)
-#endif
     (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
     stream->fd = -1;
     new_fd = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(

@@ -298,6 +298,14 @@ extern void  platform_mutex_lock(void* mutex);
 extern int   platform_mutex_trylock(void* mutex);
 extern int   platform_mutex_lock_robust(void* mutex);
 extern int   platform_mutex_trylock_robust(void* mutex);
+/* Matches platform_thread.h's bounded absolute-realtime wait result ABI. */
+enum {
+    RIN_PLATFORM_MUTEX_TIMEDLOCK_TIMEOUT = 1,
+    RIN_PLATFORM_MUTEX_TIMEDLOCK_OWNER_DIED = 2,
+    RIN_PLATFORM_MUTEX_TIMEDLOCK_NOT_RECOVERABLE = 3
+};
+extern int   platform_mutex_timedlock(void* mutex, int64_t deadline_seconds,
+                                      int64_t deadline_nanoseconds);
 extern int   platform_mutex_consistent(void* mutex);
 extern int   platform_mutex_unlock_robust(void* mutex);
 extern int   platform_mutex_busy(void* mutex);
@@ -1094,6 +1102,44 @@ static inline int pthread_mutex_trylock(pthread_mutex_t* mutex) {
     __rin_pthread_mutex_owner_store(mutex, self);
     mutex->recursion = 1;
     return 0;
+}
+
+static inline int pthread_mutex_timedlock(
+    pthread_mutex_t* mutex, const struct timespec* abstime) {
+    pthread_t self;
+    int type;
+    int result;
+    if (!mutex || !abstime || abstime->tv_nsec < 0 ||
+        abstime->tv_nsec >= 1000000000L)
+        return EINVAL;
+    self = pthread_self();
+    if (self == 0) return ESRCH;
+    type = mutex->type & RIN_PTHREAD_MUTEXATTR_TYPE_MASK;
+    if (type == PTHREAD_MUTEX_RECURSIVE &&
+        __rin_pthread_mutex_owner_load(mutex) == self) {
+        if (mutex->recursion == INT_MAX) return EAGAIN;
+        ++mutex->recursion;
+        return 0;
+    }
+    if (type == PTHREAD_MUTEX_ERRORCHECK &&
+        __rin_pthread_mutex_owner_load(mutex) == self)
+        return EDEADLK;
+    if (!mutex->kernel_mutex) return EINVAL;
+    result = platform_mutex_timedlock(
+        mutex->kernel_mutex, (int64_t)abstime->tv_sec,
+        (int64_t)abstime->tv_nsec);
+    if (result == RIN_PLATFORM_MUTEX_TIMEDLOCK_TIMEOUT)
+        return ETIMEDOUT;
+    if (result == RIN_PLATFORM_MUTEX_TIMEDLOCK_NOT_RECOVERABLE)
+        return ENOTRECOVERABLE;
+    if (result != 0 &&
+        result != RIN_PLATFORM_MUTEX_TIMEDLOCK_OWNER_DIED)
+        return EIO;
+    __atomic_store_n(&mutex->locked, 1, __ATOMIC_RELEASE);
+    __rin_pthread_mutex_owner_store(mutex, self);
+    mutex->recursion = 1;
+    return result == RIN_PLATFORM_MUTEX_TIMEDLOCK_OWNER_DIED
+               ? EOWNERDEAD : 0;
 }
 
 static inline int pthread_mutex_unlock(pthread_mutex_t* mutex) {
