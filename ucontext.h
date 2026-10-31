@@ -637,9 +637,14 @@ getcontext(ucontext_t* context) {
     context->uc_mcontext.fpregs = &context->__fpregs_mem;
     context->uc_mcontext.oldmask = 0u;
     context->uc_mcontext.cr2 = 0u;
-    if (!rin_ucontext_amd64_xstate_prepare(context)) return -1;
-    if (rin_ucontext_sigmask(NULL, &context->uc_sigmask) != 0)
+    if (!rin_ucontext_amd64_xstate_prepare(context)) {
+        context->uc_flags = 0u;
         return -1;
+    }
+    if (rin_ucontext_sigmask(NULL, &context->uc_sigmask) != 0) {
+        context->uc_flags = 0u;
+        return -1;
+    }
     return rin_ucontext_amd64_capture(context);
 }
 
