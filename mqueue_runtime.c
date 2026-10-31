@@ -615,6 +615,8 @@ static void mq_notify_slot_cleanup(void* argument)
 static void* mq_notify_worker(void* argument)
 {
     RinLibcMqNotifySlot* slot = (RinLibcMqNotifySlot*)argument;
+    void (*callback)(union sigval) = NULL;
+    union sigval callback_value = {0};
     int wait_result;
     uint64_t event_value = 0u;
     if (!slot) return NULL;
@@ -622,11 +624,13 @@ static void* mq_notify_worker(void* argument)
     wait_result = mq_event_wait(slot->event, &event_value);
     if (wait_result == 0 && event_value != 0u &&
         __atomic_load_n(&slot->state, __ATOMIC_ACQUIRE) == 2u) {
-        if (slot->notification == SIGEV_THREAD) {
-            if (slot->function) slot->function(slot->value);
+        if (slot->notification == SIGEV_THREAD && slot->function) {
+            callback = slot->function;
+            callback_value = slot->value;
         }
     }
     pthread_cleanup_pop(1);
+    if (callback) callback(callback_value);
     return NULL;
 }
 
