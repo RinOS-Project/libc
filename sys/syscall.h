@@ -107,6 +107,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_exit_group      SYS_EXIT
 #define SYS_fork            SYS_FORK
 #define SYS_vfork           SYS_VFORK
+#define SYS_unshare         SYS_UNSHARE
 #define SYS_execve          SYS_EXEC
 #define SYS_wait4           SYS_WAIT4
 #define SYS_getrusage       SYS_GETRUSAGE
@@ -186,6 +187,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_exit           SYS_THREAD_EXIT
 #define __NR_fork           SYS_FORK
 #define __NR_vfork          SYS_VFORK
+#define __NR_unshare        SYS_UNSHARE
 #define __NR_read           SYS_READ        /* 22 */
 #define __NR_write          SYS_WRITE       /* 23 */
 #define __NR_open           SYS_OPEN        /* 20 */

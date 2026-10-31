@@ -113,12 +113,9 @@ static inline wchar_t* wcscpy(wchar_t* dest, const wchar_t* src) {
 }
 
 static inline wchar_t* wcsncpy(wchar_t* dest, const wchar_t* src, size_t n) {
-    size_t i = 0u;
-    while (i < n && src[i] != L'\0') {
-        dest[i] = src[i];
-        ++i;
-    }
-    while (i < n) dest[i++] = L'\0';
+    wchar_t* d = dest;
+    while (n && (*d++ = *src++)) n--;
+    while (n--) *d++ = L'\0';
     return dest;
 }
 
@@ -385,11 +382,7 @@ static inline int mbtowc(wchar_t* pwc, const char* s, size_t n) {
 #if defined(RIN_USERSPACE)
     return rin_locale_current_mbtowc32((uint32_t*)pwc, s, n);
 #else
-    {
-        int rc = rin_unicode_mbtowc32((uint32_t*)pwc, s, n);
-        if (rc == -1) errno = EILSEQ;
-        return rc;
-    }
+    return rin_unicode_mbtowc32((uint32_t*)pwc, s, n);
 #endif
 }
 
@@ -398,11 +391,7 @@ static inline int wctomb(char* s, wchar_t wc) {
     return rin_locale_current_wctomb32(s, (uint32_t)wc);
 #else
     if (!s) return 0;
-    {
-        int rc = rin_unicode_wctomb32(s, (uint32_t)wc);
-        if (rc == -1) errno = EILSEQ;
-        return rc;
-    }
+    return rin_unicode_wctomb32(s, (uint32_t)wc);
 #endif
 }
 
@@ -410,11 +399,7 @@ static inline size_t mbstowcs(wchar_t* dest, const char* src, size_t n) {
 #if defined(RIN_USERSPACE)
     return rin_locale_current_mbstowcs32((uint32_t*)dest, src, n);
 #else
-    {
-        size_t rc = rin_unicode_mbstowcs32((uint32_t*)dest, src, n);
-        if (rc == (size_t)-1) errno = EILSEQ;
-        return rc;
-    }
+    return rin_unicode_mbstowcs32((uint32_t*)dest, src, n);
 #endif
 }
 
@@ -422,11 +407,7 @@ static inline size_t wcstombs(char* dest, const wchar_t* src, size_t n) {
 #if defined(RIN_USERSPACE)
     return rin_locale_current_wcstombs32(dest, (const uint32_t*)src, n);
 #else
-    {
-        size_t rc = rin_unicode_wcstombs32(dest, (const uint32_t*)src, n);
-        if (rc == (size_t)-1) errno = EILSEQ;
-        return rc;
-    }
+    return rin_unicode_wcstombs32(dest, (const uint32_t*)src, n);
 #endif
 }
 
@@ -849,7 +830,6 @@ static inline unsigned long long wcstoull_l(const wchar_t* nptr,
 
 static inline wint_t btowc(int c) {
     if (c == EOF) return WEOF;
-    if (c == 0) return 0;
 #if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
     if (c < 0 || c > 255) return WEOF;
     {
@@ -862,18 +842,7 @@ static inline wint_t btowc(int c) {
         return (wint_t)character;
     }
 #else
-    /* The direct path is UTF-8: lone high bytes are not valid
-     * single-byte characters (byte identity would be C-locale). */
-    if (c < 0 || c > 255) return WEOF;
-    {
-        char byte = (char)(unsigned char)c;
-        uint32_t character = 0u;
-        rin_unicode_mbstate_t state = {0u, 0u};
-        size_t converted = rin_unicode_mbrtowc32(
-            &character, &byte, 1u, &state);
-        if (converted != 1u) return WEOF;
-        return (wint_t)character;
-    }
+    return (wint_t)(uint32_t)(unsigned char)c;
 #endif
 }
 
@@ -888,16 +857,8 @@ static inline int wctob(wint_t c) {
     if (converted != 1u) return EOF;
     return (int)(unsigned char)encoded[0];
 #else
-    {
-        char encoded[4];
-        rin_unicode_mbstate_t state = {0u, 0u};
-        size_t converted;
-        if (c == WEOF) return EOF;
-        converted = rin_unicode_wcrtomb32(
-            encoded, (uint32_t)c, &state);
-        if (converted != 1u) return EOF;
-        return (int)(unsigned char)encoded[0];
-    }
+    if (c == WEOF || !rin_unicode_is_valid_scalar((uint32_t)c) || c > 0xFF) return EOF;
+    return (int)(unsigned char)c;
 #endif
 }
 
@@ -910,11 +871,7 @@ static inline size_t mbrlen(const char* s, size_t n, mbstate_t* ps) {
     return rin_locale_current_mbrlen(
         s, n, (struct rin_unicode_mbstate*)ps);
 #else
-    {
-        size_t rc = rin_unicode_mbrlen(s, n, (rin_unicode_mbstate_t*)ps);
-        if (rc == (size_t)-1) errno = EILSEQ;
-        return rc;
-    }
+    return rin_unicode_mbrlen(s, n, (rin_unicode_mbstate_t*)ps);
 #endif
 }
 
@@ -923,12 +880,7 @@ static inline size_t mbrtowc(wchar_t* pwc, const char* s, size_t n, mbstate_t* p
     return rin_locale_current_mbrtowc32(
         (uint32_t*)pwc, s, n, (struct rin_unicode_mbstate*)ps);
 #else
-    {
-        size_t rc = rin_unicode_mbrtowc32(
-            (uint32_t*)pwc, s, n, (rin_unicode_mbstate_t*)ps);
-        if (rc == (size_t)-1) errno = EILSEQ;
-        return rc;
-    }
+    return rin_unicode_mbrtowc32((uint32_t*)pwc, s, n, (rin_unicode_mbstate_t*)ps);
 #endif
 }
 
@@ -937,12 +889,7 @@ static inline size_t wcrtomb(char* s, wchar_t wc, mbstate_t* ps) {
     return rin_locale_current_wcrtomb32(
         s, (uint32_t)wc, (struct rin_unicode_mbstate*)ps);
 #else
-    {
-        size_t rc = rin_unicode_wcrtomb32(
-            s, (uint32_t)wc, (rin_unicode_mbstate_t*)ps);
-        if (rc == (size_t)-1) errno = EILSEQ;
-        return rc;
-    }
+    return rin_unicode_wcrtomb32(s, (uint32_t)wc, (rin_unicode_mbstate_t*)ps);
 #endif
 }
 
@@ -951,17 +898,7 @@ static inline size_t mbsrtowcs(wchar_t* dest, const char** src, size_t len, mbst
     return rin_locale_current_mbsrtowcs32(
         (uint32_t*)dest, src, len, (struct rin_unicode_mbstate*)ps);
 #else
-    {
-        size_t rc;
-        if (!src) {
-            errno = EINVAL;
-            return (size_t)-1;
-        }
-        rc = rin_unicode_mbsrtowcs32(
-            (uint32_t*)dest, src, len, (rin_unicode_mbstate_t*)ps);
-        if (rc == (size_t)-1) errno = EILSEQ;
-        return rc;
-    }
+    return rin_unicode_mbsrtowcs32((uint32_t*)dest, src, len, (rin_unicode_mbstate_t*)ps);
 #endif
 }
 
@@ -979,7 +916,6 @@ static inline size_t wcsrtombs(char* dest, const wchar_t** src, size_t len, mbst
 #else
     result = rin_unicode_wcsrtombs32(
         dest, &source32, len, (rin_unicode_mbstate_t*)ps);
-    if (result == (size_t)-1) errno = EILSEQ;
 #endif
     if (dest) *src = (const wchar_t*)source32;
     return result;

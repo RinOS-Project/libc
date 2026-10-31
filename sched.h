@@ -65,6 +65,10 @@ extern "C" {
 #define SCHED_IDLE      5   /* アイドル優先度 */
 #define SCHED_DEADLINE  6   /* デッドラインスケジューリング */
 
+#ifndef CLONE_NEWUSER
+#define CLONE_NEWUSER UINT32_C(0x10000000)
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * RinOS内部優先度 (カーネルSchedPriority対応)
  * ═══════════════════════════════════════════════════════════════*/
@@ -162,6 +166,13 @@ static inline int __rin_sched_cpu_count(const cpu_set_t* cpuset) {
  * ═══════════════════════════════════════════════════════════════*/
 
 #include "sys/syscall.h"
+
+#if defined(RIN_SCHED_TARGET_FUNCTIONS)
+static inline int unshare(int flags) {
+    long result = syscall(SYS_UNSHARE, (uint32_t)flags);
+    return (int)result;
+}
+#endif
 
 #ifndef _RIN_SCHED_SYSCALL0
 #if defined(RIN_SCHED_HOSTED_WINDOWS)

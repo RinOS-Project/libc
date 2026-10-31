@@ -120,14 +120,10 @@ int getifaddrs(struct ifaddrs** ifap)
             memcpy(&netmask->sin_addr.s_addr, addresses->ipv4_netmask, 4u);
             if ((source->capabilities &
                  RIN_NET_IFADDRS_V2_CAP_POINT_TO_POINT) != 0u) {
-                if ((source->ipv4_peer[0] | source->ipv4_peer[1] |
-                     source->ipv4_peer[2] | source->ipv4_peer[3]) != 0u) {
-                    struct sockaddr_in* peer =
-                        &storage->peer4[interface_index];
-                    peer->sin_family = AF_INET;
-                    memcpy(&peer->sin_addr.s_addr, source->ipv4_peer, 4u);
-                    entry->ifa_dstaddr = (struct sockaddr*)peer;
-                }
+                struct sockaddr_in* peer = &storage->peer4[interface_index];
+                peer->sin_family = AF_INET;
+                memcpy(&peer->sin_addr.s_addr, source->ipv4_peer, 4u);
+                entry->ifa_dstaddr = (struct sockaddr*)peer;
             } else if ((source->capabilities &
                         RIN_NET_IFADDRS_V2_CAP_BROADCAST) != 0u &&
                        rin_ifaddrs_ipv4_prefix_length(
