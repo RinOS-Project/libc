@@ -8,7 +8,11 @@
 #define _SYS_SOCKET_H
 
 #include "types.h"
+#if !defined(_WIN32)
+/* MinGW sys/types.h uses foreign guards and redefines ino_t/pid_t/
+ * mode_t with clashing widths; Rin types.h above owns the ABI. */
 #include <sys/types.h>
+#endif
 #include "syscall.h"
 #include "../stdint.h"
 #include "../time.h"

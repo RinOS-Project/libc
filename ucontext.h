@@ -12,7 +12,7 @@
  * compilers intentionally see no target-only ucontext declarations. */
 #if (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
     defined(__STDC_HOSTED__) && __STDC_HOSTED__
-#if defined(__GNUC__) || defined(__clang__)
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
 #include_next <ucontext.h>
 #endif
 #else
