@@ -186,8 +186,8 @@ struct winsize {
 #define SIOCSPGRP   0x8902
 #define FIOGETOWN   0x8903
 #define SIOCGPGRP   0x8904
-/* sockatmark() query.  The kernel TCP urgent-pointer owner is tracked
- * separately; until it exists the ioctl reports the request as unhandled. */
+/* sockatmark() query. The kernel reports whether a TCP receive cursor is at
+ * the urgent-data mark; non-TCP descriptors return ENOTTY. */
 #define SIOCATMARK  0x8905
 
 /* ネットワークインターフェースioctlはkernel handler未実装のため公開しない。
