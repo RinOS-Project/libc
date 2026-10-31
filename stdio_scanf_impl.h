@@ -1327,7 +1327,8 @@ static int rin_fscanf_stream_parse_integer(
         if (used == limit) return 0;
         status = rin_fscanf_stream_read(input, &value);
         if (status <= 0) {
-            if (status == 0) *input_failure_out = 1;
+            /* A consumed sign is a nonempty, non-convertible input item at
+             * EOF, so this is matching failure rather than input failure. */
             return status < 0 ? -1 : 0;
         }
     }
@@ -1450,7 +1451,7 @@ static int rin_fscanf_stream_parse_special_float(
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
         if (status == 0) {
-            *input_failure_out = 1;
+            /* The initial i/n already began a nonempty input item. */
             return 0;
         }
         if (!rin_fscanf_stream_case_equal(value, base_suffix[suffix_index])) {
