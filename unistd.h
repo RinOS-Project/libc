@@ -113,7 +113,7 @@
 #define _POSIX_SPIN_LOCKS 200809L
 #endif
 #endif
-#ifndef _POSIX_THREAD_SAFE_FUNCTIONS
+#if defined(RIN_USERSPACE) && !defined(_POSIX_THREAD_SAFE_FUNCTIONS)
 #define _POSIX_THREAD_SAFE_FUNCTIONS 200809L
 #endif
 #ifndef _POSIX_THREAD_ATTR_STACKSIZE
@@ -2033,8 +2033,10 @@ static inline long sysconf(int name) {
         case _SC_THREAD_PROCESS_SHARED:
             return 200809L;
 #endif
+#if defined(RIN_USERSPACE)
         case _SC_THREAD_SAFE_FUNCTIONS:
             return _POSIX_THREAD_SAFE_FUNCTIONS;
+#endif
 #ifdef _POSIX_SPIN_LOCKS
         case _SC_SPIN_LOCKS:
             return _POSIX_SPIN_LOCKS;
@@ -2116,6 +2118,7 @@ static inline long sysconf(int name) {
         case _SC_THREAD_PRIORITY_SCHEDULING:
 #if !defined(RIN_USERSPACE)
         case _SC_BARRIERS:
+        case _SC_THREAD_SAFE_FUNCTIONS:
 #endif
 #if (!defined(__x86_64__) && !defined(_M_X64)) || \
     (defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE))
