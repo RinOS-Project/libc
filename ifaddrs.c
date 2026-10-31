@@ -30,8 +30,7 @@ static unsigned int rin_ifaddrs_interface_flags(
     const RinNetIfaddrsInterfaceV2* interface)
 {
     unsigned int flags = 0u;
-    if ((interface->flags & RIN_NET_IFADDRS_V2_FLAG_ADMIN_KNOWN) != 0u &&
-        (interface->flags & RIN_NET_IFADDRS_V2_FLAG_ADMIN_UP) != 0u)
+    if ((interface->flags & RIN_NET_IFADDRS_V2_FLAG_ADMIN_UP) != 0u)
         flags |= IFF_UP;
     if ((interface->capabilities & RIN_NET_IFADDRS_V2_CAP_BROADCAST) != 0u)
         flags |= IFF_BROADCAST;

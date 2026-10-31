@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * RinOS libc - sys/prctl.h
- * Process control - full implementation for RinOS
+ * Process control options with RinOS-supported operations
  */
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \

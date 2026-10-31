@@ -345,7 +345,6 @@ typedef struct {
     uintptr_t alloc_size;
     int alloc_kind; /* 1=mmap */
     int detached;
-    int reserved;
 } rin_thread_stack_rec_t;
 
 enum {
@@ -402,63 +401,6 @@ static rin_thread_stack_rec_t* rin_thread_stack_find_locked(pthread_t tid) {
     return NULL;
 }
 
-/* Reserve bookkeeping before clone publishes a child.  The fixed registry is
- * intentionally bounded, but exhaustion must fail pthread_create before the
- * child can run and before an owned stack becomes untracked. */
-static rin_thread_stack_rec_t* rin_thread_stack_reserve(void) {
-    rin_thread_stack_rec_t* rec = NULL;
-
-    rin_thread_stack_lock_acquire();
-    for (unsigned int i = 0; i < RIN_THREAD_STACK_REC_MAX; i++) {
-        if (g_thread_stack_recs[i].tid == 0 &&
-            !g_thread_stack_recs[i].reserved) {
-            rec = &g_thread_stack_recs[i];
-            rec->reserved = 1;
-            break;
-        }
-    }
-    rin_thread_stack_lock_release();
-    return rec;
-}
-
-static void rin_thread_stack_release_reservation(
-    rin_thread_stack_rec_t* rec) {
-    if (!rec) return;
-
-    rin_thread_stack_lock_acquire();
-    if (rec->reserved && rec->tid == 0) {
-        rec->alloc_base = NULL;
-        rec->alloc_size = 0;
-        rec->alloc_kind = RIN_THREAD_ALLOC_NONE;
-        rec->detached = 0;
-        rec->reserved = 0;
-    }
-    rin_thread_stack_lock_release();
-}
-
-static int rin_thread_stack_publish_reservation(
-    rin_thread_stack_rec_t* rec, pthread_t tid, void* alloc_base,
-    uintptr_t alloc_size, int alloc_kind, int detached) {
-    int published = 0;
-
-    if (!rec || tid == 0 || !alloc_base || alloc_size == 0 ||
-        alloc_kind == RIN_THREAD_ALLOC_NONE)
-        return -1;
-
-    rin_thread_stack_lock_acquire();
-    if (rec->reserved && rec->tid == 0) {
-        rec->alloc_base = alloc_base;
-        rec->alloc_size = alloc_size;
-        rec->alloc_kind = alloc_kind;
-        rec->detached = detached;
-        rec->tid = tid;
-        rec->reserved = 0;
-        published = 1;
-    }
-    rin_thread_stack_lock_release();
-    return published ? 0 : -1;
-}
-
 static int rin_thread_name_copy(char destination[16], const char* source) {
     unsigned int index;
 
@@ -472,6 +414,33 @@ static int rin_thread_name_copy(char destination[16], const char* source) {
         destination[index] = ch;
     }
     return ERANGE;
+}
+
+static void rin_thread_stack_register(pthread_t tid, void* alloc_base,
+                                      uintptr_t alloc_size, int alloc_kind,
+                                      int detached) {
+    if (tid == 0 || !alloc_base || alloc_size == 0 || alloc_kind == RIN_THREAD_ALLOC_NONE) {
+        return;
+    }
+
+    rin_thread_stack_lock_acquire();
+    rin_thread_stack_rec_t* rec = rin_thread_stack_find_locked(tid);
+    if (!rec) {
+        for (unsigned int i = 0; i < RIN_THREAD_STACK_REC_MAX; i++) {
+            if (g_thread_stack_recs[i].tid == 0) {
+                rec = &g_thread_stack_recs[i];
+                break;
+            }
+        }
+    }
+    if (rec) {
+        rec->tid = tid;
+        rec->alloc_base = alloc_base;
+        rec->alloc_size = alloc_size;
+        rec->alloc_kind = alloc_kind;
+        rec->detached = detached;
+    }
+    rin_thread_stack_lock_release();
 }
 
 static int rin_thread_stack_take(pthread_t tid, void** alloc_base,
@@ -497,7 +466,6 @@ static int rin_thread_stack_take(pthread_t tid, void** alloc_base,
         rec->alloc_size = 0;
         rec->alloc_kind = RIN_THREAD_ALLOC_NONE;
         rec->detached = 0;
-        rec->reserved = 0;
         found = 1;
     }
     rin_thread_stack_lock_release();
@@ -872,7 +840,6 @@ static int rin_pthread_create_impl(pthread_t* thread,
         uintptr_t stack_top = 0;
         uintptr_t record_addr = 0;
         rin_thread_start_record_t* record = NULL;
-        rin_thread_stack_rec_t* stack_rec = NULL;
 #if defined(__x86_64__) || defined(_M_X64)
         {
             uintptr_t checked_top = 0;
@@ -891,17 +858,8 @@ static int rin_pthread_create_impl(pthread_t* thread,
         stack_top = (((uintptr_t)stack_usable_base + stack_usable_size) &
                      ~(uintptr_t)0xFULL);
 #endif
-        if (alloc_kind != RIN_THREAD_ALLOC_NONE) {
-            stack_rec = rin_thread_stack_reserve();
-            if (!stack_rec) {
-                (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base,
-                                                  alloc_size);
-                return EAGAIN;
-            }
-        }
         record = (rin_thread_start_record_t*)malloc(sizeof(*record));
         if (!record) {
-            rin_thread_stack_release_reservation(stack_rec);
             if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
                 (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base,
                                                   alloc_size);
@@ -929,7 +887,6 @@ static int rin_pthread_create_impl(pthread_t* thread,
             int err = rin_pthread_syscall_error(ret);
             rin_log("[PTHREAD] clone failed\n");
             free(record);
-            rin_thread_stack_release_reservation(stack_rec);
             if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
                 (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base, alloc_size);
             }
@@ -939,17 +896,9 @@ static int rin_pthread_create_impl(pthread_t* thread,
         pthread_t created_thread = (pthread_t)ret;
         int create_error =
             rin_pthread_cancel_register_created(created_thread);
-        int stack_record_published = stack_rec == NULL;
-        if (stack_rec) {
-            if (rin_thread_stack_publish_reservation(
-                    stack_rec, created_thread, alloc_base, alloc_size,
-                    alloc_kind, 0) == 0) {
-                stack_record_published = 1;
-            } else {
-                rin_thread_stack_release_reservation(stack_rec);
-                stack_rec = NULL;
-                if (create_error == 0) create_error = EAGAIN;
-            }
+        if (alloc_kind != RIN_THREAD_ALLOC_NONE) {
+            rin_thread_stack_register(created_thread, alloc_base, alloc_size,
+                                      alloc_kind, 0);
         }
         if (create_error == 0) {
             create_error = pthread_setschedparam(created_thread,
@@ -968,13 +917,7 @@ static int rin_pthread_create_impl(pthread_t* thread,
                 rin_pthread_start_release(record, create_error);
             } else {
                 rin_pthread_start_release(record, create_error);
-                int join_result = pthread_join(created_thread, NULL);
-                if (!stack_record_published &&
-                    alloc_kind == RIN_THREAD_ALLOC_MMAP &&
-                    join_result == 0) {
-                    (void)_RIN_PTHREAD_RUNTIME_MUNMAP(
-                        (uintptr_t)alloc_base, alloc_size);
-                }
+                (void)pthread_join(created_thread, NULL);
             }
             return create_error;
         }

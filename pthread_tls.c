@@ -65,8 +65,6 @@ __thread unsigned int _pthread_tls_key_generation[PTHREAD_KEYS_MAX];
     (UINT32_C(4) << RIN_PTHREAD_KEY_STATE_SHIFT)
 #define RIN_PTHREAD_KEY_CLOSING \
     (UINT32_C(5) << RIN_PTHREAD_KEY_STATE_SHIFT)
-#define RIN_PTHREAD_KEY_RETIRED \
-    (UINT32_C(6) << RIN_PTHREAD_KEY_STATE_SHIFT)
 
 typedef struct _PthreadKeyDispatchFrame {
     unsigned int key;
@@ -95,18 +93,16 @@ static unsigned int pthread_key_generation_load(unsigned int key)
     return __sync_fetch_and_add(&_pthread_tls_generation[key], 0u);
 }
 
-static int pthread_key_generation_next(unsigned int key)
+static unsigned int pthread_key_generation_next(unsigned int key)
 {
-    unsigned int generation = pthread_key_generation_load(key);
-    for (;;) {
-        /* Never wrap into a generation that a long-lived thread may retain.
-         * An exhausted slot is permanently retired by its caller. */
-        if (generation == UINT32_MAX) return 0;
-        if (__sync_bool_compare_and_swap(
-                &_pthread_tls_generation[key], generation, generation + 1u))
-            return 1;
-        generation = pthread_key_generation_load(key);
+    unsigned int generation = __sync_add_and_fetch(
+        &_pthread_tls_generation[key], 1u);
+    /* Zero is reserved for an uninitialized per-thread value. */
+    if (generation == 0u) {
+        generation = __sync_add_and_fetch(
+            &_pthread_tls_generation[key], 1u);
     }
+    return generation;
 }
 
 static unsigned int pthread_key_state_word_load(unsigned int key)
@@ -136,9 +132,7 @@ static void pthread_key_finalize_delete(unsigned int key,
     _pthread_tls_destructors[key] = NULL;
     __sync_synchronize();
     __sync_lock_test_and_set(&_pthread_tls_key_state[key],
-        pthread_key_generation_load(key) == UINT32_MAX
-            ? RIN_PTHREAD_KEY_RETIRED
-            : RIN_PTHREAD_KEY_FREE);
+                             RIN_PTHREAD_KEY_FREE);
 }
 
 static void pthread_key_dispatch_release(unsigned int key)
@@ -200,11 +194,7 @@ int pthread_key_create(pthread_key_t* key, void (*destructor)(void*)) {
         if (__sync_bool_compare_and_swap(&_pthread_tls_key_state[i],
                                          RIN_PTHREAD_KEY_FREE,
                                          RIN_PTHREAD_KEY_INITIALIZING)) {
-            if (!pthread_key_generation_next(i)) {
-                __sync_lock_test_and_set(&_pthread_tls_key_state[i],
-                                         RIN_PTHREAD_KEY_RETIRED);
-                continue;
-            }
+            (void)pthread_key_generation_next(i);
             _pthread_tls_destructors[i] = destructor;
             __sync_synchronize();
             __sync_lock_test_and_set(&_pthread_tls_key_state[i],
