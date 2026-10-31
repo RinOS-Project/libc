@@ -1,0 +1,59 @@
+/* SPDX-License-Identifier: MIT */
+#ifndef _LINUX_MOUNT_H
+#define _LINUX_MOUNT_H
+
+#include <stdint.h>
+
+#define OPEN_TREE_CLONE        UINT32_C(0x00000001)
+#define OPEN_TREE_CLOEXEC      UINT32_C(0x00080000)
+#define FSOPEN_CLOEXEC         UINT32_C(0x00000001)
+
+#define MOVE_MOUNT_F_SYMLINKS      UINT32_C(0x00000001)
+#define MOVE_MOUNT_F_AUTOMOUNTS    UINT32_C(0x00000002)
+#define MOVE_MOUNT_F_EMPTY_PATH    UINT32_C(0x00000004)
+#define MOVE_MOUNT_T_SYMLINKS      UINT32_C(0x00000010)
+#define MOVE_MOUNT_T_AUTOMOUNTS    UINT32_C(0x00000020)
+#define MOVE_MOUNT_T_EMPTY_PATH    UINT32_C(0x00000040)
+#define MOVE_MOUNT_SET_GROUP       UINT32_C(0x00000100)
+
+#define MOUNT_ATTR_RDONLY          UINT64_C(0x00000001)
+#define MOUNT_ATTR_NOSUID          UINT64_C(0x00000002)
+#define MOUNT_ATTR_NODEV           UINT64_C(0x00000004)
+#define MOUNT_ATTR_NOEXEC          UINT64_C(0x00000008)
+#define MOUNT_ATTR__ATIME          UINT64_C(0x00000070)
+#define MOUNT_ATTR_RELATIME        UINT64_C(0x00000000)
+#define MOUNT_ATTR_NOATIME         UINT64_C(0x00000010)
+#define MOUNT_ATTR_STRICTATIME     UINT64_C(0x00000020)
+#define MOUNT_ATTR_NODIRATIME      UINT64_C(0x00000080)
+#define MOUNT_ATTR_IDMAP           UINT64_C(0x00100000)
+#define MOUNT_ATTR_NOSYMFOLLOW     UINT64_C(0x00200000)
+
+#define AT_RECURSIVE               UINT32_C(0x8000)
+
+#define FSCONFIG_SET_FLAG          0u
+#define FSCONFIG_SET_STRING        1u
+#define FSCONFIG_SET_BINARY        2u
+#define FSCONFIG_SET_PATH          3u
+#define FSCONFIG_SET_PATH_EMPTY    4u
+#define FSCONFIG_SET_FD            5u
+#define FSCONFIG_CMD_CREATE        6u
+#define FSCONFIG_CMD_RECONFIGURE   7u
+
+#define FSMOUNT_CLOEXEC            UINT32_C(0x00000001)
+#define MS_RDONLY              UINT32_C(0x00000001)
+#define MS_NOSUID              UINT32_C(0x00000002)
+#define MS_NODEV               UINT32_C(0x00000004)
+#define MS_NOEXEC              UINT32_C(0x00000008)
+#define FSPICK_CLOEXEC             UINT32_C(0x00000001)
+#define FSPICK_SYMLINK_NOFOLLOW    UINT32_C(0x00000002)
+#define FSPICK_NO_AUTOMOUNT        UINT32_C(0x00000004)
+#define FSPICK_EMPTY_PATH          UINT32_C(0x00000008)
+
+struct mount_attr {
+    uint64_t attr_set;
+    uint64_t attr_clr;
+    uint64_t propagation;
+    uint64_t userns_fd;
+};
+
+#endif /* _LINUX_MOUNT_H */
