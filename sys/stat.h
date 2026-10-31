@@ -3,6 +3,14 @@
  * ファイル状態
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_STAT_SYSCALL1) && !defined(_RIN_STAT_SYSCALL2) && \
+    !defined(_RIN_STAT_SYSCALL4) && !defined(_RIN_STAT_PATH_AT_CALL)
+#include_next <sys/stat.h>
+#else
+
 #ifndef _SYS_STAT_H
 #define _SYS_STAT_H
 
@@ -632,3 +640,4 @@ static inline mode_t umask(mode_t mask) {
 #endif
 
 #endif /* _SYS_STAT_H */
+#endif /* hosted Linux native filesystem CRT */

@@ -3,6 +3,14 @@
  * ディレクトリ操作
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_DIRENT_SYSCALL1) && \
+    !defined(_RIN_DIRENT_SYSCALL3) && !defined(_RIN_DIRENT_SYSCALL5)
+#include_next <dirent.h>
+#else
+
 #ifndef _DIRENT_H
 #define _DIRENT_H
 
@@ -706,3 +714,4 @@ static inline int dirfd(DIR* dirp) {
 #endif
 
 #endif /* _DIRENT_H */
+#endif /* hosted Linux native filesystem CRT */
