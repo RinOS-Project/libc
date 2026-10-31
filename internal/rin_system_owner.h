@@ -10,6 +10,7 @@
 #include "../sys/wait.h"
 #include "pthread_cancel_point.h"
 #include "rin_environment_runtime.h"
+#include "rin_child_pidfd.h"
 
 #if !defined(RIN_LIBC_PTHREAD_HEADER)
 typedef struct RinSystemOwnerCleanupBuffer {
@@ -99,6 +100,15 @@ int __rin_system_disposition_unlock(void);
      ((intptr_t)-ENOSYS))
 #endif
 #endif
+#ifndef _RIN_STDLIB_SYSTEM_FORK_PIDFD
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING
+#define _RIN_STDLIB_SYSTEM_FORK_PIDFD(pidfd_out) \
+    _syscall1((uintptr_t)SYS_FORK_PIDFD, (uintptr_t)(pidfd_out))
+#else
+#define _RIN_STDLIB_SYSTEM_FORK_PIDFD(pidfd_out) \
+    ((void)(pidfd_out), ((intptr_t)-ENOSYS))
+#endif
+#endif
 #ifndef _RIN_STDLIB_SYSTEM_WAITPID
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING
 #define _RIN_STDLIB_SYSTEM_WAITPID(pid, status, options) \
@@ -151,7 +161,7 @@ int __rin_system_disposition_unlock(void);
 #endif
 
 typedef struct RinSystemOwnerCleanup {
-    intptr_t child_pid;
+    int child_pidfd;
     int child_active;
     int system_lock_held;
     int interrupt_ignored;
@@ -164,33 +174,11 @@ typedef struct RinSystemOwnerCleanup {
 
 static inline int _rin_system_owner_terminate_child(
     RinSystemOwnerCleanup* cleanup) {
-    intptr_t result;
-    int status = 0;
     if (!cleanup || !cleanup->child_active) return 0;
-    do {
-        result = __rin_syscall_posixize((intptr_t)
-            _RIN_STDLIB_SYSTEM_WAITPID_RAW(
-                cleanup->child_pid, &status, WNOHANG));
-    } while (result == -1 && errno == EINTR);
-    if (result == cleanup->child_pid ||
-        (result == -1 && errno == ECHILD)) {
-        cleanup->child_active = 0;
-        return 0;
-    }
-    (void)__rin_syscall_posixize((intptr_t)_RIN_STDLIB_SYSTEM_KILL_RAW(
-        cleanup->child_pid, SIGKILL));
-    for (;;) {
-        result = __rin_syscall_posixize((intptr_t)
-            _RIN_STDLIB_SYSTEM_WAITPID_RAW(
-                cleanup->child_pid, &status, 0u));
-        if (result == cleanup->child_pid ||
-            (result == -1 && errno == ECHILD)) {
-            cleanup->child_active = 0;
-            return 0;
-        }
-        if (result == -1 && errno == EINTR) continue;
+    if (rin_child_pidfd_terminate_and_wait(&cleanup->child_pidfd) != 0)
         return -1;
-    }
+    cleanup->child_active = 0;
+    return 0;
 }
 
 static inline int _rin_system_owner_restore_parent(
@@ -274,6 +262,8 @@ static inline int _rin_system_owner(const char* command) {
 #endif
         char* shell_arguments[4];
 
+        cleanup.child_pidfd = -1;
+
         while (command_length <= RIN_STDLIB_SYSTEM_COMMAND_MAX &&
                command[command_length] != '\0')
             ++command_length;
@@ -341,8 +331,8 @@ static inline int _rin_system_owner(const char* command) {
 #else
         environment = environ;
 #endif
-        fork_result = __rin_syscall_posixize(
-            (intptr_t)_RIN_STDLIB_SYSTEM_FORK());
+        fork_result = __rin_syscall_posixize((intptr_t)
+            _RIN_STDLIB_SYSTEM_FORK_PIDFD(&cleanup.child_pidfd));
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
         if (fork_result != 0) __rin_env_read_end(environment_epoch);
 #endif
@@ -387,27 +377,24 @@ static inline int _rin_system_owner(const char* command) {
             result = 127 << 8;
             goto system_transaction_finish;
         }
-        cleanup.child_pid = fork_result;
+        if (cleanup.child_pidfd < 0) {
+            wait_error = EIO;
+            goto system_transaction_finish;
+        }
         cleanup.child_active = 1;
         if (fork_result > (intptr_t)INT_MAX) {
             wait_error = EOVERFLOW;
             goto system_transaction_finish;
         }
-        do {
-            wait_result = __rin_syscall_posixize((intptr_t)
-                _RIN_STDLIB_SYSTEM_WAITPID(fork_result, &status, 0u));
-            if (wait_result >= 0) break;
-            if (wait_result != -1) errno = EIO;
-            if (errno != EINTR) {
-                wait_error = errno;
-                break;
-            }
-        } while (1);
-        if (wait_error == 0 && wait_result == fork_result) {
+        wait_result = rin_child_pidfd_wait_status(
+            cleanup.child_pidfd, &status);
+        if (wait_result == 0) {
+            __rin_child_pidfd_close(cleanup.child_pidfd);
+            cleanup.child_pidfd = -1;
             cleanup.child_active = 0;
             result = status;
         } else if (wait_error == 0) {
-            wait_error = EIO;
+            wait_error = errno != 0 ? errno : EIO;
         }
 
 system_transaction_finish:
