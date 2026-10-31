@@ -57,7 +57,7 @@
 #ifndef _POSIX_ADVISORY_INFO
 #define _POSIX_ADVISORY_INFO 200809L
 #endif
-#ifndef _POSIX_MESSAGE_PASSING
+#if defined(RIN_USERSPACE) && !defined(_POSIX_MESSAGE_PASSING)
 #define _POSIX_MESSAGE_PASSING 200809L
 #endif
 #ifndef _POSIX_MEMLOCK
@@ -272,11 +272,7 @@ static inline int _rin_unistd_status(intptr_t result) {
 
 /* Keep the fork/pidfd frontend in a dependency-light header.  stdlib and
  * termios can reach it before the rest of unistd is parsed. */
-#if !defined(__has_include) || __has_include("internal/rin_fork_pidfd.h")
-/* The pidfd-fork companion header lands separately; TUs must not
- * fail while it is still uncommitted. Re-export when present. */
 #include "internal/rin_fork_pidfd.h"
-#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * 定数
@@ -1985,8 +1981,13 @@ static inline long sysconf(int name) {
             return 1;
         case _SC_SAVED_IDS:
             return 1;
+#if defined(RIN_USERSPACE)
         case _SC_MESSAGE_PASSING:
             return _POSIX_MESSAGE_PASSING;
+#else
+        case _SC_MESSAGE_PASSING:
+            return -1;
+#endif
         case _SC_ADVISORY_INFO:
             return _POSIX_ADVISORY_INFO;
         case _SC_MQ_OPEN_MAX:
