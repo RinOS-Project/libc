@@ -778,35 +778,10 @@ static inline int faccessat2(int dirfd, const char* pathname, int mode,
 }
 
 static inline int faccessat(int dirfd, const char* pathname, int mode, int flags) {
-    RinPathAtCallV1 call;
-    if (!pathname) {
-        errno = EFAULT;
-        return -1;
-    }
-    if ((mode & ~7) != 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    if ((flags & ~(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) != 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (pathname[0] == '\0' && (flags & AT_EMPTY_PATH) == 0) {
-        errno = ENOENT;
-        return -1;
-    }
-    if (pathname[0] == '\0' && dirfd == AT_FDCWD) {
-        /* AT_FDCWD is a path-resolution base, not an open descriptor. */
-        pathname = ".";
-        flags &= ~AT_EMPTY_PATH;
-    }
-    _fcntl_path_at_init(&call, RIN_PATH_AT_ACCESS);
-    call.dirfd = dirfd;
-    call.flags = (uint32_t)(pathname[0] == '\0'
-        ? flags : (flags & ~AT_EMPTY_PATH));
-    call.mode = (uint32_t)mode;
-    call.path1 = (uint64_t)(uintptr_t)pathname;
-    return _fcntl_path_at_zero(&call);
+    /* Use the kernel's checked pathname copy.  In particular, do not read
+     * pathname[0] here: an invalid user pointer must become EFAULT in the
+     * syscall path rather than faulting inside libc. */
+    return faccessat2(dirfd, pathname, mode, flags);
 }
 
 static inline int fchownat(int dirfd, const char* pathname, uid_t owner, gid_t group, int flags) {
