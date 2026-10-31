@@ -102,7 +102,8 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_munlockall      SYS_MUNLOCKALL
 #define SYS_mremap          SYS_MREMAP
 #define SYS_brk             SYS_BRK
-#define SYS_exit            SYS_EXIT
+#define SYS_exit            SYS_THREAD_EXIT
+#define SYS_exit_group      SYS_EXIT
 #define SYS_fork            SYS_FORK
 #define SYS_vfork           SYS_VFORK
 #define SYS_execve          SYS_EXEC
@@ -180,7 +181,7 @@ typedef struct rin_thread_stack_info_v1 {
 /* Map supported Linux __NR_* spellings to RinOS SYS_* numbers so
  * syscall(__NR_xxx, ...) reaches the matching kernel handler. Linux numbers
  * retained for source inspection use the separate LINUX_NR_* prefix. */
-#define __NR_exit           SYS_EXIT        /* 0 */
+#define __NR_exit           SYS_THREAD_EXIT
 #define __NR_fork           SYS_FORK
 #define __NR_vfork          SYS_VFORK
 #define __NR_read           SYS_READ        /* 22 */
@@ -249,7 +250,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_io_uring_enter SYS_io_uring_enter
 #define __NR_io_uring_register SYS_io_uring_register
 #endif
-#define __NR_exit_group     SYS_EXIT        /* 0 — RinOSはexit_groupなし */
+#define __NR_exit_group     SYS_exit_group  /* RinOS process-exit operation */
 #define __NR_getrandom      SYS_GETRANDOM   /* bounded kernel CSPRNG */
 #define __NR_set_tid_address SYS_SET_TID_ADDRESS /* clear_child_tid handler */
 #define __NR_ptrace          SYS_PTRACE
