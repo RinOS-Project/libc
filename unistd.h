@@ -228,6 +228,7 @@ extern char** environ;
     (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500)
 int nice(int incr);
 #endif
+
 static inline char** __rin_unistd_environment_snapshot(
     unsigned int* epoch_out) {
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
@@ -280,11 +281,7 @@ static inline int _rin_unistd_status(intptr_t result) {
 
 /* Keep the fork/pidfd frontend in a dependency-light header.  stdlib and
  * termios can reach it before the rest of unistd is parsed. */
-#if !defined(__has_include) || __has_include("internal/rin_fork_pidfd.h")
-/* The pidfd-fork companion header lands separately; TUs must not
- * fail while it is still uncommitted. Re-export when present. */
 #include "internal/rin_fork_pidfd.h"
-#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * 定数
@@ -1406,19 +1403,7 @@ static inline pid_t setsid(void)
 }
 
 static inline pid_t fork(void) {
-#ifdef RIN_INTERNAL_FORK_PIDFD_H
     return __rin_fork_with_pidfd(NULL);
-#else
-    /* No pidfd frontend (header uncommitted): plain fork without the
-     * atfork/allocator/RinFS hooks, matching _Fork below. */
-    intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_FORK));
-    if (result < 0) return (pid_t)-1;
-    if ((uintptr_t)result > (uintptr_t)INT_MAX) {
-        errno = EOVERFLOW;
-        return (pid_t)-1;
-    }
-    return (pid_t)result;
-#endif
 }
 
 /* POSIX.1-2024 _Fork。通常のforkと同じgeneration付きkernel処理を使い、
@@ -1710,6 +1695,69 @@ static inline int setegid(gid_t egid) {
     (void)egid;
 #endif
     return __rin_set_credential(__RIN_CREDENTIAL_SET_EGID, (uint32_t)egid);
+}
+
+static inline int __rin_setres_id_value(uint64_t value, uint32_t* output)
+{
+    if (!output) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (value == UINT64_MAX || value == UINT32_MAX) {
+        *output = RIN_CREDENTIAL_SETRES_UNCHANGED;
+        return 0;
+    }
+    if (value > UINT32_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    *output = (uint32_t)value;
+    return 0;
+}
+
+static inline int __rin_setres_credential(uint16_t operation,
+                                           uint32_t real_id,
+                                           uint32_t effective_id,
+                                           uint32_t saved_id)
+{
+    RinCredentialSetResV1 request;
+    __rin_account_zero(&request, sizeof(request));
+    request.struct_size = sizeof(request);
+    request.version = RIN_CREDENTIAL_SETRES_VERSION;
+    request.operation = operation;
+    request.real_id = real_id;
+    request.effective_id = effective_id;
+    request.saved_id = saved_id;
+    return _rin_unistd_status(_RIN_CREDENTIAL_SYSCALL1(
+        RIN_SYS_CREDENTIALS_SETRES, &request));
+}
+
+static inline int setresuid(uid_t real_uid, uid_t effective_uid,
+                            uid_t saved_uid)
+{
+    uint32_t real_value;
+    uint32_t effective_value;
+    uint32_t saved_value;
+    if (__rin_setres_id_value((uint64_t)real_uid, &real_value) != 0 ||
+        __rin_setres_id_value((uint64_t)effective_uid, &effective_value) != 0 ||
+        __rin_setres_id_value((uint64_t)saved_uid, &saved_value) != 0)
+        return -1;
+    return __rin_setres_credential(RIN_CREDENTIAL_SETRES_UID, real_value,
+                                   effective_value, saved_value);
+}
+
+static inline int setresgid(gid_t real_gid, gid_t effective_gid,
+                            gid_t saved_gid)
+{
+    uint32_t real_value;
+    uint32_t effective_value;
+    uint32_t saved_value;
+    if (__rin_setres_id_value((uint64_t)real_gid, &real_value) != 0 ||
+        __rin_setres_id_value((uint64_t)effective_gid, &effective_value) != 0 ||
+        __rin_setres_id_value((uint64_t)saved_gid, &saved_value) != 0)
+        return -1;
+    return __rin_setres_credential(RIN_CREDENTIAL_SETRES_GID, real_value,
+                                   effective_value, saved_value);
 }
 #endif /* !RIN_LIBC_NO_ACCOUNT_COMPAT */
 
