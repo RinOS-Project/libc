@@ -272,7 +272,11 @@ static inline int _rin_unistd_status(intptr_t result) {
 
 /* Keep the fork/pidfd frontend in a dependency-light header.  stdlib and
  * termios can reach it before the rest of unistd is parsed. */
+#if !defined(__has_include) || __has_include("internal/rin_fork_pidfd.h")
+/* The pidfd-fork companion header lands separately; TUs must not
+ * fail while it is still uncommitted. Re-export when present. */
 #include "internal/rin_fork_pidfd.h"
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * 定数
