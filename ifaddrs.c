@@ -33,7 +33,9 @@ static unsigned int rin_ifaddrs_interface_flags(
     if ((interface->flags & RIN_NET_IFADDRS_V2_FLAG_ADMIN_KNOWN) != 0u &&
         (interface->flags & RIN_NET_IFADDRS_V2_FLAG_ADMIN_UP) != 0u)
         flags |= IFF_UP;
-    if ((interface->capabilities & RIN_NET_IFADDRS_V2_CAP_BROADCAST) != 0u)
+    if (interface->interface_type ==
+            RIN_NET_IFADDRS_V2_INTERFACE_BROADCAST ||
+        (interface->capabilities & RIN_NET_IFADDRS_V2_CAP_BROADCAST) != 0u)
         flags |= IFF_BROADCAST;
     if ((interface->capabilities & RIN_NET_IFADDRS_V2_CAP_MULTICAST) != 0u)
         flags |= IFF_MULTICAST;
@@ -42,7 +44,11 @@ static unsigned int rin_ifaddrs_interface_flags(
     if (interface->interface_type == RIN_NET_IFADDRS_V2_INTERFACE_LOOPBACK)
         flags |= IFF_LOOPBACK;
     if (interface->interface_type ==
-        RIN_NET_IFADDRS_V2_INTERFACE_POINT_TO_POINT)
+            RIN_NET_IFADDRS_V2_INTERFACE_POINT_TO_POINT ||
+        (interface->capabilities &
+         RIN_NET_IFADDRS_V2_CAP_POINT_TO_POINT) != 0u ||
+        (interface->ipv4_peer[0] | interface->ipv4_peer[1] |
+         interface->ipv4_peer[2] | interface->ipv4_peer[3]) != 0u)
         flags |= IFF_POINTOPOINT;
     return flags;
 }
@@ -118,8 +124,7 @@ int getifaddrs(struct ifaddrs** ifap)
             memcpy(&address->sin_addr.s_addr, addresses->ipv4_address, 4u);
             netmask->sin_family = AF_INET;
             memcpy(&netmask->sin_addr.s_addr, addresses->ipv4_netmask, 4u);
-            if ((source->capabilities &
-                 RIN_NET_IFADDRS_V2_CAP_POINT_TO_POINT) != 0u) {
+            if ((flags & IFF_POINTOPOINT) != 0u) {
                 if ((source->ipv4_peer[0] | source->ipv4_peer[1] |
                      source->ipv4_peer[2] | source->ipv4_peer[3]) != 0u) {
                     struct sockaddr_in* peer =
@@ -128,8 +133,7 @@ int getifaddrs(struct ifaddrs** ifap)
                     memcpy(&peer->sin_addr.s_addr, source->ipv4_peer, 4u);
                     entry->ifa_dstaddr = (struct sockaddr*)peer;
                 }
-            } else if ((source->capabilities &
-                        RIN_NET_IFADDRS_V2_CAP_BROADCAST) != 0u &&
+            } else if ((flags & IFF_BROADCAST) != 0u &&
                        rin_ifaddrs_ipv4_prefix_length(
                            addresses->ipv4_netmask) <= 30u) {
                 struct sockaddr_in* broadcast =
