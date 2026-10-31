@@ -1132,12 +1132,12 @@ static inline int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex
     return mutex_result != 0 ? mutex_result : result;
 }
 
-static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
-                                          const struct timespec* abstime) {
+static inline int __rin_pthread_cond_timedwait_clock(
+    pthread_cond_t* cond, pthread_mutex_t* mutex,
+    const struct timespec* abstime, clockid_t clock_id) {
     if (!cond || !mutex || !abstime) return EINVAL;
     if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L ||
-        (cond->clock_id != CLOCK_REALTIME &&
-         cond->clock_id != CLOCK_MONOTONIC))
+        (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC))
         return EINVAL;
 
     unsigned int gen = __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE);
@@ -1152,14 +1152,14 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* 
         /* CLOCK_MONOTONIC values cannot be negative.  A normalized negative
          * absolute deadline is already expired; do not pass it to futex,
          * whose non-realtime timeout ABI reports EINVAL for this value. */
-        if (cond->clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
+        if (clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
             result = ETIMEDOUT;
             break;
         }
         int operation = FUTEX_WAIT_BITSET |
             (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
              FUTEX_PRIVATE_FLAG) |
-            (cond->clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
+            (clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
         long ret = syscall(SYS_futex, &cond->generation, operation, (int)gen,
                            abstime, NULL, FUTEX_BITSET_MATCH_ANY);
         if (ret < 0) {
@@ -1180,6 +1180,20 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* 
     __atomic_fetch_sub(&cond->waiting, 1, __ATOMIC_SEQ_CST);
     int mutex_result = pthread_mutex_lock(mutex);
     return mutex_result != 0 ? mutex_result : result;
+}
+
+static inline int pthread_cond_timedwait(pthread_cond_t* cond,
+                                          pthread_mutex_t* mutex,
+                                          const struct timespec* abstime) {
+    return __rin_pthread_cond_timedwait_clock(
+        cond, mutex, abstime, cond ? cond->clock_id : CLOCK_REALTIME);
+}
+
+static inline int pthread_cond_clockwait(pthread_cond_t* cond,
+                                          pthread_mutex_t* mutex,
+                                          clockid_t clock_id,
+                                          const struct timespec* abstime) {
+    return __rin_pthread_cond_timedwait_clock(cond, mutex, abstime, clock_id);
 }
 
 static inline int pthread_cond_signal(pthread_cond_t* cond) {
@@ -1216,6 +1230,9 @@ extern int pthread_cond_destroy(pthread_cond_t* cond);
 extern int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex);
 extern int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
                                   const struct timespec* abstime);
+extern int pthread_cond_clockwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
+                                 clockid_t clock_id,
+                                 const struct timespec* abstime);
 extern int pthread_cond_signal(pthread_cond_t* cond);
 extern int pthread_cond_broadcast(pthread_cond_t* cond);
 #endif
@@ -1454,6 +1471,12 @@ extern int pthread_rwlock_wrlock(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_timedrdlock(pthread_rwlock_t* rwlock,
                                       const struct timespec* abstime);
 extern int pthread_rwlock_timedwrlock(pthread_rwlock_t* rwlock,
+                                      const struct timespec* abstime);
+extern int pthread_rwlock_clockrdlock(pthread_rwlock_t* rwlock,
+                                      clockid_t clock_id,
+                                      const struct timespec* abstime);
+extern int pthread_rwlock_clockwrlock(pthread_rwlock_t* rwlock,
+                                      clockid_t clock_id,
                                       const struct timespec* abstime);
 extern int pthread_rwlock_tryrdlock(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_trywrlock(pthread_rwlock_t* rwlock);
