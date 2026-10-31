@@ -272,11 +272,7 @@ static inline int _rin_unistd_status(intptr_t result) {
 
 /* Keep the fork/pidfd frontend in a dependency-light header.  stdlib and
  * termios can reach it before the rest of unistd is parsed. */
-#if !defined(__has_include) || __has_include("internal/rin_fork_pidfd.h")
-/* The pidfd-fork companion header lands separately; TUs must not
- * fail while it is still uncommitted. Re-export when present. */
 #include "internal/rin_fork_pidfd.h"
-#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * 定数
@@ -681,7 +677,7 @@ static inline int close(int fd) {
  * the syscall completes atomically with respect to signal delivery. Invalid
  * flags are reported only after close has succeeded; EBADF and other close
  * errors therefore retain precedence. */
-static inline int posix_close(int fd, int flags) {
+static inline int _rin_posix_close_impl(int fd, int flags) {
     int result = close(fd);
     int close_errno = errno;
     if (result != 0) {
@@ -694,6 +690,15 @@ static inline int posix_close(int fd, int flags) {
     }
     return 0;
 }
+
+#if (defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)) || \
+    defined(RIN_POSIX_CLOSE_RUNTIME_IMPLEMENTATION)
+int posix_close(int fd, int flags);
+#else
+static inline int posix_close(int fd, int flags) {
+    return _rin_posix_close_impl(fd, flags);
+}
+#endif
 
 static inline int close_range(unsigned int first, unsigned int last,
                               int flags) {
@@ -1389,19 +1394,7 @@ static inline pid_t setsid(void)
 }
 
 static inline pid_t fork(void) {
-#ifdef RIN_INTERNAL_FORK_PIDFD_H
     return __rin_fork_with_pidfd(NULL);
-#else
-    /* No pidfd frontend (header uncommitted): plain fork without the
-     * atfork/allocator/RinFS hooks, matching _Fork below. */
-    intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_FORK));
-    if (result < 0) return (pid_t)-1;
-    if ((uintptr_t)result > (uintptr_t)INT_MAX) {
-        errno = EOVERFLOW;
-        return (pid_t)-1;
-    }
-    return (pid_t)result;
-#endif
 }
 
 /* POSIX.1-2024 _Fork。通常のforkと同じgeneration付きkernel処理を使い、
