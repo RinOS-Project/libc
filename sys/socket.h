@@ -113,10 +113,9 @@ static inline ssize_t __rin_socket_ssize_result(intptr_t result) {
     return (ssize_t)result;
 }
 
-/* Stream and datagram I/O may not report more bytes than the caller offered.
- * Keep the target-width result signed until both the public ssize_t bound and
- * the request-length bound have been checked.  A malformed positive kernel
- * word must never become a successful over-report. */
+/* Preserve the signed syscall word and validate both the public ssize_t
+ * range and the offered byte count.  recv* with MSG_TRUNC uses the ssize_t
+ * check alone because datagram APIs may report the full packet length. */
 static inline ssize_t __rin_socket_count_result(intptr_t result,
                                                 size_t requested) {
     if (__rin_socket_raw_error(result) != 0) return (ssize_t)-1;
@@ -457,38 +456,6 @@ struct cmsghdr {
     /* 後にデータが続く */
 };
 
-/* The kernel socket message owner accepts at most 64 iovecs.  Compute the
- * aggregate request before issuing sendmsg/recvmsg so a malformed result
- * cannot claim more bytes than the caller supplied across the vector. */
-#define RIN_SOCKET_MAX_IOV 64u
-static inline int __rin_socket_message_length(const struct msghdr* message,
-                                              size_t* length_out) {
-    size_t total = 0;
-    size_t index;
-
-    if (!message || !length_out) {
-        errno = EFAULT;
-        return -1;
-    }
-    if (message->msg_iovlen > RIN_SOCKET_MAX_IOV) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (message->msg_iovlen != 0u && !message->msg_iov) {
-        errno = EFAULT;
-        return -1;
-    }
-    for (index = 0; index < message->msg_iovlen; ++index) {
-        if (message->msg_iov[index].iov_len > SIZE_MAX - total) {
-            errno = EOVERFLOW;
-            return -1;
-        }
-        total += message->msg_iov[index].iov_len;
-    }
-    *length_out = total;
-    return 0;
-}
-
 #define SCM_RIGHTS 0x01
 #define SCM_CREDENTIALS 0x02
 
@@ -826,8 +793,11 @@ static inline ssize_t send(int sockfd, const void* buf, size_t len, int flags) {
 
 static inline ssize_t recv(int sockfd, void* buf, size_t len, int flags) {
     __rin_pthread_cancel_point_if_linked();
-    ssize_t result = __rin_socket_count_result(
-        _RIN_SOCKET_SYSCALL4(SYS_RECV, sockfd, buf, len, flags), len);
+    intptr_t raw = _RIN_SOCKET_SYSCALL4(
+        SYS_RECV, sockfd, buf, len, flags);
+    ssize_t result = (flags & MSG_TRUNC) != 0
+        ? __rin_socket_ssize_result(raw)
+        : __rin_socket_count_result(raw, len);
     __rin_pthread_cancel_point_if_linked();
     return result;
 }
@@ -845,9 +815,11 @@ static inline ssize_t sendto(int sockfd, const void* buf, size_t len, int flags,
 static inline ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags,
                                struct sockaddr* src_addr, socklen_t* addrlen) {
     __rin_pthread_cancel_point_if_linked();
-    ssize_t result = __rin_socket_count_result(
-        _RIN_SOCKET_SYSCALL6(SYS_RECVFROM, sockfd, buf, len, flags,
-                             src_addr, addrlen), len);
+    intptr_t raw = _RIN_SOCKET_SYSCALL6(
+        SYS_RECVFROM, sockfd, buf, len, flags, src_addr, addrlen);
+    ssize_t result = (flags & MSG_TRUNC) != 0
+        ? __rin_socket_ssize_result(raw)
+        : __rin_socket_count_result(raw, len);
     __rin_pthread_cancel_point_if_linked();
     return result;
 }
@@ -887,23 +859,22 @@ static inline int socketpair(int domain, int type, int protocol, int sv[2]) {
 }
 
 static inline ssize_t sendmsg(int sockfd, const struct msghdr* msg, int flags) {
-    size_t requested;
     __rin_pthread_cancel_point_if_linked();
-    if (__rin_socket_message_length(msg, &requested) != 0)
-        return (ssize_t)-1;
-    ssize_t result = __rin_socket_count_result(
-        _RIN_SOCKET_SYSCALL3(SYS_SENDMSG, sockfd, msg, flags), requested);
+    /* The kernel snapshots msghdr and iovecs once and derives its result from
+     * that same request.  A libc pre-read can fault before checked copyin or
+     * disagree with the kernel if the caller mutates the vector concurrently. */
+    ssize_t result = __rin_socket_ssize_result(
+        _RIN_SOCKET_SYSCALL3(SYS_SENDMSG, sockfd, msg, flags));
     __rin_pthread_cancel_point_if_linked();
     return result;
 }
 
 static inline ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags) {
-    size_t requested;
     __rin_pthread_cancel_point_if_linked();
-    if (__rin_socket_message_length(msg, &requested) != 0)
-        return (ssize_t)-1;
-    ssize_t result = __rin_socket_count_result(
-        _RIN_SOCKET_SYSCALL3(SYS_RECVMSG, sockfd, msg, flags), requested);
+    /* recvmsg's kernel owner uses the captured vector for both scatter and
+     * result construction.  Do not inspect caller-owned headers here. */
+    ssize_t result = __rin_socket_ssize_result(
+        _RIN_SOCKET_SYSCALL3(SYS_RECVMSG, sockfd, msg, flags));
     __rin_pthread_cancel_point_if_linked();
     return result;
 }
