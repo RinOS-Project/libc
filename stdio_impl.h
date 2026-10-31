@@ -30,6 +30,7 @@
 #include "termios.h"
 #include "stdlib.h"
 #include "string.h"
+#include "wchar.h"
 #if defined(RIN_USERSPACE)
 #include "rin_atomic_wait.h"
 #endif
@@ -3690,6 +3691,83 @@ static inline int _rin_stdio_format_append(_RinStdioFormatSink* sink,
     return 0;
 }
 
+static inline int _rin_stdio_format_wide_string(
+        _RinStdioFormatSink* sink, const wchar_t* wide, int width,
+        int precision, int left_align) {
+    size_t length = 0u;
+    if (!wide) {
+        const char fallback[] = "(null)";
+        length = sizeof(fallback) - 1u;
+        if (precision >= 0 && length > (size_t)precision)
+            length = (size_t)precision;
+        if (!left_align && _rin_stdio_format_repeat(
+                sink, ' ', (size_t)width > length
+                    ? (size_t)width - length : 0u) != 0)
+            return -1;
+        if (_rin_stdio_format_append(sink, fallback, length) != 0)
+            return -1;
+        if (left_align && _rin_stdio_format_repeat(
+                sink, ' ', (size_t)width > length
+                    ? (size_t)width - length : 0u) != 0)
+            return -1;
+        return 0;
+    }
+
+    /* Precision is a byte limit.  Count only complete locale encodings so
+     * the output never ends in the middle of a multibyte character. */
+    if (precision != 0) {
+        mbstate_t measure_state = {0u, 0u};
+        const wchar_t* cursor;
+        for (cursor = wide; *cursor != L'\0'; ++cursor) {
+            char encoded[MB_LEN_MAX];
+            size_t encoded_length = wcrtomb(
+                encoded, *cursor, &measure_state);
+            if (encoded_length == (size_t)-1) return -1;
+            if (precision >= 0 &&
+                (length > (size_t)precision ||
+                 encoded_length > (size_t)precision - length))
+                break;
+            if (encoded_length > (size_t)INT_MAX - length) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            length += encoded_length;
+        }
+    }
+
+    if (!left_align && _rin_stdio_format_repeat(
+            sink, ' ', (size_t)width > length
+                ? (size_t)width - length : 0u) != 0)
+        return -1;
+    if (length != 0u) {
+        mbstate_t output_state = {0u, 0u};
+        const wchar_t* cursor;
+        size_t emitted = 0u;
+        for (cursor = wide; *cursor != L'\0' && emitted < length; ++cursor) {
+            char encoded[MB_LEN_MAX];
+            size_t encoded_length = wcrtomb(
+                encoded, *cursor, &output_state);
+            if (encoded_length == (size_t)-1) return -1;
+            if (encoded_length > length - emitted) {
+                errno = EILSEQ;
+                return -1;
+            }
+            if (_rin_stdio_format_append(sink, encoded, encoded_length) != 0)
+                return -1;
+            emitted += encoded_length;
+        }
+        if (emitted != length) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    if (left_align && _rin_stdio_format_repeat(
+            sink, ' ', (size_t)width > length
+                ? (size_t)width - length : 0u) != 0)
+        return -1;
+    return 0;
+}
+
 static inline int _rin_stdio_format_integer(
         _RinStdioFormatSink* sink, uintmax_t magnitude, int is_signed,
         int negative, unsigned int base, int uppercase, int width,
@@ -4608,46 +4686,131 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                 }
                 break;
             }
+            case 'S':
             case 's': {
-                /* BATCH41: %ls is not implemented (see LIBC-STDIO-
-                 * NARROW-WCHAR-CONV-01); fail closed instead of
-                 * misreading wchar_t* as char*. */
-                if (is_long) { errno = EINVAL; goto format_error; }
-                const char* s = va_arg(ap, const char*);
-                if (!s) s = "(null)";
-                size_t len = 0u;
-                if (precision >= 0) {
-                    /* %.*s: 非 null 終端バッファも許容、precision まで読む */
-                    while (len < (size_t)precision && s[len]) len++;
+                if (is_long || *fmt == 'S') {
+                    const wchar_t* wide;
+                    if ((!is_long && *fmt == 'S') &&
+                        (is_longlong || is_longdouble || is_short || is_char ||
+                         is_intmax || is_ptrdiff || is_size ||
+                         has_width_modifier)) {
+                        errno = EINVAL;
+                        goto format_error;
+                    }
+                    if (is_long && (is_longlong || is_longdouble || is_short ||
+                                    is_char || is_intmax || is_ptrdiff ||
+                                    is_size || has_width_modifier)) {
+                        errno = EINVAL;
+                        goto format_error;
+                    }
+                    wide = va_arg(ap, const wchar_t*);
+                    if (_rin_stdio_format_wide_string(
+                            &sink, wide, pad, precision, left_align) != 0)
+                        goto format_error;
                 } else {
-                    while (s[len]) len++;
-                }
-                if (!left_align) {
-                    _RIN_STDIO_FORMAT_REPEAT(' ',
-                        (size_t)pad > len ? (size_t)pad - len : 0u);
-                }
-                _RIN_STDIO_FORMAT_APPEND(s, len);
-                if (left_align) {
-                    _RIN_STDIO_FORMAT_REPEAT(' ',
-                        (size_t)pad > len ? (size_t)pad - len : 0u);
+                    const char* s = va_arg(ap, const char*);
+                    size_t len = 0u;
+                    if (is_longlong || is_longdouble || is_short || is_char ||
+                        is_intmax || is_ptrdiff || is_size ||
+                        has_width_modifier) {
+                        errno = EINVAL;
+                        goto format_error;
+                    }
+                    if (!s) s = "(null)";
+                    if (precision >= 0) {
+                        /* %.*s permits a non-NUL-terminated bounded input. */
+                        while (len < (size_t)precision && s[len]) len++;
+                    } else {
+                        while (s[len]) len++;
+                    }
+                    if (!left_align) {
+                        _RIN_STDIO_FORMAT_REPEAT(' ',
+                            (size_t)pad > len ? (size_t)pad - len : 0u);
+                    }
+                    _RIN_STDIO_FORMAT_APPEND(s, len);
+                    if (left_align) {
+                        _RIN_STDIO_FORMAT_REPEAT(' ',
+                            (size_t)pad > len ? (size_t)pad - len : 0u);
+                    }
                 }
                 break;
             }
             case 'c': {
-                /* BATCH41: %lc is not implemented (see LIBC-STDIO-
-                 * NARROW-WCHAR-CONV-01); fail closed. */
-                if (is_long) { errno = EINVAL; goto format_error; }
-                /* BATCH41: %c honors the field width (spaces only; the
-                 * 0 flag is ignored for c, matching glibc). */
-                int ch = va_arg(ap, int);
+                if (is_long) {
+                    char encoded[MB_LEN_MAX];
+                    mbstate_t conversion_state = {0u, 0u};
+                    size_t encoded_length;
+                    if ((is_long && (is_longlong || is_longdouble || is_short ||
+                                     is_char || is_intmax || is_ptrdiff ||
+                                     is_size || has_width_modifier)) ||
+                        (!is_long && (is_longlong || is_longdouble || is_short ||
+                                      is_char || is_intmax || is_ptrdiff ||
+                                      is_size || has_width_modifier))) {
+                        errno = EINVAL;
+                        goto format_error;
+                    }
+                    encoded_length = wcrtomb(
+                        encoded, (wchar_t)va_arg(ap, wint_t),
+                        &conversion_state);
+                    if (encoded_length == (size_t)-1)
+                        goto format_error;
+                    if (!left_align) {
+                        _RIN_STDIO_FORMAT_REPEAT(' ',
+                            (size_t)pad > encoded_length
+                                ? (size_t)pad - encoded_length : 0u);
+                    }
+                    _RIN_STDIO_FORMAT_APPEND(encoded, encoded_length);
+                    if (left_align) {
+                        _RIN_STDIO_FORMAT_REPEAT(' ',
+                            (size_t)pad > encoded_length
+                                ? (size_t)pad - encoded_length : 0u);
+                    }
+                } else {
+                    int ch;
+                    if (is_longlong || is_longdouble || is_short || is_char ||
+                        is_intmax || is_ptrdiff || is_size ||
+                        has_width_modifier) {
+                        errno = EINVAL;
+                        goto format_error;
+                    }
+                    /* %c honors field width; zero padding is ignored. */
+                    ch = va_arg(ap, int);
+                    if (!left_align) {
+                        _RIN_STDIO_FORMAT_REPEAT(' ',
+                            (size_t)pad > 1u ? (size_t)pad - 1u : 0u);
+                    }
+                    _RIN_STDIO_FORMAT_PUT(ch);
+                    if (left_align) {
+                        _RIN_STDIO_FORMAT_REPEAT(' ',
+                            (size_t)pad > 1u ? (size_t)pad - 1u : 0u);
+                    }
+                }
+                break;
+            }
+            case 'C': {
+                char encoded[MB_LEN_MAX];
+                mbstate_t conversion_state = {0u, 0u};
+                size_t encoded_length;
+                if (is_longlong || is_longdouble || is_short || is_char ||
+                    is_intmax || is_ptrdiff || is_size ||
+                    has_width_modifier) {
+                    errno = EINVAL;
+                    goto format_error;
+                }
+                encoded_length = wcrtomb(
+                    encoded, (wchar_t)va_arg(ap, wint_t), &conversion_state);
+                if (encoded_length == (size_t)-1)
+                    goto format_error;
                 if (!left_align) {
                     _RIN_STDIO_FORMAT_REPEAT(' ',
-                        (size_t)pad > 1u ? (size_t)pad - 1u : 0u);
+                        (size_t)pad > encoded_length
+                            ? (size_t)pad - encoded_length : 0u);
                 }
-                _RIN_STDIO_FORMAT_PUT(ch);
+                _RIN_STDIO_FORMAT_APPEND(encoded, encoded_length);
                 if (left_align) {
                     _RIN_STDIO_FORMAT_REPEAT(' ',
-                        (size_t)pad > 1u ? (size_t)pad - 1u : 0u);
+                        (size_t)pad > encoded_length
+                            ? (size_t)pad - encoded_length : 0u);
                 }
                 break;
             }
