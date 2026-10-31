@@ -65,8 +65,9 @@ static int rin_wcsftime_conversion_supported(uint32_t conversion) {
     switch (conversion) {
         case 'a': case 'A': case 'b': case 'B': case 'c': case 'C':
         case 'd': case 'D': case 'e': case 'F': case 'g': case 'G':
-        case 'h': case 'H': case 'I': case 'j': case 'm': case 'M':
-        case 'n': case 'p': case 'r': case 'R': case 'S': case 't':
+        case 'h': case 'H': case 'I': case 'j': case 'k': case 'l':
+        case 'm': case 'M': case 'n': case 'p': case 'P': case 'r': case 'R':
+        case 'S': case 't':
         case 'T': case 'u': case 'U': case 'V': case 'w': case 'W':
         case 'x': case 'X': case 'y': case 'Y': case 'z': case 'Z':
         case '%':

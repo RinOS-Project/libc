@@ -346,6 +346,17 @@ static int rin_strftime_format(RinStrftimeWriter* writer, const char* format,
                 rin_strftime_number(writer, (unsigned int)value->tm_yday + 1u,
                                     3u, '0');
                 break;
+            case 'k':
+                /* glibc extension: space-padded %H. */
+                rin_strftime_number(writer, (unsigned int)value->tm_hour, 2u,
+                                    ' ');
+                break;
+            case 'l': {
+                /* glibc extension: space-padded %I. */
+                unsigned int hour = (unsigned int)(value->tm_hour % 12);
+                rin_strftime_number(writer, hour == 0u ? 12u : hour, 2u, ' ');
+                break;
+            }
             case 'm':
                 rin_strftime_number(writer, (unsigned int)value->tm_mon + 1u,
                                     2u, '0');
@@ -360,6 +371,33 @@ static int rin_strftime_format(RinStrftimeWriter* writer, const char* format,
                                   rin_strftime_am_pm(writer, value->tm_hour),
                                   RIN_STRFTIME_LOCALE_TEXT_MAX);
                 break;
+            case 'P': {
+                /* glibc extension: lowercase %p. */
+                const char *marker =
+                    rin_strftime_am_pm(writer, value->tm_hour);
+                size_t length = 0u;
+                size_t valid_prefix = 0u;
+                size_t index;
+                if (!rin_strftime_bounded_length(marker,
+                                                 RIN_STRFTIME_LOCALE_TEXT_MAX,
+                                                 &length)) {
+                    writer->error = EOVERFLOW;
+                    break;
+                }
+                if (!rin_unicode_validate_utf8(marker, length,
+                                               &valid_prefix) ||
+                    valid_prefix != length) {
+                    writer->error = EILSEQ;
+                    break;
+                }
+                for (index = 0u; index < length; ++index) {
+                    char c = marker[index];
+                    if (c >= 'A' && c <= 'Z')
+                        c = (char)(c + 32);
+                    rin_strftime_character(writer, c);
+                }
+                break;
+            }
             case 'r':
                 rin_strftime_composite(writer, "%I:%M:%S %p", value, depth);
                 break;

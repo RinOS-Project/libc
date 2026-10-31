@@ -80,8 +80,12 @@ static int rin_wprintf_scalar(RinWprintfEmit emit, void* context,
         errno = EILSEQ;
         return -1;
     }
-#if defined(__SIZEOF_WCHAR_T__) && __SIZEOF_WCHAR_T__ == 2
-    if (value > 0xffffu) {
+    /* Surrogate splitting keys off the actual wchar_t width, not the
+     * compiler's __SIZEOF_WCHAR_T__ builtin: hosted fixtures may
+     * compile this TU with a 32-bit wchar_t model on a 16-bit-wchar
+     * host (and vice versa), and the emitter must match the type it
+     * writes through. Folds to a constant in real builds. */
+    if (sizeof(wchar_t) == 2u && value > 0xffffu) {
         uint32_t high;
         uint32_t low;
         high = 0xd800u + ((value - 0x10000u) >> 10u);
@@ -89,7 +93,6 @@ static int rin_wprintf_scalar(RinWprintfEmit emit, void* context,
         if (emit(context, (wchar_t)high) != 0) return -1;
         return emit(context, (wchar_t)low);
     }
-#endif
     return emit(context, (wchar_t)value);
 }
 
@@ -1241,6 +1244,26 @@ static int rin_wprintf_format(RinWprintfEmit emit, void* context,
                 } else {
                     break;
                 }
+                continue;
+            case 'C':
+                /* glibc extension: %C acts like %lc; any length
+                 * modifier is ignored. */
+                if (precision_set || zero || plus || space || alternate) break;
+                if (rin_wprintf_text_candidate(
+                        emit, context, 3,
+                        (const void*)(uintptr_t)(unsigned int)
+                            va_arg(arguments, int),
+                        width == 0u ? 1u : width, left, 0u, 0) != 0)
+                    return -1;
+                continue;
+            case 'S':
+                /* glibc extension: %S acts like %ls; any length
+                 * modifier is ignored. */
+                if (zero || plus || space || alternate) break;
+                if (rin_wprintf_text_candidate(
+                        emit, context, 1, va_arg(arguments, const wchar_t*),
+                        width, left, precision, precision_set) != 0)
+                    return -1;
                 continue;
             case 'd': case 'i': {
                 long long signed_value;
@@ -2424,12 +2447,16 @@ static int rin_wscanf_scanset(RinWscanfInput* input,
                                va_list* arguments) {
     uint32_t candidate[RIN_WSCANF_FIELD_LIMIT];
     unsigned int index = 0u;
+    int saw_eof = 0;
     for (;;) {
         uint32_t value;
         int status;
         if (index == width) break;
         status = rin_wscanf_read(input, &value);
-        if (status == RIN_WSCANF_EOF) break;
+        if (status == RIN_WSCANF_EOF) {
+            saw_eof = 1;
+            break;
+        }
         if (status != RIN_WSCANF_MATCH) return status;
         if (!rin_wscanf_scanset_contains(set, value)) {
             if (rin_wscanf_unread(input, value) != RIN_WSCANF_MATCH)
@@ -2438,7 +2465,8 @@ static int rin_wscanf_scanset(RinWscanfInput* input,
         }
         candidate[index++] = value;
     }
-    if (index == 0u) return RIN_WSCANF_NOMATCH;
+    if (index == 0u)
+        return saw_eof ? RIN_WSCANF_EOF : RIN_WSCANF_NOMATCH;
     return suppress ? RIN_WSCANF_MATCH :
         rin_wscanf_store_characters(candidate, index, 1, wide, arguments);
 }
@@ -2605,8 +2633,16 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                 produces_assignment = 0;
                 status = rin_wscanf_literal(input, (uint32_t)'%');
             } else if (conversion == (uint32_t)'c' ||
-                       conversion == (uint32_t)'s') {
-                if (length != RIN_WSCANF_LENGTH_DEFAULT &&
+                       conversion == (uint32_t)'s' ||
+                       conversion == (uint32_t)'C' ||
+                       conversion == (uint32_t)'S') {
+                /* glibc extension: %C/%S act like %lc/%ls; any length
+                 * modifier is ignored. */
+                int is_upper = conversion == (uint32_t)'C' ||
+                    conversion == (uint32_t)'S';
+                int is_string = conversion == (uint32_t)'s' ||
+                    conversion == (uint32_t)'S';
+                if (!is_upper && length != RIN_WSCANF_LENGTH_DEFAULT &&
                     length != RIN_WSCANF_LENGTH_LONG) {
                     errno = EINVAL;
                     return EOF;
@@ -2617,12 +2653,13 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                      * The candidate is private until the complete token has
                      * been collected, so the terminator is always within the
                      * caller's advertised maximum field size. */
-                    width = conversion == (uint32_t)'s' ?
+                    width = is_string ?
                         RIN_WSCANF_FIELD_LIMIT : 1u;
                 }
                 status = rin_wscanf_characters(input, width,
-                    conversion == (uint32_t)'s',
-                    length == RIN_WSCANF_LENGTH_LONG, suppress, arguments);
+                    is_string,
+                    is_upper || length == RIN_WSCANF_LENGTH_LONG,
+                    suppress, arguments);
             } else if (conversion == (uint32_t)'[') {
                 RinWscanfScanSet set;
                 if (length != RIN_WSCANF_LENGTH_DEFAULT &&
