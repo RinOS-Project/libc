@@ -1,6 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 /* RinOS product-backed inotify-shaped filesystem watch ABI. */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
+#include_next <sys/inotify.h>
+#else
 #ifndef _SYS_INOTIFY_H
 #define _SYS_INOTIFY_H
 
@@ -17,6 +22,9 @@ extern "C" {
 #define IN_ACCESS       0x00000001u
 #define IN_MODIFY       0x00000002u
 #define IN_ATTRIB       0x00000004u
+#define IN_CLOSE_WRITE  0x00000008u
+#define IN_CLOSE_NOWRITE 0x00000010u
+#define IN_OPEN         0x00000020u
 #define IN_MOVED_FROM   0x00000040u
 #define IN_MOVED_TO     0x00000080u
 #define IN_CREATE       0x00000100u
@@ -28,8 +36,10 @@ extern "C" {
 #define IN_ONLYDIR      0x01000000u
 #define IN_DONT_FOLLOW  0x02000000u
 #define IN_EXCL_UNLINK  0x04000000u
+#define IN_MASK_CREATE  0x10000000u
 #define IN_MASK_ADD     0x20000000u
 #define IN_ISDIR        0x40000000u
+#define IN_ONESHOT      0x80000000u
 
 /* inotify_init1 flags are intentionally limited to the flags represented by
  * the product descriptor owner.  The RinOS queue is created close-on-exec;
@@ -96,3 +106,4 @@ static inline int inotify_rm_watch(int fd, int wd)
 #endif
 
 #endif /* _SYS_INOTIFY_H */
+#endif /* hosted Linux delegates to native inotify */
