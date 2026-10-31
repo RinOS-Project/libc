@@ -1,4 +1,27 @@
 /* SPDX-License-Identifier: MIT */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_TIME_CUSTOM_SYSCALL_HOOK) && \
+    !defined(_RIN_TIME_SYSCALL1) && !defined(_RIN_TIME_SYSCALL2) && \
+    !defined(_RIN_TIME_SLEEP) && !defined(_RIN_TIME_GETTIMEOFDAY) && \
+    !defined(_RIN_TIME_NS64) && !defined(_RIN_TIME_NS32) && \
+    !defined(_RIN_TIME_REALTIME_NS64) && !defined(_RIN_TIME_REALTIME_NS32) && \
+    !defined(_RIN_TIME_CLOCKSOURCE_RESOLUTION) && \
+    !defined(_RIN_TIME_CPU_GET) && !defined(_RIN_TIME_SETITIMER) && \
+    !defined(_RIN_TIME_GETITIMER) && \
+    !defined(_RIN_TIME_TIMER_CREATE) && !defined(_RIN_TIME_TIMER_SETTIME) && \
+    !defined(_RIN_TIME_TIMER_GETTIME) && !defined(_RIN_TIME_TIMER_DELETE) && \
+    !defined(_RIN_TIME_TIMER_GETOVERRUN) && \
+    !defined(_RIN_TIME_TIMER_POLL) && !defined(_RIN_TIME_CLOCK_SETTIME) && \
+    !defined(_RIN_TIME_CLOCK_GETTIME64) && !defined(_RIN_TIME_FUTEX_WAIT) && \
+    !defined(RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL) && \
+    !defined(RIN_PROCESS_PRIORITY_PRODUCT_SYSCALL) && \
+    !defined(_RIN_RESOURCE_LIMIT_SYSCALL2) && \
+    !defined(_RIN_PRIORITY_SYSCALL2) && !defined(_RIN_PRIORITY_SYSCALL3) && \
+    !defined(_RIN_GETRUSAGE_SYSCALL2)
+#include_next <sys/times.h>
+#else
 #ifndef _SYS_TIMES_H
 #define _SYS_TIMES_H
 
@@ -109,3 +132,4 @@ static inline clock_t times(struct tms* buffer)
 #endif
 
 #endif /* _SYS_TIMES_H */
+#endif /* hosted Linux delegates to the native times provider */
