@@ -142,6 +142,13 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_rt_sigsuspend   SYS_RT_SIGSUSPEND
 #define SYS_tgkill          SYS_TGKILL
 #define SYS_ppoll           SYS_PPOLL
+#if defined(RIN_SYS_IO_URING_SETUP) && \
+    defined(RIN_SYS_IO_URING_ENTER) && \
+    defined(RIN_SYS_IO_URING_REGISTER)
+#define SYS_io_uring_setup  RIN_SYS_IO_URING_SETUP
+#define SYS_io_uring_enter  RIN_SYS_IO_URING_ENTER
+#define SYS_io_uring_register RIN_SYS_IO_URING_REGISTER
+#endif
 #define SYS_fanotify_init   SYS_FANOTIFY_INIT
 #define SYS_fanotify_mark   SYS_FANOTIFY_MARK
 #define __NR_fanotify_init  SYS_FANOTIFY_INIT
@@ -235,6 +242,13 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_getcpu         SYS_GETCPU
 #define __NR_tkill          SYS_TKILL       /* 500 (RinOS独自, Linux 200はGUIと衝突) */
 #define __NR_tgkill         SYS_TGKILL      /* 501 */
+#if defined(RIN_SYS_IO_URING_SETUP) && \
+    defined(RIN_SYS_IO_URING_ENTER) && \
+    defined(RIN_SYS_IO_URING_REGISTER)
+#define __NR_io_uring_setup SYS_io_uring_setup
+#define __NR_io_uring_enter SYS_io_uring_enter
+#define __NR_io_uring_register SYS_io_uring_register
+#endif
 #define __NR_exit_group     SYS_EXIT        /* 0 — RinOSはexit_groupなし */
 #define __NR_getrandom      SYS_GETRANDOM   /* bounded kernel CSPRNG */
 #define __NR_set_tid_address SYS_SET_TID_ADDRESS /* clear_child_tid handler */
