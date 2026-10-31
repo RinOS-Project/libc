@@ -389,12 +389,53 @@ double complex cpow(double complex base, double complex exponent) {
     if (base_real == 1.0 && base_imaginary == 0.0)
         return cx_make(1.0, 0.0);
     if (base_real == 0.0 && base_imaginary == 0.0) {
-        if (exponent_real > 0.0)
-            return cx_make(0.0, copysign(0.0, base_imaginary));
-        if (exponent_real < 0.0) {
-            cx_raise(FE_DIVBYZERO);
-            return cx_make(INFINITY, copysign(0.0, base_imaginary));
+        /* Zero base: probed glibc grid, base zero-signs ignored.
+         * er>0 (finite or +inf): (+0, +0 iff ei<0 strictly else -0),
+         * except finite er with ei=+-inf, which is NaN+NaN*i.
+         * er<0 (finite or -inf): (+inf,-NaN), except finite er with
+         * ei=+-inf, which is NaN+NaN*i.  er==0/NaN with a nonzero
+         * exponent: NaN+NaN*i.  Flags: DIVBYZERO throughout, plus
+         * INVALID except for finite er>0 with finite nonzero ei.
+         * (The (0,0) exponent keeps Annex G (1,+0) via the early
+         * return above; glibc's NaN there is its own quirk.)
+         * Base zero-signs are deliberately ignored throughout: for
+         * (-0,+-0) with an infinite exponent component glibc leaks
+         * its polar atan2(+-0,-0)=+-pi branch choice (e.g. (-0,+0)
+         * ^(1,+inf) is (+0,-0), (-0,-0)^(1,+inf) is NaN+NaN*i),
+         * an implementation artifact UCRT does not share.  The
+         * uniform rule above is locked host-independently by the
+         * differential test instead of chasing that artifact. */
+        double zero_imag =
+            (exponent_imaginary < 0.0) ? 0.0 : -0.0;
+        if (exponent_real == INFINITY) {
+            /* Probed: +0 iff ei is exactly -inf, else -0 (finite
+             * negative ei also yields -0 here, unlike finite er). */
+            double inf_imag =
+                (exponent_imaginary == -INFINITY) ? 0.0 : -0.0;
+            cx_raise(FE_INVALID | FE_DIVBYZERO);
+            return cx_make(0.0, inf_imag);
         }
+        if (exponent_real > 0.0) {
+            if (isinf(exponent_imaginary)) {
+                cx_raise(FE_INVALID | FE_DIVBYZERO);
+                return cx_make(NAN, NAN);
+            }
+            if (exponent_imaginary != 0.0 &&
+                !isnan(exponent_imaginary))
+                cx_raise(FE_DIVBYZERO);
+            else
+                cx_raise(FE_INVALID | FE_DIVBYZERO);
+            return cx_make(0.0, zero_imag);
+        }
+        if (exponent_real < 0.0) {
+            if (!isinf(exponent_real) && isinf(exponent_imaginary)) {
+                cx_raise(FE_INVALID | FE_DIVBYZERO);
+                return cx_make(NAN, NAN);
+            }
+            cx_raise(FE_INVALID | FE_DIVBYZERO);
+            return cx_make(INFINITY, -NAN);
+        }
+        cx_raise(FE_INVALID | FE_DIVBYZERO);
         return cx_make(NAN, NAN);
     }
     logarithm = clog(base);

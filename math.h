@@ -15,6 +15,7 @@
 #include "float.h"
 #include "limits.h"
 #include "fenv.h"
+#include "errno.h"
 
 #if FLT_EVAL_METHOD == 0
 typedef float  float_t;
@@ -59,6 +60,18 @@ typedef long double double_t;
 
 #ifndef M_SQRT2
 #define M_SQRT2 1.41421356237309504880
+#endif
+
+/* C17 7.12.1: RinOS reports math errors through both errno and the
+ * floating-point exception flags. */
+#ifndef MATH_ERRNO
+#define MATH_ERRNO 1
+#endif
+#ifndef MATH_ERREXCEPT
+#define MATH_ERREXCEPT 2
+#endif
+#ifndef math_errhandling
+#define math_errhandling (MATH_ERRNO | MATH_ERREXCEPT)
 #endif
 
 /* lgamma writes the sign of the gamma result here.  Unlike errno this is
@@ -316,6 +329,28 @@ static inline int _libc_issignaling_d(double x) {
     double: _libc_issignaling_d, \
     default: _libc_issignaling_d)(x)
 
+/* C's relational comparison macros are quiet for unordered operands. Keep
+ * these on compiler builtins instead of expanding them to <, <=, or !=, which
+ * can raise FE_INVALID for a quiet NaN on some targets. */
+#ifndef isgreater
+#define isgreater(x, y) __builtin_isgreater((x), (y))
+#endif
+#ifndef isgreaterequal
+#define isgreaterequal(x, y) __builtin_isgreaterequal((x), (y))
+#endif
+#ifndef isless
+#define isless(x, y) __builtin_isless((x), (y))
+#endif
+#ifndef islessequal
+#define islessequal(x, y) __builtin_islessequal((x), (y))
+#endif
+#ifndef islessgreater
+#define islessgreater(x, y) __builtin_islessgreater((x), (y))
+#endif
+#ifndef isunordered
+#define isunordered(x, y) __builtin_isunordered((x), (y))
+#endif
+
 #endif /* !__cplusplus */
 
 #ifdef __cplusplus
@@ -413,6 +448,13 @@ static inline double nextafter(double from, double to) {
         ++u.i;
     else
         --u.i;
+    if (__builtin_isinf(u.d)) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+    } else if (u.d == 0.0) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+    }
     return u.d;
 }
 
@@ -436,6 +478,13 @@ static inline float nextafterf(float from, float to) {
         ++u.i;
     else
         --u.i;
+    if (__builtin_isinf(u.f)) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+    } else if (u.f == 0.0f) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+    }
     return u.f;
 }
 
@@ -504,8 +553,24 @@ static inline double exp(double x);
 static inline double log(double x);
 static inline double frexp(double x, int* exp);
 static inline double ldexp(double x, int exp);
+static inline long double fabsl(long double x);
+static inline long double expl(long double x);
+static inline long double ldexpl(long double x, int exp);
 static inline double atan(double x);
 static inline double atan2(double y, double x);
+
+/* Narrow a widened-double result to float, reporting float-range
+ * overflow/underflow-to-zero via errno (the inner double call already
+ * reported double-range edges; the hardware conversion raises OF/UF).
+ * Subnormal float results report flags alone (uniform rule). */
+static inline float __rin_math_narrow_errno(double d) {
+    float f = (float)d;
+    if (__builtin_isinf(f) && !__builtin_isinf(d))
+        errno = ERANGE;
+    else if (f == 0.0f && d != 0.0)
+        errno = ERANGE;
+    return f;
+}
 
 /* ═══════════════════════════════════════════════════════════════
  * 基本数学関数 (Taylor展開による近似)
@@ -530,6 +595,7 @@ static inline float fabsf(float x) {
 static inline double fmod(double x, double y) {
     if (__builtin_isnan(x) || __builtin_isnan(y)) return NAN;
     if (y == 0.0 || __builtin_isinf(x)) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
@@ -560,43 +626,346 @@ static inline float fmodf(float x, float y) {
     return (float)fmod((double)x, (double)y);
 }
 
-/* sin - 正弦 (Taylor展開) */
-static inline double sin(double x) {
-    if (__builtin_isnan(x) || __builtin_isinf(x)) return NAN;
-    /* Bounded remainder reduction avoids one-subtraction-per-period work. */
-    x = fmod(x, 2 * M_PI);
+/* ═══════════════════════════════════════════════════════════════
+ * Payne-Hanek argument reduction for sin/cos/tan (+f/l via widening).
+ * Computes n = round(ax*2/pi) mod 8 and r = ax - n*pi/2 in
+ * [-pi/4, pi/4] with a 192-bit fixed-point accumulator over a
+ * 40-limb (1280-bit) expansion of 2/pi, so the reduction stays
+ * exact-class (<= 1 ulp of r) from subnormals to DBL_MAX.  The
+ * fraction is reconstructed as a normalized double-double scaled
+ * by pi/2 in double-double, keeping full relative accuracy for
+ * near-multiples of pi/2 and tiny arguments alike.  Integer-only
+ * arithmetic (no __uint128_t): portable across ILP32/LP64/LLP64.
+ * ═══════════════════════════════════════════════════════════════ */
 
-    /* Taylor展開: sin(x) = x - x^3/3! + x^5/5! - x^7/7! + ... */
-    double term = x;
-    double sum = x;
-    double x2 = x * x;
+/* 2/pi as 40 big-endian 32-bit fraction limbs (2^-1280 tail).
+ * Limb 0 = 0xA2F9836E matches the known expansion; the table was
+ * derived from an exact-rational Machin computation of pi and is
+ * validated end to end by the host differential sweep (max 4 ulp
+ * over ~360k points incl. full-exponent fuzz and ULP-adversarial
+ * near-multiples of pi/2; worst case is kernel, not reduction). */
+static const unsigned __RIN_MATH_T2OPI[40] = {
+    0xA2F9836Eu, 0x4E441529u, 0xFC2757D1u, 0xF534DDC0u,
+    0xDB629599u, 0x3C439041u, 0xFE5163ABu, 0xDEBBC561u,
+    0xB7246E3Au, 0x424DD2E0u, 0x06492EEAu, 0x09D1921Cu,
+    0xFE1DEB1Cu, 0xB129A73Eu, 0xE88235F5u, 0x2EBB4484u,
+    0xE99C7026u, 0xB45F7E41u, 0x3991D639u, 0x835339F4u,
+    0x9C845F8Bu, 0xBDF9283Bu, 0x1FF897FFu, 0xDE05980Fu,
+    0xEF2F118Bu, 0x5A0A6D1Fu, 0x6D367ECFu, 0x27CB09B7u,
+    0x4F463F66u, 0x9E5FEA2Du, 0x7527BAC7u, 0xEBE5F17Bu,
+    0x3D0739F7u, 0x8A5292EAu, 0x6BFB5FB1u, 0x1F8D5D08u,
+    0x56033046u, 0xFC7B6BABu, 0xF0CFBC20u, 0x9AF4361Du,
+};
 
+#define __RIN_MATH_PIO2_HI 0x1.921fb54442d18p+0
+#define __RIN_MATH_PIO2_LO 0x1.1a62633145c07p-54
+
+/* Portable count-leading-zeros for nonzero 64-bit. */
+static inline int __rin_math_clz64(unsigned long long v) {
+    int n = 0;
+    if ((v >> 32) == 0) { n += 32; v <<= 32; }
+    if ((v >> 48) == 0) { n += 16; v <<= 16; }
+    if ((v >> 56) == 0) { n += 8; v <<= 8; }
+    if ((v >> 60) == 0) { n += 4; v <<= 4; }
+    if ((v >> 62) == 0) { n += 2; v <<= 2; }
+    if ((v >> 63) == 0) { n += 1; }
+    return n;
+}
+
+/* Reduce ax = |x| (finite): returns octant n mod 8, *r in
+ * [-pi/4, pi/4] with ax ~= n*pi/2 + r. */
+static inline int __rin_math_rem_pio2(double ax, double *r) {
+    /* Already reduced: |x| < pi/4 (threshold 1ulp below correctly
+     * rounded pi/4, hence strictly below true pi/4). */
+    if (ax < 0x1.921FB54442D17p-1) {
+        *r = ax;
+        return 0;
+    }
+    /* 192-bit fraction acc, little-endian words: f0 = 2^-192..2^-129,
+     * f1 = 2^-128..2^-65, f2 = 2^-64..2^-1. Plus sticky + int mod 8. */
+    {
+        unsigned long long f0 = 0, f1 = 0, f2 = 0;
+        unsigned sticky = 0;
+        unsigned n8 = 0;
+        int e, j;
+        double m = frexp(ax, &e);
+        /* M in [2^52, 2^53): exact (m*2^53 is integral and < 2^53). */
+        unsigned long long M = (unsigned long long)(m * 9007199254740992.0);
+        int E = e - 53;
+        for (j = 0; j < 40; j++) {
+            unsigned T = __RIN_MATH_T2OPI[j];
+            int s;
+            unsigned long long p0, p1;
+            unsigned long long Mhi, Mlo;
+            unsigned long long q0, q1;
+            if (T == 0)
+                continue;
+            s = E - 32 * (j + 1);
+            if (s >= 3)
+                continue; /* integer bits >= 3: mod 8 no-op */
+            /* prod = M*T < 2^85: split MAC into p1:p0.
+             * Mhi<2^26, Mlo<2^27; Mhi*T<2^58, Mlo*T<2^59. */
+            Mhi = M >> 27;
+            Mlo = M & 0x7FFFFFFu;
+            q0 = Mlo * (unsigned long long)T; /* < 2^59 */
+            q1 = Mhi * (unsigned long long)T; /* < 2^58 */
+            /* prod = q1*2^27 + q0. p0 = low 64, p1 = high 21. */
+            p0 = (q0 + (q1 << 27));
+            {
+                unsigned c = (p0 < q0) ? 1u : 0u;
+                p1 = (q1 >> 37) + (unsigned long long)c;
+            }
+            if (s >= 0) {
+                /* Pure integer contribution, take mod 8. */
+                n8 = (unsigned)((n8 + ((p0 << (unsigned)s) & 7u)) & 7u);
+            } else {
+                unsigned R = (unsigned)(-s);
+                /* Integer part of prod/2^R, mod 8. */
+                if (R < 85) {
+                    unsigned long long iv;
+                    if (R >= 64)
+                        iv = p1 >> (R - 64);
+                    else
+                        iv = (p0 >> R) | (p1 << (64 - R));
+                    n8 = (unsigned)((n8 + (iv & 7u)) & 7u);
+                }
+                /* Fraction: low R bits of prod, scaled by 2^-R, into
+                 * f0:f1:f2 (192 bits) + sticky. */
+                if (R <= 192) {
+                    /* F192 = prod << (192-R), low 192 bits. */
+                    unsigned L = 192 - R;
+                    unsigned ws = L / 64, bs = L % 64;
+                    unsigned long long w[3] = {0, 0, 0};
+                    unsigned long long s0 = p0, s1 = p1 & 0x1FFFFFu;
+                    /* shift left by L across 3 words (drop overflow). */
+                    if (ws == 0) {
+                        if (bs == 0) {
+                            w[0] = s0;
+                            w[1] = s1;
+                        } else {
+                            w[0] = s0 << bs;
+                            w[1] = (s0 >> (64 - bs)) | (s1 << bs);
+                            w[2] = (s1 >> (64 - bs));
+                        }
+                    } else if (ws == 1) {
+                        if (bs == 0) {
+                            w[1] = s0;
+                            w[2] = s1;
+                        } else {
+                            w[1] = s0 << bs;
+                            w[2] = (s0 >> (64 - bs)) | (s1 << bs);
+                        }
+                    } else {
+                        if (bs == 0)
+                            w[2] = s0;
+                        else
+                            w[2] = s0 << bs;
+                    }
+                    {
+                        /* Carry out of a+=b+c: c ? (a_new<=b)
+                         * : (a_new<b). */
+                        unsigned cy0, cy1, cy2;
+                        f0 += w[0];
+                        cy0 = (f0 < w[0]) ? 1u : 0u;
+                        f1 += w[1] + cy0;
+                        cy1 = (cy0 ? (f1 <= w[1]) : (f1 < w[1])) ?
+                                  1u :
+                                  0u;
+                        f2 += w[2] + cy1;
+                        cy2 = (cy1 ? (f2 <= w[2]) : (f2 < w[2])) ?
+                                  1u :
+                                  0u;
+                        n8 = (n8 + cy2) & 7u;
+                    }
+                } else {
+                    /* R > 192: keep top (prod >> (R-192)) & mask192. */
+                    unsigned RR = R - 192;
+                    unsigned long long k0 = 0, k1 = 0, k2 = 0;
+                    if (RR < 85) {
+                        if (RR >= 64) {
+                            k0 = p1 >> (RR - 64);
+                        } else if (RR == 0) {
+                            k0 = p0;
+                            k1 = p1;
+                        } else {
+                            k0 = (p0 >> RR) | (p1 << (64 - RR));
+                            k1 = p1 >> RR;
+                        }
+                        {
+                            unsigned cy0, cy1, cy2;
+                            f0 += k0;
+                            cy0 = (f0 < k0) ? 1u : 0u;
+                            f1 += k1 + cy0;
+                            cy1 = (cy0 ? (f1 <= k1) : (f1 < k1)) ?
+                                      1u :
+                                      0u;
+                            f2 += k2 + cy1;
+                            cy2 = (cy1 ? (f2 <= k2) : (f2 < k2)) ?
+                                      1u :
+                                      0u;
+                            n8 = (n8 + cy2) & 7u;
+                        }
+                        /* dropped low RR bits -> sticky. */
+                        if (RR >= 64) {
+                            if (p0 || (p1 & ((((unsigned long long)1)
+                                              << (RR - 64)) -
+                                             1u)))
+                                sticky = 1;
+                        } else if (RR > 0) {
+                            if ((p0 & ((((unsigned long long)1) << RR) -
+                                         1u)))
+                                sticky = 1;
+                        }
+                    } else {
+                        /* Entire prod below the floor: sticky if
+                         * nonzero. */
+                        if (p0 | p1)
+                            sticky = 1;
+                    }
+                }
+            }
+        }
+        /* Round to nearest octant: Fs = F - rb, n += rb. */
+        {
+            /* Fs as normalized double-double: |Fs|<=0.5 kept to
+             * 106 bits relative to its leading 1, so
+             * near-multiples of pi/2 and tiny x keep full
+             * relative accuracy. */
+            unsigned rb = (unsigned)(f2 >> 63);
+            unsigned long long u2, u1, u0, mh, ml;
+            double Fh, Fl, rmag;
+            int p, s;
+            n8 = (n8 + rb) & 7u;
+            if (rb == 0) {
+                u2 = f2; u1 = f1; u0 = f0;
+            } else {
+                /* MAG192 = 2^192 - F192 - (sticky?1:0); borrow
+                 * out of 0-X is 1 iff X!=0 (true integer,
+                 * pre-wrap). */
+                unsigned b0 = (f0 | (sticky ? 1u : 0u)) ? 1u : 0u;
+                unsigned b1;
+                u0 = 0u - f0 - (sticky ? 1u : 0u);
+                u1 = 0u - f1 - b0;
+                b1 = (f1 | b0) ? 1u : 0u;
+                u2 = 0u - f2 - b1;
+            }
+            if ((u2 | u1 | u0) == 0u) {
+                /* True |r| < 2^-191 (2^-192 coincidence);
+                 * underflows. */
+                *r = (rb == 0) ? 0.0 : -0.0;
+                return (int)n8;
+            }
+            if (u2 != 0u)
+                p = 191 - __rin_math_clz64(u2);
+            else if (u1 != 0u)
+                p = 127 - __rin_math_clz64(u1);
+            else
+                p = 63 - __rin_math_clz64(u0);
+            s = 191 - p;
+            {
+                /* G = U192 << s: leading 1 at bit 191; top 106
+                 * bits are U's bits [p-105..p], zero-filled
+                 * below bit 0. */
+                unsigned ws = (unsigned)s / 64u;
+                unsigned bs = (unsigned)s % 64u;
+                unsigned long long g2, g1;
+                if (ws == 0u) {
+                    g2 = (u2 << bs) | (bs ? (u1 >> (64u - bs)) : 0u);
+                    g1 = (u1 << bs) | (bs ? (u0 >> (64u - bs)) : 0u);
+                } else if (ws == 1u) {
+                    g2 = (u1 << bs) | (bs ? (u0 >> (64u - bs)) : 0u);
+                    g1 = u0 << bs;
+                } else {
+                    g2 = u0 << bs;
+                    g1 = 0u;
+                }
+                mh = g2 >> 11;
+                ml = ((g2 & 0x7FFu) << 42) | (g1 >> 22);
+            }
+            /* 106-bit value x 2^(p-297); ldexp only sets exponent. */
+            Fh = ldexp((double)mh, p - 244);
+            Fl = ldexp((double)ml, p - 297);
+            rmag = (Fh * __RIN_MATH_PIO2_HI) +
+                   ((Fh * __RIN_MATH_PIO2_LO) +
+                    (Fl * __RIN_MATH_PIO2_HI)) +
+                   (Fl * __RIN_MATH_PIO2_LO);
+            *r = (rb == 0) ? rmag : -rmag;
+            return (int)n8;
+        }
+    }
+}
+
+/* Kernel evaluations on |r| <= pi/4 (10-term Taylor: truncation
+ * ~1e-22 there, so the kernel is exact-class). */
+static inline double __rin_math_sin_kernel(double r) {
+    double term = r;
+    double sum = r;
+    double r2 = r * r;
     for (int i = 1; i <= 10; i++) {
-        term *= -x2 / ((2*i) * (2*i + 1));
+        term *= -r2 / ((2*i) * (2*i + 1));
         sum += term;
     }
     return sum;
+}
+
+static inline double __rin_math_cos_kernel(double r) {
+    double term = 1.0;
+    double sum = 1.0;
+    double r2 = r * r;
+    for (int i = 1; i <= 10; i++) {
+        term *= -r2 / ((2*i - 1) * (2*i));
+        sum += term;
+    }
+    return sum;
+}
+
+/* Single-reduction sin+cos of ax = |x|: octant-map the kernels. */
+static inline void __rin_math_sincos_red(double ax, double *sp,
+                                         double *cp) {
+    double r;
+    int n = __rin_math_rem_pio2(ax, &r);
+    double s = __rin_math_sin_kernel(r);
+    double c = __rin_math_cos_kernel(r);
+    switch (n & 3) {
+    case 0: *sp = s; *cp = c; break;
+    case 1: *sp = c; *cp = -s; break;
+    case 2: *sp = -s; *cp = -c; break;
+    default: *sp = -c; *cp = s; break;
+    }
+}
+
+/* sin - 正弦 (Payne-Hanek reduction + Taylor kernel) */
+static inline double sin(double x) {
+    if (__builtin_isnan(x)) return NAN;
+    if (__builtin_isinf(x)) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    {
+        double s, c;
+        __rin_math_sincos_red(fabs(x), &s, &c);
+        return __builtin_signbit(x) ? -s : s;
+    }
 }
 
 static inline float sinf(float x) {
     return (float)sin((double)x);
 }
 
-/* cos - 余弦 (Taylor展開) */
+/* cos - 余弦 (Payne-Hanek reduction + Taylor kernel) */
 static inline double cos(double x) {
-    if (__builtin_isnan(x) || __builtin_isinf(x)) return NAN;
-    x = fmod(x, 2 * M_PI);
-
-    /* Taylor展開: cos(x) = 1 - x^2/2! + x^4/4! - x^6/6! + ... */
-    double term = 1.0;
-    double sum = 1.0;
-    double x2 = x * x;
-
-    for (int i = 1; i <= 10; i++) {
-        term *= -x2 / ((2*i - 1) * (2*i));
-        sum += term;
+    if (__builtin_isnan(x)) return NAN;
+    if (__builtin_isinf(x)) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
     }
-    return sum;
+    {
+        double s, c;
+        __rin_math_sincos_red(fabs(x), &s, &c);
+        return c;
+    }
 }
 
 static inline float cosf(float x) {
@@ -605,26 +974,48 @@ static inline float cosf(float x) {
 
 /* sincos - calculate sine and cosine in one ABI-compatible call. */
 static inline void sincos(double x, double* sinp, double* cosp) {
-    if (sinp != NULL) *sinp = sin(x);
-    if (cosp != NULL) *cosp = cos(x);
+    double s, c;
+    if (__builtin_isnan(x)) {
+        s = NAN;
+        c = NAN;
+    } else if (__builtin_isinf(x)) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        s = NAN;
+        c = NAN;
+    } else {
+        __rin_math_sincos_red(fabs(x), &s, &c);
+        if (__builtin_signbit(x)) s = -s;
+    }
+    if (sinp != NULL) *sinp = s;
+    if (cosp != NULL) *cosp = c;
 }
 
 static inline void sincosf(float x, float* sinp, float* cosp) {
-    if (sinp != NULL) *sinp = sinf(x);
-    if (cosp != NULL) *cosp = cosf(x);
+    double s, c;
+    sincos((double)x, &s, &c);
+    if (sinp != NULL) *sinp = (float)s;
+    if (cosp != NULL) *cosp = (float)c;
 }
 
-/* tan - 正接 */
+/* tan - 正接 (single Payne-Hanek reduction, quotient of kernels) */
 static inline double tan(double x) {
-    if (__builtin_isnan(x) || __builtin_isinf(x)) return NAN;
+    if (__builtin_isnan(x)) return NAN;
+    if (__builtin_isinf(x)) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (x == 0.0) return x;
-    double s = sin(x);
-    double c = cos(x);
-    /* At an exactly represented pole, preserve the sign of sin instead of
-     * silently claiming that tan is zero.  The finite reduced path below
-     * still returns the quotient for near-pole arguments. */
-    if (c == 0.0) return __builtin_copysign(HUGE_VAL, s);
-    return s / c;
+    {
+        double s, c;
+        __rin_math_sincos_red(fabs(x), &s, &c);
+        if (__builtin_signbit(x)) s = -s;
+        /* At an exactly represented pole, preserve the sign of sin
+         * instead of silently claiming that tan is zero. */
+        if (c == 0.0) return __builtin_copysign(HUGE_VAL, s);
+        return s / c;
+    }
 }
 
 static inline float tanf(float x) {
@@ -635,6 +1026,7 @@ static inline float tanf(float x) {
 static inline double sqrt(double x) {
     if (__builtin_isnan(x)) return x;
     if (x < 0) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
@@ -682,6 +1074,7 @@ static inline double pow(double base, double exponent) {
         return grows ? INFINITY : 0.0;
     }
     if (!integral_exp && base < 0.0) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
@@ -690,7 +1083,14 @@ static inline double pow(double base, double exponent) {
         return (negative_base && odd_exp) ? -result : result;
     }
     if (base == 0.0) {
-        if (neg_exp) (void)feraiseexcept(FE_DIVBYZERO);
+        if (neg_exp) {
+            /* Pole: C17 7.12.1 range error; glibc agrees
+             * (folding-proof B42 probe: errno 34, DIVBYZERO).
+             * An earlier literal-arg probe read errno 0: gcc
+             * had constant-folded pow and run no libm code. */
+            errno = ERANGE;
+            (void)feraiseexcept(FE_DIVBYZERO);
+        }
         double result = neg_exp ? INFINITY : 0.0;
         return (negative_base && odd_exp) ? -result : result;
     }
@@ -700,17 +1100,95 @@ static inline double pow(double base, double exponent) {
     /* Integer exponentiation without narrowing the exponent to int. */
     double factor = base;
     double result = 1.0;
+    /* Entry flags: the recompute branches below supersede the
+     * squaring loop, so they scrub its stale artifacts and
+     * restore these caller flags. */
+    int entry_excepts = fetestexcept(FE_ALL_EXCEPT);
     while (magnitude >= 1.0) {
         double half = trunc(magnitude / 2.0);
         if (magnitude - half * 2.0 >= 1.0) result *= factor;
         factor *= factor;
         magnitude = half;
     }
-    return neg_exp ? 1.0 / result : result;
+    if (__builtin_isinf(result)) {
+        if (neg_exp) {
+            /* TRUE = 1/R is tiny: recompute with an inverted loop
+             * so subnormal-exact powers (e.g. 2^-1074) come out
+             * exactly instead of flushing to zero.  Drop only the
+             * overflow the squaring loop just raised (baseline it
+             * so pre-existing caller flags survive). */
+            double mag2 = -exponent;
+            double factor2 = 1.0 / base;
+            double result2 = 1.0;
+            while (mag2 >= 1.0) {
+                double half2 = trunc(mag2 / 2.0);
+                if (mag2 - half2 * 2.0 >= 1.0) result2 *= factor2;
+                factor2 *= factor2;
+                mag2 = half2;
+            }
+            /* The inverted loop supersedes the squaring loop:
+             * scrub its stale OF (loop 1 always raised
+             * OF|INEXACT here) and any microarch-specific DE,
+             * restoring the entry flags. Loop 2 UF|INEXACT are
+             * genuine (it computed the reported value) and stay.
+             * A stale INEXACT can survive when loop 2 is exact;
+             * INEXACT is algorithmic noise (glibc raises it for
+             * exact results, e.g. pow(2,3)) and parity checks
+             * mask it. */
+            feclearexcept(FE_OVERFLOW | FE_DENORMAL);
+            if (entry_excepts & FE_OVERFLOW)
+                (void)feraiseexcept(FE_OVERFLOW);
+            if (entry_excepts & FE_DENORMAL)
+                (void)feraiseexcept(FE_DENORMAL);
+            if (result2 == 0.0) {
+                errno = ERANGE;
+                (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+                return result2;
+            }
+            if (fabs(result2) < __DBL_MIN__ &&
+                !fetestexcept(FE_UNDERFLOW))
+                (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+            return result2;
+        }
+        errno = ERANGE;
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return (negative_base && odd_exp) ? -HUGE_VAL : HUGE_VAL;
+    }
+    if (result == 0.0) {
+        errno = ERANGE;
+        if (neg_exp) {
+            /* 1/0 overflows (|base| < 1): the TRUE result is huge
+             * so scrub the stale UF (+microarch DE), restoring
+             * the entry flags, before raising OF|INEXACT. */
+            feclearexcept(FE_UNDERFLOW | FE_DENORMAL);
+            if (entry_excepts & FE_UNDERFLOW)
+                (void)feraiseexcept(FE_UNDERFLOW);
+            if (entry_excepts & FE_DENORMAL)
+                (void)feraiseexcept(FE_DENORMAL);
+            (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+            return (negative_base && odd_exp) ? -HUGE_VAL : HUGE_VAL;
+        }
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+        return (negative_base && odd_exp) ? -0.0 : 0.0;
+    }
+    if (neg_exp) {
+        double q = 1.0 / result;
+        if (__builtin_isinf(q)) {
+            errno = ERANGE;
+            return q;
+        }
+        if (q != 0.0 && fabs(q) < __DBL_MIN__ &&
+            !fetestexcept(FE_UNDERFLOW))
+            (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+        return q;
+    }
+    if (fabs(result) < __DBL_MIN__ && !fetestexcept(FE_UNDERFLOW))
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+    return result;
 }
 
 static inline float powf(float base, float exp) {
-    return (float)pow((double)base, (double)exp);
+    return __rin_math_narrow_errno(pow((double)base, (double)exp));
 }
 
 /* floor - 切り捨て */
@@ -947,10 +1425,12 @@ static inline double exp(double x) {
     if (__builtin_isinf(x)) return x > 0.0 ? INFINITY : 0.0;
     /* Binary64 overflow/underflow boundaries. */
     if (x > 709.782712893384) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
         return HUGE_VAL;
     }
     if (x < -745.133219101941) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
         return 0.0;
     }
@@ -972,17 +1452,19 @@ static inline double exp(double x) {
 }
 
 static inline float expf(float x) {
-    return (float)exp((double)x);
+    return __rin_math_narrow_errno(exp((double)x));
 }
 
 /* log - 自然対数 (Newton法) */
 static inline double log(double x) {
     if (__builtin_isnan(x)) return x;
     if (x == 0.0) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_DIVBYZERO);
         return -HUGE_VAL;
     }
     if (x < 0.0) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
@@ -1011,7 +1493,7 @@ static inline double log(double x) {
 }
 
 static inline float logf(float x) {
-    return (float)log((double)x);
+    return __rin_math_narrow_errno(log((double)x));
 }
 
 /* log10 - 常用対数 */
@@ -1020,7 +1502,7 @@ static inline double log10(double x) {
 }
 
 static inline float log10f(float x) {
-    return (float)log10((double)x);
+    return __rin_math_narrow_errno(log10((double)x));
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1037,6 +1519,8 @@ static inline float log10f(float x) {
 /* 2/sqrt(pi) and 1/sqrt(pi), correctly rounded. */
 #define __RIN_MATH_2_SQRT_PI 1.12837916709551257390
 #define __RIN_MATH_1_SQRT_PI 0.56418958354775628695
+#define __RIN_MATH_LN2_512 354.89135644669199 /* 512*ln2 */
+#define __RIN_MATH_LN2_512L 354.891356446691998421622846186586402854656068792450690109788L /* 512*ln2 */
 
 static inline double __rin_math_erf_taylor(double x) {
     /* erf(x) = 2/sqrt(pi) * sum_n (-1)^n x^(2n+1) / (n! (2n+1)).
@@ -1058,7 +1542,17 @@ static inline double __rin_math_erfc_lentz(double x) {
      *   CF = 1/(x^2+ (1/2)/(1+ 1/(x^2+ (3/2)/(1+ ...)))),
      * numerators n/2, denominators alternating x^2, 1.
      * Converges for x >= 1 in about 20 iterations.  Raises nothing;
-     * the erfc wrapper reports underflow for tiny results. */
+     * the erfc wrapper reports underflow for tiny results.
+     * The exponential is scaled by 2^512 through K = 512*ln2 for
+     * x > 26.6, where exp(-x^2) would go subnormal: intermediates
+     * stay normal (full 53-bit mantissa) down to subnormal results
+     * and the final ldexp(-512) is exact.  At x <= 26.6 the plain
+     * form is kept: it already sits at the x^2-rounding floor and
+     * the +K shift would only add argument rounding.  Beyond
+     * x = 27.3 the true value is below half the least subnormal
+     * (erfc(x) < e^(-x^2)/(x*sqrt(pi))), so it rounds to zero;
+     * this guard also keeps x*x finite for huge arguments. */
+    if (x > 27.3) return 0.0;
     double x2 = x * x;
     double tiny = 1e-300;
     double f = tiny;
@@ -1076,6 +1570,9 @@ static inline double __rin_math_erfc_lentz(double x) {
         f *= cd;
         if (fabs(cd - 1.0) < 1e-16) break;
     }
+    if (x > 26.6)
+        return ldexp(x * exp(-x2 + __RIN_MATH_LN2_512) *
+                     __RIN_MATH_1_SQRT_PI * f, -512);
     return x * exp(-x2) * __RIN_MATH_1_SQRT_PI * f;
 }
 
@@ -1123,7 +1620,9 @@ static inline double erfc(double x) {
     } else {
         e = __rin_math_erfc_lentz(ax);
         if (x >= 0.0 && (e == 0.0 || e < __DBL_MIN__)) {
-            /* Tiny positive result: glibc raises underflow here. */
+            /* Tiny positive result: glibc raises underflow here;
+             * errno only when the result flushes to zero. */
+            if (e == 0.0) errno = ERANGE;
             (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
         }
     }
@@ -1136,8 +1635,102 @@ static inline float erfcf(float x) {
     return (float)erfc((double)x);
 }
 
+static inline long double __rin_math_erfcl_lentz(long double x) {
+    /* Long-double Laplace/Lentz core mirroring __rin_math_erfc_lentz.
+     * The x^2 and continued-fraction arithmetic run in long double
+     * while the exp factor comes from the (double-precision) nested
+     * expl widener, so results carry ~1e-15 against an 80-bit oracle
+     * where the widened-double path bottoms out at the double-
+     * subnormal floor (relerr 4.7e-7 at x = 27).  Past x = 32.5 a
+     * single scaled exp would go double-subnormal (precision loss)
+     * then flush (x > 33.2) while the TRUE 80-bit value stays normal
+     * to x = 107, so e^(-x^2) is split into n double-normal
+     * factors multiplied in long double (~1e-14).  On binary64-
+     * long-double targets the product underflows exactly where the
+     * host double does.  Beyond x = 107 the true value is below
+     * half the least 80-bit subnormal (same e^(-x^2)/(x*sqrt(pi))
+     * bound), so it rounds to zero; the guard also keeps x*x finite. */
+    if (x > 107.0L) return 0.0L;
+    long double x2 = x * x;
+    long double tiny = 1e-300L;
+    long double f = tiny;
+    long double c = tiny;
+    long double dd = 0.0L;
+    for (int n = 1; n <= 2000; n++) {
+        long double a = (n == 1) ? 1.0L : (long double)(n - 1) / 2.0L;
+        long double b = (n % 2 == 1) ? x2 : 1.0L;
+        long double cd;
+        dd = b + a * dd;
+        if (dd == 0.0L) dd = tiny;
+        dd = 1.0L / dd;
+        c = b + a / c;
+        if (c == 0.0L) c = tiny;
+        cd = c * dd;
+        f *= cd;
+        if (fabsl(cd - 1.0L) < 1e-19L) break;
+    }
+    if (x > 32.5L) {
+        /* n = x^2/700 + 1 keeps every stage argument -x^2/n
+         * above -700 (n <= 17 below the 107 guard), so each
+         * expl factor is double-normal and only the LD product
+         * reaches 80-bit depths. */
+        int nst = (int)(x2 / 700.0L) + 1;
+        long double acc = x *
+            0.56418958354775628694807945156077258584405025397353L *
+            f;
+        long double stage = -x2 / (long double)nst;
+        int k;
+        for (k = 0; k < nst; k++)
+            acc *= expl(stage);
+        return acc;
+    }
+    if (x > 26.6L)
+        /* Exact long-double downscale: the ldexpl widener routes
+         * through double and would re-impose the double floor. */
+        return x * expl(-x2 + __RIN_MATH_LN2_512L) *
+               0.56418958354775628694807945156077258584405025397353L *
+               f * 0x1p-512L;
+    return x * expl(-x2) *
+           0.56418958354775628694807945156077258584405025397353L * f;
+}
+
 static inline long double erfcl(long double x) {
-    return (long double)erfc((double)x);
+    if (__builtin_isnan(x)) return x;
+    if (x == HUGE_VALL) return 0.0L;
+    if (x == -HUGE_VALL) return 2.0L;
+    int entry_uf = fetestexcept(FE_UNDERFLOW);
+    /* Exact long-double abs: fabsl narrows through double,
+     * which both loses the value (tiny 80-bit inputs flush to
+     * zero) and latches a spurious UF the scrub below would
+     * then fail to clear (0.0 < LDBL_MIN). */
+    long double ax = x < 0.0L ? -x : x;
+    long double e;
+    if (ax <= 1.5L) {
+        /* Taylor results are unit-scale: the double core widened
+         * keeps ~1e-17, no native long-double series needed. */
+        e = 1.0L - (long double)__rin_math_erf_taylor((double)ax);
+    } else {
+        e = __rin_math_erfcl_lentz(ax);
+        if (x >= 0.0L && (e == 0.0L || e < __LDBL_MIN__)) {
+            /* Tiny positive result: glibc raises underflow here;
+             * errno only when the result flushes to zero. */
+            if (e == 0.0L) errno = ERANGE;
+            (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+        }
+    }
+    long double r = x >= 0.0L ? e : 2.0L - e;
+    /* Same exact-abs requirement as ax above (the narrowing
+     * conversion itself latches UF for 80-bit-tiny results).
+     * Observation note: the compiler reorders plain FP ops
+     * across fetestexcept reads (flags are not modeled as
+     * state), so HW-raised flags are only reliably observed
+     * across an opaque call boundary; the differential test
+     * reads them through the rinm_ shim for exactly this
+     * reason. */
+    long double ar = r < 0.0L ? -r : r;
+    if (!entry_uf && r != 0.0L && ar >= __LDBL_MIN__)
+        feclearexcept(FE_UNDERFLOW);
+    return r;
 }
 
 static inline double __rin_lgamma(double x, int *signp) {
@@ -1158,6 +1751,7 @@ static inline double __rin_lgamma(double x, int *signp) {
         return HUGE_VAL;
     }
     if (x == 0.0) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_DIVBYZERO);
         *signp = __builtin_signbit(x) ? -1 : 1;
         return HUGE_VAL;
@@ -1170,6 +1764,7 @@ static inline double __rin_lgamma(double x, int *signp) {
     if (x < 0.0) {
         double fl = floor(x);
         if (x == fl) {
+            errno = ERANGE;
             (void)feraiseexcept(FE_DIVBYZERO);
             *signp = 1;
             return HUGE_VAL;
@@ -1211,6 +1806,7 @@ static inline double __rin_lgamma(double x, int *signp) {
     r += shift;
     *signp = 1;
     if (__builtin_isinf(r) && r > 0.0) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
         return HUGE_VAL;
     }
@@ -1225,7 +1821,7 @@ static inline double lgamma(double x) {
 }
 
 static inline float lgammaf(float x) {
-    return (float)lgamma((double)x);
+    return __rin_math_narrow_errno(lgamma((double)x));
 }
 
 static inline long double lgammal(long double x) {
@@ -1238,14 +1834,17 @@ static inline double tgamma(double x) {
     if (__builtin_isnan(x)) return x;
     if (__builtin_isinf(x)) {
         if (x > 0.0) return x;
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
     if (x == 0.0) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_DIVBYZERO);
         return __builtin_signbit(x) ? -HUGE_VAL : HUGE_VAL;
     }
     if (x < 0.0 && x == floor(x)) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
@@ -1254,15 +1853,18 @@ static inline double tgamma(double x) {
     double g = __rin_lgamma(x, &s);
     if (__builtin_isnan(g)) return NAN;
     if (__builtin_isinf(g) && g > 0.0) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
         return s > 0 ? HUGE_VAL : -HUGE_VAL;
     }
     double r = exp(g);
     if (__builtin_isinf(r)) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
         return s > 0 ? HUGE_VAL : -HUGE_VAL;
     }
     if (fabs(r) < __DBL_MIN__) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
         return s > 0 ? r : -r;
     }
@@ -1270,7 +1872,7 @@ static inline double tgamma(double x) {
 }
 
 static inline float tgammaf(float x) {
-    return (float)tgamma((double)x);
+    return __rin_math_narrow_errno(tgamma((double)x));
 }
 
 static inline long double tgammal(long double x) {
@@ -1284,6 +1886,7 @@ static inline double remquo(double x, double y, int *quo) {
      * past 2^1024 also store 0 (unrepresentable in binary64). */
     if (__builtin_isnan(x) || __builtin_isnan(y)) return NAN;
     if (y == 0.0 || __builtin_isinf(x)) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
@@ -1345,17 +1948,19 @@ static inline double log2(double x) {
 }
 
 static inline float log2f(float x) {
-    return (float)log2((double)x);
+    return __rin_math_narrow_errno(log2((double)x));
 }
 
 /* log1p - log(1 + x) より精度の高い実装 */
 static inline double log1p(double x) {
     if (__builtin_isnan(x)) return x;
     if (x == -1.0) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_DIVBYZERO);
         return -HUGE_VAL;
     }
     if (x < -1.0) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
@@ -1376,7 +1981,11 @@ static inline double log1p(double x) {
         for (int i = 1; i <= 39; i += 2) {
             sum += term / i;
             term *= y2;
-            if (fabs(term / (i + 2)) < 1e-18) break;
+            /* Positive shrinking terms: first dropped term bounds
+             * the truncation.  An absolute cutoff truncates to a
+             * single term for tiny y (losing x^3/3-class pieces);
+             * run to relative 2^-60 instead (~14 steps at y=0.2). */
+            if (fabs(term / (i + 2)) < 8.7e-19 * fabs(sum)) break;
         }
         return 2.0 * sum;
     }
@@ -1384,7 +1993,7 @@ static inline double log1p(double x) {
 }
 
 static inline float log1pf(float x) {
-    return (float)log1p((double)x);
+    return __rin_math_narrow_errno(log1p((double)x));
 }
 
 /* expm1 - exp(x) - 1 より精度の高い実装 */
@@ -1408,7 +2017,7 @@ static inline double expm1(double x) {
 }
 
 static inline float expm1f(float x) {
-    return (float)expm1((double)x);
+    return __rin_math_narrow_errno(expm1((double)x));
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1419,6 +2028,7 @@ static inline float expm1f(float x) {
 static inline double asin(double x) {
     if (__builtin_isnan(x)) return x;
     if (x < -1.0 || x > 1.0) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
@@ -1433,6 +2043,7 @@ static inline float asinf(float x) {
 static inline double acos(double x) {
     if (__builtin_isnan(x)) return x;
     if (x < -1.0 || x > 1.0) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
@@ -1464,10 +2075,14 @@ static inline double atan(double x) {
     double sum = 0.0;
     double term = x;
     double x2 = x * x;
-    for (int i = 0; i <= 30; i++) {
+    for (int i = 0; i <= 60; i++) {
         sum += term / (2*i + 1);
         term *= -x2;
-        if (fabs(term / (2*i + 3)) < 1e-15) break;
+        /* Alternating series with shrinking terms: the first
+         * dropped term bounds the truncation.  Run to a relative
+         * 2^-60 so the kernel keeps ~1 ULP (about 23 iterations
+         * at tan(pi/8)); sum is nonzero for the x != 0 caller. */
+        if (fabs(term / (2*i + 3)) < 8.7e-19 * fabs(sum)) break;
     }
 
     sum += offset;
@@ -1525,13 +2140,14 @@ static inline double sinh(double x) {
         /* Compute exp(|x|)/2 without overflowing exp(|x|) first. */
         double half_ex = exp(magnitude * 0.5);
         double result = (0.5 * half_ex) * half_ex;
+        if (__builtin_isinf(result)) errno = ERANGE;
         return __builtin_copysign(result, x);
     }
     double ex = exp(x);
     return (ex - 1.0 / ex) / 2.0;
 }
 static inline float sinhf(float x) {
-    return (float)sinh((double)x);
+    return __rin_math_narrow_errno(sinh((double)x));
 }
 
 /* cosh - 双曲線余弦 */
@@ -1546,13 +2162,15 @@ static inline double cosh(double x) {
     if (magnitude > 20.0) {
         /* Compute exp(|x|)/2 without overflowing exp(|x|) first. */
         double half_ex = exp(magnitude * 0.5);
-        return (0.5 * half_ex) * half_ex;
+        double cosh_r = (0.5 * half_ex) * half_ex;
+        if (__builtin_isinf(cosh_r)) errno = ERANGE;
+        return cosh_r;
     }
     double ex = exp(magnitude);
     return (ex + 1.0 / ex) / 2.0;
 }
 static inline float coshf(float x) {
-    return (float)cosh((double)x);
+    return __rin_math_narrow_errno(cosh((double)x));
 }
 
 /* tanh - 双曲線正接 */
@@ -1585,7 +2203,12 @@ static inline double asinh(double x) {
     if (magnitude > 1e10) {
         result = log(magnitude) + M_LN2;
     } else {
-        result = log(magnitude + sqrt(magnitude * magnitude + 1.0));
+        /* log1p form: magnitude + sqrt(m^2+1) = 1 + m + m^2/(1 +
+         * sqrt(m^2+1)).  The naive log(1+m) rounds its argument
+         * first, losing ~6e-7 relative just above the tiny cutoff. */
+        double s = sqrt(magnitude * magnitude + 1.0);
+        result = log1p(magnitude +
+                       magnitude * magnitude / (s + 1.0));
     }
     return negative ? -result : result;
 }
@@ -1598,6 +2221,7 @@ static inline float asinhf(float x) {
 static inline double acosh(double x) {
     if (__builtin_isnan(x)) return x;
     if (x < 1.0) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
@@ -1615,14 +2239,17 @@ static inline float acoshf(float x) {
 static inline double atanh(double x) {
     if (__builtin_isnan(x)) return x;
     if (x == 1.0) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_DIVBYZERO);
         return INFINITY;
     }
     if (x == -1.0) {
+        errno = ERANGE;
         (void)feraiseexcept(FE_DIVBYZERO);
         return -INFINITY;
     }
     if (x < -1.0 || x > 1.0) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
@@ -1690,7 +2317,11 @@ static inline double hypot(double x, double y) {
     }
     if (ax == 0.0) return 0.0;
     double ratio = ay / ax;
-    return ax * sqrt(1.0 + ratio * ratio);
+    {
+        double r = ax * sqrt(1.0 + ratio * ratio);
+        if (__builtin_isinf(r)) errno = ERANGE;
+        return r;
+    }
 }
 
 static inline float hypotf(float x, float y) {
@@ -1706,7 +2337,11 @@ static inline float hypotf(float x, float y) {
     }
     if (ax == 0.0f) return 0.0f;
     float ratio = ay / ax;
-    return ax * sqrtf(1.0f + ratio * ratio);
+    {
+        float r = ax * sqrtf(1.0f + ratio * ratio);
+        if (__builtin_isinf(r)) errno = ERANGE;
+        return r;
+    }
 }
 
 /* modf - 整数部と小数部に分離 */
@@ -1798,6 +2433,7 @@ static inline int ilogbf(float x) {
 
     if (exponent == 0) {
         if (fraction == 0) {
+            errno = EDOM;
             (void)feraiseexcept(FE_INVALID);
             return FP_ILOGB0;
         }
@@ -1808,6 +2444,7 @@ static inline int ilogbf(float x) {
     }
 
     if (exponent == 0xFFU) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return fraction == 0 ? INT_MAX : FP_ILOGBNAN;
     }
@@ -1822,6 +2459,7 @@ static inline int ilogb(double x) {
 
     if (exponent == 0) {
         if (fraction == 0) {
+            errno = EDOM;
             (void)feraiseexcept(FE_INVALID);
             return FP_ILOGB0;
         }
@@ -1831,6 +2469,7 @@ static inline int ilogb(double x) {
     }
 
     if (exponent == 0x7FFU) {
+        errno = EDOM;
         (void)feraiseexcept(FE_INVALID);
         return fraction == 0 ? INT_MAX : FP_ILOGBNAN;
     }
@@ -1900,7 +2539,11 @@ static inline double ldexp(double x, int exp) {
         x *= 0x1p1023;
         /* Directed rounding may saturate at the largest finite value rather
          * than infinity; another positive chunk cannot change that result. */
-        if (__builtin_isinf(x) || x == previous) return x;
+        if (__builtin_isinf(x)) {
+            errno = ERANGE;
+            return x;
+        }
+        if (x == previous) return x;
         exp -= 1023;
     }
     while (exp < -1022) {
@@ -1909,7 +2552,11 @@ static inline double ldexp(double x, int exp) {
         /* Directed rounding can keep a tiny nonzero value at the same
          * minimum subnormal on every scale-down step.  Further negative
          * scaling cannot change that correctly rounded result. */
-        if (x == 0.0 || x == previous) return x;
+        if (x == 0.0) {
+            errno = ERANGE;
+            return x;
+        }
+        if (x == previous) return x;
         exp += 1022;
     }
     if (exp == 0) return x;
@@ -1919,11 +2566,17 @@ static inline double ldexp(double x, int exp) {
      * once per exponent step was both slower and exposed extra intermediates. */
     union { double value; unsigned long long bits; } scale;
     scale.bits = (unsigned long long)(exp + 1023) << 52;
-    return x * scale.value;
+    {
+        double r = x * scale.value;
+        /* errno only on overflow/flush; subnormal results report
+         * flags alone (uniform rule, probed on both oracles). */
+        if (__builtin_isinf(r) || r == 0.0) errno = ERANGE;
+        return r;
+    }
 }
 
 static inline float ldexpf(float x, int exp) {
-    return (float)ldexp((double)x, exp);
+    return __rin_math_narrow_errno(ldexp((double)x, exp));
 }
 
 /* scalbn - 2のべき乗をかける */
@@ -2570,6 +3223,11 @@ static inline float fmaf(float x, float y, float z) {
 
 /* exp2 - 2^x */
 static inline double exp2(double x) {
+    /* Integral x in [-1074, -1022): exact subnormal powers are
+     * silent (glibc raises nothing, unlike the pow route which
+     * reports UF there); ldexp computes them exactly. */
+    if (x >= -1074.0 && x < -1021.0 && trunc(x) == x)
+        return ldexp(1.0, (int)x);
     return pow(2.0, x);
 }
 
