@@ -47,13 +47,23 @@ typedef struct RinStdioMemstreamOwner {
     struct RinStdioMemstreamOwner* next;
 } RinStdioMemstreamOwner;
 
-static RinStdioMemstreamOwner* _rin_stdio_memstream_owners;
+static RinStdioMemstreamOwner* _rin_stdio_memstream_buckets[
+    _RIN_STDIO_STREAM_INDEX_BUCKET_COUNT];
+
+static size_t _rin_stdio_memstream_bucket(FILE* stream) {
+    uintptr_t value = (uintptr_t)stream >> 4u;
+    value ^= value >> 11u;
+    value ^= value >> 21u;
+    return (size_t)(value % _RIN_STDIO_STREAM_INDEX_BUCKET_COUNT);
+}
 
 static RinStdioMemstreamOwner* _rin_stdio_memstream_find(FILE* stream) {
     RinStdioMemstreamOwner* found = NULL;
     if (!stream) return NULL;
     _rin_stdio_lock_table_enter();
-    for (RinStdioMemstreamOwner* owner = _rin_stdio_memstream_owners;
+    for (RinStdioMemstreamOwner* owner =
+             _rin_stdio_memstream_buckets[
+                 _rin_stdio_memstream_bucket(stream)];
          owner; owner = owner->next) {
         if (owner->stream == stream) {
             found = owner;
@@ -101,8 +111,11 @@ static FILE* _rin_stdio_memstream_open(int kind, unsigned int mode,
     owner->wide_output = wide_output;
     owner->size_output = size_output;
     _rin_stdio_lock_table_enter();
-    owner->next = _rin_stdio_memstream_owners;
-    _rin_stdio_memstream_owners = owner;
+    {
+        size_t bucket = _rin_stdio_memstream_bucket(stream);
+        owner->next = _rin_stdio_memstream_buckets[bucket];
+        _rin_stdio_memstream_buckets[bucket] = owner;
+    }
     _rin_stdio_lock_table_leave();
     return stream;
 }
@@ -415,6 +428,7 @@ int rin_stdio_memstream_flush(FILE* stream) {
 int rin_stdio_memstream_close(FILE* stream, int* handled) {
     RinStdioMemstreamOwner* owner = _rin_stdio_memstream_find(stream);
     RinStdioMemstreamOwner** link;
+    size_t bucket;
     int result = 0;
     if (handled) *handled = owner != NULL;
     if (!owner) return 0;
@@ -430,11 +444,13 @@ int rin_stdio_memstream_close(FILE* stream, int* handled) {
     } else if (owner->owns_data && owner->data) {
         RIN_STDIO_MEMSTREAM_FREE(owner->data);
     }
+    bucket = _rin_stdio_memstream_bucket(stream);
     _rin_stdio_lock_table_enter();
-    link = &_rin_stdio_memstream_owners;
+    link = &_rin_stdio_memstream_buckets[bucket];
     while (*link && *link != owner) link = &(*link)->next;
     if (*link == owner) {
         *link = owner->next;
+        owner->next = NULL;
         owner->stream = NULL;
         owner->data = NULL;
         owner->capacity = 0u;
