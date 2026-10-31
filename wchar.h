@@ -591,6 +591,149 @@ static inline int rin_wc_integer_current_space(wint_t character,
 }
 
 #if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+/* The _l floating converters apply the supplied locale to leading wide
+ * whitespace and the decimal separator. The ASCII staging buffer preserves
+ * a one-to-one offset so parser end pointers map back to wchar_t. */
+static inline rin_wc_float_input rin_wc_float_prepare_locale(
+    const wchar_t* nptr, locale_t locale) {
+    rin_wc_float_input input;
+    const wchar_t* cursor = nptr;
+    input.start = nptr;
+    input.length = 0u;
+    input.too_long = 0;
+    input.text[0] = '\0';
+    if (!nptr) return input;
+    while (rin_locale_wide_ctype_test(
+        locale, (uint32_t)*cursor, RIN_LOCALE_CTYPE_SPACE))
+        ++cursor;
+    input.start = cursor;
+    while (*cursor && (uint32_t)*cursor <= 0x7fu) {
+        if (input.length == RIN_WC_FLOAT_MAX) {
+            input.too_long = 1;
+            break;
+        }
+        input.text[input.length++] = (char)*cursor++;
+    }
+    input.text[input.length] = '\0';
+    return input;
+}
+
+static inline double wcstod_l(const wchar_t* nptr, wchar_t** endptr,
+                              locale_t locale) {
+    rin_wc_float_input input = rin_wc_float_prepare_locale(nptr, locale);
+    rin_float_parse_result parsed;
+    if (!nptr) {
+        if (endptr) *endptr = (wchar_t*)0;
+        errno = EINVAL;
+        return 0.0;
+    }
+    if (input.too_long) {
+        if (endptr) *endptr = (wchar_t*)(input.start + input.length);
+        errno = ERANGE;
+        return 0.0;
+    }
+    parsed = rin_float_parse_binary64_radix(
+        input.text, rin_locale_decimal_point_l(locale));
+    if (endptr)
+        *endptr = parsed.converted
+                      ? (wchar_t*)(input.start + (parsed.end - input.text))
+                      : (wchar_t*)nptr;
+    if (parsed.invalid_input) errno = EINVAL;
+    else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
+    return rin_float_parse_binary64_value(parsed.bits);
+}
+
+static inline float wcstof_l(const wchar_t* nptr, wchar_t** endptr,
+                             locale_t locale) {
+    rin_wc_float_input input = rin_wc_float_prepare_locale(nptr, locale);
+    rin_float_parse_result parsed;
+    if (!nptr) {
+        if (endptr) *endptr = (wchar_t*)0;
+        errno = EINVAL;
+        return 0.0f;
+    }
+    if (input.too_long) {
+        if (endptr) *endptr = (wchar_t*)(input.start + input.length);
+        errno = ERANGE;
+        return 0.0f;
+    }
+    parsed = rin_float_parse_binary32_radix(
+        input.text, rin_locale_decimal_point_l(locale));
+    if (endptr)
+        *endptr = parsed.converted
+                      ? (wchar_t*)(input.start + (parsed.end - input.text))
+                      : (wchar_t*)nptr;
+    if (parsed.invalid_input) errno = EINVAL;
+    else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
+    return rin_float_parse_binary32_value(parsed.bits);
+}
+
+#if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
+static inline long double wcstold_l(const wchar_t* nptr, wchar_t** endptr,
+                                    locale_t locale) {
+    rin_wc_float_input input = rin_wc_float_prepare_locale(nptr, locale);
+    if (!nptr) {
+        if (endptr) *endptr = (wchar_t*)0;
+        errno = EINVAL;
+        return 0.0;
+    }
+    if (input.too_long) {
+        if (endptr) *endptr = (wchar_t*)(input.start + input.length);
+        errno = ERANGE;
+        return 0.0;
+    }
+#if defined(RIN_FP_HAS_BINARY80)
+    {
+        rin_long_double_parse_result parsed = rin_float_parse_binary80_radix(
+            input.text, rin_locale_decimal_point_l(locale));
+        if (endptr)
+            *endptr = parsed.converted
+                          ? (wchar_t*)(input.start + (parsed.end - input.text))
+                          : (wchar_t*)nptr;
+        if (parsed.invalid_input) errno = EINVAL;
+        else if (parsed.range_direction != 0 || parsed.subnormal)
+            errno = ERANGE;
+        return parsed.value;
+    }
+#else
+    {
+        rin_float_parse_result parsed = rin_float_parse_binary64_radix(
+            input.text, rin_locale_decimal_point_l(locale));
+        if (endptr)
+            *endptr = parsed.converted
+                          ? (wchar_t*)(input.start + (parsed.end - input.text))
+                          : (wchar_t*)nptr;
+        if (parsed.invalid_input) errno = EINVAL;
+        else if (parsed.range_direction != 0 || parsed.subnormal)
+            errno = ERANGE;
+        return (long double)rin_float_parse_binary64_value(parsed.bits);
+    }
+#endif
+}
+#endif
+
+static inline int wcsncasecmp_l(const wchar_t* left, const wchar_t* right,
+                                size_t count, locale_t locale) {
+    size_t index;
+    for (index = 0u; index < count; ++index) {
+        uint32_t left_folded = rin_locale_wide_ctype_map(
+            locale, (uint32_t)left[index], RIN_LOCALE_CTYPE_TOLOWER);
+        uint32_t right_folded = rin_locale_wide_ctype_map(
+            locale, (uint32_t)right[index], RIN_LOCALE_CTYPE_TOLOWER);
+        if (left_folded != right_folded)
+            return left_folded < right_folded ? -1 : 1;
+        if (left[index] == L'\0' || right[index] == L'\0') return 0;
+    }
+    return 0;
+}
+
+static inline int wcscasecmp_l(const wchar_t* left, const wchar_t* right,
+                               locale_t locale) {
+    return wcsncasecmp_l(left, right, SIZE_MAX, locale);
+}
+#endif
+
 static inline int rin_wc_integer_locale_space(wint_t character,
                                                const void* context) {
     return rin_locale_wide_ctype_test(
