@@ -233,9 +233,9 @@ static inline int _rin_ioctl_result_status_zero(intptr_t raw_result) {
  *                physical backend未接続のrequestは EOPNOTSUPP を返すが、
  *                session attach/detach、TIOCGSID、同一session限定の
  *                TIOCGPGRP / TIOCSPGRPはTTY ownerへ実装済み。
- *   TIOCGWINSZ / TIOCSWINSZ : x86_64 の admitted stdio descriptor は
- *              TTY owner の 8-byte winsize を取得・更新する。32-bit ABI、
- *              virtual-terminal descriptor、未admit fd は ENOTTY。
+ *   TIOCGWINSZ / TIOCSWINSZ : IA-32 と x86_64 native/compat32 の TTY owner
+ *              経由で 8-byte winsize を取得・更新する。対象TTYでない
+ *              descriptor や未admit fd は ENOTTY。
  *   未対応 req : EINVAL。
  */
 typedef enum _rin_ioctl_argument_kind {
