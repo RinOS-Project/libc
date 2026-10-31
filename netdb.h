@@ -12,6 +12,7 @@
 #include "sys/socket.h"
 #include "sys/un.h"
 #include "netinet/in.h"
+#include "net/if.h"
 #include "arpa/inet.h"
 #include "string.h"
 #include "stdlib.h"
@@ -1024,7 +1025,7 @@ static inline int _netdb_resolved_lookup_dual(
 static inline struct addrinfo* _netdb_allocate_addrinfo_one(
     int flags, int family, int socktype, int protocol, uint16_t port,
     const uint8_t address[RIN_RESOLVED_IPV6_ADDRESS_BYTES],
-    const char* canonical_name) {
+    uint32_t scope_id, const char* canonical_name) {
     struct addrinfo* ai;
     struct sockaddr* socket_address;
     size_t socket_address_size = family == AF_INET6
@@ -1044,6 +1045,7 @@ static inline struct addrinfo* _netdb_allocate_addrinfo_one(
         struct sockaddr_in6* address6 = (struct sockaddr_in6*)socket_address;
         address6->sin6_family = AF_INET6;
         address6->sin6_port = htons(port);
+        address6->sin6_scope_id = scope_id;
         memcpy(address6->sin6_addr.s6_addr, address,
                RIN_RESOLVED_IPV6_ADDRESS_BYTES);
     } else {
@@ -1073,6 +1075,70 @@ static inline struct addrinfo* _netdb_allocate_addrinfo_one(
     return ai;
 }
 
+/* Returns 1 for a valid IPv6 literal, 0 when the text is not an IPv6
+ * literal, and -1 for a malformed or unusable zone identifier. */
+static inline int _netdb_parse_ipv6_literal(
+    const char* node, size_t node_length,
+    uint8_t address[RIN_RESOLVED_IPV6_ADDRESS_BYTES], uint32_t* scope_id_out)
+{
+    char address_text[RIN_IPV6_TEXT_MAX];
+    const char* zone = NULL;
+    size_t address_length = node_length;
+    size_t index;
+    uint32_t scope_id = 0u;
+    if (!node || !address || !scope_id_out || node_length == 0u) return 0;
+    *scope_id_out = 0u;
+    for (index = 0u; index < node_length; ++index) {
+        if (node[index] == '%') {
+            if (zone != NULL) return -1;
+            zone = node + index + 1u;
+            address_length = index;
+        }
+    }
+    if (zone == NULL) return rin_ipv6_text_parse(node, address) == 0 ? 1 : 0;
+    if (address_length == 0u || address_length >= sizeof(address_text) ||
+        zone >= node + node_length)
+        return -1;
+    memcpy(address_text, node, address_length);
+    address_text[address_length] = '\0';
+    if (rin_ipv6_text_parse(address_text, address) != 0 ||
+        !rin_resolved_ipv6_scope_id_valid(address, 1u))
+        return -1;
+    {
+        size_t zone_length = (size_t)((node + node_length) - zone);
+        int numeric = 1;
+        if (zone_length == 0u) return -1;
+        for (index = 0u; index < zone_length; ++index) {
+            if (zone[index] < '0' || zone[index] > '9') {
+                numeric = 0;
+                break;
+            }
+        }
+        if (numeric) {
+            for (index = 0u; index < zone_length; ++index) {
+                uint32_t digit = (uint32_t)(zone[index] - '0');
+                if (scope_id > (UINT32_MAX - digit) / 10u) return -1;
+                scope_id = scope_id * 10u + digit;
+            }
+            if (scope_id == 0u) return -1;
+        } else {
+            char interface_name[IF_NAMESIZE];
+            if (zone_length >= sizeof(interface_name)) return -1;
+            memcpy(interface_name, zone, zone_length);
+            interface_name[zone_length] = '\0';
+            scope_id = if_nametoindex(interface_name);
+            if (scope_id == 0u) return -1;
+        }
+    }
+    {
+        char current_name[IF_NAMESIZE];
+        if (if_indextoname((unsigned int)scope_id, current_name) == NULL)
+            return -1;
+    }
+    *scope_id_out = scope_id;
+    return 1;
+}
+
 static inline int getaddrinfo(const char* node, const char* service,
                               const struct addrinfo* hints,
                               struct addrinfo** res) {
@@ -1081,6 +1147,7 @@ static inline int getaddrinfo(const char* node, const char* service,
     int effective_socktype;
     int effective_protocol;
     int node_missing;
+    uint32_t ipv6_scope_id = 0u;
     int ipv4_configured = 1;
     int ipv6_configured = 1;
     _NetdbSocketCandidate socket_candidates[2];
@@ -1126,7 +1193,7 @@ static inline int getaddrinfo(const char* node, const char* service,
     if (node != NULL && node_length == 0u) return EAI_NONAME;
     if (node_missing && service == NULL) return EAI_NONAME;
     if ((flags & AI_CANONNAME) != 0 && node_missing) return EAI_BADFLAGS;
-    if ((flags & AI_NUMERICSERV) != 0 &&
+    if ((flags & AI_NUMERICSERV) != 0 && service != NULL &&
         !_netdb_service_is_numeric(service, service_length)) {
         return EAI_NONAME;
     }
@@ -1235,45 +1302,48 @@ static inline int getaddrinfo(const char* node, const char* service,
                        RIN_RESOLVED_IPV4_ADDRESS_BYTES);
             }
             resolved_locally = 1;
-        } else if (family != AF_INET &&
-                   rin_ipv6_text_parse(node, address) == 0) {
-            if (!ipv6_configured) return EAI_NONAME;
-            result_family = AF_INET6;
-            resolved_locally = 1;
-        } else if ((flags & AI_NUMERICHOST) != 0) {
-            return EAI_NONAME;
-        } else if (_netdb_is_localhost(node)) {
-            if (result_family == AF_INET6) {
-                if (mapped_ipv4_primary) {
-                    const uint8_t ipv4_loopback[
-                        RIN_RESOLVED_IPV4_ADDRESS_BYTES] = {127u, 0u, 0u, 1u};
-                    _netdb_map_ipv4_address(address, ipv4_loopback);
+        } else {
+            int ipv6_parse_status = _netdb_parse_ipv6_literal(
+                node, node_length, address, &ipv6_scope_id);
+            if (ipv6_parse_status < 0) return EAI_NONAME;
+            if (ipv6_parse_status > 0) {
+                if (family == AF_INET || !ipv6_configured)
+                    return EAI_NONAME;
+                result_family = AF_INET6;
+                resolved_locally = 1;
+            } else if ((flags & AI_NUMERICHOST) != 0) {
+                return EAI_NONAME;
+            } else if (_netdb_is_localhost(node)) {
+                if (result_family == AF_INET6) {
+                    if (mapped_ipv4_primary) {
+                        const uint8_t ipv4_loopback[
+                            RIN_RESOLVED_IPV4_ADDRESS_BYTES] = {127u, 0u, 0u, 1u};
+                        _netdb_map_ipv4_address(address, ipv4_loopback);
+                    } else {
+                        address[15] = 1u;
+                    }
+                    if (unspec_dual) {
+                        secondary_address[0] = 127u;
+                        secondary_address[3] = 1u;
+                        secondary_family = AF_INET;
+                        have_secondary = 1;
+                    } else if ((flags & AI_ALL) != 0 && ipv4_configured &&
+                               ipv6_configured) {
+                        const uint8_t ipv4_loopback[
+                            RIN_RESOLVED_IPV4_ADDRESS_BYTES] = {127u, 0u, 0u, 1u};
+                        _netdb_map_ipv4_address(
+                            secondary_address, ipv4_loopback);
+                        secondary_family = AF_INET6;
+                        have_secondary = 1;
+                    }
                 } else {
-                    address[15] = 1u;
+                    address[0] = 127u;
+                    address[3] = 1u;
                 }
-                if (unspec_dual) {
-                    secondary_address[0] = 127u;
-                    secondary_address[3] = 1u;
-                    secondary_family = AF_INET;
-                    have_secondary = 1;
-                } else if ((flags & AI_ALL) != 0 && ipv4_configured &&
-                           ipv6_configured) {
-                    const uint8_t ipv4_loopback[
-                        RIN_RESOLVED_IPV4_ADDRESS_BYTES] = {
-                            127u, 0u, 0u, 1u
-                        };
-                    _netdb_map_ipv4_address(
-                        secondary_address, ipv4_loopback);
-                    secondary_family = AF_INET6;
-                    have_secondary = 1;
-                }
-            } else {
-                address[0] = 127u;
-                address[3] = 1u;
+                strncpy(canon_buf, "localhost", sizeof(canon_buf) - 1u);
+                canon_buf[sizeof(canon_buf) - 1u] = '\0';
+                resolved_locally = 1;
             }
-            strncpy(canon_buf, "localhost", sizeof(canon_buf) - 1);
-            canon_buf[sizeof(canon_buf) - 1] = '\0';
-            resolved_locally = 1;
         }
     }
 
@@ -1466,6 +1536,8 @@ static inline int getaddrinfo(const char* node, const char* service,
                     socket_candidates[socket_index].socket_type,
                     socket_candidates[socket_index].protocol,
                     socket_candidates[socket_index].port, candidate_address,
+                    candidate_family == AF_INET6 && address_index == 0u
+                        ? ipv6_scope_id : 0u,
                     candidate_canonical);
                 if (!candidate) {
                     freeaddrinfo(ai);
@@ -1554,7 +1626,7 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     const struct sockaddr_in* sin;
     const struct sockaddr_in6* sin6;
     _NetdbServiceRecord service_record;
-    char numeric_host[RIN_IPV6_TEXT_MAX];
+    char numeric_host[RIN_IPV6_TEXT_MAX + 12u];
     char numeric_service[NI_MAXSERV];
     char service_text[NI_MAXSERV];
     uint8_t embedded_ipv4[RIN_RESOLVED_IPV4_ADDRESS_BYTES];
@@ -1594,6 +1666,14 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     host_requested = host != NULL;
     service_requested = serv != NULL;
     if (!host_requested && !service_requested) return EAI_NONAME;
+    if (host_requested && sin6 && sin6->sin6_scope_id != 0u) {
+        char interface_name[IF_NAMESIZE];
+        if (!rin_resolved_ipv6_scope_id_valid(
+                sin6->sin6_addr.s6_addr, sin6->sin6_scope_id) ||
+            if_indextoname((unsigned int)sin6->sin6_scope_id,
+                           interface_name) == NULL)
+            return EAI_FAMILY;
+    }
 
     memset(numeric_host, 0, sizeof(numeric_host));
     memset(numeric_service, 0, sizeof(numeric_service));
@@ -1632,6 +1712,15 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
                              (unsigned)((address >> 8) & 0xFF),
                              (unsigned)(address & 0xFF));
         if (formatted <= 0 || (size_t)formatted >= sizeof(numeric_host))
+            return EAI_FAIL;
+    }
+    if (sin6 && sin6->sin6_scope_id != 0u) {
+        size_t address_length = strlen(numeric_host);
+        formatted = snprintf(numeric_host + address_length,
+                             sizeof(numeric_host) - address_length,
+                             "%%%u", (unsigned)sin6->sin6_scope_id);
+        if (formatted <= 0 ||
+            (size_t)formatted >= sizeof(numeric_host) - address_length)
             return EAI_FAIL;
     }
     formatted = snprintf(
@@ -1677,21 +1766,36 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
     }
 
     RinResolvedGetNameInfoRequest req;
+    RinResolvedGetNameInfoRequestV2 req_v2;
     RinResolvedGetNameInfoResponse resp;
     RinResolvedMsgHeader header;
     uint8_t outbuf[sizeof(resp) + NI_MAXHOST + NI_MAXSERV];
-    memset(&req, 0, sizeof(req));
-    req.flags = (uint32_t)flags;
-    req.family = (uint32_t)lookup_family;
-    req.addr_len = lookup_address_length;
-    memcpy(req.addr, lookup_address, lookup_address_length);
-    req.port = sin6 ? sin6->sin6_port : sin->sin_port;
-
     {
-        int transact_status = RIN_NETDB_RESOLVED_TRANSACT(
-            RIN_RESOLVED_CMD_GETNAMEINFO_V1, &req,
-            (uint32_t)sizeof(req), &header, outbuf,
-            (uint32_t)sizeof(outbuf));
+        int transact_status;
+        if (sin6 && sin6->sin6_scope_id != 0u) {
+            memset(&req_v2, 0, sizeof(req_v2));
+            req_v2.flags = (uint32_t)flags;
+            req_v2.family = (uint32_t)lookup_family;
+            req_v2.addr_len = lookup_address_length;
+            memcpy(req_v2.addr, lookup_address, lookup_address_length);
+            req_v2.port = sin6->sin6_port;
+            req_v2.scope_id = sin6->sin6_scope_id;
+            transact_status = RIN_NETDB_RESOLVED_TRANSACT(
+                RIN_RESOLVED_CMD_GETNAMEINFO_V2, &req_v2,
+                (uint32_t)sizeof(req_v2), &header, outbuf,
+                (uint32_t)sizeof(outbuf));
+        } else {
+            memset(&req, 0, sizeof(req));
+            req.flags = (uint32_t)flags;
+            req.family = (uint32_t)lookup_family;
+            req.addr_len = lookup_address_length;
+            memcpy(req.addr, lookup_address, lookup_address_length);
+            req.port = sin6 ? sin6->sin6_port : sin->sin_port;
+            transact_status = RIN_NETDB_RESOLVED_TRANSACT(
+                RIN_RESOLVED_CMD_GETNAMEINFO_V1, &req,
+                (uint32_t)sizeof(req), &header, outbuf,
+                (uint32_t)sizeof(outbuf));
+        }
         if (transact_status != 0) {
             return _netdb_resolved_gai_error(transact_status);
         }
