@@ -6,7 +6,20 @@
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
     defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
-    !defined(_RIN_TIME_SETITIMER) && !defined(_RIN_TIME_GETITIMER)
+    !defined(RIN_TIME_CUSTOM_SYSCALL_HOOK) && \
+    !defined(_RIN_TIME_SYSCALL1) && !defined(_RIN_TIME_SYSCALL2) && \
+    !defined(_RIN_TIME_SLEEP) && !defined(_RIN_TIME_GETTIMEOFDAY) && \
+    !defined(_RIN_TIME_NS64) && !defined(_RIN_TIME_NS32) && \
+    !defined(_RIN_TIME_REALTIME_NS64) && !defined(_RIN_TIME_REALTIME_NS32) && \
+    !defined(_RIN_TIME_CLOCKSOURCE_RESOLUTION) && \
+    !defined(_RIN_TIME_CPU_GET) && !defined(_RIN_TIME_SETITIMER) && \
+    !defined(_RIN_TIME_GETITIMER) && \
+    !defined(_RIN_TIME_TIMER_CREATE) && !defined(_RIN_TIME_TIMER_SETTIME) && \
+    !defined(_RIN_TIME_TIMER_GETTIME) && !defined(_RIN_TIME_TIMER_DELETE) && \
+    !defined(_RIN_TIME_TIMER_GETOVERRUN) && !defined(_RIN_TIME_TIMER_POLL) && \
+    !defined(_RIN_TIME_CLOCK_SETTIME) && \
+    !defined(_RIN_TIME_CLOCK_GETTIME64) && !defined(_RIN_TIME_FUTEX_WAIT) && \
+    !defined(RIN_TIME_ABI64) && !defined(RIN_USERSPACE) && !defined(RIN_KERNEL)
 #include_next <sys/time.h>
 #else
 

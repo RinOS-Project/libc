@@ -3,6 +3,7 @@
     (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
     defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
     !defined(RIN_TIME_CUSTOM_SYSCALL_HOOK) && \
+    !defined(RIN_TIME_ABI64) && !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
     !defined(_RIN_TIME_SYSCALL1) && !defined(_RIN_TIME_SYSCALL2) && \
     !defined(_RIN_TIME_SLEEP) && !defined(_RIN_TIME_GETTIMEOFDAY) && \
     !defined(_RIN_TIME_NS64) && !defined(_RIN_TIME_NS32) && \

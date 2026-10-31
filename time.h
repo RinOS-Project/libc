@@ -4,6 +4,31 @@
  * 時刻・日付操作
  */
 
+/* A caller-provided time hook is an explicit request for Rin's target
+ * implementation even in a hosted test process. */
+#if defined(_RIN_TIME_SYSCALL1) || defined(_RIN_TIME_SYSCALL2) || \
+    defined(_RIN_TIME_SLEEP) || defined(_RIN_TIME_GETTIMEOFDAY) || \
+    defined(_RIN_TIME_NS64) || defined(_RIN_TIME_NS32) || \
+    defined(_RIN_TIME_REALTIME_NS64) || defined(_RIN_TIME_REALTIME_NS32) || \
+    defined(_RIN_TIME_CLOCKSOURCE_RESOLUTION) || \
+    defined(_RIN_TIME_CPU_GET) || defined(_RIN_TIME_SETITIMER) || \
+    defined(_RIN_TIME_GETITIMER) || \
+    defined(_RIN_TIME_TIMER_CREATE) || defined(_RIN_TIME_TIMER_SETTIME) || \
+    defined(_RIN_TIME_TIMER_GETTIME) || defined(_RIN_TIME_TIMER_DELETE) || \
+    defined(_RIN_TIME_TIMER_GETOVERRUN) || defined(_RIN_TIME_TIMER_POLL) || \
+    defined(_RIN_TIME_CLOCK_SETTIME) || \
+    defined(_RIN_TIME_CLOCK_GETTIME64) || defined(_RIN_TIME_FUTEX_WAIT)
+#define RIN_TIME_CUSTOM_SYSCALL_HOOK 1
+#endif
+
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_TIME_CUSTOM_SYSCALL_HOOK) && \
+    !defined(RIN_TIME_ABI64) && !defined(RIN_USERSPACE) && \
+    !defined(RIN_KERNEL)
+#include_next <time.h>
+#else
 #ifndef _TIME_H
 #define _TIME_H
 
@@ -27,21 +52,7 @@ typedef locale_t RinStrptimeLocale;
 typedef void* RinStrptimeLocale;
 #endif
 
-/* A caller-provided time hook is an explicit request for Rin's target
- * implementation even in a hosted test process. */
-#if defined(_RIN_TIME_SYSCALL1) || defined(_RIN_TIME_SYSCALL2) || \
-    defined(_RIN_TIME_SLEEP) || defined(_RIN_TIME_GETTIMEOFDAY) || \
-    defined(_RIN_TIME_NS64) || defined(_RIN_TIME_NS32) || \
-    defined(_RIN_TIME_REALTIME_NS64) || defined(_RIN_TIME_REALTIME_NS32) || \
-    defined(_RIN_TIME_CLOCKSOURCE_RESOLUTION) || \
-    defined(_RIN_TIME_CPU_GET) || defined(_RIN_TIME_SETITIMER) || \
-    defined(_RIN_TIME_GETITIMER) || \
-    defined(_RIN_TIME_TIMER_CREATE) || defined(_RIN_TIME_TIMER_SETTIME) || \
-    defined(_RIN_TIME_TIMER_GETTIME) || defined(_RIN_TIME_TIMER_DELETE) || \
-    defined(_RIN_TIME_TIMER_GETOVERRUN) || defined(_RIN_TIME_TIMER_POLL) || \
-    defined(_RIN_TIME_CLOCK_SETTIME) || defined(_RIN_TIME_FUTEX_WAIT)
-#define RIN_TIME_CUSTOM_SYSCALL_HOOK 1
-#endif
+
 
 #if (defined(RIN_FREESTANDING) && RIN_FREESTANDING) || \
     !defined(__STDC_HOSTED__) || !__STDC_HOSTED__ || \
@@ -320,6 +331,9 @@ extern void rin_timer_thread_unregister(timer_t timer_id)
 #endif
 #ifndef NSIG
 #define NSIG 64
+#endif
+#ifndef __RIN_SIGCANCEL
+#define __RIN_SIGCANCEL 63
 #endif
 
 /* A target syscall result is a signed machine word.  Keep it in intptr_t
@@ -1194,6 +1208,20 @@ static inline int _rin_time_timespec_to_ns(const struct timespec* input,
     return 0;
 }
 
+static inline int _rin_time_timer_value_to_ns(
+    const struct timespec* input, int flags, uint64_t* output) {
+    if (!input || !output) return EFAULT;
+    if (input->tv_nsec < 0 || input->tv_nsec >= 1000000000L)
+        return EINVAL;
+    if (input->tv_sec < 0) {
+        if ((flags & TIMER_ABSTIME) == 0) return EINVAL;
+        /* A normalized negative absolute deadline is already expired. */
+        *output = 0u;
+        return 0;
+    }
+    return _rin_time_timespec_to_ns(input, output);
+}
+
 /* Set the shared wall clock only through the authenticated, capability-gated
  * kernel owner.  CLOCK_MONOTONIC and CPU clocks are immutable. */
 static inline int clock_settime(clockid_t clk_id,
@@ -1351,7 +1379,8 @@ static inline int timer_settime(timer_t timer_id, int flags,
         errno = EINVAL;
         return -1;
     }
-    error = _rin_time_timespec_to_ns(&value->it_value, &value_ns);
+    error = _rin_time_timer_value_to_ns(
+        &value->it_value, flags, &value_ns);
     if (error != 0) {
         errno = error;
         return -1;
@@ -2642,3 +2671,4 @@ static inline int _strptime_epoch_to_calendar(int64_t seconds, int* year,
 #undef RIN_TIME_CUSTOM_SYSCALL_HOOK
 
 #endif /* _TIME_H */
+#endif /* hosted Linux delegates to native time */
