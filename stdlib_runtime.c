@@ -8,16 +8,9 @@
 #include "signal.h"
 #include "stdlib.h"
 #include "rin_stdlib_runtime.h"
-#include "sys/sysinfo.h"
 
 #include "fcntl.h"
 #include "unistd.h"
-
-#if defined(RIN_USERSPACE) && RIN_USERSPACE
-char* realpath(const char* path, char* resolved_path) {
-    return _rin_realpath_inline(path, resolved_path);
-}
-#endif
 
 int __rin_stdlib_system_available(void) {
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
@@ -125,22 +118,6 @@ float rin_stdlib_strtof(const char* text, char** end) {
 
 long double rin_stdlib_strtold(const char* text, char** end) {
     return strtold(text, end);
-}
-
-int getloadavg(double loadavg[], int nelem) {
-    struct sysinfo information;
-    int count;
-    int index;
-    if (nelem <= 0) return 0;
-    if (loadavg == NULL) {
-        errno = EFAULT;
-        return -1;
-    }
-    if (sysinfo(&information) != 0) return -1;
-    count = nelem < 3 ? nelem : 3;
-    for (index = 0; index < count; ++index)
-        loadavg[index] = (double)information.loads[index] / 65536.0;
-    return count;
 }
 
 char* rin_stdlib_getenv(const char* name) {
