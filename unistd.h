@@ -133,6 +133,28 @@
 #if defined(RIN_USERSPACE) && !defined(_POSIX_SPAWN)
 #define _POSIX_SPAWN 200809L
 #endif
+/* Options implemented below but historically unadvertised (BATCH35
+ * conformance audit): semaphores ride the userspace kernel-object
+ * runtime; the rest are direct syscalls or header-inline state
+ * available on every freestanding target. */
+#if defined(RIN_USERSPACE) && !defined(_POSIX_SEMAPHORES)
+#define _POSIX_SEMAPHORES 200809L
+#endif
+#ifndef _POSIX_TIMERS
+#define _POSIX_TIMERS 200809L
+#endif
+#ifndef _POSIX_PRIORITY_SCHEDULING
+#define _POSIX_PRIORITY_SCHEDULING 200809L
+#endif
+#ifndef _POSIX_REALTIME_SIGNALS
+#define _POSIX_REALTIME_SIGNALS 200809L
+#endif
+#ifndef _POSIX_THREAD_PRIORITY_SCHEDULING
+#define _POSIX_THREAD_PRIORITY_SCHEDULING 200809L
+#endif
+#ifndef _POSIX_THREAD_PRIO_INHERIT
+#define _POSIX_THREAD_PRIO_INHERIT 200809L
+#endif
 
 /* Preserve caller-provided syscall hooks before installing defaults.  A
  * hosted unit that supplies a hook is intentionally asking for the Rin
@@ -2187,11 +2209,7 @@ static inline long sysconf(int name) {
                           sizeof(((__rin_account_info_v1*)0)->shell));
 #endif
         case _SC_PRIORITIZED_IO:
-        case _SC_PRIORITY_SCHEDULING:
-        case _SC_REALTIME_SIGNALS:
         case _SC_REGEXP:
-        case _SC_SEMAPHORES:
-        case _SC_TIMERS:
         case _SC_BC_BASE_MAX:
         case _SC_BC_DIM_MAX:
         case _SC_BC_SCALE_MAX:
@@ -2229,9 +2247,7 @@ static inline long sysconf(int name) {
 #endif
         case _SC_THREAD_ATTR_STACKADDR:
         case _SC_THREAD_CPUTIME:
-        case _SC_THREAD_PRIO_INHERIT:
         case _SC_THREAD_PRIO_PROTECT:
-        case _SC_THREAD_PRIORITY_SCHEDULING:
 #if !defined(RIN_USERSPACE)
         case _SC_BARRIERS:
         case _SC_THREAD_SAFE_FUNCTIONS:
@@ -2267,6 +2283,23 @@ static inline long sysconf(int name) {
             return 200809L;
 #else
         case _SC_TIMEOUTS:
+            return -1;
+#endif
+        case _SC_PRIORITY_SCHEDULING:
+            return _POSIX_PRIORITY_SCHEDULING;
+        case _SC_REALTIME_SIGNALS:
+            return _POSIX_REALTIME_SIGNALS;
+        case _SC_TIMERS:
+            return _POSIX_TIMERS;
+        case _SC_THREAD_PRIORITY_SCHEDULING:
+            return _POSIX_THREAD_PRIORITY_SCHEDULING;
+        case _SC_THREAD_PRIO_INHERIT:
+            return _POSIX_THREAD_PRIO_INHERIT;
+#if defined(RIN_USERSPACE)
+        case _SC_SEMAPHORES:
+            return _POSIX_SEMAPHORES;
+#else
+        case _SC_SEMAPHORES:
             return -1;
 #endif
         case _SC_CLOCK_SELECTION:
