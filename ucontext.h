@@ -186,6 +186,21 @@ struct __ucontext {
     mcontext_t         uc_mcontext;
     sigset_t           uc_sigmask;
     struct _libc_fpstate __fpregs_mem;
+#if defined(__x86_64__) || defined(_M_X64)
+    /* Versioned tail extension.  Keep the historical register, signal-mask,
+     * and FXSAVE offsets stable while giving x86_64 contexts room for the
+     * complete state enabled by the kernel's XCR0 mask. */
+    struct {
+        uint32_t version;
+        uint32_t mode;
+        uint32_t size;
+        uint32_t reserved;
+        uint64_t mask;
+        /* Reserve alignment slack so malloc-allocated ucontext_t objects do
+         * not require an over-aligned allocator. */
+        unsigned char bytes[4096u + 63u];
+    } uc_xstate;
+#endif
 };
 
 #ifndef _UCONTEXT_T_DEFINED
@@ -263,6 +278,11 @@ static inline int rin_ucontext_sigmask(const sigset_t* new_mask,
 
 #define RIN_UCONTEXT_RFLAGS_MASK       0x0000000000000cd5ULL
 #define RIN_UCONTEXT_RFLAGS_REQUIRED   0x0000000000000202ULL
+#define RIN_UCONTEXT_XSTATE_VERSION    1u
+#define RIN_UCONTEXT_XSTATE_FXSAVE     1u
+#define RIN_UCONTEXT_XSTATE_XSAVE      2u
+#define RIN_UCONTEXT_XSTATE_MAX_BYTES  4096u
+#define RIN_UCONTEXT_XSTATE_BASE_MASK UINT64_C(3)
 
 /* This layout is shared with the scheduler's signal-frame ABI.  Keep the
  * naked assembly below tied to explicit assertions instead of silently
@@ -277,6 +297,137 @@ RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_mcontext.gregs[REG_EFL]) == 1
                "ucontext AMD64 RFLAGS offset changed");
 RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_mcontext.fpregs) == 224u,
                "ucontext AMD64 FP pointer offset changed");
+RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_xstate.version) == 768u,
+               "ucontext AMD64 xstate version offset changed");
+RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_xstate.mode) == 772u,
+               "ucontext AMD64 xstate mode offset changed");
+RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_xstate.size) == 776u,
+               "ucontext AMD64 xstate size offset changed");
+RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_xstate.mask) == 784u,
+               "ucontext AMD64 xstate mask offset changed");
+RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_xstate.bytes) == 792u,
+               "ucontext AMD64 xstate data offset changed");
+
+static inline unsigned char* rin_ucontext_amd64_xstate_area(
+    ucontext_t* context) {
+    uintptr_t address = (uintptr_t)context->uc_xstate.bytes;
+    address = (address + 63u) & ~(uintptr_t)63u;
+    return (unsigned char*)address;
+}
+
+static inline const unsigned char* rin_ucontext_amd64_xstate_area_const(
+    const ucontext_t* context) {
+    uintptr_t address = (uintptr_t)context->uc_xstate.bytes;
+    address = (address + 63u) & ~(uintptr_t)63u;
+    return (const unsigned char*)address;
+}
+
+static inline void rin_ucontext_amd64_cpuid(uint32_t leaf, uint32_t subleaf,
+                                            uint32_t* eax_out,
+                                            uint32_t* ebx_out,
+                                            uint32_t* ecx_out,
+                                            uint32_t* edx_out) {
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(leaf), "c"(subleaf));
+    if (eax_out) *eax_out = eax;
+    if (ebx_out) *ebx_out = ebx;
+    if (ecx_out) *ecx_out = ecx;
+    if (edx_out) *edx_out = edx;
+}
+
+/* Returns 0 for a legacy FXSAVE CPU, 1 for an XSAVE CPU, and -1 when its
+ * enabled state cannot fit the versioned context record. */
+static inline int rin_ucontext_amd64_xstate_query(uint64_t* mask_out,
+                                                  uint32_t* size_out) {
+    uint32_t max_leaf = 0u, eax = 0u, ebx = 0u, ecx = 0u, edx = 0u;
+    uint64_t mask;
+    uint64_t supported_mask;
+    rin_ucontext_amd64_cpuid(0u, 0u, &max_leaf, 0, 0, 0);
+    if (max_leaf < 1u) return 0;
+    rin_ucontext_amd64_cpuid(1u, 0u, &eax, &ebx, &ecx, &edx);
+    if ((ecx & (UINT32_C(1) << 26)) == 0u ||
+        (ecx & (UINT32_C(1) << 27)) == 0u)
+        return 0;
+    if (max_leaf < 0xdu) return -1;
+    rin_ucontext_amd64_cpuid(0xdu, 0u, &eax, &ebx, &ecx, &edx);
+    supported_mask = ((uint64_t)edx << 32u) | eax;
+    {
+        uint32_t xcr0_lo = 0u, xcr0_hi = 0u;
+        __asm__ volatile("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi)
+                         : "c"(0u));
+        mask = ((uint64_t)xcr0_hi << 32u) | xcr0_lo;
+    }
+    if ((mask & RIN_UCONTEXT_XSTATE_BASE_MASK) !=
+            RIN_UCONTEXT_XSTATE_BASE_MASK ||
+        (mask & ~supported_mask) != 0u ||
+        ebx < RIN_UCONTEXT_FXSAVE_BYTES + 64u ||
+        ebx > RIN_UCONTEXT_XSTATE_MAX_BYTES)
+        return -1;
+    if (mask_out) *mask_out = mask;
+    if (size_out) *size_out = ebx;
+    return 1;
+}
+
+static inline int rin_ucontext_amd64_xstate_prepare(ucontext_t* context) {
+    uint64_t mask = RIN_UCONTEXT_XSTATE_BASE_MASK;
+    uint32_t size = RIN_UCONTEXT_FXSAVE_BYTES;
+    int mode;
+    if (!context) return 0;
+    mode = rin_ucontext_amd64_xstate_query(&mask, &size);
+    if (mode < 0) {
+        errno = EINVAL;
+        return 0;
+    }
+    context->uc_xstate.version = RIN_UCONTEXT_XSTATE_VERSION;
+    context->uc_xstate.mode = mode != 0
+        ? RIN_UCONTEXT_XSTATE_XSAVE : RIN_UCONTEXT_XSTATE_FXSAVE;
+    context->uc_xstate.size = size;
+    context->uc_xstate.reserved = 0u;
+    context->uc_xstate.mask = mask;
+    return 1;
+}
+
+static inline int rin_ucontext_amd64_xstate_valid(
+    const ucontext_t* context) {
+    uint64_t current_mask = 0u;
+    uint32_t current_size = 0u;
+    int current_mode;
+    if (!context || context->uc_xstate.version !=
+                        RIN_UCONTEXT_XSTATE_VERSION ||
+        context->uc_xstate.reserved != 0u ||
+        ((uintptr_t)rin_ucontext_amd64_xstate_area_const(context) & 63u) != 0u)
+        return 0;
+    current_mode = rin_ucontext_amd64_xstate_query(&current_mask,
+                                                    &current_size);
+    if (context->uc_xstate.mode == RIN_UCONTEXT_XSTATE_FXSAVE)
+        return current_mode == 0 &&
+               context->uc_xstate.size == RIN_UCONTEXT_FXSAVE_BYTES &&
+               context->uc_xstate.mask == RIN_UCONTEXT_XSTATE_BASE_MASK;
+    if (context->uc_xstate.mode == RIN_UCONTEXT_XSTATE_XSAVE &&
+        current_mode == 1 && context->uc_xstate.mask == current_mask &&
+        context->uc_xstate.size == current_size &&
+        (current_mask & RIN_UCONTEXT_XSTATE_BASE_MASK) ==
+            RIN_UCONTEXT_XSTATE_BASE_MASK) {
+        const unsigned char* area =
+            rin_ucontext_amd64_xstate_area_const(context);
+        uint64_t state_bv = 0u;
+        uint64_t compacted_bv = 0u;
+        uint32_t index;
+        memcpy(&state_bv, area + RIN_UCONTEXT_FXSAVE_BYTES,
+               sizeof(state_bv));
+        memcpy(&compacted_bv, area + RIN_UCONTEXT_FXSAVE_BYTES + 8u,
+               sizeof(compacted_bv));
+        if ((state_bv & ~current_mask) != 0u || compacted_bv != 0u)
+            return 0;
+        for (index = 16u; index < 64u; ++index)
+            if (area[RIN_UCONTEXT_FXSAVE_BYTES + index] != 0u)
+                return 0;
+        return 1;
+    }
+    return 0;
+}
 
 static inline int rin_ucontext_amd64_canonical(uintptr_t value) {
     uint64_t upper = (uint64_t)value >> 47;
@@ -299,7 +450,8 @@ static inline int rin_ucontext_amd64_ready(const ucontext_t* context) {
            rin_ucontext_amd64_canonical(rip) &&
            rin_ucontext_amd64_canonical(rsp) &&
            context->uc_mcontext.fpregs != NULL &&
-           (((uintptr_t)context->uc_mcontext.fpregs & 15u) == 0u);
+           (((uintptr_t)context->uc_mcontext.fpregs & 15u) == 0u) &&
+           rin_ucontext_amd64_xstate_valid(context);
 }
 
 /* The wrapper around this naked function validates the pointer first.  On a
@@ -315,12 +467,21 @@ rin_ucontext_amd64_capture(ucontext_t* context __attribute__((unused))) {
         "movq %rdi, 104(%rcx)\n\t"
         "movq %rcx, 152(%rcx)\n\t"
         "movq %rcx, %rdi\n\t"
+        "movq %rdx, 136(%rdi)\n\t"
+        "movq %r11, 64(%rdi)\n\t"
         "movq 224(%rdi), %rax\n\t"
         "fxsave (%rax)\n\t"
+        "cmpl $2, 772(%rdi)\n\t"
+        "jne 1f\n\t"
+        "movl 784(%rdi), %eax\n\t"
+        "movl 788(%rdi), %edx\n\t"
+        "leaq 855(%rdi), %r11\n\t"
+        "andq $-64, %r11\n\t"
+        "xsave64 (%r11)\n\t"
+        "1:\n\t"
         "movq %r8, 40(%rdi)\n\t"
         "movq %r9, 48(%rdi)\n\t"
         "movq %r10, 56(%rdi)\n\t"
-        "movq %r11, 64(%rdi)\n\t"
         "movq %r12, 72(%rdi)\n\t"
         "movq %r13, 80(%rdi)\n\t"
         "movq %r14, 88(%rdi)\n\t"
@@ -328,7 +489,6 @@ rin_ucontext_amd64_capture(ucontext_t* context __attribute__((unused))) {
         "movq %rsi, 112(%rdi)\n\t"
         "movq %rbp, 120(%rdi)\n\t"
         "movq %rbx, 128(%rdi)\n\t"
-        "movq %rdx, 136(%rdi)\n\t"
         "movq %rcx, 152(%rdi)\n\t"
         "leaq 8(%rsp), %rax\n\t"
         "movq %rax, 160(%rdi)\n\t"
@@ -341,12 +501,21 @@ rin_ucontext_amd64_capture(ucontext_t* context __attribute__((unused))) {
 #else
     __asm__(
         "movq %rax, 144(%rdi)\n\t"
+        "movq %rdx, 136(%rdi)\n\t"
+        "movq %r11, 64(%rdi)\n\t"
         "movq 224(%rdi), %rax\n\t"
         "fxsave (%rax)\n\t"
+        "cmpl $2, 772(%rdi)\n\t"
+        "jne 1f\n\t"
+        "movl 784(%rdi), %eax\n\t"
+        "movl 788(%rdi), %edx\n\t"
+        "leaq 855(%rdi), %r11\n\t"
+        "andq $-64, %r11\n\t"
+        "xsave64 (%r11)\n\t"
+        "1:\n\t"
         "movq %r8, 40(%rdi)\n\t"
         "movq %r9, 48(%rdi)\n\t"
         "movq %r10, 56(%rdi)\n\t"
-        "movq %r11, 64(%rdi)\n\t"
         "movq %r12, 72(%rdi)\n\t"
         "movq %r13, 80(%rdi)\n\t"
         "movq %r14, 88(%rdi)\n\t"
@@ -355,7 +524,6 @@ rin_ucontext_amd64_capture(ucontext_t* context __attribute__((unused))) {
         "movq %rsi, 112(%rdi)\n\t"
         "movq %rbp, 120(%rdi)\n\t"
         "movq %rbx, 128(%rdi)\n\t"
-        "movq %rdx, 136(%rdi)\n\t"
         "movq %rcx, 152(%rdi)\n\t"
         "leaq 8(%rsp), %rax\n\t"
         "movq %rax, 160(%rdi)\n\t"
@@ -375,8 +543,18 @@ rin_ucontext_amd64_restore(const ucontext_t* context __attribute__((unused))) {
 #if defined(_WIN64)
     __asm__(
         "movq %rcx, %rdi\n\t"
+        "cmpl $2, 772(%rdi)\n\t"
+        "jne 1f\n\t"
+        "movl 784(%rdi), %eax\n\t"
+        "movl 788(%rdi), %edx\n\t"
+        "leaq 855(%rdi), %r11\n\t"
+        "andq $-64, %r11\n\t"
+        "xrstor64 (%r11)\n\t"
+        "jmp 2f\n\t"
+        "1:\n\t"
         "movq 224(%rdi), %rax\n\t"
         "fxrstor (%rax)\n\t"
+        "2:\n\t"
         "movq 160(%rdi), %r11\n\t"
         "subq $8, %r11\n\t"
         "movq 168(%rdi), %rax\n\t"
@@ -405,8 +583,18 @@ rin_ucontext_amd64_restore(const ucontext_t* context __attribute__((unused))) {
         "ret\n\t");
 #else
     __asm__(
+        "cmpl $2, 772(%rdi)\n\t"
+        "jne 1f\n\t"
+        "movl 784(%rdi), %eax\n\t"
+        "movl 788(%rdi), %edx\n\t"
+        "leaq 855(%rdi), %r11\n\t"
+        "andq $-64, %r11\n\t"
+        "xrstor64 (%r11)\n\t"
+        "jmp 2f\n\t"
+        "1:\n\t"
         "movq 224(%rdi), %rax\n\t"
         "fxrstor (%rax)\n\t"
+        "2:\n\t"
         "movq 160(%rdi), %r11\n\t"
         "subq $8, %r11\n\t"
         "movq 168(%rdi), %rax\n\t"
@@ -449,6 +637,7 @@ getcontext(ucontext_t* context) {
     context->uc_mcontext.fpregs = &context->__fpregs_mem;
     context->uc_mcontext.oldmask = 0u;
     context->uc_mcontext.cr2 = 0u;
+    if (!rin_ucontext_amd64_xstate_prepare(context)) return -1;
     if (rin_ucontext_sigmask(NULL, &context->uc_sigmask) != 0)
         return -1;
     return rin_ucontext_amd64_capture(context);
