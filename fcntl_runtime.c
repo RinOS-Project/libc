@@ -3,7 +3,9 @@
 #define RIN_MMAN_POSIX_ADVISE_RUNTIME_IMPLEMENTATION 1
 #include "fcntl.h"
 #include "sys/mman.h"
+#include "sys/syscall.h"
 #include "unistd.h"
+#include <rin/ipc.h>
 
 int _fcntl_fd_flags[_FCNTL_MAX_FDS];
 int _fcntl_fl_flags[_FCNTL_MAX_FDS];
@@ -34,19 +36,44 @@ int posix_madvise(void* addr, size_t length, int advice) {
     return error;
 }
 
+static int rin_shm_name_snapshot(const char* name, char* destination,
+                                 size_t capacity) {
+    RinSdkArgsV1 request = {0};
+    intptr_t result;
+    if (!name || !destination || capacity == 0u || capacity > UINT32_MAX) {
+        errno = name && destination ? EINVAL : EFAULT;
+        return -1;
+    }
+    request.struct_size = sizeof(request);
+    request.version = RIN_SDK_STRUCT_VERSION_1;
+    request.value[0] = (uint64_t)(uintptr_t)name;
+    request.value[1] = (uint64_t)capacity;
+    request.value[2] = 1u;
+    result = __RIN_SYSCALL_7(
+        SYS_SDK_CALL, (uintptr_t)&request, (uintptr_t)sizeof(request),
+        RIN_SDK_LIBRARY_IPC, 28u, (uintptr_t)destination,
+        (uintptr_t)capacity);
+    if (result == RIN_SUCCESS) return 0;
+    if (result == RIN_ERROR_INVALID_ADDRESS) errno = EFAULT;
+    else if (result == RIN_ERROR_LIMIT_EXCEEDED) errno = ENAMETOOLONG;
+    else if (result == RIN_ERROR_INVALID_ARGUMENT) errno = EINVAL;
+    else if (result == RIN_ERROR_NOT_SUPPORTED) errno = ENOSYS;
+    else errno = EIO;
+    return -1;
+}
+
 static int rin_shm_name_path(const char* name,
                              char path[sizeof("/dev/shm/") + NAME_MAX]) {
     static const char prefix[] = "/dev/shm/";
     char name_copy[NAME_MAX + 2u];
     size_t length = 0u;
-    if (!name || name[0] != '/' || name[1] == '\0') {
-        errno = EINVAL;
+    if (!name) {
+        errno = EFAULT;
         return -1;
     }
-    /* Single bounded pass over caller memory: every check and the
-     * path build below observe the stable copy. */
-    while (length <= NAME_MAX + 1u) {
-        name_copy[length] = name[length];
+    if (rin_shm_name_snapshot(name, name_copy, sizeof(name_copy)) != 0)
+        return -1;
+    while (length < sizeof(name_copy)) {
         if (name_copy[length] == '\0') break;
         ++length;
     }

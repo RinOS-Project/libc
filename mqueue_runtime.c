@@ -30,7 +30,8 @@ enum {
     RIN_LIBC_SDK_IPC_POSIX_MQ_WAIT_RECEIVE_BEGIN = 22u,
     RIN_LIBC_SDK_IPC_POSIX_MQ_WAIT_RECEIVE_END = 23u,
     RIN_LIBC_SDK_IPC_EVENT_QUERY = 24u,
-    RIN_LIBC_SDK_IPC_POSIX_MQ_TIMEOUT_SNAPSHOT = 25u
+    RIN_LIBC_SDK_IPC_POSIX_MQ_TIMEOUT_SNAPSHOT = 25u,
+    RIN_LIBC_SDK_IPC_POSIX_MQ_USER_SNAPSHOT = 28u
 };
 
 typedef struct RinLibcMqNotifySlot {
@@ -95,7 +96,9 @@ static int mq_error_from_result(int32_t result, uint32_t operation,
     case RIN_ERROR_OVERFLOW: errno = EOVERFLOW; break;
     case RIN_ERROR_LIMIT_EXCEEDED:
         errno = operation == RIN_LIBC_SDK_IPC_POSIX_MQ_OPEN
-                    ? ENOSPC : EOVERFLOW;
+                    ? ENOSPC
+                    : operation == RIN_LIBC_SDK_IPC_POSIX_MQ_USER_SNAPSHOT
+                          ? ENAMETOOLONG : EOVERFLOW;
         break;
     case RIN_ERROR_INVALID_ADDRESS: errno = EFAULT; break;
     case RIN_ERROR_EXISTS: errno = EEXIST; break;
@@ -107,21 +110,45 @@ static int mq_error_from_result(int32_t result, uint32_t operation,
     return -1;
 }
 
-static int mq_name_slice(const char* name, RinStringV1* slice)
+static int mq_user_snapshot(const void* source, size_t size, int string_mode,
+                            void* destination)
+{
+    RinSdkArgsV1 request;
+    if (!source || !destination || size == 0u || size > UINT32_MAX) {
+        errno = source && destination ? EINVAL : EFAULT;
+        return -1;
+    }
+    mq_sdk_request_init(&request);
+    request.value[0] = (uint64_t)(uintptr_t)source;
+    request.value[1] = (uint64_t)size;
+    request.value[2] = string_mode ? 1u : 0u;
+    return mq_error_from_result(
+        mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
+                        RIN_LIBC_SDK_IPC_POSIX_MQ_USER_SNAPSHOT,
+                        &request, destination, (uint32_t)size),
+        RIN_LIBC_SDK_IPC_POSIX_MQ_USER_SNAPSHOT, 0);
+}
+
+static int mq_name_snapshot(const char* name,
+                            char buffer[RIN_POSIX_MQ_NAME_MAX + 1u],
+                            RinStringV1* slice)
 {
     size_t length;
-    if (!name || !slice) {
+    if (!name || !buffer || !slice) {
         errno = EFAULT;
         return -1;
     }
+    if (mq_user_snapshot(name, RIN_POSIX_MQ_NAME_MAX + 1u, 1,
+                         buffer) != 0)
+        return -1;
     for (length = 0u; length <= RIN_POSIX_MQ_NAME_MAX; ++length) {
-        if (name[length] == '\0') break;
+        if (buffer[length] == '\0') break;
     }
     if (length < 2u || length > RIN_POSIX_MQ_NAME_MAX) {
         errno = length > RIN_POSIX_MQ_NAME_MAX ? ENAMETOOLONG : EINVAL;
         return -1;
     }
-    slice->address = (uint64_t)(uintptr_t)name;
+    slice->address = (uint64_t)(uintptr_t)buffer;
     slice->size = (uint64_t)length;
     return 0;
 }
@@ -222,22 +249,27 @@ static int32_t mq_receive_once(mqd_t queue, char* message, size_t capacity,
 
 static int mq_realtime_ns(const struct timespec* absolute, uint64_t* ns_out)
 {
+    struct timespec deadline_copy;
     if (!absolute || !ns_out) return -1;
-    if (absolute->tv_nsec < 0 || absolute->tv_nsec >= 1000000000L) {
+    if (mq_user_snapshot(absolute, sizeof(deadline_copy), 0,
+                         &deadline_copy) != 0)
+        return -1;
+    if (deadline_copy.tv_nsec < 0 || deadline_copy.tv_nsec >= 1000000000L) {
         errno = EINVAL;
         return -1;
     }
-    if (absolute->tv_sec < 0) {
+    if (deadline_copy.tv_sec < 0) {
         *ns_out = 0u;
         return 0;
     }
-    if ((uint64_t)absolute->tv_sec >
-        (UINT64_MAX - (uint64_t)absolute->tv_nsec) / UINT64_C(1000000000)) {
+    if ((uint64_t)deadline_copy.tv_sec >
+        (UINT64_MAX - (uint64_t)deadline_copy.tv_nsec) /
+            UINT64_C(1000000000)) {
         errno = EOVERFLOW;
         return -1;
     }
-    *ns_out = (uint64_t)absolute->tv_sec * UINT64_C(1000000000) +
-              (uint64_t)absolute->tv_nsec;
+    *ns_out = (uint64_t)deadline_copy.tv_sec * UINT64_C(1000000000) +
+              (uint64_t)deadline_copy.tv_nsec;
     return 0;
 }
 
@@ -596,6 +628,7 @@ static void* mq_notify_worker(void* argument)
 mqd_t mq_open(const char* name, int oflag, ...)
 {
     RinStringV1 name_string;
+    char name_copy[RIN_POSIX_MQ_NAME_MAX + 1u];
     RinPosixMqAttrV1 wire_attributes;
     RinObjectHandle queue = RIN_OBJECT_HANDLE_INVALID;
     RinSdkArgsV1 request;
@@ -604,7 +637,8 @@ mqd_t mq_open(const char* name, int oflag, ...)
     uint32_t flags;
     int allowed_flags = O_ACCMODE | O_CREAT | O_EXCL | O_NONBLOCK | O_CLOEXEC;
     int32_t result;
-    if (mq_name_slice(name, &name_string) != 0) return (mqd_t)-1;
+    if (mq_name_snapshot(name, name_copy, &name_string) != 0)
+        return (mqd_t)-1;
     if ((oflag & ~allowed_flags) != 0) {
         errno = EINVAL;
         return (mqd_t)-1;
@@ -638,11 +672,15 @@ mqd_t mq_open(const char* name, int oflag, ...)
     request.value[2] = flags;
     request.value[3] = mode;
     if (attributes && (oflag & O_CREAT) != 0) {
+        struct mq_attr attr_copy;
+        if (mq_user_snapshot(attributes, sizeof(attr_copy), 0,
+                             &attr_copy) != 0)
+            return (mqd_t)-1;
         wire_attributes.struct_size = sizeof(wire_attributes);
         wire_attributes.version = RIN_POSIX_MQ_ABI_VERSION;
         wire_attributes.mq_flags = 0u;
-        wire_attributes.mq_maxmsg = (uint64_t)attributes->mq_maxmsg;
-        wire_attributes.mq_msgsize = (uint64_t)attributes->mq_msgsize;
+        wire_attributes.mq_maxmsg = (uint64_t)attr_copy.mq_maxmsg;
+        wire_attributes.mq_msgsize = (uint64_t)attr_copy.mq_msgsize;
         wire_attributes.mq_curmsgs = 0u;
         wire_attributes.reserved[0] = 0u;
         wire_attributes.reserved[1] = 0u;
@@ -673,9 +711,10 @@ int mq_close(mqd_t mqdes)
 int mq_unlink(const char* name)
 {
     RinStringV1 name_string;
+    char name_copy[RIN_POSIX_MQ_NAME_MAX + 1u];
     RinSdkArgsV1 request;
     int32_t result;
-    if (mq_name_slice(name, &name_string) != 0) return -1;
+    if (mq_name_snapshot(name, name_copy, &name_string) != 0) return -1;
     mq_sdk_request_init(&request);
     request.value[0] = name_string.address;
     request.value[1] = name_string.size;
@@ -707,18 +746,21 @@ int mq_setattr(mqd_t mqdes, const struct mq_attr* newattr,
 {
     RinPosixMqAttrV1 requested;
     RinPosixMqAttrV1 previous;
+    struct mq_attr attr_copy;
     int32_t result;
     if (!newattr) {
         errno = EFAULT;
         return -1;
     }
-    if ((newattr->mq_flags & ~O_NONBLOCK) != 0) {
+    if (mq_user_snapshot(newattr, sizeof(attr_copy), 0, &attr_copy) != 0)
+        return -1;
+    if ((attr_copy.mq_flags & ~O_NONBLOCK) != 0) {
         errno = EINVAL;
         return -1;
     }
     requested.struct_size = sizeof(requested);
     requested.version = RIN_POSIX_MQ_ABI_VERSION;
-    requested.mq_flags = (newattr->mq_flags & O_NONBLOCK)
+    requested.mq_flags = (attr_copy.mq_flags & O_NONBLOCK)
                              ? RIN_POSIX_MQ_ATTR_NONBLOCK : 0u;
     requested.mq_maxmsg = 0u;
     requested.mq_msgsize = 0u;
@@ -780,6 +822,9 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
 {
     RinLibcMqNotifySlot* slot = NULL;
     RinEvent event = RIN_OBJECT_HANDLE_INVALID;
+    struct sigevent event_copy;
+    pthread_attr_t attr_copy;
+    int has_thread_attributes = 0;
     uint32_t action;
     int32_t result;
     if (!notification) {
@@ -792,33 +837,45 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
             return -1;
         return 0;
     }
+    /* Single snapshot: every field below comes from the copy, so a
+     * concurrent caller-side modification cannot mix generations. */
+    if (mq_user_snapshot(notification, sizeof(event_copy), 0,
+                         &event_copy) != 0)
+        return -1;
+    if (event_copy.sigev_notify == SIGEV_THREAD &&
+        event_copy.sigev_notify_attributes) {
+        if (mq_user_snapshot(event_copy.sigev_notify_attributes,
+                             sizeof(attr_copy), 0, &attr_copy) != 0)
+            return -1;
+        has_thread_attributes = 1;
+    }
 
-    if (notification->sigev_notify == SIGEV_NONE)
+    if (event_copy.sigev_notify == SIGEV_NONE)
         action = RIN_POSIX_MQ_NOTIFY_NONE;
-    else if (notification->sigev_notify == SIGEV_SIGNAL) {
-        if (notification->sigev_signo <= 0 ||
-            notification->sigev_signo >= NSIG ||
-            notification->sigev_signo == __RIN_SIGCANCEL ||
-            notification->sigev_signo == SIGKILL ||
-            notification->sigev_signo == SIGSTOP) {
+    else if (event_copy.sigev_notify == SIGEV_SIGNAL) {
+        if (event_copy.sigev_signo <= 0 ||
+            event_copy.sigev_signo >= NSIG ||
+            event_copy.sigev_signo == __RIN_SIGCANCEL ||
+            event_copy.sigev_signo == SIGKILL ||
+            event_copy.sigev_signo == SIGSTOP) {
             errno = EINVAL;
             return -1;
         }
         {
             uint64_t signal_value = 0u;
-            const size_t value_size = sizeof(notification->sigev_value) <
+            const size_t value_size = sizeof(event_copy.sigev_value) <
                                               sizeof(signal_value)
-                                          ? sizeof(notification->sigev_value)
+                                          ? sizeof(event_copy.sigev_value)
                                           : sizeof(signal_value);
-            memcpy(&signal_value, &notification->sigev_value, value_size);
+            memcpy(&signal_value, &event_copy.sigev_value, value_size);
             return mq_error_from_result(
                 mq_notify_call(mqdes,
-                               (RinEvent)(uint32_t)notification->sigev_signo,
+                               (RinEvent)(uint32_t)event_copy.sigev_signo,
                                RIN_POSIX_MQ_NOTIFY_SIGNAL, signal_value),
                 RIN_LIBC_SDK_IPC_POSIX_MQ_NOTIFY, 0);
         }
-    } else if (notification->sigev_notify == SIGEV_THREAD) {
-        if (!notification->sigev_notify_function) {
+    } else if (event_copy.sigev_notify == SIGEV_THREAD) {
+        if (!event_copy.sigev_notify_function) {
             errno = EINVAL;
             return -1;
         }
@@ -843,19 +900,20 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
         return mq_error_from_result(result,
                                     RIN_LIBC_SDK_IPC_EVENT_CREATE, 0);
     }
-    slot->notification = (uint32_t)notification->sigev_notify;
+    slot->notification = (uint32_t)event_copy.sigev_notify;
     slot->queue = mqdes;
     slot->event = event;
-    slot->function = notification->sigev_notify_function;
-    slot->value = notification->sigev_value;
+    slot->function = event_copy.sigev_notify_function;
+    slot->value = event_copy.sigev_value;
     slot->sequence = __atomic_add_fetch(&g_mq_notify_sequence, 1u,
                                         __ATOMIC_RELAXED);
     {
         pthread_t thread;
-        const int thread_result = pthread_create(
-            &thread,
-            (const pthread_attr_t*)notification->sigev_notify_attributes,
-            mq_notify_worker, slot);
+        const pthread_attr_t* thread_attributes = NULL;
+        int thread_result;
+        if (has_thread_attributes) thread_attributes = &attr_copy;
+        thread_result = pthread_create(&thread, thread_attributes,
+                                       mq_notify_worker, slot);
         if (thread_result != 0) {
             (void)mq_close_handle(event);
             slot->event = RIN_OBJECT_HANDLE_INVALID;
