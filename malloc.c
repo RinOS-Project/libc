@@ -33,17 +33,6 @@ void free(void* ptr) {
     rin_free(ptr);  /* rin_free は NULL チェック済み */
 }
 
-void free_sized(void* ptr, size_t size) {
-    (void)size;
-    free(ptr);
-}
-
-void free_aligned_sized(void* ptr, size_t alignment, size_t size) {
-    (void)alignment;
-    (void)size;
-    free(ptr);
-}
-
 void* calloc(size_t nmemb, size_t size) {
     if (nmemb == 0 || size == 0) return 0;
     if (nmemb > ((size_t)-1) / size) {
@@ -121,14 +110,6 @@ void* realloc(void* ptr, size_t size) {
     void* replacement = rin_realloc(ptr, size);
     if (!replacement) errno = ENOMEM;
     return replacement;
-}
-
-void* reallocarray(void* ptr, size_t nmemb, size_t size) {
-    if (size != 0 && nmemb > SIZE_MAX / size) {
-        errno = ENOMEM;
-        return 0;
-    }
-    return realloc(ptr, nmemb * size);
 }
 
 size_t malloc_usable_size(void* ptr) {

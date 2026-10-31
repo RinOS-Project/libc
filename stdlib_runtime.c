@@ -101,10 +101,6 @@ void* aligned_alloc(size_t alignment, size_t size) {
     return _rin_aligned_alloc_internal(alignment, size, 1);
 }
 
-void* memalign(size_t alignment, size_t size) {
-    return _rin_aligned_alloc_internal(alignment, size, 0);
-}
-
 int posix_memalign(void** memptr, size_t alignment, size_t size) {
     void* ptr;
     int saved_errno;
