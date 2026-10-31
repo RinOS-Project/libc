@@ -11,6 +11,7 @@
 #include "stdint.h"
 #include "stdarg.h"
 #include "limits.h"
+#include "internal/posix_capabilities.h"
 #include "internal/posix_clock.h"
 #include "errno.h"
 #include "sys/types.h"
@@ -46,93 +47,6 @@
 #error "ARG_MAX must match the public exec argument/environment byte limit"
 #endif
 #include <rin/process/memory_abi.h>
-
-/* The kernel preserves saved UID/GID values per process. */
-#ifndef _POSIX_SAVED_IDS
-#define _POSIX_SAVED_IDS 1
-#endif
-#ifndef _POSIX_JOB_CONTROL
-#define _POSIX_JOB_CONTROL 1
-#endif
-#ifndef _POSIX_ADVISORY_INFO
-#define _POSIX_ADVISORY_INFO 200809L
-#endif
-#if defined(RIN_USERSPACE) && !defined(_POSIX_MESSAGE_PASSING)
-#define _POSIX_MESSAGE_PASSING 200809L
-#endif
-#ifndef _POSIX_MEMLOCK
-#define _POSIX_MEMLOCK 200809L
-#endif
-#ifndef _POSIX_MEMLOCK_RANGE
-#define _POSIX_MEMLOCK_RANGE 200809L
-#endif
-#ifndef _POSIX_MEMORY_PROTECTION
-#define _POSIX_MEMORY_PROTECTION 200809L
-#endif
-#ifndef _POSIX_IPV6
-#define _POSIX_IPV6 200809L
-#endif
-#ifndef _POSIX_MAPPED_FILES
-#define _POSIX_MAPPED_FILES 200809L
-#endif
-#if defined(RIN_USERSPACE) && !defined(_POSIX_SHARED_MEMORY_OBJECTS)
-#define _POSIX_SHARED_MEMORY_OBJECTS 200809L
-#endif
-#ifndef _POSIX_FSYNC
-#define _POSIX_FSYNC 200809L
-#endif
-#ifndef _POSIX_SYNCHRONIZED_IO
-#define _POSIX_SYNCHRONIZED_IO 200809L
-#endif
-
-/* Asynchronous I/O is provided by the user-space libc AIO runtime. */
-#if defined(RIN_USERSPACE) && !defined(_POSIX_ASYNCHRONOUS_IO)
-#define _POSIX_ASYNCHRONOUS_IO 200809L
-#endif
-#ifndef _POSIX_CLOCK_SELECTION
-#define _POSIX_CLOCK_SELECTION 200809L
-#endif
-#ifndef _POSIX_MONOTONIC_CLOCK
-#define _POSIX_MONOTONIC_CLOCK 200809L
-#endif
-#ifndef _POSIX_THREADS
-#define _POSIX_THREADS 200809L
-#endif
-/* The complete timed API set is provided by the user-space libc runtime. */
-#if defined(RIN_USERSPACE) && !defined(_POSIX_TIMEOUTS)
-#define _POSIX_TIMEOUTS 200809L
-#endif
-#ifndef _POSIX_READER_WRITER_LOCKS
-#define _POSIX_READER_WRITER_LOCKS 200809L
-#endif
-#if defined(RIN_USERSPACE) && \
-    (defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || \
-     defined(_M_X64))
-#ifndef _POSIX_SPIN_LOCKS
-#define _POSIX_SPIN_LOCKS 200809L
-#endif
-#endif
-#if defined(RIN_USERSPACE) && !defined(_POSIX_THREAD_SAFE_FUNCTIONS)
-#define _POSIX_THREAD_SAFE_FUNCTIONS 200809L
-#endif
-#ifndef _POSIX_THREAD_ATTR_STACKSIZE
-#define _POSIX_THREAD_ATTR_STACKSIZE 200809L
-#endif
-#ifndef _POSIX_THREAD_ROBUST_PRIO_INHERIT
-#define _POSIX_THREAD_ROBUST_PRIO_INHERIT 200809L
-#endif
-#if (defined(__x86_64__) || defined(_M_X64)) && \
-    (!defined(RIN_FREESTANDING) || defined(RIN_USERSPACE))
-#ifndef _POSIX_THREAD_PROCESS_SHARED
-#define _POSIX_THREAD_PROCESS_SHARED 200809L
-#endif
-#endif
-#if defined(RIN_USERSPACE) && !defined(_POSIX_BARRIERS)
-#define _POSIX_BARRIERS 200809L
-#endif
-#if defined(RIN_USERSPACE) && !defined(_POSIX_SPAWN)
-#define _POSIX_SPAWN 200809L
-#endif
 
 /* Preserve caller-provided syscall hooks before installing defaults.  A
  * hosted unit that supplies a hook is intentionally asking for the Rin
@@ -2072,7 +1986,7 @@ static inline long sysconf(int name) {
              * fit in ttyname()'s 16-byte TLS buffer. */
             return TTY_NAME_MAX;
         case _SC_VERSION:
-            return 200809L;
+            return RIN_POSIX_VERSION_VALUE;
         case _SC_NPROCESSORS_CONF: {
             intptr_t count = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(
                 SYS_GETCPU_COUNT));
@@ -2126,36 +2040,29 @@ static inline long sysconf(int name) {
         case _SC_JOB_CONTROL:
             /* Process groups, sessions, controlling TTY ownership and the
              * signal paths used for job control are kernel-owned. */
-            return 1;
+            return RIN_POSIX_CAP_JOB_CONTROL;
         case _SC_SAVED_IDS:
-            return 1;
-#if defined(RIN_USERSPACE)
+            return RIN_POSIX_CAP_SAVED_IDS;
         case _SC_MESSAGE_PASSING:
-            return _POSIX_MESSAGE_PASSING;
-#else
-        case _SC_MESSAGE_PASSING:
-            return -1;
-#endif
+            return RIN_POSIX_CAP_MESSAGE_PASSING;
         case _SC_ADVISORY_INFO:
-            return _POSIX_ADVISORY_INFO;
+            return RIN_POSIX_CAP_ADVISORY_INFO;
         case _SC_MQ_OPEN_MAX:
             return MQ_OPEN_MAX;
         case _SC_MQ_PRIO_MAX:
             return MQ_PRIO_MAX;
         case _SC_MEMLOCK:
-            return _POSIX_MEMLOCK;
-#if defined(RIN_USERSPACE)
+            return RIN_POSIX_CAP_MEMLOCK;
         case _SC_ASYNCHRONOUS_IO:
-            return _POSIX_ASYNCHRONOUS_IO;
-#else
-        case _SC_ASYNCHRONOUS_IO:
+            return RIN_POSIX_CAP_ASYNCHRONOUS_IO;
+#if !defined(RIN_USERSPACE)
         case _SC_AIO_LISTIO_MAX:
         case _SC_AIO_MAX:
         case _SC_AIO_PRIO_DELTA_MAX:
             return -1;
 #endif
         case _SC_IPV6:
-            return _POSIX_IPV6;
+            return RIN_POSIX_CAP_IPV6;
 #if defined(RIN_USERSPACE)
         case _SC_AIO_LISTIO_MAX:
             return AIO_LISTIO_MAX;
@@ -2192,30 +2099,21 @@ static inline long sysconf(int name) {
         case _SC_THREAD_STACK_MIN:
             return PTHREAD_STACK_MIN;
         case _SC_THREAD_ATTR_STACKSIZE:
-            return _POSIX_THREAD_ATTR_STACKSIZE;
-#if (defined(__x86_64__) || defined(_M_X64)) && \
-    (!defined(RIN_FREESTANDING) || defined(RIN_USERSPACE))
+            return RIN_POSIX_CAP_THREAD_ATTR_STACKSIZE;
         case _SC_THREAD_PROCESS_SHARED:
-            return 200809L;
-#endif
-#if defined(RIN_USERSPACE)
+            return RIN_POSIX_CAP_THREAD_PROCESS_SHARED;
         case _SC_THREAD_SAFE_FUNCTIONS:
-            return _POSIX_THREAD_SAFE_FUNCTIONS;
-#endif
-#ifdef _POSIX_SPIN_LOCKS
+            return RIN_POSIX_CAP_THREAD_SAFE_FUNCTIONS;
         case _SC_SPIN_LOCKS:
-            return _POSIX_SPIN_LOCKS;
-#endif
+            return RIN_POSIX_CAP_SPIN_LOCKS;
         case _SC_THREADS:
+            return RIN_POSIX_CAP_THREADS;
         case _SC_READER_WRITER_LOCKS:
-#if defined(RIN_USERSPACE)
+            return RIN_POSIX_CAP_READER_WRITER_LOCKS;
         case _SC_BARRIERS:
-#endif
-            return 200809L;
-#if defined(RIN_USERSPACE)
+            return RIN_POSIX_CAP_BARRIERS;
         case _SC_SPAWN:
-            return 200809L;
-#endif
+            return RIN_POSIX_CAP_SPAWN;
         case _SC_IOV_MAX:
             return IOV_MAX;
 #if !defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
@@ -2268,27 +2166,13 @@ static inline long sysconf(int name) {
         case _SC_GETPW_R_SIZE_MAX:
 #endif
         case _SC_SHELL:
-#ifndef _POSIX_SPIN_LOCKS
-        case _SC_SPIN_LOCKS:
-#endif
         case _SC_SPORADIC_SERVER:
         case _SC_SS_REPL_MAX:
-#if !defined(RIN_USERSPACE)
-        case _SC_SPAWN:
-#endif
         case _SC_THREAD_ATTR_STACKADDR:
         case _SC_THREAD_CPUTIME:
         case _SC_THREAD_PRIO_INHERIT:
         case _SC_THREAD_PRIO_PROTECT:
         case _SC_THREAD_PRIORITY_SCHEDULING:
-#if !defined(RIN_USERSPACE)
-        case _SC_BARRIERS:
-        case _SC_THREAD_SAFE_FUNCTIONS:
-#endif
-#if (!defined(__x86_64__) && !defined(_M_X64)) || \
-    (defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE))
-        case _SC_THREAD_PROCESS_SHARED:
-#endif
         case _SC_THREAD_ROBUST_PRIO_PROTECT:
         case _SC_THREAD_SPORADIC_SERVER:
         case _SC_TYPED_MEMORY_OBJECTS:
@@ -2310,29 +2194,25 @@ static inline long sysconf(int name) {
              * unsupported option returns -1 without changing errno. */
             return -1;
         case _SC_THREAD_ROBUST_PRIO_INHERIT:
-            return 200809L;
-#if defined(RIN_USERSPACE)
+            return RIN_POSIX_CAP_THREAD_ROBUST_PRIO_INHERIT;
         case _SC_TIMEOUTS:
-            return 200809L;
-#else
-        case _SC_TIMEOUTS:
-            return -1;
-#endif
+            return RIN_POSIX_CAP_TIMEOUTS;
         case _SC_CLOCK_SELECTION:
+            return RIN_POSIX_CAP_CLOCK_SELECTION;
         case _SC_MONOTONIC_CLOCK:
+            return RIN_POSIX_CAP_MONOTONIC_CLOCK;
         case _SC_SYNCHRONIZED_IO:
+            return RIN_POSIX_CAP_SYNCHRONIZED_IO;
         case _SC_FSYNC:
+            return RIN_POSIX_CAP_FSYNC;
         case _SC_MAPPED_FILES:
-#if defined(RIN_USERSPACE)
+            return RIN_POSIX_CAP_MAPPED_FILES;
         case _SC_SHARED_MEMORY_OBJECTS:
-#endif
+            return RIN_POSIX_CAP_SHARED_MEMORY_OBJECTS;
         case _SC_MEMLOCK_RANGE:
+            return RIN_POSIX_CAP_MEMLOCK_RANGE;
         case _SC_MEMORY_PROTECTION:
-            return 200809L;
-#if !defined(RIN_USERSPACE)
-        case _SC_SHARED_MEMORY_OBJECTS:
-            return -1;
-#endif
+            return RIN_POSIX_CAP_MEMORY_PROTECTION;
         case _SC_SIGQUEUE_MAX: {
             struct rlimit signal_limit;
             const rlim_t queue_capacity = (rlim_t)64u;

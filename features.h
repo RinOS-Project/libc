@@ -14,17 +14,13 @@
 #include_next <features.h>
 #else
 
+#include "internal/posix_capabilities.h"
+
 #ifndef _FEATURES_H
 #define _FEATURES_H
 
 /* RinOS freestanding environment */
 #define __RINOS__ 1
-
-/* POSIX version compatibility (minimal) */
-#define _POSIX_VERSION 200809L
-#if defined(RIN_USERSPACE) && !defined(_POSIX_MESSAGE_PASSING)
-#define _POSIX_MESSAGE_PASSING 200809L
-#endif
 
 /* Keep the explicit GNU request for the individual extension owners that
  * implement a GNU ABI, while leaving the broader GNU namespace disabled. */
