@@ -600,12 +600,25 @@ static int32_t mq_event_wait(RinEvent event, uint64_t* value_out)
     return result == RIN_SUCCESS ? 0 : -1;
 }
 
+static void mq_notify_slot_cleanup(void* argument)
+{
+    RinLibcMqNotifySlot* slot = (RinLibcMqNotifySlot*)argument;
+    if (!slot) return;
+    if (slot->event != RIN_OBJECT_HANDLE_INVALID)
+        (void)mq_close_handle(slot->event);
+    slot->event = RIN_OBJECT_HANDLE_INVALID;
+    slot->function = NULL;
+    slot->value.sival_ptr = NULL;
+    __atomic_store_n(&slot->state, 0u, __ATOMIC_RELEASE);
+}
+
 static void* mq_notify_worker(void* argument)
 {
     RinLibcMqNotifySlot* slot = (RinLibcMqNotifySlot*)argument;
     int wait_result;
     uint64_t event_value = 0u;
     if (!slot) return NULL;
+    pthread_cleanup_push(mq_notify_slot_cleanup, slot);
     wait_result = mq_event_wait(slot->event, &event_value);
     if (wait_result == 0 && event_value != 0u &&
         __atomic_load_n(&slot->state, __ATOMIC_ACQUIRE) == 2u) {
@@ -613,11 +626,7 @@ static void* mq_notify_worker(void* argument)
             if (slot->function) slot->function(slot->value);
         }
     }
-    (void)mq_close_handle(slot->event);
-    slot->event = RIN_OBJECT_HANDLE_INVALID;
-    slot->function = NULL;
-    slot->value.sival_ptr = NULL;
-    __atomic_store_n(&slot->state, 0u, __ATOMIC_RELEASE);
+    pthread_cleanup_pop(1);
     return NULL;
 }
 
