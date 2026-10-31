@@ -5,6 +5,7 @@
 #include "time.h"
 #include "signal.h"
 #include "pthread.h"
+#include "string.h"
 
 #define RIN_TIMER_THREAD_SLOTS 16u
 #define RIN_TIMER_THREAD_JOBS 8u
@@ -15,6 +16,8 @@ typedef struct RinTimerThreadEntry {
     void (*function)(union sigval);
     union sigval value;
     unsigned int generation;
+    pthread_attr_t attributes;
+    int has_attributes;
 } RinTimerThreadEntry;
 typedef struct RinTimerThreadJob {
     volatile sig_atomic_t active;
@@ -23,6 +26,8 @@ typedef struct RinTimerThreadJob {
     unsigned int generation;
     void (*function)(union sigval);
     union sigval value;
+    pthread_attr_t attributes;
+    int has_attributes;
 } RinTimerThreadJob;
 static RinTimerThreadEntry g_entries[RIN_TIMER_THREAD_SLOTS];
 static RinTimerThreadJob g_jobs[RIN_TIMER_THREAD_JOBS];
@@ -79,6 +84,8 @@ typedef struct RinTimerThreadSnapshot {
     void (*function)(union sigval);
     union sigval value;
     unsigned int generation;
+    pthread_attr_t attributes;
+    int has_attributes;
 } RinTimerThreadSnapshot;
 
 static void rin_timer_thread_publish_wake(void);
@@ -102,6 +109,8 @@ static void* rin_timer_thread_job(void* argument) {
         job->timer_id = 0;
         job->slot = 0u;
         job->generation = 0u;
+        memset(&job->attributes, 0, sizeof(job->attributes));
+        job->has_attributes = 0;
         __atomic_store_n(&job->active, 0, __ATOMIC_RELEASE);
         rin_timer_thread_publish_wake();
     }
@@ -179,6 +188,8 @@ static void rin_timer_thread_job_release(RinTimerThreadJob* job) {
     job->timer_id = 0;
     job->slot = 0u;
     job->generation = 0u;
+    memset(&job->attributes, 0, sizeof(job->attributes));
+    job->has_attributes = 0;
     __atomic_store_n(&job->active, 0, __ATOMIC_RELEASE);
 }
 
@@ -200,6 +211,8 @@ static unsigned int rin_timer_thread_launch_pending_jobs(void) {
         snapshot.function = job->function;
         snapshot.value = job->value;
         snapshot.generation = job->generation;
+        snapshot.attributes = job->attributes;
+        snapshot.has_attributes = job->has_attributes;
         if (!rin_timer_thread_snapshot_current(&snapshot)) {
             rin_timer_thread_job_release(job);
             continue;
@@ -208,7 +221,10 @@ static unsigned int rin_timer_thread_launch_pending_jobs(void) {
                                          __ATOMIC_ACQ_REL,
                                          __ATOMIC_ACQUIRE))
             continue;
-        if (pthread_create(&thread, (const pthread_attr_t*)0,
+        if (pthread_create(&thread,
+                           snapshot.has_attributes
+                               ? &job->attributes
+                               : (const pthread_attr_t*)0,
                            rin_timer_thread_job, job) != 0) {
             /* No worker owns the job after a failed create.  Keep the
              * callback and timer generation for the next dispatcher pass. */
@@ -217,7 +233,7 @@ static unsigned int rin_timer_thread_launch_pending_jobs(void) {
         }
         /* A successful create transfers ownership of the job record to the
          * worker even when detach itself fails. */
-        (void)pthread_detach(thread);
+        if (!snapshot.has_attributes) (void)pthread_detach(thread);
         ++dispatched;
     }
     return dispatched;
@@ -247,6 +263,8 @@ static unsigned int rin_timer_thread_dispatch_once(void) {
         snapshots[snapshot_count].function = entry->function;
         snapshots[snapshot_count].value = entry->value;
         snapshots[snapshot_count].generation = entry->generation;
+        snapshots[snapshot_count].attributes = entry->attributes;
+        snapshots[snapshot_count].has_attributes = entry->has_attributes;
         ++snapshot_count;
     }
     rin_timer_thread_unlock();
@@ -279,6 +297,8 @@ static unsigned int rin_timer_thread_dispatch_once(void) {
             job->generation = snapshot->generation;
             job->function = snapshot->function;
             job->value = snapshot->value;
+            job->attributes = snapshot->attributes;
+            job->has_attributes = snapshot->has_attributes;
             dispatched += rin_timer_thread_launch_pending_jobs();
             /* A create failure leaves this consumed notification in its
              * reserved slot.  Do not consume a second event for this timer
@@ -321,11 +341,58 @@ static int rin_timer_thread_start_dispatcher(void) {
     return 0;
 }
 
+static int rin_timer_thread_attributes_snapshot(
+    const void* source, pthread_attr_t* destination, int* has_attributes)
+{
+    int error;
+    if (!destination || !has_attributes) return EINVAL;
+    memset(destination, 0, sizeof(*destination));
+    *has_attributes = 0;
+    if (!source) return 0;
+
+    /* The attr object is caller-owned. Copy it once before storing anything
+     * in the asynchronous timer registry. */
+    memcpy(destination, source, sizeof(*destination));
+    if ((destination->detachstate != PTHREAD_CREATE_JOINABLE &&
+         destination->detachstate != PTHREAD_CREATE_DETACHED) ||
+        destination->stacksize < PTHREAD_STACK_MIN ||
+        destination->stacksize > UINT32_MAX ||
+        destination->guardsize > SIZE_MAX - (size_t)0xfffu ||
+        (destination->stackaddr != NULL &&
+         destination->stacksize >
+             UINTPTR_MAX - (uintptr_t)destination->stackaddr))
+        return EINVAL;
+    if (destination->scope != PTHREAD_SCOPE_SYSTEM)
+        return destination->scope == PTHREAD_SCOPE_PROCESS ? ENOTSUP : EINVAL;
+    if (destination->inheritsched == PTHREAD_EXPLICIT_SCHED) {
+        if (!_rin_pthread_sched_policy_supported(destination->schedpolicy))
+            return destination->schedpolicy == SCHED_DEADLINE
+                ? ENOTSUP : EINVAL;
+        if (!_rin_sched_policy_priority_valid(destination->schedpolicy,
+                                               destination->sched_priority))
+            return EINVAL;
+    } else if (destination->inheritsched != PTHREAD_INHERIT_SCHED) {
+        return EINVAL;
+    }
+    error = pthread_attr_setdetachstate(destination,
+                                         PTHREAD_CREATE_DETACHED);
+    if (error != 0) return error;
+    *has_attributes = 1;
+    return 0;
+}
+
 int rin_timer_thread_register(timer_t timer_id,
                               void (*function)(union sigval),
-                              union sigval value) {
+                              union sigval value,
+                              const void* attributes) {
     struct sigaction action;
-    if (timer_id <= 0 || !function) return -1;
+    pthread_attr_t attr_snapshot;
+    int has_attributes;
+    int attr_error;
+    if (timer_id <= 0 || !function) return EINVAL;
+    attr_error = rin_timer_thread_attributes_snapshot(
+        attributes, &attr_snapshot, &has_attributes);
+    if (attr_error != 0) return attr_error;
     if (!__atomic_load_n(&g_handler_installed, __ATOMIC_ACQUIRE)) {
         action.sa_handler = rin_timer_thread_signal;
         action.sa_mask = 0;
@@ -345,6 +412,8 @@ int rin_timer_thread_register(timer_t timer_id,
         g_entries[i].timer_id = timer_id;
         g_entries[i].function = function;
         g_entries[i].value = value;
+        g_entries[i].attributes = attr_snapshot;
+        g_entries[i].has_attributes = has_attributes;
         ++g_entries[i].generation;
         if (g_entries[i].generation == 0u) g_entries[i].generation = 1u;
         __atomic_store_n(&g_entries[i].active, 1, __ATOMIC_RELEASE);
@@ -364,6 +433,9 @@ void rin_timer_thread_unregister(timer_t timer_id) {
             __atomic_store_n(&g_entries[i].active, 0, __ATOMIC_RELEASE);
             g_entries[i].function = (void (*)(union sigval))0;
             g_entries[i].value.sival_ptr = (void*)0;
+            memset(&g_entries[i].attributes, 0,
+                   sizeof(g_entries[i].attributes));
+            g_entries[i].has_attributes = 0;
             rin_timer_thread_unlock();
             rin_timer_thread_publish_wake();
             return;

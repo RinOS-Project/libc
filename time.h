@@ -303,7 +303,8 @@ struct sigevent {
 #define RIN_TIMER_THREAD_RUNTIME_DECLS 1
 extern int rin_timer_thread_register(timer_t timer_id,
                                      void (*function)(union sigval),
-                                     union sigval value)
+                                     union sigval value,
+                                     const void* attributes)
     __attribute__((weak));
 extern void rin_timer_thread_unregister(timer_t timer_id)
     __attribute__((weak));
@@ -1233,9 +1234,16 @@ static inline int timer_create(clockid_t clock_id,
                                const struct sigevent* event,
                                timer_t* timer_id) {
     RinTimerCreateV1 request;
+    struct sigevent event_snapshot;
+    const struct sigevent* effective_event = (const struct sigevent*)0;
+    void (*thread_function)(union sigval) =
+        (void (*)(union sigval))0;
+    union sigval thread_value;
+    void* thread_attributes = (void*)0;
     intptr_t result;
     int notify = SIGEV_SIGNAL;
     int signo = SIGALRM;
+    thread_value.sival_ptr = (void*)0;
     if (!timer_id) {
         errno = EFAULT;
         return -1;
@@ -1245,17 +1253,24 @@ static inline int timer_create(clockid_t clock_id,
         return -1;
     }
     if (event) {
-        notify = event->sigev_notify;
+        const unsigned char* source = (const unsigned char*)event;
+        unsigned char* destination = (unsigned char*)&event_snapshot;
+        for (size_t index = 0u; index < sizeof(event_snapshot); ++index)
+            destination[index] = source[index];
+        effective_event = &event_snapshot;
+        notify = effective_event->sigev_notify;
         if (notify != SIGEV_SIGNAL && notify != SIGEV_NONE &&
             notify != SIGEV_THREAD) {
             errno = EINVAL;
             return -1;
         }
         if (notify == SIGEV_SIGNAL) {
-            signo = event->sigev_signo;
+            signo = effective_event->sigev_signo;
         } else if (notify == SIGEV_THREAD) {
-            if (!event->sigev_notify_function ||
-                event->sigev_notify_attributes != (void*)0) {
+            thread_function = effective_event->sigev_notify_function;
+            thread_value = effective_event->sigev_value;
+            thread_attributes = effective_event->sigev_notify_attributes;
+            if (!thread_function) {
                 errno = EINVAL;
                 return -1;
             }
@@ -1272,18 +1287,19 @@ static inline int timer_create(clockid_t clock_id,
     }
     request.struct_size = (uint32_t)sizeof(request);
     request.version = (uint16_t)RIN_TIMER_ABI_VERSION;
-    request.flags = event ? 0u : RIN_TIMER_CREATE_FLAG_VALUE_TIMER_ID;
+    request.flags = effective_event
+        ? 0u : RIN_TIMER_CREATE_FLAG_VALUE_TIMER_ID;
     request.clock_id = (int32_t)clock_id;
     request.notify = notify;
     request.signo = (int32_t)signo;
     request.reserved0 = 0;
     request.value = 0u;
-    if (event) {
+    if (effective_event) {
         const unsigned char* source =
-            (const unsigned char*)&event->sigev_value;
+            (const unsigned char*)&effective_event->sigev_value;
         unsigned char* destination = (unsigned char*)&request.value;
         for (size_t index = 0u;
-             index < sizeof(event->sigev_value) &&
+             index < sizeof(effective_event->sigev_value) &&
              index < sizeof(request.value); ++index)
             destination[index] = source[index];
     }
@@ -1297,11 +1313,14 @@ static inline int timer_create(clockid_t clock_id,
     *timer_id = (timer_t)result;
 #if defined(RIN_USERSPACE)
     if (notify == SIGEV_THREAD) {
-        if (!rin_timer_thread_register ||
-            rin_timer_thread_register(*timer_id, event->sigev_notify_function,
-                                      event->sigev_value) != 0) {
+        int registration_error = rin_timer_thread_register
+            ? rin_timer_thread_register(*timer_id, thread_function,
+                                        thread_value, thread_attributes)
+            : EAGAIN;
+        if (registration_error != 0) {
             (void)_RIN_TIME_TIMER_DELETE(*timer_id);
-            errno = EAGAIN;
+            errno = registration_error > 0 && registration_error <= INT_MAX
+                ? registration_error : EAGAIN;
             return -1;
         }
     }
