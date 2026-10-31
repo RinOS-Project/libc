@@ -648,7 +648,6 @@ static inline int sigwait(const sigset_t* set, int* signal_number_out) {
                    ? (int)magnitude : EIO;
     }
     if (result <= 0 || result >= NSIG) return EIO;
-    *signal_number_out = (int)result;
     return 0;
 }
 
