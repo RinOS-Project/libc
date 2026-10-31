@@ -13,9 +13,11 @@
 #undef mkostemps
 #undef mkdtemp
 
+#if !defined(RINSDK_BOOTSTRAP_HAS_MKSTEMP)
 int mkstemp(char* template_name) {
     return __rin_mkstemp_inline(template_name);
 }
+#endif
 
 int mkstemps(char* template_name, int suffix_length) {
     return __rin_mkstemps_inline(template_name, suffix_length);
