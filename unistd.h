@@ -1580,11 +1580,10 @@ static inline ssize_t __rin_unistd_readlink_fd(
 static inline int fexecve(int fd, char* const argv[], char* const envp[]) {
     struct stat file_info;
     char target[4096u + 1u];
-    /* Same procfs-fd resolution as fstatvfs (helper shared from
-     * sys/statvfs.h included above): linked files execute through
-     * their resolved path with full execve validation and hooks.
-     * Unlinked fds and missing procfs surface as ENOENT; true
-     * kernel fd-exec is tracked separately. */
+    /* This path-based fallback is intentionally separate from fstatvfs's
+     * descriptor-pinned usage query. It preserves execve validation and hooks
+     * for linked files, but cannot make execution follow the original FD
+     * across unlink or pathname replacement; kernel fd-exec remains needed. */
     if (fstat(fd, &file_info) != 0) return -1;
     if (!S_ISREG(file_info.st_mode)) {
         errno = EACCES;
