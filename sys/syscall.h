@@ -440,10 +440,12 @@ static inline intptr_t _syscall6(uintptr_t num, uintptr_t a1,
                              uintptr_t a6) {
     intptr_t ret = (intptr_t)num;
     __asm__ volatile (
+        "pushl %6\n\t"
         "pushl %%ebp\n\t"
-        "movl %6, %%ebp\n\t"
+        "movl 4(%%esp), %%ebp\n\t"
         "int $0x80\n\t"
-        "popl %%ebp"
+        "popl %%ebp\n\t"
+        "addl $4, %%esp"
         : "+a"(ret)
         : "b"(a1), "c"(a2), "d"(a3), "S"(a4), "D"(a5), "m"(a6)
         : "memory"
