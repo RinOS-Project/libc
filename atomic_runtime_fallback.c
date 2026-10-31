@@ -3,6 +3,149 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "rin_atomic_wait.h"
+
+#define RIN_ATOMIC_WAIT_BUCKET_COUNT 64u
+
+typedef struct rin_atomic_waiter_v1 {
+    const volatile void *object;
+    size_t size;
+    volatile uint32_t wake_state;
+    struct rin_atomic_waiter_v1 *next;
+} rin_atomic_waiter_v1;
+
+static volatile uint32_t g_rin_atomic_wait_lock;
+static unsigned long long g_rin_atomic_wait_generation;
+static rin_atomic_waiter_v1 *g_rin_atomic_wait_buckets[
+    RIN_ATOMIC_WAIT_BUCKET_COUNT];
+
+static void rin_atomic_wait_lock_acquire(void)
+{
+    while (__atomic_exchange_n(&g_rin_atomic_wait_lock, 1u,
+                               __ATOMIC_ACQUIRE) != 0u) {
+        __asm__ volatile("pause" ::: "memory");
+    }
+}
+
+static void rin_atomic_wait_lock_release(void)
+{
+    __atomic_store_n(&g_rin_atomic_wait_lock, 0u, __ATOMIC_RELEASE);
+}
+
+static size_t rin_atomic_wait_bucket_index(const volatile void *object,
+                                           size_t size)
+{
+    uintptr_t key = (uintptr_t)object;
+    key ^= key >> 11;
+    key ^= (uintptr_t)size * (uintptr_t)0x9e3779b1u;
+    return (size_t)(key & (RIN_ATOMIC_WAIT_BUCKET_COUNT - 1u));
+}
+
+#ifdef RIN_ATOMIC_WAIT_RUNTIME_TEST_HOOKS
+extern int rin_atomic_wait_test_host_wait(volatile uint32_t *address,
+                                          uint32_t expected,
+                                          const struct timespec *timeout);
+extern int rin_atomic_wait_test_host_wake_one(volatile uint32_t *address);
+extern int rin_atomic_wait_test_host_wake_all(volatile uint32_t *address);
+#define RIN_ATOMIC_WAIT_RUNTIME_WAIT(address, expected, timeout) \
+    rin_atomic_wait_test_host_wait((address), (expected), (timeout))
+#define RIN_ATOMIC_WAIT_RUNTIME_WAKE_ONE(address) \
+    rin_atomic_wait_test_host_wake_one((address))
+#define RIN_ATOMIC_WAIT_RUNTIME_WAKE_ALL(address) \
+    rin_atomic_wait_test_host_wake_all((address))
+#else
+#define RIN_ATOMIC_WAIT_RUNTIME_WAIT(address, expected, timeout) \
+    rin_atomic_wait_u32((address), (expected), (timeout))
+#define RIN_ATOMIC_WAIT_RUNTIME_WAKE_ONE(address) \
+    rin_atomic_notify_one_u32((address))
+#define RIN_ATOMIC_WAIT_RUNTIME_WAKE_ALL(address) \
+    rin_atomic_notify_all_u32((address))
+#endif
+
+unsigned long long __rin_atomic_wait_prepare_v1(void)
+{
+    unsigned long long generation;
+    rin_atomic_wait_lock_acquire();
+    generation = g_rin_atomic_wait_generation;
+    rin_atomic_wait_lock_release();
+    return generation;
+}
+
+void __rin_atomic_wait_park_v1(const volatile void *object, size_t size,
+                               unsigned long long generation)
+{
+    const size_t bucket_index = rin_atomic_wait_bucket_index(object, size);
+    rin_atomic_waiter_v1 waiter;
+
+    waiter.object = object;
+    waiter.size = size;
+    waiter.next = NULL;
+    __atomic_store_n(&waiter.wake_state, 0u, __ATOMIC_RELAXED);
+
+    rin_atomic_wait_lock_acquire();
+    if (g_rin_atomic_wait_generation != generation) {
+        rin_atomic_wait_lock_release();
+        return;
+    }
+    waiter.next = g_rin_atomic_wait_buckets[bucket_index];
+    g_rin_atomic_wait_buckets[bucket_index] = &waiter;
+    rin_atomic_wait_lock_release();
+
+    while (__atomic_load_n(&waiter.wake_state, __ATOMIC_ACQUIRE) == 0u) {
+        struct timespec retry_timeout;
+        int wait_result;
+        retry_timeout.tv_sec = 0;
+        retry_timeout.tv_nsec = 100000000L;
+        wait_result = RIN_ATOMIC_WAIT_RUNTIME_WAIT(
+            &waiter.wake_state, 0u, &retry_timeout);
+#ifdef RIN_ATOMIC_WAIT_RUNTIME_TEST_HOOKS
+        (void)wait_result;
+#else
+        if (wait_result != 0 && errno != ETIMEDOUT) {
+            while (__atomic_load_n(&waiter.wake_state,
+                                   __ATOMIC_ACQUIRE) == 0u) {
+                __asm__ volatile("pause" ::: "memory");
+            }
+        }
+#endif
+    }
+
+    rin_atomic_wait_lock_acquire();
+    {
+        rin_atomic_waiter_v1 **link =
+            &g_rin_atomic_wait_buckets[bucket_index];
+        while (*link && *link != &waiter)
+            link = &(*link)->next;
+        if (*link == &waiter)
+            *link = waiter.next;
+    }
+    rin_atomic_wait_lock_release();
+}
+
+void __rin_atomic_notify_v1(const volatile void *object, size_t size,
+                            int notify_all)
+{
+    const size_t bucket_index =
+        rin_atomic_wait_bucket_index(object, size);
+    rin_atomic_waiter_v1 *waiter;
+
+    rin_atomic_wait_lock_acquire();
+    ++g_rin_atomic_wait_generation;
+    for (waiter = g_rin_atomic_wait_buckets[bucket_index]; waiter;
+         waiter = waiter->next) {
+        if (waiter->object != object || waiter->size != size ||
+            __atomic_load_n(&waiter->wake_state, __ATOMIC_RELAXED) != 0u)
+            continue;
+        __atomic_store_n(&waiter->wake_state, 1u, __ATOMIC_RELEASE);
+        if (notify_all)
+            (void)RIN_ATOMIC_WAIT_RUNTIME_WAKE_ALL(&waiter->wake_state);
+        else
+            (void)RIN_ATOMIC_WAIT_RUNTIME_WAKE_ONE(&waiter->wake_state);
+        if (!notify_all)
+            break;
+    }
+    rin_atomic_wait_lock_release();
+}
 
 static volatile uint32_t g_rin_atomic_fallback_lock;
 
