@@ -2761,14 +2761,10 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
         errno = EINVAL;
         return NULL;
     }
+    /* POSIX requires freopen() to attempt a flush, but to ignore a flush
+     * failure and continue closing/reopening the stream. */
+    (void)_rin_stdio_flush_output_buffer(stream);
     if (_rin_stdio_parse_mode(mode, &flags) != 0) {
-        int saved_errno = errno;
-        (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
-        _rin_freopen_discard_stream(stream);
-        errno = saved_errno;
-        return NULL;
-    }
-    if (_rin_stdio_flush_output_buffer(stream) != 0) {
         int saved_errno = errno;
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
         _rin_freopen_discard_stream(stream);
