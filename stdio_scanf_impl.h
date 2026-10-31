@@ -1245,18 +1245,24 @@ static int rin_fscanf_stream_wide_field(
 
 static int rin_fscanf_stream_try_hex_prefix(
         struct RinFscanfStreamInput* input, size_t used, size_t limit,
-        unsigned char* value, int* prefixed_out) {
+        unsigned char* value, int* prefixed_out,
+        int* matching_failure_out) {
     unsigned char prefix;
     unsigned char suffix;
     unsigned int digit;
     int status;
     *prefixed_out = 0;
-    if (*value != '0' || limit - used < 3u) return 0;
+    *matching_failure_out = 0;
+    if (*value != '0' || limit - used < 2u) return 0;
     status = rin_fscanf_stream_read(input, &prefix);
     if (status < 0) return -1;
     if (status == 0) return 0;
     if (prefix != 'x' && prefix != 'X')
         return rin_fscanf_stream_unread(input, prefix);
+    if (limit - used < 3u) {
+        *matching_failure_out = 1;
+        return 0;
+    }
     status = rin_fscanf_stream_read(input, &suffix);
     if (status > 0 && rin_sscanf_digit(suffix, &digit) && digit < 16u) {
         *value = suffix;
@@ -1266,23 +1272,30 @@ static int rin_fscanf_stream_try_hex_prefix(
     if (status < 0) return -1;
     if (status > 0 && rin_fscanf_stream_unread(input, suffix) != 0)
         return -1;
-    return rin_fscanf_stream_unread(input, prefix);
+    *matching_failure_out = 1;
+    return 0;
 }
 
 static int rin_fscanf_stream_try_binary_prefix(
         struct RinFscanfStreamInput* input, size_t used, size_t limit,
-        unsigned char* value, int* prefixed_out) {
+        unsigned char* value, int* prefixed_out,
+        int* matching_failure_out) {
     unsigned char prefix;
     unsigned char suffix;
     unsigned int digit;
     int status;
     *prefixed_out = 0;
-    if (*value != '0' || limit - used < 3u) return 0;
+    *matching_failure_out = 0;
+    if (*value != '0' || limit - used < 2u) return 0;
     status = rin_fscanf_stream_read(input, &prefix);
     if (status < 0) return -1;
     if (status == 0) return 0;
     if (prefix != 'b' && prefix != 'B')
         return rin_fscanf_stream_unread(input, prefix);
+    if (limit - used < 3u) {
+        *matching_failure_out = 1;
+        return 0;
+    }
     status = rin_fscanf_stream_read(input, &suffix);
     if (status > 0 && rin_sscanf_digit(suffix, &digit) && digit < 2u) {
         *value = suffix;
@@ -1292,7 +1305,8 @@ static int rin_fscanf_stream_try_binary_prefix(
     if (status < 0) return -1;
     if (status > 0 && rin_fscanf_stream_unread(input, suffix) != 0)
         return -1;
-    return rin_fscanf_stream_unread(input, prefix);
+    *matching_failure_out = 1;
+    return 0;
 }
 
 static int rin_fscanf_stream_parse_integer(
@@ -1305,6 +1319,7 @@ static int rin_fscanf_stream_parse_integer(
     uint64_t magnitude = 0u;
     int negative = 0;
     int prefixed = 0;
+    int matching_failure = 0;
     int status = rin_fscanf_stream_skip_space(input);
 
     *input_failure_out = 0;
@@ -1332,21 +1347,28 @@ static int rin_fscanf_stream_parse_integer(
             return status < 0 ? -1 : 0;
         }
     }
-    if ((base == 0u || base == 16u) &&
-        rin_fscanf_stream_try_hex_prefix(input, used, limit, &value,
-                                         &prefixed) != 0)
-        return -1;
+    if (base == 0u || base == 16u) {
+        if (rin_fscanf_stream_try_hex_prefix(
+                input, used, limit, &value, &prefixed,
+                &matching_failure) != 0)
+            return -1;
+        if (matching_failure) return 0;
+    }
     if (prefixed) {
         base = 16u;
         used += 2u;
-    } else if ((base == 0u || base == 2u) &&
-               rin_fscanf_stream_try_binary_prefix(
-                   input, used, limit, &value, &prefixed) != 0) {
-        return -1;
-    } else if (prefixed) {
-        base = 2u;
-        used += 2u;
-    } else if (base == 0u) {
+    } else if (base == 0u || base == 2u) {
+        if (rin_fscanf_stream_try_binary_prefix(
+                input, used, limit, &value, &prefixed,
+                &matching_failure) != 0)
+            return -1;
+        if (matching_failure) return 0;
+        if (prefixed) {
+            base = 2u;
+            used += 2u;
+        }
+    }
+    if (!prefixed && base == 0u) {
         base = value == '0' ? 8u : 10u;
     }
     {
