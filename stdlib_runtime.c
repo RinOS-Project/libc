@@ -2,6 +2,7 @@
 /* C++ standard-library bridges to the libc-owned conversion and process APIs. */
 
 #define RIN_STDLIB_NO_INLINE_GETSUBOPT 1
+#define RIN_STDLIB_ALIGNED_ALLOC_RUNTIME_IMPLEMENTATION 1
 /* signal.h first: see the include-order contract in unistd.h.  This unit
  * must compile standalone for the libc build as well as host tests. */
 #include "signal.h"
@@ -11,6 +12,12 @@
 
 #include "fcntl.h"
 #include "unistd.h"
+
+#if defined(RIN_USERSPACE) && RIN_USERSPACE
+char* realpath(const char* path, char* resolved_path) {
+    return _rin_realpath_inline(path, resolved_path);
+}
+#endif
 
 int __rin_stdlib_system_available(void) {
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
@@ -88,6 +95,28 @@ int __rin_system_disposition_unlock(void) { return ENOSYS; }
 
 int getsubopt(char** optionp, char* const* keylistp, char** valuep) {
     return _rin_stdlib_getsubopt_parse(optionp, keylistp, valuep);
+}
+
+void* aligned_alloc(size_t alignment, size_t size) {
+    return _rin_aligned_alloc_internal(alignment, size, 1);
+}
+
+void* memalign(size_t alignment, size_t size) {
+    return _rin_aligned_alloc_internal(alignment, size, 0);
+}
+
+int posix_memalign(void** memptr, size_t alignment, size_t size) {
+    void* ptr;
+    int saved_errno;
+    if (!memptr) return EINVAL;
+    if (alignment < sizeof(void*) || !_rin_is_power_of_two_size(alignment))
+        return EINVAL;
+    saved_errno = errno;
+    ptr = _rin_aligned_alloc_internal(alignment, size, 0);
+    errno = saved_errno;
+    if (!ptr) return ENOMEM;
+    *memptr = ptr;
+    return 0;
 }
 
 double rin_stdlib_strtod(const char* text, char** end) {

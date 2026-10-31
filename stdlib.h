@@ -149,10 +149,35 @@ int __rin_stdlib_system_available(void);
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
 #include "internal/rin_environment_runtime.h"
 #endif
-#if !defined(RINSDK_SPLIT_BUILD) && \
+#if !defined(RINSDK_SPLIT_BUILD) && !defined(RIN_KERNEL) && \
     !defined(_RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER) && \
     !defined(_RIN_STDLIB_HOSTED_C_OWNER) && \
     !defined(_RIN_STDLIB_HOSTED_CXX_OWNER)
+/* The system owner can include unistd.h, which pulls in poll.h and the
+ * freestanding stdio implementation. Publish allocator and temporary-file
+ * declarations before that recursive include path reaches inline bodies. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+#ifndef malloc
+void* malloc(size_t size);
+#endif
+#ifndef realloc
+void* realloc(void* ptr, size_t size);
+#endif
+#ifndef free
+void free(void* ptr);
+#endif
+#ifdef __cplusplus
+}
+#endif
+#ifdef __cplusplus
+extern "C" {
+#endif
+static inline int mkostemp(char* tmpl, int flags);
+#ifdef __cplusplus
+}
+#endif
 #include "internal/rin_system_owner.h"
 #endif
 #endif /* !MIDL_PASS */
@@ -260,11 +285,9 @@ void free_aligned_sized(void* ptr, size_t alignment, size_t size);
 size_t malloc_usable_size(void* ptr);
 #endif
 
-/* The static inline implementation lives in unistd.h.  This userland
- * declaration preserves the POSIX stdlib.h entry point without imposing a
- * function definition requirement on kernel-only consumers of stdlib.h. */
+/* POSIX realpath() is exported by the libc runtime. */
 #if defined(RIN_USERSPACE) && RIN_USERSPACE
-extern char* realpath(const char* path, char* resolved_path);
+char* realpath(const char* path, char* resolved_path);
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1057,6 +1080,14 @@ static inline void* _rin_aligned_alloc_internal(size_t alignment, size_t size,
     return (void*)aligned_addr;
 }
 
+/* Keep inline fallbacks for standalone freestanding consumers.  The userspace
+ * runtime and ABI consumers use these public symbols. */
+#if (defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)) || \
+    defined(RIN_STDLIB_ALIGNED_ALLOC_RUNTIME_IMPLEMENTATION)
+void* aligned_alloc(size_t alignment, size_t size);
+void* memalign(size_t alignment, size_t size);
+int posix_memalign(void** memptr, size_t alignment, size_t size);
+#else
 /* aligned_alloc - C11準拠アラインドメモリ確保 */
 static inline void* aligned_alloc(size_t alignment, size_t size) {
     return _rin_aligned_alloc_internal(alignment, size, 1);
@@ -1083,6 +1114,7 @@ static inline int posix_memalign(void** memptr, size_t alignment, size_t size) {
     *memptr = ptr;
     return 0;
 }
+#endif
 
 /* POSIX string duplication.  A standalone freestanding stdlib.h keeps the
  * inline fallback; userspace and mixed string.h/stdlib.h includes share the
@@ -1531,8 +1563,9 @@ static inline char* mkdtemp(char* tmpl) {
  * execution.  Keep the RinOS system() owner exclusively in freestanding
  * targets, where the shell lifecycle is backed by RinOS syscalls. */
 int system(const char* command);
-#elif defined(RINSDK_SPLIT_BUILD)
-/* SDK libraries are linked independently from libc's process owner. */
+#elif defined(RINSDK_SPLIT_BUILD) || defined(RIN_KERNEL)
+/* SDK libraries and the kernel are linked independently from libc's process
+ * owner. */
 int system(const char* command);
 #else
 static inline int system(const char* command) {
