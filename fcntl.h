@@ -157,14 +157,6 @@ struct f_owner_ex {
  * AT_* フラグ (xxxat系関数用)
  * ═══════════════════════════════════════════════════════════════*/
 
-#define AT_FDCWD            (-100) /* カレントディレクトリ */
-#define AT_SYMLINK_NOFOLLOW 0x100  /* シンボリックリンクを辿らない */
-#define AT_REMOVEDIR        0x200  /* ディレクトリを削除 */
-#define AT_SYMLINK_FOLLOW   0x400  /* シンボリックリンクを辿る */
-#define AT_NO_AUTOMOUNT     0x800  /* 自動マウントしない */
-#define AT_EMPTY_PATH       0x1000 /* 空パスを許可 */
-#define AT_EACCESS          0x200  /* 実効IDでアクセスチェック */
-
 /* ═══════════════════════════════════════════════════════════════
  * ファイルディスクリプタ状態保持 (簡易実装)
  * ═══════════════════════════════════════════════════════════════*/
@@ -177,6 +169,30 @@ struct f_owner_ex {
 /* Syscall results travel in the target-width intptr_t carrier.  Never route
  * a successful descriptor result through host `long`/`int` before checking its
  * range: LLP64 hosts make `long` only 32 bits while a valid Rin descriptor is
+/* Linux fallocate(2) mode flags. Modes that the selected filesystem cannot
+ * perform are reported by the kernel as EOPNOTSUPP. */
+#ifndef FALLOC_FL_KEEP_SIZE
+#define FALLOC_FL_KEEP_SIZE       0x01
+#endif
+#ifndef FALLOC_FL_PUNCH_HOLE
+#define FALLOC_FL_PUNCH_HOLE      0x02
+#endif
+#ifndef FALLOC_FL_NO_HIDE_STALE
+#define FALLOC_FL_NO_HIDE_STALE   0x04
+#endif
+#ifndef FALLOC_FL_COLLAPSE_RANGE
+#define FALLOC_FL_COLLAPSE_RANGE  0x08
+#endif
+#ifndef FALLOC_FL_ZERO_RANGE
+#define FALLOC_FL_ZERO_RANGE      0x10
+#endif
+#ifndef FALLOC_FL_INSERT_RANGE
+#define FALLOC_FL_INSERT_RANGE    0x20
+#endif
+#ifndef FALLOC_FL_UNSHARE_RANGE
+#define FALLOC_FL_UNSHARE_RANGE   0x40
+#endif
+
  * still target-word sized.  Unknown negative values are not POSIX errno
  * encodings and must fail closed instead of becoming a wrapped descriptor. */
 static inline int _fcntl_result_to_int(intptr_t raw_result) {
@@ -656,7 +672,8 @@ static inline int posix_fadvise(int fd, off_t offset, off_t len, int advice) {
     return EIO;
 }
 
-static inline int posix_fallocate(int fd, off_t offset, off_t len) {
+static inline int _rin_fallocate_result(
+    int fd, int mode, off_t offset, off_t len) {
     uint64_t unsigned_offset;
     uint64_t unsigned_length;
     intptr_t result;
@@ -664,13 +681,14 @@ static inline int posix_fallocate(int fd, off_t offset, off_t len) {
     if (offset < 0 || len <= 0) return EINVAL;
     unsigned_offset = (uint64_t)offset;
     unsigned_length = (uint64_t)len;
-    if (unsigned_offset > UINT64_MAX - unsigned_length) return EOVERFLOW;
+    if (unsigned_offset > (uint64_t)INT64_MAX - unsigned_length)
+        return EOVERFLOW;
     result = _RIN_FCNTL_SYSCALL6(
         SYS_FALLOCATE, (uintptr_t)fd,
         (uintptr_t)(uint32_t)unsigned_offset,
         (uintptr_t)(uint32_t)(unsigned_offset >> 32),
         (uintptr_t)(uint32_t)unsigned_length,
-        (uintptr_t)(uint32_t)(unsigned_length >> 32), 0u);
+        (uintptr_t)(uint32_t)(unsigned_length >> 32), (uintptr_t)mode);
     if (result == 0) return 0;
     if (result < 0 && result >= (intptr_t)-4095) return (int)-result;
     return EIO;
@@ -700,6 +718,17 @@ static inline int faccessat(int dirfd, const char* pathname, int mode, int flags
         pathname = ".";
         flags &= ~AT_EMPTY_PATH;
     }
+static inline int fallocate(int fd, int mode, off_t offset, off_t len) {
+    int error = _rin_fallocate_result(fd, mode, offset, len);
+    if (error == 0) return 0;
+    errno = error;
+    return -1;
+}
+
+static inline int posix_fallocate(int fd, off_t offset, off_t len) {
+    return _rin_fallocate_result(fd, 0, offset, len);
+}
+
     _fcntl_path_at_init(&call, RIN_PATH_AT_ACCESS);
     call.dirfd = dirfd;
     call.flags = (uint32_t)(pathname[0] == '\0'
