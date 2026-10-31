@@ -4,6 +4,8 @@
 #include "fcntl.h"
 #include "sys/mman.h"
 #include "sys/syscall.h"
+#include "sys/xattr.h"
+#include <string.h>
 #include "unistd.h"
 #include <rin/ipc.h>
 
@@ -126,6 +128,13 @@ int shm_unlink(const char* name) {
 }
 
 int memfd_create(const char* name, unsigned int flags) {
+    static const char debug_label_xattr[] = "user.rinos.memfd.name";
+    static const char debug_label_prefix[] = "memfd:";
+    char name_snapshot[250];
+    char debug_label[sizeof(debug_label_prefix) + sizeof(name_snapshot)];
+    size_t name_length = 0u;
+    int fd;
+
     if (name == 0) {
         errno = EFAULT;
         return -1;
@@ -134,8 +143,41 @@ int memfd_create(const char* name, unsigned int flags) {
         errno = EINVAL;
         return -1;
     }
-    (void)name;
-    return openat(AT_FDCWD, "/dev/shm", O_TMPFILE | O_RDWR |
-                      ((flags & MFD_CLOEXEC) != 0u ? O_CLOEXEC : 0),
-                  0600);
+    /* Snapshot through the checked-copy IPC operation.  memfd_create must
+     * not dereference the caller's name in libc: an invalid pointer is an
+     * EFAULT result, and concurrent unmap cannot change the label halfway
+     * through file creation. */
+    if (rin_shm_name_snapshot(name, name_snapshot,
+                              sizeof(name_snapshot)) != 0) {
+        if (errno == ENAMETOOLONG) errno = EINVAL;
+        return -1;
+    }
+    while (name_length < sizeof(name_snapshot) &&
+           name_snapshot[name_length] != '\0')
+        ++name_length;
+    if (name_length == sizeof(name_snapshot) || name_length > 249u) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* O_EXCL makes the anonymous inode permanently un-linkable, matching
+     * memfd lifetime semantics even though the current backing is tmpfs. */
+    fd = openat(AT_FDCWD, "/dev/shm", O_TMPFILE | O_EXCL | O_RDWR |
+                    ((flags & MFD_CLOEXEC) != 0u ? O_CLOEXEC : 0),
+                0600);
+    if (fd < 0) return -1;
+
+    memcpy(debug_label, debug_label_prefix, sizeof(debug_label_prefix) - 1u);
+    memcpy(debug_label + sizeof(debug_label_prefix) - 1u,
+           name_snapshot, name_length);
+    debug_label[sizeof(debug_label_prefix) - 1u + name_length] = '\0';
+    if (fsetxattr(fd, debug_label_xattr, debug_label,
+                  sizeof(debug_label_prefix) - 1u + name_length + 1u,
+                  XATTR_CREATE) != 0) {
+        int saved_errno = errno;
+        (void)close(fd);
+        errno = saved_errno;
+        return -1;
+    }
+    return fd;
 }
