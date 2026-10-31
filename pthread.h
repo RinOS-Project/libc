@@ -664,6 +664,8 @@ static inline int pthread_setname_np(pthread_t thread, const char* name) {
  * ═══════════════════════════════════════════════════════════════*/
 
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+static inline pthread_t pthread_self(void);
+
 static inline int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
                                   void* (*start_routine)(void*), void* arg) {
     size_t stack_size = 8u * 1024u * 1024u;
@@ -1221,6 +1223,9 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_condattr_setpshared(pthread_condattr_
     if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
                   pshared != PTHREAD_PROCESS_SHARED))
         return EINVAL;
+#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+    if (pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
+#endif
     attr->pshared = pshared;
     return 0;
 }
@@ -1244,6 +1249,7 @@ static inline int pthread_cond_init(pthread_cond_t* cond, const pthread_condattr
     if (attr && attr->pshared != PTHREAD_PROCESS_PRIVATE &&
         attr->pshared != PTHREAD_PROCESS_SHARED)
         return EINVAL;
+    if (attr && attr->pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
     cond->generation = 0;
     cond->waiting = 0;
     cond->clock_id = (attr ? attr->clock_id : CLOCK_REALTIME);
@@ -1959,19 +1965,24 @@ extern int pthread_setschedprio(pthread_t thread, int prio);
 #else
 _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_setschedprio(pthread_t thread, int prio) {
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
-    int policy = SCHED_OTHER;
-    struct sched_param param;
-    int result = pthread_getschedparam(thread, &policy, &param);
-    if (result != 0) return result;
-    param.sched_priority = prio;
-    return pthread_setschedparam(thread, policy, &param);
+    RinThreadSchedParametersV1 parameters;
+    intptr_t result;
+    if (thread == 0) return ESRCH;
+    parameters.struct_size = (uint32_t)sizeof(parameters);
+    parameters.version = RIN_THREAD_SCHED_ABI_VERSION;
+    parameters.reserved0 = 0u;
+    parameters.policy = RIN_THREAD_SCHED_POLICY_KEEP_CURRENT;
+    parameters.priority = prio;
+    parameters.reserved1 = 0u;
+    result = _RIN_PTHREAD_SCHED_SYSCALL2(
+        (uintptr_t)SYS_THREAD_SCHED_SET, (uintptr_t)thread,
+        (uintptr_t)&parameters);
+    if (result < 0) return _rin_pthread_error_from_result(result);
+    return result == 0 ? 0 : EIO;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    int policy = SCHED_OTHER;
-    int ignored_priority = 0;
-    int result = platform_thread_sched_get((void*)(uintptr_t)thread,
-                                            &policy, &ignored_priority);
-    if (result != 0) return result;
-    return platform_thread_sched_set((void*)(uintptr_t)thread, policy, prio);
+    return platform_thread_sched_set(
+        (void*)(uintptr_t)thread,
+        RIN_THREAD_SCHED_POLICY_KEEP_CURRENT, prio);
 #else
     (void)thread;
     (void)prio;
