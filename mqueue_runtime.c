@@ -37,7 +37,6 @@ enum {
 typedef struct RinLibcMqNotifySlot {
     volatile uint32_t state;
     uint32_t notification;
-    uint64_t sequence;
     mqd_t queue;
     RinEvent event;
     void (*function)(union sigval);
@@ -45,7 +44,6 @@ typedef struct RinLibcMqNotifySlot {
 } RinLibcMqNotifySlot;
 
 static RinLibcMqNotifySlot g_mq_notify_slots[RIN_LIBC_MQ_NOTIFY_SLOTS];
-static volatile uint64_t g_mq_notify_sequence;
 
 static int32_t mq_raw_sdk_call(uint32_t library_id, uint32_t operation,
                               const RinSdkArgsV1* request, void* response,
@@ -905,8 +903,6 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
     slot->event = event;
     slot->function = event_copy.sigev_notify_function;
     slot->value = event_copy.sigev_value;
-    slot->sequence = __atomic_add_fetch(&g_mq_notify_sequence, 1u,
-                                        __ATOMIC_RELAXED);
     {
         pthread_t thread;
         const pthread_attr_t* thread_attributes = NULL;
