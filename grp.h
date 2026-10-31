@@ -12,6 +12,7 @@
 #include "sys/types.h"
 #include "errno.h"
 #include "rin_account_compat.h"
+#include "rin_account_enum.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,6 +46,7 @@ typedef struct __rin_group_runtime_state_v1 {
         void* align;
     } storage;
     uint32_t cursor;
+    uint32_t cursor_started;
 } __rin_group_runtime_state_v1;
 
 extern RIN_GROUP_THREAD_LOCAL __rin_group_runtime_state_v1
@@ -157,20 +159,23 @@ static inline struct group* getgrgid(gid_t gid) {
 /* setgrent - グループファイルを先頭に巻き戻す */
 static inline void setgrent(void) {
     __rin_group_runtime_state.cursor = 0u;
+    __rin_group_runtime_state.cursor_started = 0u;
 }
 
 /* endgrent - グループファイルを閉じる */
 static inline void endgrent(void) {
     __rin_group_runtime_state.cursor = 0u;
+    __rin_group_runtime_state.cursor_started = 0u;
 }
 
 /* getgrent - 次のエントリを取得 */
 static inline struct group* getgrent(void) {
     __rin_account_info_v1 info;
     struct group* result = NULL;
-    int error = __rin_account_query(__RIN_ACCOUNT_QUERY_BY_INDEX,
-                                    __rin_group_runtime_state.cursor,
-                                    NULL, &info);
+    int error = __rin_group_runtime_state.cursor_started
+        ? __rin_account_query_uid_after(__rin_group_runtime_state.cursor,
+                                        &info)
+        : __rin_account_query(__RIN_ACCOUNT_QUERY_BY_UID, 0u, NULL, &info);
     if (error == ENOENT) {
         return NULL;
     }
@@ -184,11 +189,8 @@ static inline struct group* getgrent(void) {
         errno = error;
         return NULL;
     }
-    if (__rin_group_runtime_state.cursor == UINT32_MAX) {
-        errno = EOVERFLOW;
-        return NULL;
-    }
-    ++__rin_group_runtime_state.cursor;
+    __rin_group_runtime_state.cursor = info.uid;
+    __rin_group_runtime_state.cursor_started = 1u;
     return result;
 }
 

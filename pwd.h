@@ -11,6 +11,7 @@
 #include "stddef.h"
 #include "sys/types.h"
 #include "rin_account_compat.h"
+#include "rin_account_enum.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,6 +41,7 @@ typedef struct __rin_passwd_runtime_state_v1 {
     struct passwd entry;
     char buffer[512];
     uint32_t cursor;
+    uint32_t cursor_started;
 } __rin_passwd_runtime_state_v1;
 
 extern RIN_PWD_THREAD_LOCAL __rin_passwd_runtime_state_v1
@@ -174,20 +176,23 @@ static inline struct passwd* getpwuid(uid_t uid) {
 /* setpwent - パスワードファイルを先頭に巻き戻す */
 static inline void setpwent(void) {
     __rin_passwd_runtime_state.cursor = 0u;
+    __rin_passwd_runtime_state.cursor_started = 0u;
 }
 
 /* endpwent - パスワードファイルを閉じる */
 static inline void endpwent(void) {
     __rin_passwd_runtime_state.cursor = 0u;
+    __rin_passwd_runtime_state.cursor_started = 0u;
 }
 
 /* getpwent - 次のエントリを取得 */
 static inline struct passwd* getpwent(void) {
     __rin_account_info_v1 info;
     struct passwd* result = NULL;
-    int error = __rin_account_query(__RIN_ACCOUNT_QUERY_BY_INDEX,
-                                    __rin_passwd_runtime_state.cursor,
-                                    NULL, &info);
+    int error = __rin_passwd_runtime_state.cursor_started
+        ? __rin_account_query_uid_after(__rin_passwd_runtime_state.cursor,
+                                        &info)
+        : __rin_account_query(__RIN_ACCOUNT_QUERY_BY_UID, 0u, NULL, &info);
     if (error == ENOENT) {
         return NULL;
     }
@@ -201,11 +206,8 @@ static inline struct passwd* getpwent(void) {
         errno = error;
         return NULL;
     }
-    if (__rin_passwd_runtime_state.cursor == UINT32_MAX) {
-        errno = EOVERFLOW;
-        return NULL;
-    }
-    ++__rin_passwd_runtime_state.cursor;
+    __rin_passwd_runtime_state.cursor = info.uid;
+    __rin_passwd_runtime_state.cursor_started = 1u;
     return result;
 }
 
