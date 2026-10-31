@@ -6,7 +6,11 @@
 
 #include "../sys/pidfd.h"
 #include "../sys/wait.h"
-#include "../unistd.h"
+#include "rin_fork_pidfd.h"
+
+static inline void __rin_child_pidfd_close(int pidfd) {
+    (void)_syscall1((uintptr_t)SYS_CLOSE, (uintptr_t)(intptr_t)pidfd);
+}
 
 static inline pid_t rin_child_fork_pidfd(int* pidfd_out) {
     if (pidfd_out == NULL) {
@@ -61,7 +65,7 @@ static inline int rin_child_pidfd_terminate_and_wait(int* pidfd_inout) {
     if (rin_child_pidfd_wait_status(pidfd, &status) != 0 &&
         errno != ECHILD && saved_error == 0)
         saved_error = errno != 0 ? errno : EIO;
-    (void)close(pidfd);
+    __rin_child_pidfd_close(pidfd);
     *pidfd_inout = -1;
     if (saved_error != 0) {
         errno = saved_error;
