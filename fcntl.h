@@ -142,6 +142,9 @@ struct flock {
 #define F_OFD_GETLK     36   /* オープンファイルディスクリプタロック取得 */
 #define F_OFD_SETLK     37   /* オープンファイルディスクリプタロック設定 */
 #define F_OFD_SETLKW    38   /* オープンファイルディスクリプタロック設定(ブロッキング) */
+/* RinOS BSD flock locks use a separate OFD-owned conflict namespace. */
+#define F_RIN_FLOCK_SETLK  0x52464c01
+#define F_RIN_FLOCK_SETLKW 0x52464c02
 
 /* ═══════════════════════════════════════════════════════════════
  * flock構造体 (64ビット版)
@@ -636,6 +639,8 @@ static inline int fcntl(int fd, int cmd, ...) {
         case F_SETLKW:
         case F_OFD_SETLK:
         case F_OFD_SETLKW:
+        case F_RIN_FLOCK_SETLK:
+        case F_RIN_FLOCK_SETLKW:
         {
             struct flock* lock = va_arg(ap, struct flock*);
             if (lock == NULL) {
