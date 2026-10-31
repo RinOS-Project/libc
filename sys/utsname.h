@@ -3,6 +3,14 @@
  * システム識別情報
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64) && \
+    !defined(_RIN_UTSNAME_SYSCALL1)
+#include_next <sys/utsname.h>
+#else
 #ifndef _SYS_UTSNAME_H
 #define _SYS_UTSNAME_H
 
@@ -19,18 +27,18 @@ extern "C" {
  * utsname構造体
  * ═══════════════════════════════════════════════════════════════*/
 
-#define _UTSNAME_LENGTH RIN_UTSNAME_ABI_V1_FIELD_SIZE
+#define _UTSNAME_LENGTH RIN_UTSNAME_ABI_V2_FIELD_SIZE
 
 struct utsname {
-    RIN_UTSNAME_ABI_V1_FIELDS;
+    RIN_UTSNAME_ABI_V2_FIELDS;
 };
 
 #ifdef __cplusplus
-static_assert(sizeof(struct utsname) == sizeof(RinUtsnameAbiV1),
-              "SYS_UNAME ABI layout mismatch");
+static_assert(sizeof(struct utsname) == sizeof(RinUtsnameAbiV2),
+              "SYS_UNAME_V2 ABI layout mismatch");
 #else
-_Static_assert(sizeof(struct utsname) == sizeof(RinUtsnameAbiV1),
-               "SYS_UNAME ABI layout mismatch");
+_Static_assert(sizeof(struct utsname) == sizeof(RinUtsnameAbiV2),
+               "SYS_UNAME_V2 ABI layout mismatch");
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -66,8 +74,9 @@ static inline int uname(struct utsname* buf) {
         return -1;
     }
 
-    /* SYS_UNAMEシステムコールを呼び出す */
-    return __rin_uname_status_result(_RIN_UTSNAME_SYSCALL1(SYS_UNAME, buf));
+    /* SYS_UNAME_V2で拡張された識別情報を取得する。 */
+    return __rin_uname_status_result(
+        _RIN_UTSNAME_SYSCALL1(SYS_UNAME_V2, buf));
 }
 
 #ifdef __cplusplus
@@ -75,3 +84,4 @@ static inline int uname(struct utsname* buf) {
 #endif
 
 #endif /* _SYS_UTSNAME_H */
+#endif /* hosted Linux delegates to native UTS name provider */

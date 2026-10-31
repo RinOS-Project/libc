@@ -1,4 +1,11 @@
 /* SPDX-License-Identifier: MIT */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64)
+#include_next <sys/sysinfo.h>
+#else
 #ifndef _SYS_SYSINFO_H
 #define _SYS_SYSINFO_H
 
@@ -88,3 +95,4 @@ static inline int rin_sysinfo_valid_metrics(uint32_t* valid_metrics_out) {
 #endif
 
 #endif /* _SYS_SYSINFO_H */
+#endif /* hosted Linux delegates to native system-info provider */
