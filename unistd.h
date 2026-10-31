@@ -2651,8 +2651,8 @@ static inline size_t confstr(int name, char* buf, size_t len) {
 static inline int gethostname(char* name, size_t len) {
     RinUtsnameAbiV2 identity;
     size_t size = 0;
-    if (!name || len == 0) {
-        errno = EINVAL;
+    if (!name) {
+        errno = EFAULT;
         return -1;
     }
     if (_rin_unistd_status(_RIN_UNISTD_SYSCALL1(
@@ -2664,10 +2664,15 @@ static inline int gethostname(char* name, size_t len) {
         errno = EIO;
         return -1;
     }
-    size_t copy_length = size < len ? size : len - 1u;
-    for (size_t index = 0; index < copy_length; ++index)
+    if (size >= len) {
+        for (size_t index = 0; index < len; ++index)
+            name[index] = identity.nodename[index];
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    for (size_t index = 0; index < size; ++index)
         name[index] = identity.nodename[index];
-    name[copy_length] = '\0';
+    name[size] = '\0';
     return 0;
 }
 
