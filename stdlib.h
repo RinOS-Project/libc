@@ -1243,6 +1243,37 @@ void srand(unsigned int seed);
 int rand_r(unsigned int* seed);
 long random(void);
 void srandom(unsigned int seed);
+#if defined(_RIN_STDLIB_RANDOM_STATE_OWNER) || \
+    defined(_DEFAULT_SOURCE) || defined(_BSD_SOURCE) || \
+    defined(_GNU_SOURCE) || defined(__USE_MISC) || \
+    defined(_RIN_USE_BSD_RANDOM) || \
+    (!defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE) && \
+     !defined(_XOPEN_SOURCE))
+/* BSD/glibc state-buffer and reentrant random(3) interfaces. The state
+ * buffer must remain alive while selected by initstate()/setstate(). */
+struct random_data {
+    int32_t* fptr;
+    int32_t* rptr;
+    int32_t* state;
+    int rand_type;
+    int rand_deg;
+    int rand_sep;
+    int32_t* end_ptr;
+};
+#ifdef __cplusplus
+extern "C" {
+#endif
+int random_r(struct random_data* buffer, int32_t* result);
+int srandom_r(unsigned int seed, struct random_data* buffer);
+char* initstate(unsigned int seed, char* state, size_t state_size);
+char* setstate(char* state);
+int initstate_r(unsigned int seed, char* state, size_t state_size,
+                struct random_data* buffer);
+int setstate_r(char* state, struct random_data* buffer);
+#ifdef __cplusplus
+}
+#endif
+#endif
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1250,6 +1281,21 @@ void srandom(unsigned int seed);
  * ═══════════════════════════════════════════════════════════════*/
 
 typedef int (*_qsort_cmp_t)(const void*, const void*);
+
+/* GNU's context-taking comparator ABI is available only when explicitly
+ * requested; other systems assign qsort_r a different signature. */
+#if (defined(_GNU_SOURCE) || defined(__USE_GNU) || \
+     defined(_RIN_USE_GNU_QSORT_R)) && \
+    !defined(_RIN_STDLIB_HOSTED_CXX_OWNER)
+#ifdef __cplusplus
+extern "C" {
+#endif
+void qsort_r(void* base, size_t nmemb, size_t size,
+             int (*compar)(const void*, const void*, void*), void* context);
+#ifdef __cplusplus
+}
+#endif
+#endif
 
 static inline void _rin_qsort_swap_bytes(unsigned char* left,
                                          unsigned char* right,
@@ -1623,7 +1669,11 @@ static inline int mbtowc(wchar_t* pwc, const char* s, size_t n) {
 #if defined(RIN_USERSPACE)
     return rin_locale_current_mbtowc32((uint32_t*)pwc, s, n);
 #else
-    return rin_unicode_mbtowc32((uint32_t*)pwc, s, n);
+    {
+        int rc = rin_unicode_mbtowc32((uint32_t*)pwc, s, n);
+        if (rc == -1) errno = EILSEQ;
+        return rc;
+    }
 #endif
 }
 
@@ -1632,7 +1682,11 @@ static inline int wctomb(char* s, wchar_t wc) {
     return rin_locale_current_wctomb32(s, (uint32_t)wc);
 #else
     if (!s) return 0;
-    return rin_unicode_wctomb32(s, (uint32_t)wc);
+    {
+        int rc = rin_unicode_wctomb32(s, (uint32_t)wc);
+        if (rc == -1) errno = EILSEQ;
+        return rc;
+    }
 #endif
 }
 
@@ -1640,7 +1694,11 @@ static inline size_t mbstowcs(wchar_t* dest, const char* src, size_t n) {
 #if defined(RIN_USERSPACE)
     return rin_locale_current_mbstowcs32((uint32_t*)dest, src, n);
 #else
-    return rin_unicode_mbstowcs32((uint32_t*)dest, src, n);
+    {
+        size_t rc = rin_unicode_mbstowcs32((uint32_t*)dest, src, n);
+        if (rc == (size_t)-1) errno = EILSEQ;
+        return rc;
+    }
 #endif
 }
 
@@ -1648,7 +1706,11 @@ static inline size_t wcstombs(char* dest, const wchar_t* src, size_t n) {
 #if defined(RIN_USERSPACE)
     return rin_locale_current_wcstombs32(dest, (const uint32_t*)src, n);
 #else
-    return rin_unicode_wcstombs32(dest, (const uint32_t*)src, n);
+    {
+        size_t rc = rin_unicode_wcstombs32(dest, (const uint32_t*)src, n);
+        if (rc == (size_t)-1) errno = EILSEQ;
+        return rc;
+    }
 #endif
 }
 #endif /* !_MSVCRT_COMPAT */
