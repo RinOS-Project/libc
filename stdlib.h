@@ -1251,6 +1251,21 @@ void srandom(unsigned int seed);
 
 typedef int (*_qsort_cmp_t)(const void*, const void*);
 
+/* GNU's context-taking comparator ABI is available only when explicitly
+ * requested; other systems assign qsort_r a different signature. */
+#if (defined(_GNU_SOURCE) || defined(__USE_GNU) || \
+     defined(_RIN_USE_GNU_QSORT_R)) && \
+    !defined(_RIN_STDLIB_HOSTED_CXX_OWNER)
+#ifdef __cplusplus
+extern "C" {
+#endif
+void qsort_r(void* base, size_t nmemb, size_t size,
+             int (*compar)(const void*, const void*, void*), void* context);
+#ifdef __cplusplus
+}
+#endif
+#endif
+
 static inline void _rin_qsort_swap_bytes(unsigned char* left,
                                          unsigned char* right,
                                          size_t size) {
