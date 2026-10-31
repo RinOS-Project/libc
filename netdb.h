@@ -712,43 +712,20 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
                               char* serv, socklen_t servlen,
                               int flags);
 
-/* gethostbyname2 - ホスト名を指定familyで検索する */
-static inline struct hostent* gethostbyname2(const char* name, int family) {
-    _NetdbHostRecord host_record_storage;
-    const _NetdbHostRecord* host_record = NULL;
+/* gethostbyname - ホスト名からアドレスを取得 */
+static inline struct hostent* gethostbyname(const char* name) {
     int lookup_result;
-    if (!name || (family != AF_INET && family != AF_INET6)) {
+    if (!name) {
         h_errno = NO_RECOVERY;
         return NULL;
     }
 
     _netdb_prepare_hostent_storage();
-    memset(&host_record_storage, 0, sizeof(host_record_storage));
-    lookup_result = _netdb_find_hosts_by_name(
-        name, family == AF_INET ? &host_record_storage : NULL,
-        family == AF_INET6 ? &host_record_storage : NULL);
-    if (lookup_result < 0) {
-        h_errno = NO_RECOVERY;
-        return NULL;
-    }
-    if (family == AF_INET && (lookup_result & 1) != 0)
-        host_record = &host_record_storage;
-    else if (family == AF_INET6 && (lookup_result & 2) != 0)
-        host_record = &host_record_storage;
-    if (host_record != NULL) {
-        struct hostent* result = _netdb_publish_host(host_record);
-        if (result == NULL) {
-            h_errno = NO_RECOVERY;
-            return NULL;
-        }
-        h_errno = 0;
-        return result;
-    }
 
     struct addrinfo hints;
     struct addrinfo* ai = NULL;
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = family;
+    hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
     hints.ai_flags = AI_CANONNAME;
@@ -760,31 +737,7 @@ static inline struct hostent* gethostbyname2(const char* name, int family) {
         return NULL;
     }
 
-    if (ai->ai_family != family || ai->ai_addr == NULL ||
-        (family == AF_INET && ai->ai_addrlen < sizeof(struct sockaddr_in)) ||
-        (family == AF_INET6 &&
-         ai->ai_addrlen < sizeof(struct sockaddr_in6))) {
-        freeaddrinfo(ai);
-        h_errno = NO_RECOVERY;
-        return NULL;
-    }
-    if (family == AF_INET) {
-        memcpy(&_netdb_addr,
-               &((struct sockaddr_in*)ai->ai_addr)->sin_addr,
-               sizeof(_netdb_addr));
-        _netdb_addr_list[0] = (char*)&_netdb_addr;
-        _netdb_hostent.h_length = (int)sizeof(_netdb_addr);
-    } else {
-        memcpy(&__rin_netdb_runtime_state.host_addr6,
-               &((struct sockaddr_in6*)ai->ai_addr)->sin6_addr,
-               sizeof(__rin_netdb_runtime_state.host_addr6));
-        _netdb_addr_list[0] =
-            (char*)&__rin_netdb_runtime_state.host_addr6;
-        _netdb_hostent.h_length =
-            (int)sizeof(__rin_netdb_runtime_state.host_addr6);
-    }
-    _netdb_addr_list[1] = NULL;
-    _netdb_aliases[0] = NULL;
+    memcpy(&_netdb_addr, &((struct sockaddr_in*)ai->ai_addr)->sin_addr, sizeof(_netdb_addr));
     const char* host_name = (ai->ai_canonname && ai->ai_canonname[0]) ? ai->ai_canonname : name;
     int i = 0;
     while (host_name[i] && i < 255) { _netdb_hostname[i] = host_name[i]; i++; }
@@ -793,66 +746,32 @@ static inline struct hostent* gethostbyname2(const char* name, int family) {
 
     _netdb_hostent.h_name = _netdb_hostname;
     _netdb_hostent.h_aliases = _netdb_aliases;
-    _netdb_hostent.h_addrtype = family;
+    _netdb_hostent.h_addrtype = AF_INET;
+    _netdb_hostent.h_length = 4;
     _netdb_hostent.h_addr_list = _netdb_addr_list;
     h_errno = 0;
     return &_netdb_hostent;
 }
 
-/* gethostbyname - ホスト名からIPv4アドレスを取得 */
-static inline struct hostent* gethostbyname(const char* name) {
-    return gethostbyname2(name, AF_INET);
-}
-
 /* gethostbyaddr - アドレスからホスト名を取得 */
 static inline struct hostent* gethostbyaddr(const void* addr, socklen_t len, int type) {
-    _NetdbHostRecord host_record;
-    struct sockaddr_in sa4;
-    struct sockaddr_in6 sa6;
-    const struct sockaddr* sa;
-    socklen_t sa_len;
-    int hosts_result;
     int lookup_result;
-    if ((type != AF_INET && type != AF_INET6) || !addr ||
-        len != (socklen_t)(type == AF_INET ? sizeof(struct in_addr)
-                                           : sizeof(struct in6_addr))) {
+    if (type != AF_INET || !addr || len != (socklen_t)sizeof(struct in_addr)) {
         h_errno = NO_RECOVERY;
         return NULL;
     }
 
     _netdb_prepare_hostent_storage();
-    memset(&host_record, 0, sizeof(host_record));
-    hosts_result = _netdb_find_host_by_address(
-        addr, type, len, &host_record);
-    if (hosts_result < 0) {
-        h_errno = NO_RECOVERY;
-        return NULL;
-    }
-    if (hosts_result > 0) {
-        struct hostent* result = _netdb_publish_host(&host_record);
-        if (result == NULL) {
-            h_errno = NO_RECOVERY;
-            return NULL;
-        }
-        h_errno = 0;
-        return result;
-    }
 
+    struct sockaddr_in sa;
     char host[256];
-    if (type == AF_INET) {
-        memset(&sa4, 0, sizeof(sa4));
-        sa4.sin_family = AF_INET;
-        memcpy(&sa4.sin_addr, addr, sizeof(sa4.sin_addr));
-        sa = (const struct sockaddr*)&sa4;
-        sa_len = (socklen_t)sizeof(sa4);
-    } else {
-        memset(&sa6, 0, sizeof(sa6));
-        sa6.sin6_family = AF_INET6;
-        memcpy(&sa6.sin6_addr, addr, sizeof(sa6.sin6_addr));
-        sa = (const struct sockaddr*)&sa6;
-        sa_len = (socklen_t)sizeof(sa6);
-    }
-    lookup_result = getnameinfo(sa, sa_len, host,
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    memcpy(&sa.sin_addr, addr, sizeof(sa.sin_addr));
+    _netdb_addr = sa.sin_addr;
+
+    lookup_result = getnameinfo((const struct sockaddr*)&sa,
+                                (socklen_t)sizeof(sa), host,
                                 (socklen_t)sizeof(host), NULL, 0,
                                 NI_NAMEREQD);
     if (lookup_result != 0) {
@@ -863,24 +782,11 @@ static inline struct hostent* gethostbyaddr(const void* addr, socklen_t len, int
     }
     strncpy(_netdb_hostname, host, sizeof(_netdb_hostname) - 1);
     _netdb_hostname[sizeof(_netdb_hostname) - 1] = '\0';
-    if (type == AF_INET) {
-        memcpy(&_netdb_addr, addr, sizeof(_netdb_addr));
-        _netdb_addr_list[0] = (char*)&_netdb_addr;
-        _netdb_hostent.h_length = (int)sizeof(_netdb_addr);
-    } else {
-        memcpy(&__rin_netdb_runtime_state.host_addr6, addr,
-               sizeof(__rin_netdb_runtime_state.host_addr6));
-        _netdb_addr_list[0] =
-            (char*)&__rin_netdb_runtime_state.host_addr6;
-        _netdb_hostent.h_length =
-            (int)sizeof(__rin_netdb_runtime_state.host_addr6);
-    }
-    _netdb_addr_list[1] = NULL;
-    _netdb_aliases[0] = NULL;
 
     _netdb_hostent.h_name = _netdb_hostname;
     _netdb_hostent.h_aliases = _netdb_aliases;
-    _netdb_hostent.h_addrtype = type;
+    _netdb_hostent.h_addrtype = AF_INET;
+    _netdb_hostent.h_length = 4;
     _netdb_hostent.h_addr_list = _netdb_addr_list;
     h_errno = 0;
 
@@ -898,107 +804,6 @@ static inline void _netdb_map_ipv4_address(
     output[10] = 0xffu;
     output[11] = 0xffu;
     memcpy(output + 12u, input, RIN_RESOLVED_IPV4_ADDRESS_BYTES);
-}
-
-static inline int _netdb_hosts_resolve_name(
-    const char* name, int family, int flags, int ipv4_configured,
-    int ipv6_configured,
-    uint8_t address[RIN_RESOLVED_GAI_MAX_RESULTS *
-                    RIN_RESOLVED_IPV6_ADDRESS_BYTES],
-    int* result_family, uint32_t* primary_address_count,
-    uint8_t secondary_address[RIN_RESOLVED_GAI_MAX_RESULTS *
-                               RIN_RESOLVED_IPV6_ADDRESS_BYTES],
-    int* secondary_family, int* have_secondary,
-    uint32_t* secondary_address_count, char* canonical_name,
-    size_t canonical_name_capacity)
-{
-    _NetdbHostRecord ipv4_record;
-    _NetdbHostRecord ipv6_record;
-    const _NetdbHostRecord* primary = NULL;
-    int allow_ipv4;
-    int allow_ipv6;
-    int found;
-    int output_family = AF_UNSPEC;
-    int mapped_ipv4 = 0;
-    if (name == NULL || address == NULL || result_family == NULL ||
-        primary_address_count == NULL || secondary_address == NULL ||
-        secondary_family == NULL || have_secondary == NULL ||
-        secondary_address_count == NULL || canonical_name == NULL ||
-        canonical_name_capacity == 0u) {
-        errno = EINVAL;
-        return -1;
-    }
-    allow_ipv4 = family == AF_INET || family == AF_UNSPEC ||
-        (family == AF_INET6 && (flags & AI_V4MAPPED) != 0);
-    allow_ipv6 = family == AF_INET6 || family == AF_UNSPEC;
-    if ((flags & AI_ADDRCONFIG) != 0) {
-        if (!ipv4_configured) allow_ipv4 = 0;
-        if (!ipv6_configured) allow_ipv6 = 0;
-    }
-    memset(&ipv4_record, 0, sizeof(ipv4_record));
-    memset(&ipv6_record, 0, sizeof(ipv6_record));
-    found = _netdb_find_hosts_by_name(
-        name, allow_ipv4 ? &ipv4_record : NULL,
-        allow_ipv6 ? &ipv6_record : NULL);
-    if (found < 0) return -1;
-
-    *secondary_address_count = 0u;
-    *secondary_family = AF_UNSPEC;
-    *have_secondary = 0;
-    canonical_name[0] = '\0';
-    if (family == AF_INET) {
-        if ((found & 1) != 0) {
-            primary = &ipv4_record;
-            output_family = AF_INET;
-        }
-    } else if (family == AF_INET6) {
-        if ((found & 2) != 0) {
-            primary = &ipv6_record;
-            output_family = AF_INET6;
-            if ((flags & AI_ALL) != 0 && (found & 1) != 0) {
-                _netdb_map_ipv4_address(secondary_address,
-                                        ipv4_record.address);
-                *secondary_family = AF_INET6;
-                *secondary_address_count = 1u;
-                *have_secondary = 1;
-            }
-        } else if ((flags & AI_V4MAPPED) != 0 && (found & 1) != 0) {
-            primary = &ipv4_record;
-            output_family = AF_INET6;
-            mapped_ipv4 = 1;
-        }
-    } else if (family == AF_UNSPEC) {
-        if ((found & 2) != 0) {
-            primary = &ipv6_record;
-            output_family = AF_INET6;
-            if ((found & 1) != 0) {
-                memcpy(secondary_address, ipv4_record.address, 4u);
-                *secondary_family = AF_INET;
-                *secondary_address_count = 1u;
-                *have_secondary = 1;
-            }
-        } else if ((found & 1) != 0) {
-            primary = &ipv4_record;
-            output_family = AF_INET;
-        }
-    }
-    if (primary == NULL) return 0;
-    if (mapped_ipv4)
-        _netdb_map_ipv4_address(address, primary->address);
-    else
-        memcpy(address, primary->address,
-               output_family == AF_INET6 ? 16u : 4u);
-    *result_family = output_family;
-    *primary_address_count = 1u;
-    {
-        size_t name_length = strlen(primary->name);
-        if (name_length >= canonical_name_capacity) {
-            errno = EOVERFLOW;
-            return -1;
-        }
-        memcpy(canonical_name, primary->name, name_length + 1u);
-    }
-    return 1;
 }
 
 static inline int _netdb_addrconfig_snapshot(int* ipv4_configured,
@@ -1508,51 +1313,36 @@ static inline int getaddrinfo(const char* node, const char* service,
                 resolved_locally = 1;
             } else if ((flags & AI_NUMERICHOST) != 0) {
                 return EAI_NONAME;
-            } else {
-                int hosts_status = _netdb_hosts_resolve_name(
-                    node, family, flags, ipv4_configured, ipv6_configured,
-                    address, &result_family, &primary_address_count,
-                    secondary_address, &secondary_family, &have_secondary,
-                    &secondary_address_count, canon_buf,
-                    sizeof(canon_buf));
-                if (hosts_status < 0) return EAI_SYSTEM;
-                if (hosts_status > 0) {
-                    resolved_locally = 1;
-                } else if (_netdb_is_localhost(node)) {
-                    if (result_family == AF_INET6) {
-                        if (mapped_ipv4_primary) {
-                            const uint8_t ipv4_loopback[
-                                RIN_RESOLVED_IPV4_ADDRESS_BYTES] = {
-                                    127u, 0u, 0u, 1u
-                                };
-                            _netdb_map_ipv4_address(address, ipv4_loopback);
-                        } else {
-                            address[15] = 1u;
-                        }
-                        if (unspec_dual) {
-                            secondary_address[0] = 127u;
-                            secondary_address[3] = 1u;
-                            secondary_family = AF_INET;
-                            have_secondary = 1;
-                        } else if ((flags & AI_ALL) != 0 && ipv4_configured &&
-                                   ipv6_configured) {
-                            const uint8_t ipv4_loopback[
-                                RIN_RESOLVED_IPV4_ADDRESS_BYTES] = {
-                                    127u, 0u, 0u, 1u
-                                };
-                            _netdb_map_ipv4_address(
-                                secondary_address, ipv4_loopback);
-                            secondary_family = AF_INET6;
-                            have_secondary = 1;
-                        }
+            } else if (_netdb_is_localhost(node)) {
+                if (result_family == AF_INET6) {
+                    if (mapped_ipv4_primary) {
+                        const uint8_t ipv4_loopback[
+                            RIN_RESOLVED_IPV4_ADDRESS_BYTES] = {127u, 0u, 0u, 1u};
+                        _netdb_map_ipv4_address(address, ipv4_loopback);
                     } else {
-                        address[0] = 127u;
-                        address[3] = 1u;
+                        address[15] = 1u;
                     }
-                    strncpy(canon_buf, "localhost", sizeof(canon_buf) - 1u);
-                    canon_buf[sizeof(canon_buf) - 1u] = '\0';
-                    resolved_locally = 1;
+                    if (unspec_dual) {
+                        secondary_address[0] = 127u;
+                        secondary_address[3] = 1u;
+                        secondary_family = AF_INET;
+                        have_secondary = 1;
+                    } else if ((flags & AI_ALL) != 0 && ipv4_configured &&
+                               ipv6_configured) {
+                        const uint8_t ipv4_loopback[
+                            RIN_RESOLVED_IPV4_ADDRESS_BYTES] = {127u, 0u, 0u, 1u};
+                        _netdb_map_ipv4_address(
+                            secondary_address, ipv4_loopback);
+                        secondary_family = AF_INET6;
+                        have_secondary = 1;
+                    }
+                } else {
+                    address[0] = 127u;
+                    address[3] = 1u;
                 }
+                strncpy(canon_buf, "localhost", sizeof(canon_buf) - 1u);
+                canon_buf[sizeof(canon_buf) - 1u] = '\0';
+                resolved_locally = 1;
             }
         }
     }
@@ -1973,28 +1763,6 @@ static inline int getnameinfo(const struct sockaddr* sa, socklen_t salen,
         if (service_requested)
             memcpy(serv, service_text, service_text_length + 1u);
         return 0;
-    }
-
-    if ((flags & NI_NOFQDN) == 0) {
-        _NetdbHostRecord host_record;
-        int hosts_status;
-        size_t host_record_length;
-        memset(&host_record, 0, sizeof(host_record));
-        hosts_status = _netdb_find_host_by_address(
-            lookup_address, lookup_family, lookup_address_length,
-            &host_record);
-        if (hosts_status < 0) return EAI_SYSTEM;
-        if (hosts_status > 0) {
-            host_record_length = strlen(host_record.name);
-            if (host_record_length + 1u > (size_t)hostlen ||
-                (service_requested &&
-                 service_text_length + 1u > (size_t)servlen))
-                return EAI_OVERFLOW;
-            memcpy(host, host_record.name, host_record_length + 1u);
-            if (service_requested)
-                memcpy(serv, service_text, service_text_length + 1u);
-            return 0;
-        }
     }
 
     RinResolvedGetNameInfoRequest req;
