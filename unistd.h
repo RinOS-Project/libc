@@ -1389,7 +1389,19 @@ static inline pid_t setsid(void)
 }
 
 static inline pid_t fork(void) {
+#ifdef RIN_INTERNAL_FORK_PIDFD_H
     return __rin_fork_with_pidfd(NULL);
+#else
+    /* No pidfd frontend (header uncommitted): plain fork without the
+     * atfork/allocator/RinFS hooks, matching _Fork below. */
+    intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_FORK));
+    if (result < 0) return (pid_t)-1;
+    if ((uintptr_t)result > (uintptr_t)INT_MAX) {
+        errno = EOVERFLOW;
+        return (pid_t)-1;
+    }
+    return (pid_t)result;
+#endif
 }
 
 /* POSIX.1-2024 _Fork。通常のforkと同じgeneration付きkernel処理を使い、
