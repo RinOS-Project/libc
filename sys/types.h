@@ -4,6 +4,14 @@
  * POSIX基本型定義
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64) && \
+    !defined(RIN_TIME_ABI64)
+#include_next <sys/types.h>
+#else
 #ifndef _SYS_TYPES_H
 #define _SYS_TYPES_H
 
@@ -31,8 +39,9 @@ extern "C" {
 
 /* プロセス/ユーザー関連 */
 typedef int            pid_t;      /* プロセスID */
-typedef int            uid_t;      /* ユーザーID */
-typedef int            gid_t;      /* グループID */
+typedef uint32_t       uid_t;      /* ユーザーID */
+typedef uint32_t       gid_t;      /* グループID */
+#define RIN_SYS_TYPES_UNSIGNED_ID 1
 typedef unsigned int   id_t;       /* 汎用ID */
 
 /* ファイル関連 */
@@ -86,9 +95,14 @@ typedef int            key_t;      /* IPC キー */
 #define major(dev)        ((unsigned int)(((dev) >> 8) & 0xFF))
 #define minor(dev)        ((unsigned int)((dev) & 0xFF))
 
-/* pthread関連型はpthread.hで定義 - 循環参照を避けるため基本型のみここで定義 */
-#ifndef _PTHREAD_H
+/* pthread_t is shared with signal.h, which pthread.h includes indirectly
+ * through time.h. Keep the target-width type visible before _PTHREAD_H has
+ * finished defining the rest of the pthread API. */
+#ifndef _RIN_PTHREAD_T_DEFINED
+#define _RIN_PTHREAD_T_DEFINED
 typedef uintptr_t      pthread_t;
+#endif
+#ifndef _PTHREAD_H
 typedef unsigned int   pthread_key_t;
 typedef int            pthread_once_t;
 #endif
@@ -152,3 +166,4 @@ typedef struct {
 #undef RIN_SYS_TYPES_HOST_OWNER
 
 #endif /* _SYS_TYPES_H */
+#endif /* hosted Linux delegates to native POSIX types */
