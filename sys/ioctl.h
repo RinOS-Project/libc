@@ -126,6 +126,7 @@ extern "C" {
 #define TIOCSSOFTCAR 0x541A
 #define FIONREAD    0x541B  /* 読み取り可能バイト数 */
 #define TIOCINQ     FIONREAD
+/* Retained for Linux source compatibility; RinOS returns ENOTTY. */
 #define TIOCLINUX   0x541C
 #define TIOCCONS    0x541D
 #ifndef TIOCPKT
