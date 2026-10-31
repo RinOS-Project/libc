@@ -1,6 +1,7 @@
 /* C99 complex elementary functions. */
 #include "complex.h"
-#include <math.h>
+#include "math.h" /* nested: M_* constants + scalar ops (B38: <math.h> broke
+                   * host builds where the system math.h hides M_*). */
 #include "fenv.h"
 
 static double complex cx_make(double real, double imaginary) {
