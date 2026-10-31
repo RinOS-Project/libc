@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* Product-owned POSIX pthread_atfork registry and fork dispatch hooks. */
 
-#define RIN_PTHREAD_RUNTIME_IMPLEMENTATION 1
 #include "pthread.h"
 #include "internal/pthread_atfork.h"
 
