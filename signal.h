@@ -693,7 +693,7 @@ static inline int sigtimedwait(const sigset_t* set,
 /* pthread_kill: スレッドにシグナル送信 */
 static inline int pthread_kill_sig(uintptr_t tid, int sig) {
     intptr_t result;
-    if (sig < 0 || sig >= NSIG) return EINVAL;
+    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL) return EINVAL;
     result = _RIN_SIGNAL_SYSCALL2(SYS_TKILL, tid, sig);
     if (result < 0 && result >= -4095) return (int)-result;
     return result == 0 ? 0 : EIO;
