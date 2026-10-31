@@ -161,6 +161,19 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 #define POSIX_MADV_DONTNEED   MADV_DONTNEED
 #endif
 
+static inline int __rin_posix_madvise_advice_valid(int advice) {
+    switch (advice) {
+        case POSIX_MADV_NORMAL:
+        case POSIX_MADV_RANDOM:
+        case POSIX_MADV_SEQUENTIAL:
+        case POSIX_MADV_WILLNEED:
+        case POSIX_MADV_DONTNEED:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * mlock フラグ
  * ═══════════════════════════════════════════════════════════════*/
@@ -324,6 +337,7 @@ static inline int posix_madvise(void* addr, size_t length, int advice) {
     /* POSIX advice may influence performance but must not change memory
      * contents. Linux MADV_DONTNEED is destructive, so treat the POSIX
      * DONTNEED hint as NORMAL while retaining kernel range validation. */
+    if (!__rin_posix_madvise_advice_valid(advice)) return EINVAL;
     if (advice == POSIX_MADV_DONTNEED)
         advice = MADV_NORMAL;
     if (madvise(addr, length, advice) == 0) {
