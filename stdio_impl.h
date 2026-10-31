@@ -2742,7 +2742,6 @@ static inline void _rin_freopen_discard_stream(FILE* stream) {
 static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FILE* stream) {
     unsigned int flags;
     intptr_t new_fd;
-    intptr_t close_result;
     int stream_index;
     unsigned char* previous_buffer;
     int previous_owned;
@@ -2771,11 +2770,14 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
         errno = saved_errno;
         return NULL;
     }
+    /* POSIX freopen() closes the old descriptor before opening the new path.
+     * This also lets the replacement reuse its descriptor-table slot. */
+    (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
+    stream->fd = -1;
     new_fd = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
         SYS_OPEN, (uintptr_t)path, (uintptr_t)flags, (uintptr_t)0666u));
     if (new_fd < 0) {
         int saved_errno = errno;
-        (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
         _rin_freopen_discard_stream(stream);
         errno = saved_errno;
         return NULL;
@@ -2783,17 +2785,8 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     if ((uintptr_t)new_fd > (uintptr_t)INT_MAX) {
         int saved_errno = EOVERFLOW;
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)new_fd);
-        (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
         _rin_freopen_discard_stream(stream);
         errno = saved_errno;
-        return NULL;
-    }
-    close_result = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL1(
-        SYS_CLOSE, (uintptr_t)stream->fd));
-    if (close_result != 0) {
-        if (close_result > 0) errno = EIO;
-        (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)new_fd);
-        _rin_freopen_discard_stream(stream);
         return NULL;
     }
     _rin_stdio_lock_table_enter();
