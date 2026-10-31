@@ -1,6 +1,8 @@
 /* C99 complex arithmetic interface for RinOS. */
 #ifndef _COMPLEX_H
 #define _COMPLEX_H
+#define __STDC_VERSION_COMPLEX_H__ 202311L
+
 
 #ifdef __cplusplus
 extern "C" {

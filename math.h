@@ -5,6 +5,10 @@
 
 #ifndef _MATH_H
 #define _MATH_H
+/* C23 header-version macro withheld: the extended binary math surface
+ * is owned by LIBC-C23-MATH-API-COVERAGE-01 (sinpi/fmaximum/powr/
+ * compoundn, roundeven, fadd-family, ...).  Only nextup/nextdown plus
+ * the C99/C11 subset exist today, so no version claim is published. */
 
 #include "stddef.h"
 #include "float.h"
@@ -92,8 +96,12 @@ typedef long double double_t;
 #define HUGE_VAL    __builtin_huge_val()
 #define HUGE_VALF   __builtin_huge_valf()
 #define HUGE_VALL   ((long double)__builtin_huge_val())
+#ifndef INFINITY
 #define INFINITY    __builtin_inff()
+#endif
+#ifndef NAN
 #define NAN         __builtin_nanf("")
+#endif
 #else
 /* Fallback: inline関数版 */
 static inline double _libc_make_huge_val(void) {
@@ -115,8 +123,12 @@ static inline float _libc_make_nanf(void) {
 #define HUGE_VAL    (_libc_make_huge_val())
 #define HUGE_VALF   (_libc_make_huge_valf())
 #define HUGE_VALL   ((long double)_libc_make_huge_val())
+#ifndef INFINITY
 #define INFINITY    (_libc_make_huge_valf())
+#endif
+#ifndef NAN
 #define NAN         (_libc_make_nanf())
+#endif
 #endif
 
 /* C99 constructors.  The payload is intentionally ignored: the

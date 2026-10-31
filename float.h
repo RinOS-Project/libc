@@ -5,6 +5,8 @@
 
 #ifndef _FLOAT_H
 #define _FLOAT_H
+#define __STDC_VERSION_FLOAT_H__ 202311L
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -101,6 +103,78 @@ extern "C" {
 #define FLT_HAS_SUBNORM  1
 #define DBL_HAS_SUBNORM  1
 #define LDBL_HAS_SUBNORM 1
+
+/* C23 normalized maxima: RinOS models IEEE-754 binary32/64, where the
+ * normalized maximum equals the maximum. */
+#ifndef FLT_NORM_MAX
+#define FLT_NORM_MAX FLT_MAX
+#endif
+#ifndef DBL_NORM_MAX
+#define DBL_NORM_MAX DBL_MAX
+#endif
+#ifndef LDBL_NORM_MAX
+#define LDBL_NORM_MAX LDBL_MAX
+#endif
+/* C23 IEC-60559 format queries: prefer the compiler's answer, else claim
+ * the IEEE binary model this header already hardcodes. */
+#ifndef FLT_IS_IEC_60559
+#ifdef __FLT_IS_IEC_60559__
+#define FLT_IS_IEC_60559 __FLT_IS_IEC_60559__
+#else
+#define FLT_IS_IEC_60559 1
+#endif
+#endif
+#ifndef DBL_IS_IEC_60559
+#ifdef __DBL_IS_IEC_60559__
+#define DBL_IS_IEC_60559 __DBL_IS_IEC_60559__
+#else
+#define DBL_IS_IEC_60559 1
+#endif
+#endif
+#ifndef LDBL_IS_IEC_60559
+#ifdef __LDBL_IS_IEC_60559__
+#define LDBL_IS_IEC_60559 __LDBL_IS_IEC_60559__
+#else
+#define LDBL_IS_IEC_60559 1
+#endif
+#endif
+/* C23 also specifies INFINITY/NAN in <float.h> (shared with <math.h>). */
+#ifndef INFINITY
+#if defined(__FLT_HAS_INFINITY__) && !__FLT_HAS_INFINITY__
+/* Target without infinity: INFINITY stays undefined. */
+#elif defined(__GNUC__) || defined(__clang__)
+#define INFINITY (__builtin_inff())
+#else
+#define INFINITY ((float)(1e+300 * 1e+300))
+#endif
+#endif
+#ifndef NAN
+#if defined(__FLT_HAS_QUIET_NAN__) && !__FLT_HAS_QUIET_NAN__
+/* Target without quiet NaN: NAN stays undefined. */
+#elif defined(__GNUC__) || defined(__clang__)
+#define NAN (__builtin_nanf(""))
+#else
+#define NAN ((float)(INFINITY - INFINITY))
+#endif
+#endif
+#if defined(__GNUC__) || defined(__clang__)
+/* C23 signaling NaNs ("if exists": GNU-compatible compilers provide them). */
+#ifndef FLT_SNAN
+#if !defined(__FLT_HAS_QUIET_NAN__) || __FLT_HAS_QUIET_NAN__
+#define FLT_SNAN (__builtin_nansf(""))
+#endif
+#endif
+#ifndef DBL_SNAN
+#if !defined(__DBL_HAS_QUIET_NAN__) || __DBL_HAS_QUIET_NAN__
+#define DBL_SNAN (__builtin_nans(""))
+#endif
+#endif
+#ifndef LDBL_SNAN
+#if !defined(__LDBL_HAS_QUIET_NAN__) || __LDBL_HAS_QUIET_NAN__
+#define LDBL_SNAN (__builtin_nansl(""))
+#endif
+#endif
+#endif
 
 #ifdef __cplusplus
 }

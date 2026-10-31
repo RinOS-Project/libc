@@ -5,6 +5,8 @@
 
 #ifndef _FENV_H
 #define _FENV_H
+#define __STDC_VERSION_FENV_H__ 202311L
+
 
 #ifdef __cplusplus
 extern "C" {

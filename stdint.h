@@ -373,15 +373,38 @@ typedef uint64_t uintmax_t;
 #define UINTMAX_WIDTH INTMAX_WIDTH
 #endif
 
-#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
-    __STDC_VERSION__ >= 202311L && \
-    (defined(_MSC_VER) || \
-     (defined(__INT_FAST8_WIDTH__) && defined(__INT_FAST16_WIDTH__) && \
-      defined(__INT_FAST32_WIDTH__) && defined(__INT_FAST64_WIDTH__)))
-#ifndef __STDC_VERSION_STDINT_H__
+#ifndef PTRDIFF_WIDTH
+/* ptrdiff_t spans the pointer width on ILP32/LLP64/LP64 alike. */
+#define PTRDIFF_WIDTH INTPTR_WIDTH
+#endif
+#ifndef SIZE_WIDTH
+/* size_t spans the pointer width on ILP32/LLP64/LP64 alike. */
+#define SIZE_WIDTH INTPTR_WIDTH
+#endif
+#ifndef SIG_ATOMIC_WIDTH
+/* sig_atomic_t is int (see signal.h). */
+#define SIG_ATOMIC_WIDTH 32
+#endif
+#ifndef WCHAR_WIDTH
+#ifdef __WCHAR_WIDTH__
+#define WCHAR_WIDTH __WCHAR_WIDTH__
+#elif defined(_MSC_VER) || defined(_WIN32)
+#define WCHAR_WIDTH 16
+#else
+#define WCHAR_WIDTH 32
+#endif
+#endif
+#ifndef WINT_WIDTH
+/* Mirrors the wint_t width selection in wctype.h. */
+#if defined(__MINGW32__) && defined(__SIZEOF_WCHAR_T__) && \
+    __SIZEOF_WCHAR_T__ == 2
+#define WINT_WIDTH 16
+#else
+#define WINT_WIDTH 32
+#endif
+#endif
+
 #define __STDC_VERSION_STDINT_H__ 202311L
-#endif
-#endif
 
 #ifndef INTMAX_MIN
 #define INTMAX_MIN INT64_MIN

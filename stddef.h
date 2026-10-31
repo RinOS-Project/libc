@@ -5,6 +5,8 @@
 
 #ifndef _STDDEF_H
 #define _STDDEF_H
+#define __STDC_VERSION_STDDEF_H__ 202311L
+
 
 /* Use compiler built-in types for portability.  MSVC does not expose the
  * GNU/Clang spelling, so retain the actual target-width ABI explicitly. */
@@ -46,6 +48,28 @@ typedef int              wchar_t;
   #else
     #define NULL ((void*)0)
   #endif
+#endif
+
+/* C23 unreachable(): hint that control flow cannot reach this point.
+ * Provided as a macro (like assert) in C modes with optimizer support;
+ * withheld from C++ so <utility>'s std::unreachable is never shadowed. */
+#ifndef unreachable
+#if !defined(__cplusplus) && (defined(__GNUC__) || defined(__clang__))
+#define unreachable() __builtin_unreachable()
+#elif !defined(__cplusplus) && defined(_MSC_VER)
+#define unreachable() __assume(0)
+#endif
+#endif
+#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
+    __STDC_VERSION__ > 201710L && \
+    ((defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13) || \
+     (defined(__clang__) && __clang_major__ >= 16) || \
+     (!defined(__GNUC__) && !defined(__clang__) && !defined(_MSC_VER)))
+/* C23 nullptr_t: the type of nullptr.  Declared only where the nullptr
+ * and typeof_unqual keywords exist (C2X modes of GCC >= 13, Clang >= 16,
+ * or an assumed-conforming unknown compiler); withheld from C++ (which
+ * has its own nullptr_t) and from pre-C2X modes (no keyword). */
+typedef typeof_unqual(nullptr) nullptr_t;
 #endif
 
 /* offsetof - 構造体メンバのオフセットを取得

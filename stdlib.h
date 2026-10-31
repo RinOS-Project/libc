@@ -18,12 +18,7 @@
     defined(RINCXX_CSTDLIB_H)
 #define _RIN_STDLIB_HOSTED_CXX_OWNER
 #endif
-#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
-    __STDC_VERSION__ >= 202311L
-#ifndef __STDC_VERSION_STDLIB_H__
 #define __STDC_VERSION_STDLIB_H__ 202311L
-#endif
-#endif
 
 
 #include "stddef.h"
@@ -248,8 +243,7 @@ void* realloc(void* ptr, size_t size);
 #endif
 void* reallocarray(void* ptr, size_t nmemb, size_t size);
 size_t memalignment(const void* ptr);
-#if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
-    __STDC_VERSION__ >= 202311L
+#if !defined(__cplusplus)
 int strfromd(char* restrict s, size_t n, const char* restrict format,
              double fp);
 int strfromf(char* restrict s, size_t n, const char* restrict format,

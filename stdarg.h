@@ -5,6 +5,7 @@
 
 #ifndef _STDARG_H
 #define _STDARG_H
+#define __STDC_VERSION_STDARG_H__ 202311L
 
 typedef __builtin_va_list va_list;
 typedef __builtin_va_list __gnuc_va_list;

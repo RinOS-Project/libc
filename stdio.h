@@ -6,6 +6,7 @@
 
 #ifndef _STDIO_H
 #define _STDIO_H
+#define __STDC_VERSION_STDIO_H__ 202311L
 
 #include "stddef.h"
 #include "stdint.h"

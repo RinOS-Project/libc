@@ -15,9 +15,7 @@
 #include "rin_atomic_wait.h"
 #endif
 
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
 #define __STDC_VERSION_STDATOMIC_H__ 202311L
-#endif
 
 #ifdef __cplusplus
 extern "C" {

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #ifndef _ASSERT_H
 #define _ASSERT_H
+#define __STDC_VERSION_ASSERT_H__ 202311L
 
 #if !defined(RIN_FREESTANDING) && defined(__STDC_HOSTED__) && \
     __STDC_HOSTED__ && (defined(__clang__) || defined(__GNUC__))

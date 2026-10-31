@@ -1,5 +1,7 @@
 #ifndef _INTTYPES_H
 #define _INTTYPES_H
+#define __STDC_VERSION_INTTYPES_H__ 202311L
+
 
 #include "stdint.h"
 #include "stdlib.h"  /* For strtoll, strtoull */
