@@ -23,6 +23,7 @@
 #include "sys/types.h"
 #include "errno.h"
 #include "internal/pthread_cancel_point.h"
+#include <rin/contract_abi.h>
 
 #ifndef _RIN_SIGNAL_SYSCALL0
 #define _RIN_SIGNAL_SYSCALL0(number) _syscall0((uintptr_t)(number))
@@ -627,11 +628,18 @@ static inline int sigsuspend(const sigset_t* mask) {
 
 static inline int sigwait(const sigset_t* set, int* signal_number_out) {
     intptr_t result;
-    if (!set || !signal_number_out) return EINVAL;
+    RinSignalWaitRequestV1 request;
+    if (!set) return EINVAL;
+    if (!signal_number_out) return EFAULT;
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_CONTRACT_STRUCT_VERSION_1;
+    request.reserved = 0u;
+    request.signal_number_address = (uint64_t)(uintptr_t)signal_number_out;
     __rin_pthread_cancel_point_if_linked();
     do {
         result = _RIN_SIGNAL_SYSCALL4(
-            SYS_rt_sigtimedwait, set, 0, 0, sizeof(sigset_t));
+            SYS_RT_SIGTIMEDWAIT_RESULT_V1, set, &request, 0,
+            sizeof(sigset_t));
         __rin_pthread_cancel_point_if_linked();
     } while (result == -(intptr_t)EINTR);
     if (result < 0) {
