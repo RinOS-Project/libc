@@ -36,5 +36,5 @@ int timerfd_gettime(int fd, struct itimerspec* value);
 }
 #endif
 
-#endif /* hosted Linux delegates to native provider */
 #endif /* _SYS_TIMERFD_H */
+#endif /* hosted Linux delegates to native provider */

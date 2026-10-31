@@ -27,5 +27,5 @@ int eventfd2(unsigned int initial_value, int flags);
 }
 #endif
 
-#endif /* hosted Linux delegates to native provider */
 #endif /* _SYS_EVENTFD_H */
+#endif /* hosted Linux delegates to native provider */

@@ -53,5 +53,5 @@ int signalfd4(int fd, const sigset_t* mask, int sizemask, int flags);
 }
 #endif
 
-#endif /* hosted Linux delegates to native provider */
 #endif /* _SYS_SIGNALFD_H */
+#endif /* hosted Linux delegates to native provider */
