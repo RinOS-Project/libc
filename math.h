@@ -440,6 +440,8 @@ static inline double nextafter(double from, double to) {
         return from + to;
     if (from == 0.0) {
         u.i = (to > 0.0) ? 1ULL : (1ULL << 63) | 1ULL;
+        /* Min-subnormal result: underflow + inexact, errno stays 0. */
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
         return u.d;
     }
 
@@ -452,6 +454,11 @@ static inline double nextafter(double from, double to) {
         errno = ERANGE;
         (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
     } else if (u.d == 0.0) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+    } else if ((u.i & 0x7FF0000000000000ULL) == 0) {
+        /* Subnormal result: glibc reports ERANGE + UF|INEXACT here
+         * (the from-zero path below stays FE-only, also per glibc). */
         errno = ERANGE;
         (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
     }
@@ -470,6 +477,8 @@ static inline float nextafterf(float from, float to) {
         return from + to;
     if (from == 0.0f) {
         u.i = (to > 0.0f) ? 1U : (1U << 31) | 1U;
+        /* Min-subnormal result: underflow + inexact, errno stays 0. */
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
         return u.f;
     }
 
@@ -482,6 +491,11 @@ static inline float nextafterf(float from, float to) {
         errno = ERANGE;
         (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
     } else if (u.f == 0.0f) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+    } else if ((u.i & 0x7F800000U) == 0) {
+        /* Subnormal result: glibc reports ERANGE + UF|INEXACT here
+         * (the from-zero path below stays FE-only, also per glibc). */
         errno = ERANGE;
         (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
     }
@@ -998,6 +1012,14 @@ static inline void sincosf(float x, float* sinp, float* cosp) {
     if (cosp != NULL) *cosp = (float)c;
 }
 
+static inline void sincosl(long double x, long double* sinp,
+                           long double* cosp) {
+    double s, c;
+    sincos((double)x, &s, &c);
+    if (sinp != NULL) *sinp = (long double)s;
+    if (cosp != NULL) *cosp = (long double)c;
+}
+
 /* tan - 正接 (single Payne-Hanek reduction, quotient of kernels) */
 static inline double tan(double x) {
     if (__builtin_isnan(x)) return NAN;
@@ -1316,27 +1338,55 @@ static inline long double roundl(long double x) {
 }
 
 static inline long __rin_math_lround_to_long(double rounded) {
-    if (__builtin_isnan(rounded)) return 0L;
-    if (__builtin_isinf(rounded))
+    if (__builtin_isnan(rounded)) {
+        (void)feraiseexcept(FE_INVALID);
+        return 0L;
+    }
+    if (__builtin_isinf(rounded)) {
+        (void)feraiseexcept(FE_INVALID);
         return __builtin_signbit(rounded) ? LONG_MIN : LONG_MAX;
+    }
 #if __LONG_MAX__ > 2147483647L
     /* No binary64 value exists between the largest representable integer
      * below 2^63 and 2^63 itself, so the half-open check is exact. */
-    if (rounded >= 0x1p63) return LONG_MAX;
-    if (rounded < -0x1p63) return LONG_MIN;
+    if (rounded >= 0x1p63) {
+        (void)feraiseexcept(FE_INVALID);
+        return LONG_MAX;
+    }
+    if (rounded < -0x1p63) {
+        (void)feraiseexcept(FE_INVALID);
+        return LONG_MIN;
+    }
 #else
-    if (rounded > (double)LONG_MAX) return LONG_MAX;
-    if (rounded < (double)LONG_MIN) return LONG_MIN;
+    if (rounded > (double)LONG_MAX) {
+        (void)feraiseexcept(FE_INVALID);
+        return LONG_MAX;
+    }
+    if (rounded < (double)LONG_MIN) {
+        (void)feraiseexcept(FE_INVALID);
+        return LONG_MIN;
+    }
 #endif
     return (long)rounded;
 }
 
 static inline long long __rin_math_lround_to_ll(double rounded) {
-    if (__builtin_isnan(rounded)) return 0LL;
-    if (__builtin_isinf(rounded))
+    if (__builtin_isnan(rounded)) {
+        (void)feraiseexcept(FE_INVALID);
+        return 0LL;
+    }
+    if (__builtin_isinf(rounded)) {
+        (void)feraiseexcept(FE_INVALID);
         return __builtin_signbit(rounded) ? LLONG_MIN : LLONG_MAX;
-    if (rounded >= 0x1p63) return LLONG_MAX;
-    if (rounded < -0x1p63) return LLONG_MIN;
+    }
+    if (rounded >= 0x1p63) {
+        (void)feraiseexcept(FE_INVALID);
+        return LLONG_MAX;
+    }
+    if (rounded < -0x1p63) {
+        (void)feraiseexcept(FE_INVALID);
+        return LLONG_MIN;
+    }
     return (long long)rounded;
 }
 
@@ -1886,7 +1936,7 @@ static inline double remquo(double x, double y, int *quo) {
      * past 2^1024 also store 0 (unrepresentable in binary64). */
     if (__builtin_isnan(x) || __builtin_isnan(y)) return NAN;
     if (y == 0.0 || __builtin_isinf(x)) {
-        errno = EDOM;
+        /* glibc parity: FE-only, no errno on this domain row. */
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
