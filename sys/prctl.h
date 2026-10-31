@@ -88,12 +88,8 @@ extern "C" {
 #define PR_GET_FP_MODE      46  /* Get FP mode */
 #define PR_CAP_AMBIENT      47  /* Ambient capabilities */
 
-/* Linux capability sets are deliberately unavailable.  Their prctl options
- * return ENOTSUP; capget/capset have no RinOS syscall entrypoint.  LINUX_NR_*
- * values are source-compatibility constants, not dispatch numbers.  RinOS
- * capabilities are not translated into Linux bits. */
-#define RIN_LINUX_CAPABILITY_SETS_SUPPORTED 0
-#define RIN_LINUX_PRCTL_CAPABILITY_OPTIONS_SUPPORTED 0
+#define RIN_LINUX_CAPABILITY_SETS_SUPPORTED 1
+#define RIN_LINUX_PRCTL_CAPABILITY_OPTIONS_SUPPORTED 1
 #define PR_SVE_SET_VL       50  /* Set SVE vector length */
 #define PR_SVE_GET_VL       51  /* Get SVE vector length */
 #define PR_GET_SPECULATION_CTRL 52
@@ -317,7 +313,9 @@ static inline int prctl(int option, ...) {
         option == PR_SET_NAME || option == PR_GET_NAME ||
         option == PR_SET_TSC || option == PR_SET_PDEATHSIG ||
         option == PR_SET_DUMPABLE || option == PR_SET_NO_NEW_PRIVS ||
-        option == PR_SET_SECCOMP) {
+        option == PR_SET_SECCOMP || option == PR_SET_KEEPCAPS ||
+        option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP ||
+        option == PR_SET_SECUREBITS || option == PR_CAP_AMBIENT) {
         __builtin_va_list args;
         __builtin_va_start(args, option);
         if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
@@ -330,6 +328,9 @@ static inline int prctl(int option, ...) {
         } else if (option == PR_SET_SECCOMP) {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
             arg3 = (uintptr_t)__builtin_va_arg(args, struct sock_fprog*);
+        } else if (option == PR_CAP_AMBIENT) {
+            arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+            arg3 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
         } else {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
         }

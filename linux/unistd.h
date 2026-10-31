@@ -9,9 +9,9 @@
 
 #include "../sys/syscall.h"
 
-/* LINUX_NR_* values are source-compatibility constants only.  capget/capset
- * are not registered in the RinOS syscall namespace. */
-#define RIN_LINUX_CAPGET_CAPSET_SUPPORTED 0
+/* LINUX_NR_* preserves Linux source numbers.  The __NR_* capability aliases
+ * below target RinOS's separate, generated syscall namespace. */
+#define RIN_LINUX_CAPGET_CAPSET_SUPPORTED 1
 
 /* x86 (32-bit) syscall numbers */
 /* Support __i386__, __i686__, or 32-bit mode (-m32) */
@@ -338,6 +338,19 @@
 #define LINUX_NR_io_uring_setup    425
 #define LINUX_NR_io_uring_enter    426
 #define LINUX_NR_io_uring_register 427
+
+#if defined(__x86_64__) && defined(__SIZEOF_POINTER__) && \
+    __SIZEOF_POINTER__ == 8
+#define LINUX_NR_capget 125
+#define LINUX_NR_capset 126
+#endif
+
+#ifndef __NR_capget
+#define __NR_capget SYS_CAPGET
+#endif
+#ifndef __NR_capset
+#define __NR_capset SYS_CAPSET
+#endif
 
 /* syscall function is defined in sys/syscall.h */
 
