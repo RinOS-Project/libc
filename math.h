@@ -10,6 +10,7 @@
  * compoundn, roundeven, fadd-family, ...).  Only nextup/nextdown plus
  * the C99/C11 subset exist today, so no version claim is published. */
 
+
 #include "stddef.h"
 #include "float.h"
 #include "limits.h"
@@ -59,6 +60,10 @@ typedef long double double_t;
 #ifndef M_SQRT2
 #define M_SQRT2 1.41421356237309504880
 #endif
+
+/* lgamma writes the sign of the gamma result here.  Unlike errno this is
+ * a single process-global integer, not per-thread state. */
+extern int signgam;
 
 /* 分類マクロ定数 */
 #define FP_NAN       0
@@ -522,8 +527,11 @@ static inline float fabsf(float x) {
 
 /* fmod - 浮動小数点剰余 */
 static inline double fmod(double x, double y) {
-    if (__builtin_isnan(x) || __builtin_isnan(y) || y == 0.0 ||
-        __builtin_isinf(x)) return NAN;
+    if (__builtin_isnan(x) || __builtin_isnan(y)) return NAN;
+    if (y == 0.0 || __builtin_isinf(x)) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (__builtin_isinf(y) || x == 0.0) return x;
 
     int ex = 0;
@@ -625,7 +633,10 @@ static inline float tanf(float x) {
 /* sqrt - 平方根 (Newton法) */
 static inline double sqrt(double x) {
     if (__builtin_isnan(x)) return x;
-    if (x < 0) return NAN;
+    if (x < 0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (__builtin_isinf(x) || x == 0) return x;
 
     int exponent = 0;
@@ -662,7 +673,6 @@ static inline double pow(double base, double exponent) {
                   magnitude < 9007199254740992.0 &&
                   trunc(magnitude / 2.0) * 2.0 != magnitude;
 
-    if (!integral_exp && base < 0.0) return NAN;
     if (__builtin_isinf(exponent)) {
         double abs_base = fabs(base);
         if (abs_base == 1.0) return 1.0;
@@ -674,7 +684,12 @@ static inline double pow(double base, double exponent) {
         double result = neg_exp ? 0.0 : INFINITY;
         return (negative_base && odd_exp) ? -result : result;
     }
+    if (!integral_exp && base < 0.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (base == 0.0) {
+        if (neg_exp) (void)feraiseexcept(FE_DIVBYZERO);
         double result = neg_exp ? INFINITY : 0.0;
         return (negative_base && odd_exp) ? -result : result;
     }
@@ -726,36 +741,9 @@ static inline long double ceill(long double x) {
 /* round - 四捨五入 */
 static inline unsigned long long rin_math_double_fraction_mask(
     unsigned int fractional_bits) {
-    static const unsigned long long masks[53] = {
-        0x0000000000000000ULL, 0x0000000000000001ULL,
-        0x0000000000000003ULL, 0x0000000000000007ULL,
-        0x000000000000000FULL, 0x000000000000001FULL,
-        0x000000000000003FULL, 0x000000000000007FULL,
-        0x00000000000000FFULL, 0x00000000000001FFULL,
-        0x00000000000003FFULL, 0x00000000000007FFULL,
-        0x0000000000000FFFULL, 0x0000000000001FFFULL,
-        0x0000000000003FFFULL, 0x0000000000007FFFULL,
-        0x000000000000FFFFULL, 0x000000000001FFFFULL,
-        0x000000000003FFFFULL, 0x000000000007FFFFULL,
-        0x00000000000FFFFFULL, 0x00000000001FFFFFULL,
-        0x00000000003FFFFFULL, 0x00000000007FFFFFULL,
-        0x0000000000FFFFFFULL, 0x0000000001FFFFFFULL,
-        0x0000000003FFFFFFULL, 0x0000000007FFFFFFULL,
-        0x000000000FFFFFFFULL, 0x000000001FFFFFFFULL,
-        0x000000003FFFFFFFULL, 0x000000007FFFFFFFULL,
-        0x00000000FFFFFFFFULL, 0x00000001FFFFFFFFULL,
-        0x00000003FFFFFFFFULL, 0x00000007FFFFFFFFULL,
-        0x0000000FFFFFFFFFULL, 0x0000001FFFFFFFFFULL,
-        0x0000003FFFFFFFFFULL, 0x0000007FFFFFFFFFULL,
-        0x000000FFFFFFFFFFULL, 0x000001FFFFFFFFFFULL,
-        0x000003FFFFFFFFFFULL, 0x000007FFFFFFFFFFULL,
-        0x00000FFFFFFFFFFFULL, 0x00001FFFFFFFFFFFULL,
-        0x00003FFFFFFFFFFFULL, 0x00007FFFFFFFFFFFULL,
-        0x0000FFFFFFFFFFFFULL, 0x0001FFFFFFFFFFFFULL,
-        0x0003FFFFFFFFFFFFULL, 0x0007FFFFFFFFFFFFULL,
-        0x000FFFFFFFFFFFFFULL
-    };
-    return masks[fractional_bits];
+    return fractional_bits == 0u
+        ? 0u
+        : (1ULL << fractional_bits) - 1u;
 }
 
 static inline double round(double x) {
@@ -881,12 +869,20 @@ static inline long lroundf(float x) {
     return __rin_math_lround_to_long((double)roundf(x));
 }
 
+static inline long lroundl(long double x) {
+    return __rin_math_lround_to_long(round((double)x));
+}
+
 static inline long long llround(double x) {
     return __rin_math_lround_to_ll(round(x));
 }
 
 static inline long long llroundf(float x) {
     return __rin_math_lround_to_ll((double)roundf(x));
+}
+
+static inline long long llroundl(long double x) {
+    return __rin_math_lround_to_ll(round((double)x));
 }
 
 /* trunc - 0方向への切り捨て */
@@ -949,8 +945,14 @@ static inline double exp(double x) {
     if (__builtin_isnan(x)) return x;
     if (__builtin_isinf(x)) return x > 0.0 ? INFINITY : 0.0;
     /* Binary64 overflow/underflow boundaries. */
-    if (x > 709.782712893384) return HUGE_VAL;
-    if (x < -745.133219101941) return 0.0;
+    if (x > 709.782712893384) {
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return HUGE_VAL;
+    }
+    if (x < -745.133219101941) {
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+        return 0.0;
+    }
 
     /* Reduce to a small interval around zero, then rescale by 2^k. */
     int k = (int)(x / M_LN2 + (x >= 0.0 ? 0.5 : -0.5));
@@ -975,16 +977,22 @@ static inline float expf(float x) {
 /* log - 自然対数 (Newton法) */
 static inline double log(double x) {
     if (__builtin_isnan(x)) return x;
-    if (x == 0.0) return -HUGE_VAL;
-    if (x < 0.0) return NAN;
+    if (x == 0.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return -HUGE_VAL;
+    }
+    if (x < 0.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (__builtin_isinf(x)) return x;
     if (x == 1.0) return 0.0;
 
-    /* x = m * 2^e として分解 */
-    double m = x;
+    /* x = m * 2^e として分解する。frexpを使うことで、subnormalでも
+     * 正規化の反復回数が指数に比例しない。 */
     int e = 0;
-    while (m >= 2.0) { m /= 2.0; e++; }
-    while (m < 1.0) { m *= 2.0; e--; }
+    double m = frexp(x, &e) * 2.0;
+    --e;
 
     /* atanh series converges quickly for z=(m-1)/(m+1) in [0,1/3). */
     double z = (m - 1.0) / (m + 1.0);
@@ -1014,6 +1022,322 @@ static inline float log10f(float x) {
     return (float)log10((double)x);
 }
 
+/* ═══════════════════════════════════════════════════════════════
+ * POSIX.1-2008 completions: erf, erfc, lgamma, tgamma, remquo.
+ * Self-contained (no libm): Taylor series (|x| <= 1), Lentz
+ * continued fraction (erfc tails), Stirling series with Bernoulli
+ * numbers B2..B10 (lgamma).  Error reporting is fenv-only,
+ * matching the rest of this header.  Edge semantics (NaN /
+ * signed zero / infinities / poles / signgam / *quo on error)
+ * were probed against glibc and mirror it, including lgamma NaN
+ * raising FE_INVALID and tgamma preserving signgam.
+ * ═══════════════════════════════════════════════════════════════ */
+
+/* 2/sqrt(pi) and 1/sqrt(pi), correctly rounded. */
+#define __RIN_MATH_2_SQRT_PI 1.12837916709551257390
+#define __RIN_MATH_1_SQRT_PI 0.56418958354775628695
+
+static inline double __rin_math_erf_taylor(double x) {
+    /* erf(x) = 2/sqrt(pi) * sum_n (-1)^n x^(2n+1) / (n! (2n+1)).
+     * Called with |x| <= 1, where cancellation is negligible. */
+    double x2 = x * x;
+    double term = x;
+    double sum = x;
+    for (int n = 1; n <= 60; n++) {
+        term *= -x2 * (2.0 * n - 1.0) / ((double)n * (2.0 * n + 1.0));
+        sum += term;
+        if (term == 0.0 || fabs(term) < 1e-17 * fabs(sum)) break;
+    }
+    return __RIN_MATH_2_SQRT_PI * sum;
+}
+
+static inline double __rin_math_erfc_lentz(double x) {
+    /* Laplace continued fraction in Lentz-modified form, x > 0:
+     *   erfc(x) = x e^(-x^2)/sqrt(pi) * CF
+     *   CF = 1/(x^2+ (1/2)/(1+ 1/(x^2+ (3/2)/(1+ ...)))),
+     * numerators n/2, denominators alternating x^2, 1.
+     * Converges for x >= 1 in about 20 iterations.  Raises nothing;
+     * the erfc wrapper reports underflow for tiny results. */
+    double x2 = x * x;
+    double tiny = 1e-300;
+    double f = tiny;
+    double c = tiny;
+    double d = 0.0;
+    for (int n = 1; n <= 500; n++) {
+        double a = (n == 1) ? 1.0 : (double)(n - 1) / 2.0;
+        double b = (n % 2 == 1) ? x2 : 1.0;
+        d = b + a * d;
+        if (d == 0.0) d = tiny;
+        d = 1.0 / d;
+        c = b + a / c;
+        if (c == 0.0) c = tiny;
+        double cd = c * d;
+        f *= cd;
+        if (fabs(cd - 1.0) < 1e-16) break;
+    }
+    return x * exp(-x2) * __RIN_MATH_1_SQRT_PI * f;
+}
+
+static inline void __rin_math_scrub_spurious_uf(int entry_uf,
+                                                 double r) {
+    /* Taylor/Lentz intermediates can underflow while the final
+     * result is perfectly normal; glibc leaks no such underflow.
+     * Genuine tiny results and pre-existing flags are preserved. */
+    if (!entry_uf && r != 0.0 && fabs(r) >= __DBL_MIN__)
+        feclearexcept(FE_UNDERFLOW);
+}
+
+static inline double erf(double x) {
+    if (__builtin_isnan(x)) return x;
+    if (__builtin_isinf(x)) return x > 0.0 ? 1.0 : -1.0;
+    int entry_uf = fetestexcept(FE_UNDERFLOW);
+    double ax = fabs(x);
+    double e;
+    if (ax <= 1.5) {
+        e = __rin_math_erf_taylor(ax);
+    } else {
+        e = 1.0 - __rin_math_erfc_lentz(ax);
+    }
+    double r = __builtin_signbit(x) ? -e : e;
+    __rin_math_scrub_spurious_uf(entry_uf, r);
+    return r;
+}
+
+static inline float erff(float x) {
+    return (float)erf((double)x);
+}
+
+static inline long double erfl(long double x) {
+    return (long double)erf((double)x);
+}
+
+static inline double erfc(double x) {
+    if (__builtin_isnan(x)) return x;
+    if (__builtin_isinf(x)) return x > 0.0 ? 0.0 : 2.0;
+    int entry_uf = fetestexcept(FE_UNDERFLOW);
+    double ax = fabs(x);
+    double e;
+    if (ax <= 1.5) {
+        e = 1.0 - __rin_math_erf_taylor(ax);
+    } else {
+        e = __rin_math_erfc_lentz(ax);
+        if (x >= 0.0 && (e == 0.0 || e < __DBL_MIN__)) {
+            /* Tiny positive result: glibc raises underflow here. */
+            (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+        }
+    }
+    double r = x >= 0.0 ? e : 2.0 - e;
+    __rin_math_scrub_spurious_uf(entry_uf, r);
+    return r;
+}
+
+static inline float erfcf(float x) {
+    return (float)erfc((double)x);
+}
+
+static inline long double erfcl(long double x) {
+    return (long double)erfc((double)x);
+}
+
+static inline double __rin_lgamma(double x, int *signp) {
+    /* Stirling series: lgamma(y) = (y-1/2) ln y - y + ln(2pi)/2
+     *   + 1/(12y) - 1/(360y^3) + 1/(1260y^5) - 1/(1680y^7)
+     *   + 1/(1188y^9),
+     * from B2=1/6, B4=-1/30, B6=1/42, B8=-1/30, B10=5/66
+     * (each verified against zeta(2n)).  Positive arguments are
+     * lifted to y >= 12 (truncation ~3e-14); negatives use the
+     * reflection formula; poles and edge classes mirror glibc. */
+    if (__builtin_isnan(x)) {
+        *signp = 1;
+        return x;
+    }
+    if (__builtin_isinf(x)) {
+        *signp = 1;
+        if (x > 0.0) return x;
+        return HUGE_VAL;
+    }
+    if (x == 0.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        *signp = __builtin_signbit(x) ? -1 : 1;
+        return HUGE_VAL;
+    }
+    if (x == 1.0 || x == 2.0) {
+        /* Gamma(1) = Gamma(2) = 1: exact zero, no exceptions. */
+        *signp = 1;
+        return 0.0;
+    }
+    if (x < 0.0) {
+        double fl = floor(x);
+        if (x == fl) {
+            (void)feraiseexcept(FE_DIVBYZERO);
+            *signp = 1;
+            return HUGE_VAL;
+        }
+        /* lgamma(x) = ln pi - ln sin(pi frac) - lgamma(1-x);
+         * sign(Gamma(x)) = sign(sin(pi x)) = (-1)^floor(x).
+         * fmod keeps the parity exact past 2^53 (long would not). */
+        double frac = x - fl;
+        /* sin(pi f) = sin(pi (1-f)): fold to [0, 1/2] so near-pole
+         * arguments stay tiny and the Taylor series keeps full
+         * precision instead of cancelling at pi. */
+        double folded = (frac > 0.5) ? 1.0 - frac : frac;
+        double s = sin(3.14159265358979323846 * folded);
+        int ignored_sign;
+        double g = __rin_lgamma(1.0 - x, &ignored_sign);
+        *signp = (fmod(fl, 2.0) != 0.0) ? -1 : 1;
+        if (__builtin_isnan(g)) return g;
+        return 1.14472988584940017414 - log(s) - g;
+    }
+    double y = x;
+    double shift = 0.0;
+    while (y < 12.0) {
+        shift -= log(y);
+        y += 1.0;
+    }
+    double inv = 1.0 / y;
+    double series;
+    if (inv < 1e-150) {
+        /* Higher powers underflow to literal zero here; inv/12 is
+         * the complete series, computed without spurious underflow. */
+        series = inv * (1.0 / 12.0);
+    } else {
+        double inv2 = inv * inv;
+        series = inv * (1.0 / 12.0 + inv2 * (-1.0 / 360.0 +
+            inv2 * (1.0 / 1260.0 + inv2 * (-1.0 / 1680.0 +
+            inv2 * (1.0 / 1188.0)))));
+    }
+    double r = (y - 0.5) * log(y) - y + 0.91893853320467274178 + series;
+    r += shift;
+    *signp = 1;
+    if (__builtin_isinf(r) && r > 0.0) {
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return HUGE_VAL;
+    }
+    return r;
+}
+
+static inline double lgamma(double x) {
+    int sign;
+    double result = __rin_lgamma(x, &sign);
+    signgam = sign;
+    return result;
+}
+
+static inline float lgammaf(float x) {
+    return (float)lgamma((double)x);
+}
+
+static inline long double lgammal(long double x) {
+    return (long double)lgamma((double)x);
+}
+
+static inline double tgamma(double x) {
+    /* Use a local sign result: tgamma is thread-safe and must not access
+     * the process-global signgam used by lgamma. */
+    if (__builtin_isnan(x)) return x;
+    if (__builtin_isinf(x)) {
+        if (x > 0.0) return x;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (x == 0.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return __builtin_signbit(x) ? -HUGE_VAL : HUGE_VAL;
+    }
+    if (x < 0.0 && x == floor(x)) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (x == 1.0) return 1.0;
+    int s;
+    double g = __rin_lgamma(x, &s);
+    if (__builtin_isnan(g)) return NAN;
+    if (__builtin_isinf(g) && g > 0.0) {
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return s > 0 ? HUGE_VAL : -HUGE_VAL;
+    }
+    double r = exp(g);
+    if (__builtin_isinf(r)) {
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return s > 0 ? HUGE_VAL : -HUGE_VAL;
+    }
+    if (fabs(r) < __DBL_MIN__) {
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+        return s > 0 ? r : -r;
+    }
+    return s > 0 ? r : -r;
+}
+
+static inline float tgammaf(float x) {
+    return (float)tgamma((double)x);
+}
+
+static inline long double tgammal(long double x) {
+    return (long double)tgamma((double)x);
+}
+
+static inline double remquo(double x, double y, int *quo) {
+    /* Bitwise-identical remainder to remainder(); *quo holds the
+     * round-half-even quotient's sign and low 3 bits.  On invalid
+     * inputs *quo is left untouched (glibc behavior); quotients
+     * past 2^1024 also store 0 (unrepresentable in binary64). */
+    if (__builtin_isnan(x) || __builtin_isnan(y)) return NAN;
+    if (y == 0.0 || __builtin_isinf(x)) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (__builtin_isinf(y)) {
+        if (quo) *quo = 0;
+        return x;
+    }
+    double rem = fmod(x, y);
+    if (__builtin_isnan(rem)) return rem;
+    double qd = x / y;
+    double n0 = trunc(qd);
+    double half = 0.5 * fabs(y);
+    double magnitude = fabs(rem);
+    int adjust = magnitude > half;
+    if (magnitude == half) {
+        /* IEEE remainder chooses the even nearest quotient on a tie. */
+        if (__builtin_isfinite(qd)) {
+            double absolute = fabs(qd);
+            double lower = trunc(absolute);
+            double fraction = absolute - lower;
+            if (fraction == 0.5)
+                adjust = trunc(lower / 2.0) * 2.0 != lower;
+        }
+    }
+    /* Quotient/rounding consistency: when qd rounded to an integer
+     * (qd == n0), the true quotient is within half an ulp of n0, so
+     * n0 is already correctly rounded even though fmod trunc-side
+     * remainder exceeds half.  The remainder keeps its own adjust. */
+    int adjust_quo = (qd == n0) ? 0 : adjust;
+    if (quo) {
+        if (!__builtin_isfinite(n0)) {
+            *quo = 0;
+        } else {
+            /* glibc folds the truncated quotient, then adds the
+             * rounding increment unfolded (hence quo can be +-8). */
+            double folded = fmod(n0, 8.0);
+            int q = (int)folded;
+            if (adjust_quo)
+                q += (__builtin_signbit(x) ==
+                      __builtin_signbit(y)) ? 1 : -1;
+            *quo = q;
+        }
+    }
+    if (!adjust) return rem;
+    return __builtin_signbit(x) ? rem + fabs(y) : rem - fabs(y);
+}
+
+static inline float remquof(float x, float y, int *quo) {
+    return (float)remquo((double)x, (double)y, quo);
+}
+
+static inline long double remquol(long double x, long double y, int *quo) {
+    return (long double)remquo((double)x, (double)y, quo);
+}
+
 /* log2 - 2を底とする対数 */
 static inline double log2(double x) {
     return log(x) / 0.693147180559945309417;  /* log(2) */
@@ -1026,8 +1350,14 @@ static inline float log2f(float x) {
 /* log1p - log(1 + x) より精度の高い実装 */
 static inline double log1p(double x) {
     if (__builtin_isnan(x)) return x;
-    if (x == -1.0) return -HUGE_VAL;
-    if (x < -1.0) return NAN;
+    if (x == -1.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return -HUGE_VAL;
+    }
+    if (x < -1.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (__builtin_isinf(x)) return x;
     if (x == 0.0) return x;
     /* Below half an ulp at one, the quadratic correction cannot affect a
@@ -1087,7 +1417,10 @@ static inline float expm1f(float x) {
 /* asin - 逆正弦 (Taylor展開) */
 static inline double asin(double x) {
     if (__builtin_isnan(x)) return x;
-    if (x < -1.0 || x > 1.0) return NAN;
+    if (x < -1.0 || x > 1.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (x == 1.0) return M_PI / 2.0;
     if (x == -1.0) return -M_PI / 2.0;
 
@@ -1253,7 +1586,10 @@ static inline float asinhf(float x) {
 static inline double acosh(double x) {
     if (__builtin_isnan(x)) return x;
     if (__builtin_isinf(x)) return x;
-    if (x < 1.0) return NAN;
+    if (x < 1.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (x == 1.0) return 0.0;
     if (x > 1e10) return log(x) + M_LN2;
     return log(x + sqrt((x - 1.0) * (x + 1.0)));
@@ -1266,9 +1602,18 @@ static inline float acoshf(float x) {
 /* atanh - 逆双曲線正接 */
 static inline double atanh(double x) {
     if (__builtin_isnan(x)) return x;
-    if (x == 1.0) return INFINITY;
-    if (x == -1.0) return -INFINITY;
-    if (x < -1.0 || x > 1.0) return NAN;
+    if (x == 1.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return INFINITY;
+    }
+    if (x == -1.0) {
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return -INFINITY;
+    }
+    if (x < -1.0 || x > 1.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
     if (fabs(x) < 1e-10) return x;
     if (fabs(x) < 0.5) {
         /* atanh(x) = (log1p(x)-log1p(-x))/2; keeping the two log1p terms
@@ -1611,19 +1956,30 @@ static inline double __rin_math_round_even(double x) {
 
 static inline double __rin_math_round_mode(double x) {
     double truncated;
+    double r;
     switch (fegetround()) {
     case FE_DOWNWARD:
         truncated = trunc(x);
-        return x < truncated ? truncated - 1.0 : truncated;
+        r = x < truncated ? truncated - 1.0 : truncated;
+        break;
     case FE_UPWARD:
         truncated = trunc(x);
-        return x > truncated ? truncated + 1.0 : truncated;
+        r = x > truncated ? truncated + 1.0 : truncated;
+        break;
     case FE_TOWARDZERO:
-        return trunc(x);
+        r = trunc(x);
+        break;
     case FE_TONEAREST:
     default:
-        return __rin_math_round_even(x);
+        r = __rin_math_round_even(x);
+        break;
     }
+    /* IEEE 754: round-to-integral raises inexact when it changes
+     * the value (quiet NaN and infinities pass through silently).
+     * nearbyint below suppresses this again (C99 7.12.9.3). */
+    if (__builtin_isfinite(x) && r != x)
+        (void)feraiseexcept(FE_INEXACT);
+    return r;
 }
 
 static inline double rint(double x) {
@@ -1647,22 +2003,43 @@ static inline long lrintf(float x) {
     return __rin_math_lround_to_long(__rin_math_round_mode((double)x));
 }
 
+static inline long lrintl(long double x) {
+    return __rin_math_lround_to_long(__rin_math_round_mode((double)x));
+}
+
 /* llrint - 四捨五入してlong longへ */
 static inline long long llrint(double x) {
     return __rin_math_lround_to_ll(__rin_math_round_mode(x));
 }
 
+static inline long long llrintf(float x) {
+    return __rin_math_lround_to_ll(__rin_math_round_mode((double)x));
+}
+
+static inline long long llrintl(long double x) {
+    return __rin_math_lround_to_ll(__rin_math_round_mode((double)x));
+}
+
 /* nearbyint - 現在の丸めモードで整数へ（FE例外なし） */
 static inline double nearbyint(double x) {
-    return rint(x);
+    int had = fetestexcept(FE_INEXACT);
+    double r = rint(x);
+    if (!had) feclearexcept(FE_INEXACT);
+    return r;
 }
 
 static inline float nearbyintf(float x) {
-    return rintf(x);
+    int had = fetestexcept(FE_INEXACT);
+    float r = rintf(x);
+    if (!had) feclearexcept(FE_INEXACT);
+    return r;
 }
 
 static inline long double nearbyintl(long double x) {
-    return rintl(x);
+    int had = fetestexcept(FE_INEXACT);
+    long double r = rintl(x);
+    if (!had) feclearexcept(FE_INEXACT);
+    return r;
 }
 
 /* remainder - IEEE剰余 */
@@ -1778,32 +2155,405 @@ static inline float fdimf(float x, float y) {
     return x > y ? x - y : 0.0f;
 }
 
-/* fma - 融合積和演算 */
-static inline double __rin_fma_finite(double x, double y, double z) {
-    /* Dekker product splitting recovers the rounded-away product tail for
-     * ordinary finite operands without requiring an external libm symbol. */
-    double product = x * y;
-    if (!__builtin_isfinite(product) || fabs(x) > 1e150 || fabs(y) > 1e150)
-        return product + z;
-    const double splitter = 134217729.0; /* 2^27 + 1 */
-    double cx = splitter * x;
-    double cy = splitter * y;
-    double hx = cx - (cx - x);
-    double hy = cy - (cy - y);
-    double tx = x - hx;
-    double ty = y - hy;
-    double product_error = ((hx * hy - product) + hx * ty + tx * hy) + tx * ty;
-    double sum = product + z;
-    double sum_error = (product - sum) + z;
-    return sum + (product_error + sum_error);
+/* fma - exact binary significand product-plus-add, rounded once.  A fixed
+ * integer accumulator keeps the intermediate product outside the floating
+ * exponent range, including overflow cancellation and subnormal cases. */
+enum { __RIN_FMA_BIG_LIMBS = 67 };
+
+typedef struct __RinFmaOperand {
+    unsigned long long significand;
+    int exponent;
+    int negative;
+    int zero;
+    int infinity;
+    int nan;
+} __RinFmaOperand;
+
+static inline __RinFmaOperand __rin_fma_decode_double(double value) {
+    union { double value; unsigned long long bits; } raw;
+    __RinFmaOperand operand;
+    unsigned int exponent;
+    raw.value = value;
+    exponent = (unsigned int)((raw.bits >> 52) & 0x7FFu);
+    operand.negative = (int)(raw.bits >> 63);
+    operand.significand = raw.bits & 0xFFFFFFFFFFFFFULL;
+    operand.zero = 0;
+    operand.infinity = 0;
+    operand.nan = 0;
+    if (exponent == 0x7FFu) {
+        operand.nan = operand.significand != 0u;
+        operand.infinity = operand.significand == 0u;
+        operand.exponent = 0;
+    } else if (exponent == 0u) {
+        operand.zero = operand.significand == 0u;
+        operand.exponent = -1074;
+    } else {
+        operand.significand |= 1ULL << 52;
+        operand.exponent = (int)exponent - 1075;
+    }
+    return operand;
+}
+
+static inline __RinFmaOperand __rin_fma_decode_float(float value) {
+    union { float value; unsigned int bits; } raw;
+    __RinFmaOperand operand;
+    unsigned int exponent;
+    raw.value = value;
+    exponent = (raw.bits >> 23) & 0xFFu;
+    operand.negative = (int)(raw.bits >> 31);
+    operand.significand = raw.bits & 0x7FFFFFu;
+    operand.zero = 0;
+    operand.infinity = 0;
+    operand.nan = 0;
+    if (exponent == 0xFFu) {
+        operand.nan = operand.significand != 0u;
+        operand.infinity = operand.significand == 0u;
+        operand.exponent = 0;
+    } else if (exponent == 0u) {
+        operand.zero = operand.significand == 0u;
+        operand.exponent = -149;
+    } else {
+        operand.significand |= 1ULL << 23;
+        operand.exponent = (int)exponent - 150;
+    }
+    return operand;
+}
+
+static inline void __rin_fma_add_shifted_word(
+    unsigned long long* value, unsigned long long word, int shift) {
+    int index;
+    unsigned int offset;
+    unsigned long long low;
+    unsigned long long high;
+    unsigned long long before;
+    unsigned long long carry;
+    unsigned long long carry_a;
+    unsigned long long carry_b;
+    if (word == 0u) return;
+    index = shift / 64;
+    offset = (unsigned int)shift & 63u;
+    low = word << offset;
+    high = offset == 0u ? 0u : word >> (64u - offset);
+    before = value[index];
+    value[index] += low;
+    carry = value[index] < before;
+    ++index;
+    if (index >= __RIN_FMA_BIG_LIMBS) return;
+    before = value[index];
+    value[index] += high;
+    carry_a = value[index] < before;
+    before = value[index];
+    value[index] += carry;
+    carry_b = value[index] < before;
+    carry = carry_a | carry_b;
+    while (carry != 0u && ++index < __RIN_FMA_BIG_LIMBS) {
+        ++value[index];
+        carry = value[index] == 0u;
+    }
+}
+
+static inline int __rin_fma_big_compare(const unsigned long long* left,
+                                        const unsigned long long* right) {
+    int index;
+    for (index = __RIN_FMA_BIG_LIMBS - 1; index >= 0; --index) {
+        if (left[index] != right[index])
+            return left[index] > right[index] ? 1 : -1;
+    }
+    return 0;
+}
+
+static inline int __rin_fma_big_high_bit(const unsigned long long* value) {
+    int index;
+    for (index = __RIN_FMA_BIG_LIMBS - 1; index >= 0; --index) {
+        unsigned long long word = value[index];
+        if (word != 0u) {
+            int bit = 0;
+            while ((word >>= 1) != 0u) ++bit;
+            return index * 64 + bit;
+        }
+    }
+    return -1;
+}
+
+static inline int __rin_fma_big_bit(const unsigned long long* value,
+                                     int bit) {
+    if (bit < 0 || bit >= __RIN_FMA_BIG_LIMBS * 64) return 0;
+    return (int)((value[bit / 64] >> ((unsigned int)bit & 63u)) & 1u);
+}
+
+static inline int __rin_fma_big_any_below(
+    const unsigned long long* value, int bit_count) {
+    int full_words;
+    int index;
+    unsigned int partial_bits;
+    if (bit_count <= 0) return 0;
+    full_words = bit_count / 64;
+    if (full_words > __RIN_FMA_BIG_LIMBS)
+        full_words = __RIN_FMA_BIG_LIMBS;
+    for (index = 0; index < full_words; ++index)
+        if (value[index] != 0u) return 1;
+    partial_bits = (unsigned int)bit_count & 63u;
+    if (partial_bits != 0u && full_words < __RIN_FMA_BIG_LIMBS &&
+        (value[full_words] & ((1ULL << partial_bits) - 1u)) != 0u)
+        return 1;
+    return 0;
+}
+
+static inline unsigned long long __rin_fma_big_shifted_low(
+    const unsigned long long* value, int shift) {
+    int index;
+    unsigned int offset;
+    unsigned long long result;
+    if (shift < 0) {
+        int left = -shift;
+        return left < 64 ? value[0] << (unsigned int)left : 0u;
+    }
+    index = shift / 64;
+    offset = (unsigned int)shift & 63u;
+    if (index >= __RIN_FMA_BIG_LIMBS) return 0u;
+    result = value[index] >> offset;
+    if (offset != 0u && index + 1 < __RIN_FMA_BIG_LIMBS)
+        result |= value[index + 1] << (64u - offset);
+    return result;
+}
+
+static inline unsigned long long __rin_fma_finite_bits(
+    __RinFmaOperand x, __RinFmaOperand y, __RinFmaOperand z,
+    int precision, int fraction_bits, int exponent_bits, int bias) {
+    unsigned long long product[__RIN_FMA_BIG_LIMBS] = {0};
+    unsigned long long addend[__RIN_FMA_BIG_LIMBS] = {0};
+    unsigned long long product_low;
+    unsigned long long product_high;
+    unsigned long long part0;
+    unsigned long long part1;
+    unsigned long long part2;
+    unsigned long long carry;
+    unsigned long long rounded;
+    unsigned long long sign_bit;
+    unsigned long long fraction_mask;
+    unsigned long long exponent_all;
+    unsigned long long result;
+    int product_exponent = x.exponent + y.exponent;
+    int product_negative = x.negative ^ y.negative;
+    int base_exponent = product_exponent < z.exponent
+        ? product_exponent : z.exponent;
+    int product_shift = product_exponent - base_exponent;
+    int addend_shift = z.exponent - base_exponent;
+    int negative;
+    int high_bit;
+    int exact_exponent;
+    int unit_exponent;
+    int discarded_bits;
+    int inexact;
+    int round_mode = fegetround();
+    int minimum_exponent = 1 - bias;
+    int maximum_exponent = (int)((1u << exponent_bits) - 2u) - bias;
+    int overflow = 0;
+
+    if (round_mode != FE_TONEAREST && round_mode != FE_UPWARD &&
+        round_mode != FE_DOWNWARD && round_mode != FE_TOWARDZERO)
+        round_mode = FE_TONEAREST;
+    if (x.significand != 0u && y.significand != 0u) {
+        unsigned long long x_low = (unsigned int)x.significand;
+        unsigned long long x_high = x.significand >> 32;
+        unsigned long long y_low = (unsigned int)y.significand;
+        unsigned long long y_high = y.significand >> 32;
+        part0 = x_low * y_low;
+        part1 = x_low * y_high + x_high * y_low;
+        part2 = x_high * y_high;
+        product_low = part0 + (part1 << 32);
+        product_high = part2 + (part1 >> 32) +
+                       (product_low < part0 ? 1u : 0u);
+        __rin_fma_add_shifted_word(product, product_low, product_shift);
+        __rin_fma_add_shifted_word(product, product_high,
+                                    product_shift + 64);
+    }
+    if (z.significand != 0u)
+        __rin_fma_add_shifted_word(addend, z.significand, addend_shift);
+
+    if (product_negative == z.negative) {
+        int index;
+        carry = 0u;
+        for (index = 0; index < __RIN_FMA_BIG_LIMBS; ++index) {
+            unsigned long long sum = product[index] + addend[index];
+            unsigned long long carry_a = sum < product[index];
+            unsigned long long total = sum + carry;
+            unsigned long long carry_b = total < sum;
+            product[index] = total;
+            carry = carry_a | carry_b;
+        }
+        negative = product_negative;
+    } else {
+        int comparison = __rin_fma_big_compare(product, addend);
+        int index;
+        const unsigned long long* larger;
+        const unsigned long long* smaller;
+        if (comparison == 0) {
+            int clear_index;
+            negative = round_mode == FE_DOWNWARD;
+            for (clear_index = 0; clear_index < __RIN_FMA_BIG_LIMBS;
+                 ++clear_index)
+                product[clear_index] = 0u;
+        } else {
+            negative = comparison > 0 ? product_negative : z.negative;
+            larger = comparison > 0 ? product : addend;
+            smaller = comparison > 0 ? addend : product;
+            carry = 0u;
+            for (index = 0; index < __RIN_FMA_BIG_LIMBS; ++index) {
+                unsigned long long difference = larger[index] - smaller[index];
+                unsigned long long borrow_a = larger[index] < smaller[index];
+                unsigned long long total = difference - carry;
+                unsigned long long borrow_b = difference < carry;
+                product[index] = total;
+                carry = borrow_a | borrow_b;
+            }
+        }
+    }
+
+    sign_bit = negative ? 1ULL << (fraction_bits + exponent_bits) : 0u;
+    fraction_mask = (1ULL << fraction_bits) - 1u;
+    exponent_all = (1ULL << exponent_bits) - 1u;
+    high_bit = __rin_fma_big_high_bit(product);
+    if (high_bit < 0) return sign_bit;
+    exact_exponent = base_exponent + high_bit;
+    unit_exponent = exact_exponent >= minimum_exponent
+        ? exact_exponent - fraction_bits
+        : minimum_exponent - fraction_bits;
+    discarded_bits = unit_exponent - base_exponent;
+    rounded = __rin_fma_big_shifted_low(product, discarded_bits);
+    inexact = discarded_bits > 0 &&
+              __rin_fma_big_any_below(product, discarded_bits);
+    if (inexact) {
+        int increment = 0;
+        if (round_mode == FE_TONEAREST) {
+            int guard = __rin_fma_big_bit(product, discarded_bits - 1);
+            int sticky = __rin_fma_big_any_below(product,
+                                                 discarded_bits - 1);
+            increment = guard && (sticky || (rounded & 1u) != 0u);
+        } else if (round_mode == FE_UPWARD) {
+            increment = !negative;
+        } else if (round_mode == FE_DOWNWARD) {
+            increment = negative;
+        }
+        if (increment) ++rounded;
+    }
+
+    if (exact_exponent >= minimum_exponent) {
+        if (rounded >= (1ULL << precision)) {
+            rounded >>= 1;
+            ++exact_exponent;
+        }
+        if (exact_exponent > maximum_exponent) overflow = 1;
+    } else if (rounded >= (1ULL << fraction_bits)) {
+        /* Rounding a subnormal up to the minimum normal value. */
+        result = sign_bit | (1ULL << fraction_bits);
+        if (inexact) (void)feraiseexcept(FE_INEXACT);
+        return result;
+    }
+
+    if (overflow) {
+        int to_infinity = round_mode == FE_TONEAREST ||
+            (round_mode == FE_UPWARD && !negative) ||
+            (round_mode == FE_DOWNWARD && negative);
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        if (to_infinity)
+            return sign_bit | (exponent_all << fraction_bits);
+        return sign_bit | ((exponent_all - 1u) << fraction_bits) |
+               fraction_mask;
+    }
+
+    if (exact_exponent >= minimum_exponent) {
+        unsigned long long exponent_field =
+            (unsigned long long)(exact_exponent + bias);
+        result = sign_bit | (exponent_field << fraction_bits) |
+                 (rounded & fraction_mask);
+    } else {
+        result = sign_bit | (rounded & fraction_mask);
+    }
+    if (inexact) {
+        (void)feraiseexcept((result & (exponent_all << fraction_bits)) == 0u
+            ? FE_UNDERFLOW | FE_INEXACT : FE_INEXACT);
+    }
+    return result;
 }
 
 static inline double fma(double x, double y, double z) {
-    return __rin_fma_finite(x, y, z);
+    __RinFmaOperand a = __rin_fma_decode_double(x);
+    __RinFmaOperand b = __rin_fma_decode_double(y);
+    __RinFmaOperand c = __rin_fma_decode_double(z);
+    union { double value; unsigned long long bits; } result;
+    if ((a.infinity && b.zero) || (b.infinity && a.zero)) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (a.nan || b.nan || c.nan) {
+        /* Never route NaN through x + y + z: rounding the finite
+         * operands first can raise spurious INEXACT/OVERFLOW/UNDERFLOW.
+         * Propagate the first NaN operand quietized; signal INVALID
+         * only when a signaling NaN is present. */
+        union { double value; unsigned long long bits; } nan_operand;
+        int signaling = (a.nan && (a.significand & (1ULL << 51)) == 0u) ||
+            (b.nan && (b.significand & (1ULL << 51)) == 0u) ||
+            (c.nan && (c.significand & (1ULL << 51)) == 0u);
+        if (a.nan) nan_operand.value = x;
+        else if (b.nan) nan_operand.value = y;
+        else nan_operand.value = z;
+        if (signaling) (void)feraiseexcept(FE_INVALID);
+        result.bits = nan_operand.bits | (1ULL << 51);
+        return result.value;
+    }
+    if (a.infinity || b.infinity) {
+        if (c.infinity && ((a.negative ^ b.negative) != c.negative)) {
+            (void)feraiseexcept(FE_INVALID);
+            return NAN;
+        }
+        result.bits = ((unsigned long long)(a.negative ^ b.negative) << 63) |
+                      0x7FF0000000000000ULL;
+        return result.value;
+    }
+    if (c.infinity) return z;
+    result.bits = __rin_fma_finite_bits(a, b, c, 53, 52, 11, 1023);
+    return result.value;
 }
 
 static inline float fmaf(float x, float y, float z) {
-    return (float)__rin_fma_finite((double)x, (double)y, (double)z);
+    __RinFmaOperand a = __rin_fma_decode_float(x);
+    __RinFmaOperand b = __rin_fma_decode_float(y);
+    __RinFmaOperand c = __rin_fma_decode_float(z);
+    union { float value; unsigned int bits; } result;
+    if ((a.infinity && b.zero) || (b.infinity && a.zero)) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (a.nan || b.nan || c.nan) {
+        /* Never route NaN through x + y + z: rounding the finite
+         * operands first can raise spurious INEXACT/OVERFLOW/UNDERFLOW.
+         * Propagate the first NaN operand quietized; signal INVALID
+         * only when a signaling NaN is present. */
+        union { float value; unsigned int bits; } nan_operand;
+        int signaling = (a.nan && (a.significand & (1ULL << 22)) == 0u) ||
+            (b.nan && (b.significand & (1ULL << 22)) == 0u) ||
+            (c.nan && (c.significand & (1ULL << 22)) == 0u);
+        if (a.nan) nan_operand.value = x;
+        else if (b.nan) nan_operand.value = y;
+        else nan_operand.value = z;
+        if (signaling) (void)feraiseexcept(FE_INVALID);
+        result.bits = (unsigned int)(nan_operand.bits | (1u << 22));
+        return result.value;
+    }
+    if (a.infinity || b.infinity) {
+        if (c.infinity && ((a.negative ^ b.negative) != c.negative)) {
+            (void)feraiseexcept(FE_INVALID);
+            return NAN;
+        }
+        result.bits = ((unsigned int)(a.negative ^ b.negative) << 31) |
+                      0x7F800000u;
+        return result.value;
+    }
+    if (c.infinity) return z;
+    result.bits = (unsigned int)__rin_fma_finite_bits(
+        a, b, c, 24, 23, 8, 127);
+    return result.value;
 }
 
 /* exp2 - 2^x */
