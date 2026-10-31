@@ -93,3 +93,7 @@ static inline int getentropy(void* buffer, size_t length)
 #endif /* _SYS_RANDOM_H */
 
 #endif /* hosted random provider selection */
+
+#ifndef GRND_INSECURE
+#    define GRND_INSECURE 0x0004
+#endif
