@@ -2,7 +2,7 @@
 
 #include "syslog.h"
 #include "pthread.h"
-#include <services/servicelogd/rin_syslog_transport_abi.h>
+#include <rin/syslog_transport_v1.h>
 
 #include <errno.h>
 #include <poll.h>
@@ -150,10 +150,11 @@ int _rin_syslog_transport_send(unsigned int facility,
     memset(&envelope, 0, sizeof(envelope));
     envelope.struct_size = sizeof(envelope);
     envelope.version = RIN_SERVICE_LOG_SERVICE_VERSION;
-    envelope.mode = RIN_SERVICE_LOG_SERVICE_MODE_SYSLOG_SUBMIT;
+    envelope.mode = RIN_SYSLOG_TRANSPORT_MODE_SUBMIT;
     envelope.limit = 1u;
     envelope.request_id = request_id;
-    memcpy(envelope.service_id, "syslog", sizeof("syslog"));
+    memcpy(envelope.service_id, RIN_SYSLOG_TRANSPORT_SERVICE_ID,
+           sizeof(RIN_SYSLOG_TRANSPORT_SERVICE_ID));
 
     memset(&request, 0, sizeof(request));
     request.struct_size = sizeof(request);
