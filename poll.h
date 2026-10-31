@@ -206,23 +206,21 @@ static inline int __rin_select_unpack_pollfds(
 
     __rin_select_clear_sets(readfds, writefds, exceptfds);
     for (nfds_t i = 0u; i < poll_count; ++i) {
-        int fd_ready = 0;
         if (readfds && (pollfds[i].events & POLLIN) != 0 &&
             (pollfds[i].revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
             FD_SET(pollfds[i].fd, readfds);
-            fd_ready = 1;
+            ++ready_count;
         }
         if (writefds && (pollfds[i].events & POLLOUT) != 0 &&
             (pollfds[i].revents & (POLLOUT | POLLERR)) != 0) {
             FD_SET(pollfds[i].fd, writefds);
-            fd_ready = 1;
+            ++ready_count;
         }
         if (exceptfds && (pollfds[i].events & POLLPRI) != 0 &&
             (pollfds[i].revents & POLLPRI) != 0) {
             FD_SET(pollfds[i].fd, exceptfds);
-            fd_ready = 1;
+            ++ready_count;
         }
-        if (fd_ready) ++ready_count;
     }
     return ready_count;
 }
