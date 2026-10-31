@@ -264,7 +264,7 @@ size_t malloc_usable_size(void* ptr);
  * declaration preserves the POSIX stdlib.h entry point without imposing a
  * function definition requirement on kernel-only consumers of stdlib.h. */
 #if defined(RIN_USERSPACE) && RIN_USERSPACE
-static char* realpath(const char* path, char* resolved_path);
+extern char* realpath(const char* path, char* resolved_path);
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
