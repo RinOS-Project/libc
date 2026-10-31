@@ -40,9 +40,9 @@ struct statvfs {
     unsigned long  f_namemax;
 };
 
-/* Wire layout mirrors the schema-owned RinFilesystemUsageV1 without making a
+/* Wire layout mirrors the schema-owned RinFilesystemUsageV2 without making a
  * POSIX compatibility header expose the complete RinNative contract header. */
-typedef struct __rin_statvfs_usage_v1 {
+typedef struct __rin_statvfs_usage_v2 {
     uint32_t struct_size;
     uint16_t version;
     uint16_t filesystem_type;
@@ -55,19 +55,24 @@ typedef struct __rin_statvfs_usage_v1 {
     uint64_t total_inodes;
     uint64_t free_inodes;
     uint8_t volume_name[24];
-    uint64_t reserved;
-} __rin_statvfs_usage_v1;
+    uint64_t available_inodes;
+} __rin_statvfs_usage_v2;
 
 #if defined(__cplusplus)
-static_assert(sizeof(__rin_statvfs_usage_v1) == 96,
+static_assert(sizeof(__rin_statvfs_usage_v2) == 96,
               "statvfs filesystem usage wire layout changed");
+static_assert(offsetof(__rin_statvfs_usage_v2, available_inodes) == 88,
+              "statvfs filesystem usage v2 inode field moved");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(sizeof(__rin_statvfs_usage_v1) == 96,
+_Static_assert(sizeof(__rin_statvfs_usage_v2) == 96,
                "statvfs filesystem usage wire layout changed");
+_Static_assert(offsetof(__rin_statvfs_usage_v2, available_inodes) == 88,
+               "statvfs filesystem usage v2 inode field moved");
 #endif
 
-#define __RIN_FILESYSTEM_USAGE_VERSION 1u
+#define __RIN_FILESYSTEM_USAGE_VERSION 2u
 #define __RIN_FILESYSTEM_USAGE_FLAG_BLOCKS_VALID 1u
+#define __RIN_FILESYSTEM_USAGE_FLAG_INODES_VALID 2u
 #define __RIN_FILESYSTEM_USAGE_FLAG_READ_ONLY 4u
 #define __RIN_FILESYSTEM_USAGE_FLAG_NOEXEC 64u
 #define __RIN_FILESYSTEM_USAGE_FLAG_NOSUID 128u
@@ -119,7 +124,7 @@ static inline int __rin_statvfs_status_result(intptr_t result) {
 }
 
 static inline int statvfs(const char* path, struct statvfs* buf) {
-    __rin_statvfs_usage_v1 usage;
+    __rin_statvfs_usage_v2 usage;
     intptr_t result;
     size_t index;
     for (index = 0u; index < sizeof(usage); ++index)
@@ -133,9 +138,14 @@ static inline int statvfs(const char* path, struct statvfs* buf) {
     result = _RIN_STATVFS_SYSCALL2(
         RIN_SYS_FILESYSTEM_USAGE_GET, path, &usage);
     if (__rin_statvfs_status_result(result) != 0) return -1;
-    if ((usage.flags & __RIN_FILESYSTEM_USAGE_FLAG_BLOCKS_VALID) == 0u ||
+    if (usage.struct_size < sizeof(usage) || usage.version !=
+            __RIN_FILESYSTEM_USAGE_VERSION ||
+        (usage.flags & __RIN_FILESYSTEM_USAGE_FLAG_BLOCKS_VALID) == 0u ||
         usage.block_size == 0u || usage.free_blocks > usage.total_blocks ||
-        usage.available_blocks > usage.free_blocks) {
+        usage.available_blocks > usage.free_blocks ||
+        (((usage.flags & __RIN_FILESYSTEM_USAGE_FLAG_INODES_VALID) != 0u) &&
+         (usage.free_inodes > usage.total_inodes ||
+          usage.available_inodes > usage.free_inodes))) {
         errno = EIO;
         return -1;
     }
@@ -143,7 +153,8 @@ static inline int statvfs(const char* path, struct statvfs* buf) {
         usage.free_blocks > (uint64_t)(fsblkcnt_t)-1 ||
         usage.available_blocks > (uint64_t)(fsblkcnt_t)-1 ||
         usage.total_inodes > (uint64_t)(fsfilcnt_t)-1 ||
-        usage.free_inodes > (uint64_t)(fsfilcnt_t)-1) {
+        usage.free_inodes > (uint64_t)(fsfilcnt_t)-1 ||
+        usage.available_inodes > (uint64_t)(fsfilcnt_t)-1) {
         errno = EOVERFLOW;
         return -1;
     }
@@ -155,7 +166,7 @@ static inline int statvfs(const char* path, struct statvfs* buf) {
     buf->f_bavail = (fsblkcnt_t)usage.available_blocks;
     buf->f_files = (fsfilcnt_t)usage.total_inodes;
     buf->f_ffree = (fsfilcnt_t)usage.free_inodes;
-    buf->f_favail = (fsfilcnt_t)usage.free_inodes;
+    buf->f_favail = (fsfilcnt_t)usage.available_inodes;
     buf->f_fsid = usage.filesystem_type;
     buf->f_flag = 0u;
     if ((usage.flags & __RIN_FILESYSTEM_USAGE_FLAG_READ_ONLY) != 0u)
