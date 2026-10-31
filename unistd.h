@@ -273,11 +273,7 @@ static inline int _rin_unistd_status(intptr_t result) {
 
 /* Keep the fork/pidfd frontend in a dependency-light header.  stdlib and
  * termios can reach it before the rest of unistd is parsed. */
-#if !defined(__has_include) || __has_include("internal/rin_fork_pidfd.h")
-/* The pidfd-fork companion header lands separately; TUs must not
- * fail while it is still uncommitted. Re-export when present. */
 #include "internal/rin_fork_pidfd.h"
-#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * 定数
@@ -795,7 +791,13 @@ static inline int chdir(const char* path) {
 
 static inline char* getcwd(char* buf, size_t size) {
     intptr_t ret;
-    if (!buf || size == 0u) {
+    int allocated = 0;
+    if (!buf) {
+        if (size == 0u) size = PATH_MAX;
+        buf = (char*)malloc(size);
+        if (!buf) return NULL;
+        allocated = 1;
+    } else if (size == 0u) {
         errno = EINVAL;
         return NULL;
     }
@@ -803,11 +805,19 @@ static inline char* getcwd(char* buf, size_t size) {
      * high-half addresses a 32-bit userspace legitimately returns. */
     ret = __rin_syscall_posixize(_RIN_UNISTD_SYSCALL2(
         SYS_GETCWD, (uintptr_t)buf, (uintptr_t)size));
-    if (ret == -1) return NULL;
+    if (ret == -1) {
+        if (allocated) {
+            int saved_errno = errno;
+            free(buf);
+            errno = saved_errno;
+        }
+        return NULL;
+    }
     /* The kernel returns the target buffer address on success and zero on
      * failure.  Require the exact pointer token so a malformed positive word
      * cannot turn an unsuccessful or unrelated copy-out into success. */
     if ((uintptr_t)ret != (uintptr_t)buf) {
+        if (allocated) free(buf);
         errno = EIO;
         return NULL;
     }
