@@ -505,6 +505,7 @@ static inline double log(double x);
 static inline double frexp(double x, int* exp);
 static inline double ldexp(double x, int exp);
 static inline double atan(double x);
+static inline double atan2(double y, double x);
 
 /* ═══════════════════════════════════════════════════════════════
  * 基本数学関数 (Taylor展開による近似)
@@ -1415,18 +1416,14 @@ static inline float expm1f(float x) {
  * 逆三角関数
  * ═══════════════════════════════════════════════════════════════ */
 
-/* asin - 逆正弦 (Taylor展開) */
+/* asin - 逆正弦 */
 static inline double asin(double x) {
     if (__builtin_isnan(x)) return x;
     if (x < -1.0 || x > 1.0) {
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
-    if (x == 1.0) return M_PI / 2.0;
-    if (x == -1.0) return -M_PI / 2.0;
-
-    /* Range reduction through atan keeps convergence uniform near |x|=1. */
-    return atan(x / sqrt(1.0 - x * x));
+    return atan2(x, sqrt((1.0 - x) * (1.0 + x)));
 }
 
 static inline float asinf(float x) {
@@ -1435,9 +1432,13 @@ static inline float asinf(float x) {
 
 /* acos - 逆余弦 */
 static inline double acos(double x) {
-    return M_PI / 2.0 - asin(x);
+    if (__builtin_isnan(x)) return x;
+    if (x < -1.0 || x > 1.0) {
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    return atan2(sqrt((1.0 - x) * (1.0 + x)), x);
 }
-
 static inline float acosf(float x) {
     return (float)acos((double)x);
 }
