@@ -986,6 +986,7 @@ static inline double log(double x) {
         return NAN;
     }
     if (__builtin_isinf(x)) return x;
+    if (__builtin_isinf(x)) return x;
     if (x == 1.0) return 0.0;
 
     /* x = m * 2^e として分解する。frexpを使うことで、subnormalでも
@@ -1585,11 +1586,11 @@ static inline float asinhf(float x) {
 /* acosh - 逆双曲線余弦 */
 static inline double acosh(double x) {
     if (__builtin_isnan(x)) return x;
-    if (__builtin_isinf(x)) return x;
     if (x < 1.0) {
         (void)feraiseexcept(FE_INVALID);
         return NAN;
     }
+    if (__builtin_isinf(x)) return x;
     if (x == 1.0) return 0.0;
     if (x > 1e10) return log(x) + M_LN2;
     return log(x + sqrt((x - 1.0) * (x + 1.0)));
