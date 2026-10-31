@@ -10,6 +10,11 @@
 extern "C" {
 #endif
 
+static inline int pidfd_getfd(int pidfd, int target_fd, unsigned int flags)
+{
+    return (int)syscall(SYS_PIDFD_GETFD, pidfd, target_fd, flags);
+}
+
 /* pidfd_open always creates a close-on-exec descriptor. */
 #ifndef PIDFD_NONBLOCK
 #define PIDFD_NONBLOCK 0x800
