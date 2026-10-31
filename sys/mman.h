@@ -94,7 +94,7 @@ static inline int __rin_mman_zero_result(intptr_t result)
 #define MAP_ANONYMOUS   0x20   /* ファイルなし (メモリのみ) */
 #define MAP_ANON        MAP_ANONYMOUS
 #define MAP_GROWSDOWN   0x100  /* スタック用 (下方向に拡張) */
-#define MAP_DENYWRITE   0x800  /* 書き込み禁止 */
+#define MAP_DENYWRITE   0x800  /* Linux互換用。Linuxでは無視される */
 #define MAP_LOCKED      0x2000 /* ページをロック */
 #define MAP_NORESERVE   0x4000 /* スワップ予約なし */
 #define MAP_POPULATE    0x8000 /* 事前にページをフォルト */
