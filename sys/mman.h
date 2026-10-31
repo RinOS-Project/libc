@@ -297,7 +297,11 @@ static inline ssize_t process_madvise(int pidfd, const struct iovec* iovec,
                                       unsigned int flags) {
     RinProcessMadviseRequestV1 request = {0};
     intptr_t result;
-    if (pidfd < 0 || vlen > RIN_PROCESS_MADVISE_MAX_COUNT ||
+    if (pidfd < 0) {
+        errno = EBADF;
+        return (ssize_t)-1;
+    }
+    if (vlen > RIN_PROCESS_MADVISE_MAX_COUNT ||
         (vlen != 0u && iovec == 0) || flags != 0u ||
         (advice != RIN_PROCESS_MADVISE_ADVICE_NORMAL &&
          advice != RIN_PROCESS_MADVISE_ADVICE_RANDOM &&
