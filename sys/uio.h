@@ -10,6 +10,8 @@
 #include "../limits.h"
 #include "../errno.h"
 #include "../internal/pthread_cancel_point.h"
+#include <sys/types.h>
+#include <rin/process/vm_iov_abi.h>
 
 #ifndef RIN_LIBC_IOVEC_DEFINED
 #define RIN_LIBC_IOVEC_DEFINED 1
@@ -97,6 +99,72 @@ static inline ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
                                (uintptr_t)iov, (uintptr_t)(unsigned)iovcnt);
     __rin_pthread_cancel_point_if_linked();
     return __rin_uio_result(result);
+}
+
+static inline ssize_t __rin_process_vm_iov(
+    pid_t pid, const struct iovec* local_iov, int local_iov_count,
+    const struct iovec* remote_iov, int remote_iov_count,
+    unsigned int direction, unsigned int flags) {
+    RinProcessVmIovRequestV1 request = {0};
+    intptr_t result;
+    if (pid <= 0 || local_iov_count < 0 || remote_iov_count < 0 ||
+        (unsigned int)local_iov_count > RIN_PROCESS_VM_IOV_MAX_COUNT ||
+        (unsigned int)remote_iov_count > RIN_PROCESS_VM_IOV_MAX_COUNT ||
+        (local_iov_count != 0 && local_iov == 0) ||
+        (remote_iov_count != 0 && remote_iov == 0) || flags != 0u ||
+        (direction != RIN_PROCESS_VM_IOV_READ_REMOTE &&
+         direction != RIN_PROCESS_VM_IOV_WRITE_REMOTE)) {
+        errno = EINVAL;
+        return (ssize_t)-1;
+    }
+    request.struct_size = sizeof(request);
+    request.version = RIN_PROCESS_VM_IOV_ABI_VERSION;
+    request.direction = (uint16_t)direction;
+    request.flags = flags;
+    request.target_pid = pid;
+    request.local_iov_count = (uint32_t)local_iov_count;
+    request.remote_iov_count = (uint32_t)remote_iov_count;
+    request.iovec_width = (uint32_t)sizeof(uintptr_t);
+    request.local_iov_address = (uint64_t)(uintptr_t)local_iov;
+    request.remote_iov_address = (uint64_t)(uintptr_t)remote_iov;
+    result = _syscall1(SYS_PROCESS_VM_IOV, (uintptr_t)&request);
+    return __rin_uio_result(result);
+}
+
+static inline ssize_t process_vm_readv(pid_t pid,
+                                       const struct iovec* local_iov,
+                                       unsigned long local_iov_count,
+                                       const struct iovec* remote_iov,
+                                       unsigned long remote_iov_count,
+                                       unsigned long flags) {
+    if (local_iov_count > (unsigned long)INT_MAX ||
+        remote_iov_count > (unsigned long)INT_MAX ||
+        flags > (unsigned long)UINT_MAX) {
+        errno = EINVAL;
+        return (ssize_t)-1;
+    }
+    return __rin_process_vm_iov(
+        pid, local_iov, (int)local_iov_count, remote_iov,
+        (int)remote_iov_count, RIN_PROCESS_VM_IOV_READ_REMOTE,
+        (unsigned int)flags);
+}
+
+static inline ssize_t process_vm_writev(pid_t pid,
+                                        const struct iovec* local_iov,
+                                        unsigned long local_iov_count,
+                                        const struct iovec* remote_iov,
+                                        unsigned long remote_iov_count,
+                                        unsigned long flags) {
+    if (local_iov_count > (unsigned long)INT_MAX ||
+        remote_iov_count > (unsigned long)INT_MAX ||
+        flags > (unsigned long)UINT_MAX) {
+        errno = EINVAL;
+        return (ssize_t)-1;
+    }
+    return __rin_process_vm_iov(
+        pid, local_iov, (int)local_iov_count, remote_iov,
+        (int)remote_iov_count, RIN_PROCESS_VM_IOV_WRITE_REMOTE,
+        (unsigned int)flags);
 }
 
 static inline ssize_t __rin_uio_positional(int fd, const struct iovec* iov,
