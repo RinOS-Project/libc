@@ -724,7 +724,22 @@ static inline int dirfd(DIR* dirp) {
 #endif
 #if defined(__RIN_FILE_OFFSET_BITS64) && \
     !defined(RIN_DIRENT_RUNTIME_LEGACY_LAYOUT)
-#define scandirat scandirat64
-#define versionsort versionsort64
+#if defined(_GNU_SOURCE) || defined(_RIN_USE_GNU_DIRENT)
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern int scandirat(int dirfd, const char* directory,
+                     struct dirent*** namelist,
+                     int (*selector)(const struct dirent*),
+                     int (*compar)(const struct dirent**,
+                                   const struct dirent**))
+    __asm__("scandirat64");
+extern int versionsort(const struct dirent** left,
+                       const struct dirent** right)
+    __asm__("versionsort64");
+#ifdef __cplusplus
+}
+#endif
+#endif
 #endif
 #endif /* hosted Linux native filesystem CRT */
