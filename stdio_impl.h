@@ -698,6 +698,11 @@ static inline int _rin_stdio_format_hex_float_candidate(
 
 #define _RIN_STDIO_MAX_SYSCALL_TRANSFER_BYTES 16777216u
 
+/* BATCH41: the zero-arg form was missing its default. */
+#ifndef _RIN_STDIO_SYSCALL0
+#define _RIN_STDIO_SYSCALL0(number) \
+    _syscall0((uintptr_t)(number))
+#endif
 #ifndef _RIN_STDIO_SYSCALL1
 #define _RIN_STDIO_SYSCALL1(number, arg1) \
     _syscall1((uintptr_t)(number), (uintptr_t)(arg1))
@@ -2203,7 +2208,9 @@ _RIN_STDIO_API int putchar_unlocked(int c) {
     return _rin_fputc_unlocked(c, stdout);
 }
 
-#ifndef puts
+/* BATCH41: owner builds always emit puts (a foreign puts macro must not
+ * suppress the canonical definition). */
+#if !defined(puts) || defined(RIN_STDIO_OWNER_BUILD)
 _RIN_STDIO_API int puts(const char* s) {
     size_t length = 0;
     int result;
@@ -3699,6 +3706,7 @@ static inline int _rin_stdio_format_integer(
     size_t field_padding;
     int zero_width_pad = zero && !left_align && precision < 0;
     int suppress_zero = magnitude == 0u && precision == 0;
+    int magnitude_is_zero = magnitude == 0u;
     char sign = '\0';
     char prefix[2];
 
@@ -3706,12 +3714,15 @@ static inline int _rin_stdio_format_integer(
         errno = EINVAL;
         return -1;
     }
-    if (is_signed && !suppress_zero) {
+    /* BATCH41: the sign is not part of the digit run, so a zero value
+     * with zero precision still emits it ("%+.0d" of 0 is "+", matching
+     * glibc/musl/UCRT). Only the digits are suppressed. */
+    if (is_signed) {
         if (negative) sign = '-';
         else if (plus) sign = '+';
         else if (space) sign = ' ';
     }
-    if (magnitude == 0u && precision == 0) {
+    if (suppress_zero) {
         digit_count = 0u;
     } else {
         do {
@@ -3727,7 +3738,7 @@ static inline int _rin_stdio_format_integer(
                    (precision < 0 || (size_t)precision <= digit_count)) {
             precision = (int)digit_count + 1;
         }
-    } else if (alternate && digit_count != 0u &&
+    } else if (alternate && digit_count != 0u && !magnitude_is_zero &&
                (base == 16u || base == 2u)) {
         prefix[0] = '0';
         prefix[1] = base == 2u
@@ -3792,9 +3803,11 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
             continue;
         }
         fmt++; /* skip '%' */
+        /* BATCH41: a trailing '%' fails closed (glibc and the wide
+         * parser both reject it with EINVAL). */
         if (!*fmt) {
-            _RIN_STDIO_FORMAT_PUT('%');
-            break;
+            errno = EINVAL;
+            goto format_error;
         }
 
         /* フラグとパディング */
@@ -4057,13 +4070,24 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                 break;
             }
             case 'p': {
+                /* BATCH41: %p honors the field width (spaces; the
+                 * zero-padded implementation-defined spelling stays). */
                 uintptr_t n = (uintptr_t)va_arg(ap, void*);
-                _RIN_STDIO_FORMAT_PUT('0');
-                _RIN_STDIO_FORMAT_PUT('x');
                 char tmp[2u * sizeof(uintptr_t)]; int i = 0;
+                size_t plen = 2u + 2u * sizeof(uintptr_t);
                 do { tmp[i++] = "0123456789abcdef"[n & 0xF]; n >>= 4; } while (n);
                 while (i < (int)(2u * sizeof(uintptr_t))) tmp[i++] = '0';
+                if (!left_align) {
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        (size_t)pad > plen ? (size_t)pad - plen : 0u);
+                }
+                _RIN_STDIO_FORMAT_PUT('0');
+                _RIN_STDIO_FORMAT_PUT('x');
                 while (i--) _RIN_STDIO_FORMAT_PUT(tmp[i]);
+                if (left_align) {
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        (size_t)pad > plen ? (size_t)pad - plen : 0u);
+                }
                 break;
             }
             case 'f':
@@ -4585,6 +4609,10 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                 break;
             }
             case 's': {
+                /* BATCH41: %ls is not implemented (see LIBC-STDIO-
+                 * NARROW-WCHAR-CONV-01); fail closed instead of
+                 * misreading wchar_t* as char*. */
+                if (is_long) { errno = EINVAL; goto format_error; }
                 const char* s = va_arg(ap, const char*);
                 if (!s) s = "(null)";
                 size_t len = 0u;
@@ -4605,9 +4633,24 @@ _STDIO_PRINTF_FN int vsnprintf(char* buf, size_t size, const char* fmt, va_list 
                 }
                 break;
             }
-            case 'c':
-                _RIN_STDIO_FORMAT_PUT(va_arg(ap, int));
+            case 'c': {
+                /* BATCH41: %lc is not implemented (see LIBC-STDIO-
+                 * NARROW-WCHAR-CONV-01); fail closed. */
+                if (is_long) { errno = EINVAL; goto format_error; }
+                /* BATCH41: %c honors the field width (spaces only; the
+                 * 0 flag is ignored for c, matching glibc). */
+                int ch = va_arg(ap, int);
+                if (!left_align) {
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        (size_t)pad > 1u ? (size_t)pad - 1u : 0u);
+                }
+                _RIN_STDIO_FORMAT_PUT(ch);
+                if (left_align) {
+                    _RIN_STDIO_FORMAT_REPEAT(' ',
+                        (size_t)pad > 1u ? (size_t)pad - 1u : 0u);
+                }
                 break;
+            }
             case '%':
                 _RIN_STDIO_FORMAT_PUT('%');
                 break;
@@ -4989,7 +5032,10 @@ _RIN_STDIO_API char* tmpnam(char* s) {
     intptr_t result;
     intptr_t process_id;
 
-    process_id = _rin_stdio_syscall_result(_syscall0((uintptr_t)SYS_GETPID));
+    /* BATCH41: route through the file syscall layer (a raw _syscall0
+     * executes a host syscall instruction under test/UM builds). */
+    process_id = _rin_stdio_syscall_result(
+        _RIN_STDIO_SYSCALL0((uintptr_t)SYS_GETPID));
     if (process_id < 0) return NULL;
     if ((uint64_t)process_id > UINT32_MAX) {
         errno = EOVERFLOW;
@@ -5012,7 +5058,12 @@ _RIN_STDIO_API char* tmpnam(char* s) {
             remaining /= 36u;
         }
         generated[19] = '\0';
-        fd = open(generated, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+        /* BATCH41: open the candidate through the syscall layer like the
+         * rest of this file; a bare open() would bind to whatever open
+         * the including TU provides (host open misreads nested flags). */
+        fd = (int)_rin_stdio_syscall_result(_RIN_STDIO_SYSCALL3(
+            SYS_OPEN, (uintptr_t)generated,
+            (uintptr_t)(O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC), 0600u));
         if (fd >= 0) break;
         if (errno != EEXIST) return NULL;
     }

@@ -98,24 +98,54 @@ static inline int rin_sscanf_parse_float(
     for (size_t index = 0u; index < count; ++index)
         candidate[index] = input[current + index];
     candidate[count] = '\0';
+    /* BATCH41: a 0x/0X prefix commits to hexadecimal (glibc): without a
+     * hex digit (or point + hex digit) it is matching failure, even
+     * though strtod would read the leading 0 as decimal. */
+    {
+        const char* prefix = candidate;
+        int is_hex_prefix;
+        int head_digit;
+        int point_digit;
+        if (*prefix == '+' || *prefix == '-') ++prefix;
+        is_hex_prefix = prefix[0] == '0' &&
+            (prefix[1] == 'x' || prefix[1] == 'X');
+        head_digit = (prefix[2] >= '0' && prefix[2] <= '9') ||
+            (prefix[2] >= 'a' && prefix[2] <= 'f') ||
+            (prefix[2] >= 'A' && prefix[2] <= 'F');
+        point_digit = prefix[2] == decimal_point &&
+            ((prefix[3] >= '0' && prefix[3] <= '9') ||
+             (prefix[3] >= 'a' && prefix[3] <= 'f') ||
+             (prefix[3] >= 'A' && prefix[3] <= 'F'));
+        if (is_hex_prefix && !head_digit && !point_digit) {
+            /* A width cut right after the x cannot see past it: fall
+             * back to decimal (glibc consumes through the 0 and pushes
+             * x back; the engine below does exactly that). A true end
+             * or a visible non-digit past x is matching failure. */
+            size_t after_x = (size_t)(prefix - candidate) + 2u;
+            if (after_x < count) return 0;
+            if (end == input_size) return 0;
+        }
+    }
     if (spec->length == RIN_SSCANF_LENGTH_NONE) {
         rin_float_parse_result parsed = rin_float_parse_binary32_radix(
             candidate, decimal_point);
         if (!parsed.converted) return 0;
-        if (parsed.range_direction != 0 || parsed.subnormal) {
+        /* BATCH41: range/subnormal results still assign (the engine
+         * already holds inf/0/subnormal bits) with ERANGE, matching
+         * strtof and glibc, instead of failing the conversion. */
+        if (parsed.range_direction != 0 || parsed.subnormal)
             errno = ERANGE;
-            return -1;
-        }
         value_out->bits = parsed.bits;
         parsed_end = parsed.end;
     } else if (spec->length == RIN_SSCANF_LENGTH_LONG) {
         rin_float_parse_result parsed = rin_float_parse_binary64_radix(
             candidate, decimal_point);
         if (!parsed.converted) return 0;
-        if (parsed.range_direction != 0 || parsed.subnormal) {
+        /* BATCH41: range/subnormal results still assign (the engine
+         * already holds inf/0/subnormal bits) with ERANGE, matching
+         * strtof and glibc, instead of failing the conversion. */
+        if (parsed.range_direction != 0 || parsed.subnormal)
             errno = ERANGE;
-            return -1;
-        }
         value_out->bits = parsed.bits;
         parsed_end = parsed.end;
     } else {
@@ -124,20 +154,22 @@ static inline int rin_sscanf_parse_float(
         rin_long_double_parse_result parsed = rin_float_parse_binary80_radix(
             candidate, decimal_point);
         if (!parsed.converted) return 0;
-        if (parsed.range_direction != 0 || parsed.subnormal) {
+        /* BATCH41: range/subnormal results still assign (the engine
+         * already holds inf/0/subnormal bits) with ERANGE, matching
+         * strtof and glibc, instead of failing the conversion. */
+        if (parsed.range_direction != 0 || parsed.subnormal)
             errno = ERANGE;
-            return -1;
-        }
         value_out->long_value = parsed.value;
         parsed_end = parsed.end;
 #else
         rin_float_parse_result parsed = rin_float_parse_binary64_radix(
             candidate, decimal_point);
         if (!parsed.converted) return 0;
-        if (parsed.range_direction != 0 || parsed.subnormal) {
+        /* BATCH41: range/subnormal results still assign (the engine
+         * already holds inf/0/subnormal bits) with ERANGE, matching
+         * strtof and glibc, instead of failing the conversion. */
+        if (parsed.range_direction != 0 || parsed.subnormal)
             errno = ERANGE;
-            return -1;
-        }
         value_out->long_value = (long double)rin_float_parse_binary64_value(
             parsed.bits);
         parsed_end = parsed.end;

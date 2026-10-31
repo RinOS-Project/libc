@@ -630,13 +630,15 @@ static void rin_sscanf_bind_argument(
 static int rin_sscanf_parse_integer(
         const char* input, size_t input_size, size_t* offset,
         const struct RinSscanfSpec* spec, uint64_t* magnitude_out,
-        int* negative_out, int* input_failure_out) {
+        int* negative_out, int* input_failure_out,
+        int* range_error_out) {
     size_t current = *offset;
     size_t end;
     unsigned int base;
     uint64_t magnitude = 0u;
     int negative = 0;
     int have_digit = 0;
+    if (range_error_out) *range_error_out = 0;
     while (current < input_size &&
            rin_sscanf_space((unsigned char)input[current]))
         ++current;
@@ -684,11 +686,15 @@ static int rin_sscanf_parse_integer(
         if (!rin_sscanf_digit((unsigned char)input[current], &digit) ||
             digit >= base)
             break;
+        /* BATCH41: overflow saturates (strtol rules) instead of failing:
+         * keep consuming valid digits so the offset stays exact. */
         if (magnitude > (UINT64_MAX - digit) / base) {
             errno = ERANGE;
-            return -1;
+            if (range_error_out) *range_error_out = 1;
+            magnitude = UINT64_MAX;
+        } else {
+            magnitude = magnitude * base + digit;
         }
-        magnitude = magnitude * base + digit;
         have_digit = 1;
         ++current;
     }
@@ -699,10 +705,20 @@ static int rin_sscanf_parse_integer(
     return 1;
 }
 
-static int rin_sscanf_integer_in_range(const struct RinSscanfSpec* spec,
-                                       uint64_t magnitude, int negative) {
+/* BATCH41: strtol-family width clamp (glibc rules). Integer conversions
+ * saturate to the strto{l,ll,ul,ull}-width range of their length, set
+ * ERANGE, and still assign (the store path narrows to the target, also
+ * like glibc). Widths: {none,hh,h,l} use (unsigned) long, {ll,j} use
+ * (unsigned) long long, {z,t} use ptrdiff/size_t (which equal long on
+ * LP64, match UCRT on LLP64, and match strtol-width on m32). %p and
+ * C23 %w keep their strict range failure. */
+static int rin_sscanf_clamp_integer_magnitude(
+        const struct RinSscanfSpec* spec, uint64_t* magnitude_io,
+        int negative, int saturated, int* clamped_out) {
     int is_signed = spec->conversion == 'd' || spec->conversion == 'i';
     uint64_t maximum;
+    uint64_t magnitude = *magnitude_io;
+    if (clamped_out) *clamped_out = 0;
     if (spec->conversion == 'p') {
         if (negative || magnitude > (uint64_t)UINTPTR_MAX) {
             errno = ERANGE;
@@ -717,46 +733,38 @@ static int rin_sscanf_integer_in_range(const struct RinSscanfSpec* spec,
             spec->length == RIN_SSCANF_LENGTH_FAST_WIDTH,
             is_signed, magnitude, negative);
     if (is_signed) {
+        uint64_t limit;
         if (spec->length == RIN_SSCANF_LENGTH_LONG_LONG)
             maximum = (uint64_t)LLONG_MAX;
-        else if (spec->length == RIN_SSCANF_LENGTH_LONG)
-            maximum = (uint64_t)LONG_MAX;
-        else if (spec->length == RIN_SSCANF_LENGTH_SIZE)
-            maximum = (uint64_t)PTRDIFF_MAX;
-        else if (spec->length == RIN_SSCANF_LENGTH_SHORT)
-            maximum = (uint64_t)SHRT_MAX;
-        else if (spec->length == RIN_SSCANF_LENGTH_CHAR)
-            maximum = (uint64_t)SCHAR_MAX;
         else if (spec->length == RIN_SSCANF_LENGTH_INTMAX)
             maximum = (uint64_t)INT64_MAX;
-        else if (spec->length == RIN_SSCANF_LENGTH_PTRDIFF)
+        else if (spec->length == RIN_SSCANF_LENGTH_SIZE ||
+                 spec->length == RIN_SSCANF_LENGTH_PTRDIFF)
             maximum = (uint64_t)PTRDIFF_MAX;
         else
-            maximum = (uint64_t)INT_MAX;
-        if (magnitude > maximum + (negative ? 1u : 0u)) {
+            maximum = (uint64_t)LONG_MAX;
+        limit = maximum + (negative ? 1u : 0u);
+        /* A saturated parse holds UINT64_MAX, which can also be a
+         * legitimate in-range magnitude; the flag disambiguates. */
+        if (saturated || magnitude > limit) {
+            *magnitude_io = limit;
+            if (clamped_out) *clamped_out = 1;
             errno = ERANGE;
-            return 0;
         }
     } else {
         if (spec->length == RIN_SSCANF_LENGTH_LONG_LONG)
             maximum = (uint64_t)ULLONG_MAX;
-        else if (spec->length == RIN_SSCANF_LENGTH_LONG)
-            maximum = (uint64_t)ULONG_MAX;
-        else if (spec->length == RIN_SSCANF_LENGTH_SIZE)
-            maximum = (uint64_t)SIZE_MAX;
-        else if (spec->length == RIN_SSCANF_LENGTH_SHORT)
-            maximum = (uint64_t)USHRT_MAX;
-        else if (spec->length == RIN_SSCANF_LENGTH_CHAR)
-            maximum = (uint64_t)UCHAR_MAX;
         else if (spec->length == RIN_SSCANF_LENGTH_INTMAX)
             maximum = (uint64_t)UINT64_MAX;
-        else if (spec->length == RIN_SSCANF_LENGTH_PTRDIFF)
+        else if (spec->length == RIN_SSCANF_LENGTH_SIZE ||
+                 spec->length == RIN_SSCANF_LENGTH_PTRDIFF)
             maximum = (uint64_t)SIZE_MAX;
         else
-            maximum = (uint64_t)UINT_MAX;
-        if (magnitude > maximum) {
+            maximum = (uint64_t)ULONG_MAX;
+        if (saturated || magnitude > maximum) {
+            *magnitude_io = maximum;
+            if (clamped_out) *clamped_out = 1;
             errno = ERANGE;
-            return 0;
         }
     }
     return 1;
@@ -767,9 +775,13 @@ static int rin_sscanf_integer_in_range(const struct RinSscanfSpec* spec,
  * array-based ABI representations. */
 static int rin_sscanf_store_integer(va_list* arguments,
                                     const struct RinSscanfSpec* spec,
-                                    uint64_t magnitude, int negative) {
+                                    uint64_t magnitude, int negative,
+                                    int range_error) {
     int is_signed = spec->conversion == 'd' || spec->conversion == 'i';
-    if (!rin_sscanf_integer_in_range(spec, magnitude, negative)) return -1;
+    int clamped = 0;
+    if (!rin_sscanf_clamp_integer_magnitude(spec, &magnitude, negative,
+                                            range_error, &clamped))
+        return -1;
     if (spec->conversion == 'p') {
         void** output = (void**)rin_sscanf_argument_pointer(
             arguments, spec, RIN_SSCANF_ARG_VOID_POINTER);
@@ -838,7 +850,11 @@ static int rin_sscanf_store_integer(va_list* arguments,
             *output = (int)value;
         }
     } else {
-        uint64_t value = negative ? UINT64_C(0) - magnitude : magnitude;
+        /* A clamped magnitude already holds the strtoul result; only
+         * wrap an in-range negative (BATCH41). */
+        uint64_t value = (negative && !clamped)
+            ? UINT64_C(0) - magnitude
+            : magnitude;
         if (spec->length == RIN_SSCANF_LENGTH_LONG_LONG) {
             unsigned long long* output =
                 (unsigned long long*)rin_sscanf_argument_pointer(
@@ -1356,11 +1372,15 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
                 uint64_t magnitude;
                 int negative;
                 int input_failure = 0;
+                int range_error = 0;
                 int parsed = rin_sscanf_parse_integer(
                     input, input_size, &input_offset, &spec, &magnitude,
-                    &negative, &input_failure);
+                    &negative, &input_failure, &range_error);
+                uint64_t clamp_probe = magnitude;
                 if (parsed < 0 || (parsed > 0 &&
-                    !rin_sscanf_integer_in_range(&spec, magnitude, negative))) {
+                    !rin_sscanf_clamp_integer_magnitude(&spec, &clamp_probe,
+                                                        negative,
+                                                        range_error, NULL))) {
                     va_end(arguments);
                     return rin_sscanf_input_error_result(assignments);
                 }
@@ -1371,7 +1391,7 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
                 }
                 if (!spec.suppress) {
                     if (rin_sscanf_store_integer(&arguments, &spec, magnitude,
-                                                 negative) != 0) {
+                                                 negative, range_error) != 0) {
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
@@ -1432,11 +1452,15 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
                 continue;
             }
             if (spec.conversion == 'c') {
+                /* BATCH41: short %c input assigns what is there (glibc);
+                 * only zero available chars is input failure. */
                 size_t count = spec.has_width ? spec.width : 1u;
-                if (count > input_size - input_offset) {
+                size_t available = input_size - input_offset;
+                if (available == 0u) {
                     va_end(arguments);
                     return rin_sscanf_input_error_result(assignments);
                 }
+                if (count > available) count = available;
                 if (!spec.suppress) {
                     if (rin_sscanf_store_narrow_field(
                             &arguments, &spec, input + input_offset, count,
@@ -1588,8 +1612,13 @@ static int rin_fscanf_stream_wide_field(
         status = rin_fscanf_stream_read(input, &first);
         if (status <= 0) {
             if (status == 0) *input_failure_out = 1;
-            if ((spec->conversion == 's' || spec->conversion == '[') &&
-                scalar_count != 0u) break;
+            /* BATCH41: partial %c assigns what is there (glibc). */
+            if ((spec->conversion == 's' || spec->conversion == '[' ||
+                 spec->conversion == 'c') &&
+                scalar_count != 0u) {
+                *input_failure_out = 0;
+                break;
+            }
             return status < 0 ? -1 : 0;
         }
         if (spec->conversion == 's' && rin_sscanf_space(first)) {
@@ -1650,10 +1679,7 @@ static int rin_fscanf_stream_wide_field(
         }
     }
     if (scalar_count == 0u) return 0;
-    if (spec->conversion == 'c' && scalar_count < scalar_limit) {
-        *input_failure_out = 1;
-        return 0;
-    }
+    /* BATCH41: partial %c/%lc is success (see Fix C above). */
     *byte_count_out = byte_count;
     *scalar_count_out = scalar_count;
     return 1;
@@ -1728,7 +1754,8 @@ static int rin_fscanf_stream_try_binary_prefix(
 static int rin_fscanf_stream_parse_integer(
         struct RinFscanfStreamInput* input,
         const struct RinSscanfSpec* spec, uint64_t* magnitude_out,
-        int* negative_out, int* input_failure_out, unsigned int base) {
+        int* negative_out, int* input_failure_out, unsigned int base,
+        int* range_error_out) {
     unsigned char value = '\0';
     size_t used = 0u;
     size_t limit = spec->has_width ? spec->width : RIN_SSCANF_MAX_INPUT;
@@ -1739,6 +1766,7 @@ static int rin_fscanf_stream_parse_integer(
     int status = rin_fscanf_stream_skip_space(input);
 
     *input_failure_out = 0;
+    if (range_error_out) *range_error_out = 0;
     if (status <= 0) {
         if (status == 0) *input_failure_out = 1;
         return status < 0 ? -1 : 0;
@@ -1800,13 +1828,16 @@ static int rin_fscanf_stream_parse_integer(
             if (rin_fscanf_stream_unread(input, value) != 0) return -1;
             break;
         }
+        /* BATCH41: saturate like the string parser (strtol rules); the
+         * loop below keeps consuming digits and unreads the terminator. */
         if (magnitude > (UINT64_MAX - (uint64_t)digit) /
                             (uint64_t)base) {
-            if (rin_fscanf_stream_unread(input, value) != 0) return -1;
             errno = ERANGE;
-            return -1;
+            if (range_error_out) *range_error_out = 1;
+            magnitude = UINT64_MAX;
+        } else {
+            magnitude = magnitude * (uint64_t)base + (uint64_t)digit;
         }
-        magnitude = magnitude * (uint64_t)base + (uint64_t)digit;
         ++used;
         if (used == limit) break;
         status = rin_fscanf_stream_read(input, &value);
@@ -2361,15 +2392,20 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
                 uint64_t magnitude = 0u;
                 int negative = 0;
                 int input_failure = 0;
+                int range_error = 0;
                 int parsed = rin_fscanf_stream_parse_integer(
                     &input, &spec, &magnitude, &negative, &input_failure,
                     spec.conversion == 'b' ? 2u :
                     spec.conversion == 'o' ? 8u :
                     (spec.conversion == 'x' || spec.conversion == 'X' ||
                      spec.conversion == 'p') ?
-                    16u : spec.conversion == 'i' ? 0u : 10u);
+                    16u : spec.conversion == 'i' ? 0u : 10u,
+                    &range_error);
+                uint64_t clamp_probe = magnitude;
                 if (parsed < 0 || (parsed > 0 &&
-                    !rin_sscanf_integer_in_range(&spec, magnitude, negative))) {
+                    !rin_sscanf_clamp_integer_magnitude(&spec, &clamp_probe,
+                                                        negative,
+                                                        range_error, NULL))) {
                     va_end(arguments);
                     return rin_sscanf_input_error_result(assignments);
                 }
@@ -2380,7 +2416,7 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
                 }
                 if (!spec.suppress) {
                     if (rin_sscanf_store_integer(&arguments, &spec, magnitude,
-                                                 negative) != 0) {
+                                                 negative, range_error) != 0) {
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
@@ -2451,15 +2487,23 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
                 continue;
             }
             if (spec.conversion == 'c') {
-                count = spec.has_width ? spec.width : 1u;
-                for (size_t index = 0u; index < count; ++index) {
+                /* BATCH41: partial %c assigns what is there (glibc). */
+                size_t want = spec.has_width ? spec.width : 1u;
+                count = 0u;
+                for (size_t index = 0u; index < want; ++index) {
                     unsigned char value = '\0';
                     int status = rin_fscanf_stream_read(&input, &value);
-                    if (status <= 0) {
+                    if (status < 0) {
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
+                    if (status == 0) break;
                     candidate[index] = (char)value;
+                    ++count;
+                }
+                if (count == 0u) {
+                    va_end(arguments);
+                    return rin_sscanf_input_error_result(assignments);
                 }
                 if (!spec.suppress) {
                     if (rin_sscanf_store_narrow_field(
