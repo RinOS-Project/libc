@@ -19,8 +19,10 @@
 #include "types.h"
 #include "syscall.h"
 #include "../errno.h"
+#include "../limits.h"
 #include "../internal/pthread_cancel_point.h"
 #include <rin/mman_abi.h>
+#include <rin/process/madvise_abi.h>
 #include <stdarg.h>
 
 #ifndef _RIN_MMAN_SYSCALL0
@@ -60,6 +62,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+struct iovec;
 
 static inline int __rin_mman_zero_result(intptr_t result)
 {
@@ -273,6 +277,41 @@ static inline int madvise(void* addr, size_t length, int advice) {
         SYS_MADVISE, (uintptr_t)addr, (uintptr_t)length,
         (uintptr_t)(intptr_t)advice);
     return __rin_mman_zero_result(ret);
+}
+
+static inline ssize_t process_madvise(int pidfd, const struct iovec* iovec,
+                                      size_t vlen, int advice,
+                                      unsigned int flags) {
+    RinProcessMadviseRequestV1 request = {0};
+    intptr_t result;
+    if (pidfd < 0 || vlen > RIN_PROCESS_MADVISE_MAX_COUNT ||
+        (vlen != 0u && iovec == 0) || flags != 0u ||
+        (advice != RIN_PROCESS_MADVISE_ADVICE_NORMAL &&
+         advice != RIN_PROCESS_MADVISE_ADVICE_RANDOM &&
+         advice != RIN_PROCESS_MADVISE_ADVICE_SEQUENTIAL &&
+         advice != RIN_PROCESS_MADVISE_ADVICE_WILLNEED &&
+         advice != RIN_PROCESS_MADVISE_ADVICE_DONTNEED)) {
+        errno = EINVAL;
+        return (ssize_t)-1;
+    }
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_PROCESS_MADVISE_ABI_VERSION;
+    request.pidfd = pidfd;
+    request.advice = advice;
+    request.iovec_count = (uint32_t)vlen;
+    request.iovec_width = (uint32_t)sizeof(uintptr_t);
+    request.iovec_address = (uint64_t)(uintptr_t)iovec;
+    result = _RIN_MMAN_SYSCALL1(SYS_PROCESS_MADVISE,
+                                (uintptr_t)&request);
+    if (result < 0) {
+        errno = result >= -4095 ? (int)(-result) : EIO;
+        return (ssize_t)-1;
+    }
+    if ((uintptr_t)result > (uintptr_t)SSIZE_MAX) {
+        errno = EOVERFLOW;
+        return (ssize_t)-1;
+    }
+    return (ssize_t)result;
 }
 
 #if (defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)) || \
