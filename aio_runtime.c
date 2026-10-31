@@ -641,10 +641,12 @@ static void* rin_aio_worker(void* unused)
             if (request->notification.kind != SIGEV_NONE)
                 completed_notifications[notification_count++] =
                     request->notification;
-            if (request->group)
+            if (request->group) {
+                RinAioGroup* group = request->group;
+                request->group = NULL;
                 completed_group = rin_aio_group_complete_locked(
-                    request->group,
-                    &completed_notifications[notification_count]);
+                    group, &completed_notifications[notification_count]);
+            }
             if (completed_group) ++notification_count;
             (void)pthread_cond_broadcast(&g_rin_aio_changed);
         }
@@ -735,8 +737,10 @@ int aio_cancel(int fd, struct aiocb* request)
     int saw_running = 0;
     int saw_canceled = 0;
     int held_fds[RIN_AIO_CAPACITY];
+    RinAioGroup* completed_groups[RIN_AIO_CAPACITY];
     RinAioNotification notifications[RIN_AIO_CAPACITY * 2u];
     uint32_t held_count = 0u;
+    uint32_t completed_group_count = 0u;
     uint32_t notification_count = 0u;
     uint32_t index;
 
@@ -763,11 +767,17 @@ int aio_cancel(int fd, struct aiocb* request)
             current->result = -1;
             rin_aio_suspend_notify_locked(current);
             memset(&completed, 0, sizeof(completed));
-            completed_group = current->group
-                                  ? rin_aio_group_complete_locked(
-                                        current->group, &completed)
-                                  : NULL;
-            if (completed_group) free(completed_group);
+            if (current->group) {
+                RinAioGroup* group = current->group;
+                current->group = NULL;
+                completed_group = rin_aio_group_complete_locked(
+                    group, &completed);
+            } else {
+                completed_group = NULL;
+            }
+            if (completed_group &&
+                completed_group_count < RIN_AIO_CAPACITY)
+                completed_groups[completed_group_count++] = completed_group;
             if (current->notification.kind != SIGEV_NONE &&
                 notification_count < RIN_AIO_CAPACITY * 2u)
                 notifications[notification_count++] = current->notification;
@@ -784,6 +794,8 @@ int aio_cancel(int fd, struct aiocb* request)
 
     for (index = 0u; index < held_count; ++index)
         (void)close(held_fds[index]);
+    for (index = 0u; index < completed_group_count; ++index)
+        free(completed_groups[index]);
     for (index = 0u; index < notification_count; ++index)
         rin_aio_notify(&notifications[index]);
     if (saw_running) result = AIO_NOTCANCELED;
