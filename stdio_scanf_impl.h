@@ -828,10 +828,19 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
     size_t format_offset = 0u;
     int assignments = 0;
     va_list arguments;
+    /* GCC knows vsscanf as a builtin with nonnull format; the check
+     * below intentionally tolerates a null format defensively. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnonnull-compare"
+#endif
     if (!string || !format) {
         errno = EINVAL;
         return EOF;
     }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     if (rin_sscanf_validate_format(format) != 0) return EOF;
     while (input_size <= RIN_SSCANF_MAX_INPUT && string[input_size] != '\0')
         ++input_size;
