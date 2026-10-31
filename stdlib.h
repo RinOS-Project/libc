@@ -266,9 +266,11 @@ void free_aligned_sized(void* ptr, size_t alignment, size_t size);
 size_t malloc_usable_size(void* ptr);
 #endif
 
-/* POSIX realpath() is exported by the libc runtime. */
+/* The static inline implementation lives in unistd.h.  This userland
+ * declaration preserves the POSIX stdlib.h entry point without imposing a
+ * function definition requirement on kernel-only consumers of stdlib.h. */
 #if defined(RIN_USERSPACE) && RIN_USERSPACE
-char* realpath(const char* path, char* resolved_path);
+static char* realpath(const char* path, char* resolved_path);
 #endif
 
 /* ═══════════════════════════════════════════════════════════════

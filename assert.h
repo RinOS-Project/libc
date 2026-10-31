@@ -1,16 +1,14 @@
 /* SPDX-License-Identifier: MIT */
+#ifndef _ASSERT_H
+#define _ASSERT_H
 
 #if !defined(RIN_FREESTANDING) && defined(__STDC_HOSTED__) && \
     __STDC_HOSTED__ && (defined(__clang__) || defined(__GNUC__))
 /* Hosted tests and tools must use the host C runtime's assertion owner.  The
  * RinOS implementation below terminates through rin_log/rin_exit, neither of
- * which is linked into ordinary host-only unit executables.
- * The include guard lives inside the freestanding branch: defining it
- * first would disable the host header, which shares the guard macro. */
+ * which is linked into ordinary host-only unit executables. */
 #include_next <assert.h>
 #else
-#ifndef _ASSERT_H
-#define _ASSERT_H
 
 #ifdef NDEBUG
     #define assert(expr) ((void)0)
@@ -31,6 +29,6 @@ extern "C" {
     #define static_assert _Static_assert
 #endif
 
-#endif // _ASSERT_H
-
 #endif /* hosted C assertion owner */
+
+#endif // _ASSERT_H

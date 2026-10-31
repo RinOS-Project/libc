@@ -12,12 +12,6 @@
 #include "fcntl.h"
 #include "unistd.h"
 
-#if defined(RIN_USERSPACE) && RIN_USERSPACE
-char* realpath(const char* path, char* resolved_path) {
-    return _rin_realpath_inline(path, resolved_path);
-}
-#endif
-
 int __rin_stdlib_system_available(void) {
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
     defined(RIN_USERSPACE) && RIN_USERSPACE

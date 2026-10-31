@@ -4,15 +4,6 @@
  * ソケットAPI
  */
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
-    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
-    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
-    !defined(_RIN_SOCKET_SYSCALL1) && !defined(_RIN_SOCKET_SYSCALL2) && \
-    !defined(_RIN_SOCKET_SYSCALL3) && !defined(_RIN_SOCKET_SYSCALL4) && \
-    !defined(_RIN_SOCKET_SYSCALL5) && !defined(_RIN_SOCKET_SYSCALL6)
-#include_next <sys/socket.h>
-#else
-
 #ifndef _SYS_SOCKET_H
 #define _SYS_SOCKET_H
 
@@ -542,12 +533,8 @@ static inline struct cmsghdr* __rin_cmsg_nxthdr(
     size_t step;
     size_t current_length;
 
-    if (!message || !message->msg_control) return (struct cmsghdr*)0;
-    if (!current) {
-        if (total < sizeof(struct cmsghdr)) return (struct cmsghdr*)0;
-        return (struct cmsghdr*)message->msg_control;
-    }
-    if (base > UINTPTR_MAX - total || cursor < base || cursor - base > total)
+    if (!message || !current || !message->msg_control || base > UINTPTR_MAX - total ||
+        cursor < base || cursor - base > total)
         return (struct cmsghdr*)0;
     offset = (size_t)(cursor - base);
     remaining = total - offset;
@@ -562,25 +549,11 @@ static inline struct cmsghdr* __rin_cmsg_nxthdr(
     return (struct cmsghdr*)((unsigned char*)message->msg_control + offset);
 }
 
-#define _RIN_CMSG_ALIGN(len) \
-    ((size_t)(len) > SIZE_MAX - (sizeof(size_t) - 1u) \
-         ? SIZE_MAX \
-         : (((size_t)(len) + (sizeof(size_t) - 1u)) & \
-            ~(sizeof(size_t) - 1u)))
+#define _RIN_CMSG_ALIGN(len) __rin_cmsg_align_size((size_t)(len))
 #define CMSG_ALIGN(len) _RIN_CMSG_ALIGN(len)
-#define CMSG_SPACE(len) \
-    (_RIN_CMSG_ALIGN(len) > \
-             SIZE_MAX - _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) \
-         ? SIZE_MAX \
-         : _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) + \
-               _RIN_CMSG_ALIGN(len))
-#define CMSG_LEN(len) \
-    ((size_t)(len) > \
-             SIZE_MAX - _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) \
-         ? SIZE_MAX \
-         : _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) + (size_t)(len))
-#define CMSG_DATA(cmsg) \
-    ((unsigned char*)(cmsg) + _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)))
+#define CMSG_SPACE(len) __rin_cmsg_space_size((size_t)(len))
+#define CMSG_LEN(len) __rin_cmsg_len_size((size_t)(len))
+#define CMSG_DATA(cmsg) ((unsigned char*)(cmsg) + _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)))
 #define CMSG_FIRSTHDR(msg) \
     (((msg) && (msg)->msg_control && \
       (msg)->msg_controllen >= sizeof(struct cmsghdr)) \
@@ -875,21 +848,6 @@ static inline ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags,
     return result;
 }
 
-/* sockatmark is implemented with the native ioctl ABI.  Include its
- * declaration and inline syscall wrapper before defining sockatmark; the
- * reciprocal include is guarded by _SYS_IOCTL_H. */
-static inline int ioctl(int fd, unsigned long request, ...);
-#include "ioctl.h"
-#ifndef SIOCATMARK
-#define SIOCATMARK 0x8905
-#endif
-
-static inline int sockatmark(int fd) {
-    int mark = 0;
-    if (ioctl(fd, SIOCATMARK, &mark) < 0) return -1;
-    return mark != 0 ? 1 : 0;
-}
-
 static inline int shutdown(int sockfd, int how) {
     return __rin_socket_status_result(
         _RIN_SOCKET_SYSCALL2(SYS_SOCK_SHUTDOWN, sockfd, how));
@@ -1044,5 +1002,3 @@ static inline int accept4(int sockfd, struct sockaddr* addr,
 #endif /* !MIDL_PASS */
 
 #endif /* _SYS_SOCKET_H */
-
-#endif /* hosted Linux delegates to its native socket provider */

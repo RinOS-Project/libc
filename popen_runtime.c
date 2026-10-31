@@ -7,11 +7,11 @@
 
 #include "fcntl.h"
 #include "pthread.h"
+#include "signal.h"
 #include "spawn.h"
 #include "stdlib.h"
 #include "sys/wait.h"
 #include "unistd.h"
-#include "internal/rin_child_pidfd.h"
 
 #ifndef RIN_POPEN_PIPE2
 #define RIN_POPEN_PIPE2 pipe2
@@ -22,14 +22,20 @@
 #ifndef RIN_POPEN_CLOSE
 #define RIN_POPEN_CLOSE close
 #endif
-#ifndef RIN_POPEN_SPAWN_PIDFD
-#define RIN_POPEN_SPAWN_PIDFD rin_posix_spawn_pidfd
+#ifndef RIN_POPEN_SPAWN
+#define RIN_POPEN_SPAWN posix_spawn
 #endif
 #ifndef RIN_POPEN_FDOPEN
 #define RIN_POPEN_FDOPEN fdopen
 #endif
 #ifndef RIN_POPEN_FCLOSE
 #define RIN_POPEN_FCLOSE fclose
+#endif
+#ifndef RIN_POPEN_WAITPID
+#define RIN_POPEN_WAITPID waitpid
+#endif
+#ifndef RIN_POPEN_KILL
+#define RIN_POPEN_KILL kill
 #endif
 #ifndef RIN_POPEN_ALLOC
 #define RIN_POPEN_ALLOC malloc
@@ -41,7 +47,7 @@
 typedef struct RinPopenChild {
     struct RinPopenChild* next;
     FILE* stream;
-    int pidfd;
+    pid_t pid;
     int registered;
 } RinPopenChild;
 
@@ -120,8 +126,11 @@ static void rin_popen_close_pipe(int descriptors[2], int extra_fd) {
     if (extra_fd >= 0) (void)RIN_POPEN_CLOSE(extra_fd);
 }
 
-static void rin_popen_reap_failed_child(int* pidfd) {
-    (void)rin_child_pidfd_terminate_and_wait(pidfd);
+static void rin_popen_reap_failed_child(pid_t pid) {
+    int status = 0;
+    (void)RIN_POPEN_KILL(pid, SIGKILL);
+    while (RIN_POPEN_WAITPID(pid, &status, 0) < 0 && errno == EINTR) {
+    }
 }
 
 static void rin_popen_cancel_child(void* argument) {
@@ -142,8 +151,9 @@ static void rin_popen_cancel_child(void* argument) {
         (void)RIN_POPEN_FCLOSE(record->stream);
         record->stream = NULL;
     }
-    if (record->pidfd >= 0) {
-        rin_popen_reap_failed_child(&record->pidfd);
+    if (record->pid > 0) {
+        rin_popen_reap_failed_child(record->pid);
+        record->pid = 0;
     }
     RIN_POPEN_FREE(record);
 }
@@ -178,7 +188,6 @@ FILE* popen(const char* command, const char* type) {
     int cancel_state = -1;
     int lock_cancel_state = -1;
     pid_t child = 0;
-    int child_pidfd = -1;
     char* arguments[4];
     RinPopenChild* record;
     FILE* stream;
@@ -246,8 +255,8 @@ FILE* popen(const char* command, const char* type) {
     arguments[1] = (char*)"-c";
     arguments[2] = (char*)command;
     arguments[3] = NULL;
-    error = RIN_POPEN_SPAWN_PIDFD(&child, &child_pidfd, "/bin/sh",
-                                  &actions, NULL, arguments, NULL);
+    error = RIN_POPEN_SPAWN(&child, "/bin/sh", &actions, NULL,
+                            arguments, NULL);
     if (error != 0) {
         saved_error = error;
         goto fail_before_spawn;
@@ -271,13 +280,12 @@ FILE* popen(const char* command, const char* type) {
     descriptors[parent_index] = -1;
 
     record->stream = stream;
-    record->pidfd = child_pidfd;
-    child_pidfd = -1;
+    record->pid = child;
     record->registered = 0;
     if (rin_popen_lock(&lock_cancel_state) != 0) {
         saved_error = errno ? errno : EIO;
         (void)RIN_POPEN_FCLOSE(stream);
-        rin_popen_reap_failed_child(&record->pidfd);
+        rin_popen_reap_failed_child(child);
         RIN_POPEN_FREE(record);
         rin_popen_restore_cancel_state(cancel_state);
         errno = saved_error;
@@ -298,7 +306,7 @@ FILE* popen(const char* command, const char* type) {
 
 fail_after_spawn:
     rin_popen_close_pipe(descriptors, extra_fd);
-    rin_popen_reap_failed_child(&child_pidfd);
+    rin_popen_reap_failed_child(child);
     RIN_POPEN_FREE(record);
     rin_popen_restore_cancel_state(cancel_state);
     errno = saved_error;
@@ -317,9 +325,11 @@ fail_before_spawn:
 int pclose(FILE* stream) {
     RinPopenChild** cursor;
     RinPopenChild* record;
+    pid_t child;
     int close_result;
     int close_error;
     int status = 0;
+    pid_t waited;
     int cancel_state = -1;
     int wait_error = 0;
     int result = -1;
@@ -349,24 +359,30 @@ int pclose(FILE* stream) {
         return -1;
     }
 
+    child = record->pid;
     pthread_cleanup_push(rin_popen_cancel_child, record);
     close_result = RIN_POPEN_FCLOSE(stream);
     record->stream = NULL;
     close_error = errno;
     (void)pthread_setcancelstate(cancel_state, NULL);
-    if (rin_child_pidfd_wait_status(record->pidfd, &status) == 0) {
-        (void)RIN_POPEN_CLOSE(record->pidfd);
-        record->pidfd = -1;
+    do {
+        waited = RIN_POPEN_WAITPID(child, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    if (waited == child) {
         record->pid = 0;
         result = status;
-    } else {
+    } else if (waited < 0) {
         wait_error = errno ? errno : EIO;
         if (wait_error == ECHILD) {
-            (void)RIN_POPEN_CLOSE(record->pidfd);
-            record->pidfd = -1;
+            record->pid = 0;
         } else {
-            rin_popen_reap_failed_child(&record->pidfd);
+            rin_popen_reap_failed_child(child);
+            record->pid = 0;
         }
+    } else {
+        wait_error = ECHILD;
+        rin_popen_reap_failed_child(child);
+        record->pid = 0;
     }
     (void)pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
     pthread_cleanup_pop(0);

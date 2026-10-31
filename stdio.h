@@ -33,7 +33,6 @@ extern "C" {
 #define FOPEN_MAX STREAM_MAX
 #define TMP_MAX 238328
 #define L_tmpnam 20
-#define L_ctermid 9
 
 #ifndef _FILE_DECLARED
 #define _FILE_DECLARED
@@ -132,8 +131,6 @@ int remove(const char* pathname);
 int rename(const char* oldpath, const char* newpath);
 FILE* tmpfile(void);
 char* tmpnam(char* s);
-char* ctermid(char* s);
-char* gets(char* s);
 FILE* fmemopen(void* buffer, size_t size, const char* mode);
 FILE* open_memstream(char** buffer, size_t* size);
 

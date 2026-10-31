@@ -13,6 +13,8 @@
 #include "limits.h"
 #include "internal/posix_clock.h"
 #include "errno.h"
+#include "sys/types.h"
+
 #include "stdlib.h"
 #include "sys/syscall.h"
 #include "fcntl.h"
@@ -51,6 +53,9 @@
 #endif
 #ifndef _POSIX_JOB_CONTROL
 #define _POSIX_JOB_CONTROL 1
+#endif
+#ifndef _POSIX_ADVISORY_INFO
+#define _POSIX_ADVISORY_INFO 200809L
 #endif
 #ifndef _POSIX_MESSAGE_PASSING
 #define _POSIX_MESSAGE_PASSING 200809L
@@ -265,6 +270,10 @@ static inline int _rin_unistd_status(intptr_t result) {
     }
     return 0;
 }
+
+/* Keep the fork/pidfd frontend in a dependency-light header.  stdlib and
+ * termios can reach it before the rest of unistd is parsed. */
+#include "internal/rin_fork_pidfd.h"
 
 /* ═══════════════════════════════════════════════════════════════
  * 定数
@@ -1362,156 +1371,6 @@ static inline pid_t setsid(void)
     return (pid_t)response.session_id;
 }
 
-#if !defined(MIDL_PASS)
-__attribute__((noreturn)) static inline void _exit(int status);
-static inline int __rin_fork_complete_local(int fork_succeeded,
-                                            int rinfs_prepared,
-                                            int hooks_prepared) {
-    int result = 0;
-    if (rinfs_prepared && rinfs_fork_complete != NULL) {
-        int complete_result = rinfs_fork_complete(fork_succeeded);
-        if (complete_result != 0) result = complete_result;
-    }
-    if (hooks_prepared && rinfs_fork_hooks_complete != NULL) {
-        int complete_result = rinfs_fork_hooks_complete(fork_succeeded);
-        if (complete_result != 0 && result == 0) result = complete_result;
-    }
-    return result;
-}
-#endif
-
-static inline pid_t __rin_fork_with_pidfd(int* pidfd_out) {
-#if !defined(MIDL_PASS)
-    int allocator_fork_prepared = 0;
-    int fork_hooks_prepared = 0;
-    int rinfs_fork_prepared = 0;
-#if !defined(RINSDK_SPLIT_BUILD)
-    int atfork_handlers_prepared = 0;
-    __rin_pthread_atfork_snapshot atfork_snapshot = {0u};
-#endif
-#endif
-    intptr_t result;
-    if (pidfd_out != NULL) *pidfd_out = -1;
-#if !defined(MIDL_PASS)
-#if !defined(RINSDK_SPLIT_BUILD)
-    if (__rin_pthread_atfork_prepare != NULL) {
-        __rin_pthread_atfork_prepare(&atfork_snapshot);
-        atfork_handlers_prepared = 1;
-    }
-#endif
-    if (rinfs_fork_hooks_prepare != NULL &&
-        rinfs_fork_hooks_complete != NULL) {
-        if (rinfs_fork_hooks_prepare() != 0) {
-#if !defined(RINSDK_SPLIT_BUILD)
-            if (atfork_handlers_prepared &&
-                __rin_pthread_atfork_parent != NULL)
-                __rin_pthread_atfork_parent(&atfork_snapshot);
-#endif
-            errno = EBUSY;
-            return -1;
-        }
-        fork_hooks_prepared = 1;
-    }
-    if (rinfs_fork_prepare != NULL && rinfs_fork_complete != NULL) {
-        if (rinfs_fork_prepare() != 0) {
-            int complete_result = __rin_fork_complete_local(
-                0, rinfs_fork_prepared, fork_hooks_prepared);
-#if !defined(RINSDK_SPLIT_BUILD)
-            if (atfork_handlers_prepared &&
-                __rin_pthread_atfork_parent != NULL)
-                __rin_pthread_atfork_parent(&atfork_snapshot);
-#endif
-            errno = complete_result != 0 ? EIO : EBUSY;
-            return -1;
-        }
-        rinfs_fork_prepared = 1;
-    }
-    if (rin_user_allocator_before_fork != NULL) {
-        rin_user_allocator_before_fork();
-        allocator_fork_prepared = 1;
-    }
-#endif
-    result = _rin_unistd_result(pidfd_out != NULL
-        ? _RIN_UNISTD_SYSCALL1(SYS_FORK_PIDFD, (uintptr_t)pidfd_out)
-        : _RIN_UNISTD_SYSCALL0(SYS_FORK));
-    if (result < 0) {
-#if !defined(MIDL_PASS)
-        int fork_errno = errno;
-        int complete_result = __rin_fork_complete_local(
-            0, rinfs_fork_prepared, fork_hooks_prepared);
-        if (allocator_fork_prepared &&
-            rin_user_allocator_after_fork_parent != NULL)
-            rin_user_allocator_after_fork_parent();
-#if !defined(RINSDK_SPLIT_BUILD)
-        if (atfork_handlers_prepared &&
-            __rin_pthread_atfork_parent != NULL)
-            __rin_pthread_atfork_parent(&atfork_snapshot);
-#endif
-        errno = complete_result != 0 ? EIO : fork_errno;
-#endif
-        return -1;
-    }
-#if !defined(MIDL_PASS)
-#if !defined(RINSDK_SPLIT_BUILD)
-    if (result == 0 && __rin_pthread_atfork_child_reset != NULL)
-        __rin_pthread_atfork_child_reset();
-#endif
-#endif
-    if ((uintptr_t)result > (uintptr_t)INT_MAX) {
-#if !defined(MIDL_PASS)
-        /* The kernel created a child; retain its cloned RinFS owner counts
-         * even though this parent cannot represent the returned PID. */
-        int complete_result = __rin_fork_complete_local(
-            1, rinfs_fork_prepared, fork_hooks_prepared);
-        if (allocator_fork_prepared &&
-            rin_user_allocator_after_fork_parent != NULL)
-            rin_user_allocator_after_fork_parent();
-#if !defined(RINSDK_SPLIT_BUILD)
-        if (atfork_handlers_prepared &&
-            __rin_pthread_atfork_parent != NULL)
-            __rin_pthread_atfork_parent(&atfork_snapshot);
-#endif
-        errno = complete_result != 0 ? EIO : EOVERFLOW;
-#else
-        errno = EOVERFLOW;
-#endif
-        return -1;
-    }
-    if (result > 0 && pidfd_out != NULL && *pidfd_out < 0) {
-        /* syscallは子の公開とpidfdの登録を一体で行う契約。 */
-        errno = EIO;
-        return -1;
-    }
-#if !defined(MIDL_PASS)
-    {
-        int complete_result = __rin_fork_complete_local(
-            1, rinfs_fork_prepared, fork_hooks_prepared);
-        if (result == 0 && complete_result != 0) {
-            errno = EIO;
-            _exit(127);
-        }
-        if (result == 0 && rin_user_allocator_after_fork_child != NULL)
-            rin_user_allocator_after_fork_child();
-        else if (allocator_fork_prepared &&
-                 rin_user_allocator_after_fork_parent != NULL)
-            rin_user_allocator_after_fork_parent();
-#if !defined(RINSDK_SPLIT_BUILD)
-        if (atfork_handlers_prepared) {
-            if (result == 0 && __rin_pthread_atfork_child != NULL)
-                __rin_pthread_atfork_child(&atfork_snapshot);
-            else if (result != 0 && __rin_pthread_atfork_parent != NULL)
-                __rin_pthread_atfork_parent(&atfork_snapshot);
-        }
-#endif
-        /* fork cannot be rolled back after the kernel publishes the child.
-         * Preserve the parent's PID result and surface local completion
-         * failure in errno; the child exits before reaching user code. */
-        if (result != 0 && complete_result != 0) errno = EIO;
-    }
-#endif
-    return (pid_t)result;
-}
-
 static inline pid_t fork(void) {
     return __rin_fork_with_pidfd(NULL);
 }
@@ -2111,6 +1970,8 @@ static inline long sysconf(int name) {
             return 1;
         case _SC_MESSAGE_PASSING:
             return _POSIX_MESSAGE_PASSING;
+        case _SC_ADVISORY_INFO:
+            return _POSIX_ADVISORY_INFO;
         case _SC_MQ_OPEN_MAX:
             return MQ_OPEN_MAX;
         case _SC_MQ_PRIO_MAX:
@@ -2218,7 +2079,6 @@ static inline long sysconf(int name) {
         case _SC_2_PBS_TRACK:
         case _SC_2_SW_DEV:
         case _SC_2_UPE:
-        case _SC_ADVISORY_INFO:
         case _SC_CPUTIME:
 #if defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
         case _SC_GETGR_R_SIZE_MAX:

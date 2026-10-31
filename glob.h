@@ -13,8 +13,6 @@
 #include "wchar.h"
 #include "sys/stat.h"
 #include "dirent.h"
-#include "pwd.h"
-#include "unistd.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,7 +38,6 @@ extern "C" {
 #define GLOB_ONLYDIR  0x1000  /* ディレクトリのみ */
 #define GLOB_ALTDIRFUNC 0x2000 /* glob_tのfilesystem callbacksを使う */
 #define GLOB_MAGCHAR   0x0800 /* glob_t.gl_flags出力専用 */
-#define GLOB_TILDE_CHECK 0x4000 /* homeを解決できない場合はGLOB_NOMATCH */
 
 /* ═══════════════════════════════════════════════════════════════
  * エラーコード
@@ -106,15 +103,6 @@ static inline size_t _rin_glob_strlen(const char* text) {
 #endif
 #ifndef _RIN_GLOB_GETENV
 #define _RIN_GLOB_GETENV getenv
-#endif
-#ifndef _RIN_GLOB_GETUID
-#define _RIN_GLOB_GETUID getuid
-#endif
-#ifndef _RIN_GLOB_GETPWNAM_R
-#define _RIN_GLOB_GETPWNAM_R getpwnam_r
-#endif
-#ifndef _RIN_GLOB_GETPWUID_R
-#define _RIN_GLOB_GETPWUID_R getpwuid_r
 #endif
 
 typedef struct _RinGlobMatchList {
@@ -1272,97 +1260,35 @@ static inline int _rin_glob_brace_expand(const char* pattern, int flags,
     return found != 0 ? found : aggregate_result;
 }
 
-/* Expand a home path through the process environment or the namespace-bound
- * account provider.  Never consult a host passwd database. */
+/* Expand the current user's home directory without consulting an ambient
+ * user database.  The target environment owns HOME; arbitrary ~user lookup
+ * would otherwise turn an untrusted name into an authority-bearing path. */
 static inline int _rin_glob_tilde_expand(const char* pattern, int flags,
                                          int (*errfunc)(const char*, int),
                                          glob_t* pglob, int* handled,
                                          _RinGlobScratch* scratch,
                                          unsigned int brace_depth)
 {
-    const char* home = NULL;
+    const char* home;
     const char* suffix;
     size_t home_length;
     size_t suffix_length;
     size_t total_length;
     char* expanded;
     size_t cursor;
-    struct passwd account;
-    struct passwd* account_result = NULL;
-    char account_buffer[512];
-    char username[32];
-    int account_error = 0;
-    int current_user;
 
     if (!pattern || !pglob || !handled || !scratch) return GLOB_ABORTED;
     *handled = 0;
-    if (!(flags & (GLOB_TILDE | GLOB_TILDE_CHECK)) || pattern[0] != '~')
-        return 0;
+    if (!(flags & GLOB_TILDE) || pattern[0] != '~') return 0;
     *handled = 1;
+    if (pattern[1] != '\0' && pattern[1] != '/')
+        return GLOB_NOSYS;
 
-    current_user = pattern[1] == '\0' || pattern[1] == '/';
-    if (current_user) {
-        home = _RIN_GLOB_GETENV("HOME");
-        if (home && home[0] == '/') {
-            home_length = 0u;
-            while (home_length < _RIN_GLOB_MAX_PATTERN &&
-                   home[home_length] != '\0')
-                ++home_length;
-            if (home_length >= _RIN_GLOB_MAX_PATTERN)
-                return GLOB_NOSPACE;
-        } else {
-            account_error = _RIN_GLOB_GETPWUID_R(
-                _RIN_GLOB_GETUID(), &account, account_buffer,
-                sizeof(account_buffer), &account_result);
-            if (account_error != 0 && account_error != ENOENT) {
-                errno = account_error;
-                return GLOB_ABORTED;
-            }
-            home = account_result ? account.pw_dir : NULL;
-        }
-        suffix = pattern + 1u;
-    } else {
-        size_t username_length = 0u;
-        const char* username_start = pattern + 1u;
-        while (username_start[username_length] != '\0' &&
-               username_start[username_length] != '/') {
-            unsigned char current = (unsigned char)username_start[
-                username_length];
-            if (current < 0x21u || current > 0x7eu || current == '\\')
-                break;
-            ++username_length;
-        }
-        if (username_length == 0u || username_length >= sizeof(username) ||
-            (username_start[username_length] != '\0' &&
-             username_start[username_length] != '/')) {
-            home = NULL;
-            suffix = pattern + 1u;
-        } else {
-            memcpy(username, username_start, username_length);
-            username[username_length] = '\0';
-            account_error = _RIN_GLOB_GETPWNAM_R(
-                username, &account, account_buffer, sizeof(account_buffer),
-                &account_result);
-            if (account_error != 0 && account_error != ENOENT) {
-                errno = account_error;
-                return GLOB_ABORTED;
-            }
-            home = account_result ? account.pw_dir : NULL;
-            suffix = username_start + username_length;
-        }
-    }
-
-    if (!home || home[0] != '/') {
-        if (flags & GLOB_TILDE_CHECK) return GLOB_NOMATCH;
-        return _rin_glob_run(
-            pattern, flags & ~(GLOB_TILDE | GLOB_TILDE_CHECK), errfunc,
-            pglob, brace_depth);
-    }
-    home_length = 0u;
-    while (home_length < _RIN_GLOB_MAX_PATTERN &&
-           home[home_length] != '\0')
-        ++home_length;
-    if (home_length >= _RIN_GLOB_MAX_PATTERN) return GLOB_NOSPACE;
+    home = _RIN_GLOB_GETENV("HOME");
+    home_length = _rin_glob_strlen(home);
+    if (!home || home_length == 0u || home[0] != '/')
+        return GLOB_NOSYS;
+    suffix = pattern + 1u;
     expanded = scratch->expanded;
     suffix_length = _rin_glob_strlen(suffix);
     if (home_length > _RIN_GLOB_MAX_PATTERN - 1u ||
@@ -1383,8 +1309,7 @@ static inline int _rin_glob_tilde_expand(const char* pattern, int flags,
         expanded[home_length + index] = suffix[index];
     expanded[total_length] = '\0';
     return _rin_glob_run(
-        expanded, flags & ~(GLOB_TILDE | GLOB_TILDE_CHECK), errfunc, pglob,
-        brace_depth);
+        expanded, flags & ~GLOB_TILDE, errfunc, pglob, brace_depth);
 }
 
 /* Expand pathname components with bounded directory traversal. */
@@ -1396,7 +1321,7 @@ static inline int _rin_glob_run_body(
                             GLOB_DOOFFS | GLOB_NOCHECK | GLOB_APPEND |
                             GLOB_NOESCAPE | GLOB_PERIOD | GLOB_BRACE |
                             GLOB_NOMAGIC | GLOB_TILDE | GLOB_ONLYDIR |
-                            GLOB_ALTDIRFUNC | GLOB_TILDE_CHECK;
+                            GLOB_ALTDIRFUNC;
     size_t pattern_length;
     size_t component_count = 0u;
     size_t cursor = 0u;

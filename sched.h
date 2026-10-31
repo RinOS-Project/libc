@@ -223,18 +223,6 @@ void* rin_sched_task_get(int task_id);
 void* rin_sched_task_current(void);
 int rin_sched_task_get_priority(void* task);
 void rin_sched_task_set_priority(void* task, int priority);
-int rin_sched_task_sched_get(void* task, int* policy, int* priority);
-int rin_sched_task_sched_set(void* task, int policy, int priority);
-int rin_sched_task_sched_setparam(void* task, int priority);
-
-static inline int __rin_sched_kernel_result(int result) {
-    if (result == 0) return 0;
-    if (result < 0 && -(int64_t)result <= INT_MAX)
-        errno = (int)(-(int64_t)result);
-    else
-        errno = EIO;
-    return -1;
-}
 
 /* システム情報取得 */
 unsigned int rin_sched_get_ticks(void);
@@ -314,7 +302,7 @@ static inline int sched_getscheduler(pid_t pid) {
         SCHED_OTHER, 0, 0u};
     intptr_t result;
     uint32_t thread_id;
-    if (pid < 0) { errno = EINVAL; return -1; }
+    if (pid < 0) { errno = ESRCH; return -1; }
     if ((uint64_t)pid > UINT32_MAX) { errno = EOVERFLOW; return -1; }
     if (pid == 0) {
         result = __rin_syscall_posixize(
@@ -339,19 +327,14 @@ static inline int sched_getscheduler(pid_t pid) {
     }
     return parameters.policy;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    int policy;
-    int priority;
-    if (pid < 0) { errno = EINVAL; return -1; }
+    if (pid < 0) { errno = ESRCH; return -1; }
     void* task = rin_sched_task_get((int)pid);
     if (!task && pid == 0) {
         /* 現在のタスクを取得 */
         task = rin_sched_task_current();
     }
     if (!task) { errno = ESRCH; return -1; }
-    if (__rin_sched_kernel_result(
-            rin_sched_task_sched_get(task, &policy, &priority)) != 0)
-        return -1;
-    return policy;
+    return _rinos_priority_to_policy(rin_sched_task_get_priority(task));
 #else
     (void)pid;
     errno = ENOSYS;
@@ -365,8 +348,7 @@ static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_p
     RinThreadSchedParametersV2 parameters;
     intptr_t result;
     uint32_t thread_id;
-    if (!param) { errno = EINVAL; return -1; }
-    if (pid < 0) { errno = EINVAL; return -1; }
+    if (!param || pid < 0) { errno = EINVAL; return -1; }
     if ((uint64_t)pid > UINT32_MAX) { errno = EOVERFLOW; return -1; }
     thread_id = pid == 0 ? 0u : (uint32_t)pid;
     if (thread_id == 0u) {
@@ -390,7 +372,7 @@ static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_p
     return 0;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
     if (!param) { errno = EINVAL; return -1; }
-    if (pid < 0) { errno = EINVAL; return -1; }
+    if (pid < 0) { errno = ESRCH; return -1; }
     if (!_rin_sched_policy_priority_valid(policy, param->sched_priority)) {
         errno = EINVAL;
         return -1;
@@ -400,8 +382,13 @@ static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_p
         task = rin_sched_task_current();
     }
     if (!task) { errno = ESRCH; return -1; }
-    return __rin_sched_kernel_result(
-        rin_sched_task_sched_set(task, policy, param->sched_priority));
+    int priority = _policy_to_rinos_priority(policy);
+    if (priority < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    rin_sched_task_set_priority(task, priority);
+    return 0;
 #else
     (void)pid;
     (void)policy;
@@ -420,7 +407,7 @@ static inline int sched_getparam(pid_t pid, struct sched_param* param) {
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
     intptr_t result;
     uint32_t thread_id = pid == 0 ? 0u : (uint32_t)pid;
-    if (pid < 0) { errno = EINVAL; return -1; }
+    if (pid < 0) { errno = ESRCH; return -1; }
     if ((uint64_t)pid > UINT32_MAX) { errno = EOVERFLOW; return -1; }
     if (thread_id == 0u) {
         result = _rin_sched_result(_RIN_SCHED_SYSCALL0(SYS_GETTID));
@@ -437,18 +424,19 @@ static inline int sched_getparam(pid_t pid, struct sched_param* param) {
     if (result != 0) { errno = EIO; return -1; }
     return 0;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    int policy;
-    int priority;
-    if (pid < 0) { errno = EINVAL; return -1; }
+    if (pid < 0) { errno = ESRCH; return -1; }
     void* task = rin_sched_task_get((int)pid);
     if (!task && pid == 0) {
         task = rin_sched_task_current();
     }
     if (!task) { errno = ESRCH; return -1; }
-    if (__rin_sched_kernel_result(
-            rin_sched_task_sched_get(task, &policy, &priority)) != 0)
-        return -1;
-    param->sched_priority = priority;
+    int priority = rin_sched_task_get_priority(task);
+    int policy = _rinos_priority_to_policy(priority);
+    /* RinOS優先度(0-4)をPOSIX優先度(0-99)にマッピング */
+    param->sched_priority =
+        (policy == SCHED_FIFO || policy == SCHED_RR)
+            ? (priority >= _SCHED_PRIO_REALTIME ? 99 : priority * 25)
+            : 0;
     return 0;
 #else
     (void)pid;
@@ -465,46 +453,27 @@ static inline int sched_setparam(pid_t pid, const struct sched_param* param) {
     }
 
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
-    intptr_t result;
-    uint32_t thread_id;
-    if (pid < 0) { errno = EINVAL; return -1; }
-    if ((uint64_t)pid > UINT32_MAX) { errno = EOVERFLOW; return -1; }
-    if (pid == 0) {
-        result = __rin_syscall_posixize(
-            _RIN_SCHED_SYSCALL0(SYS_GETTID));
-        if (result < 0) return -1;
-        if (result == 0 || (uintptr_t)result > UINT32_MAX) {
-            errno = result == 0 ? ESRCH : EOVERFLOW;
-            return -1;
-        }
-        thread_id = (uint32_t)result;
-    } else {
-        thread_id = (uint32_t)pid;
-    }
-    {
-        RinThreadSchedParametersV2 parameters;
-        parameters.struct_size = (uint32_t)sizeof(parameters);
-        parameters.version = RIN_THREAD_SCHED_ABI_VERSION_2;
-        parameters.reserved0 = 0u;
-        parameters.policy = RIN_THREAD_SCHED_POLICY_KEEP_CURRENT;
-        parameters.priority = 0;
-        parameters.user_priority_address =
-            (uint64_t)(uintptr_t)&param->sched_priority;
-        result = _rin_sched_result(_RIN_SCHED_SYSCALL2(
-            SYS_THREAD_SCHED_SET, thread_id, &parameters));
-    }
-    if (result < 0) return -1;
-    if (result != 0) { errno = EIO; return -1; }
-    return 0;
+    int policy = sched_getscheduler(pid);
+    if (policy < 0) return -1;
+    return sched_setscheduler(pid, policy, param);
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    if (pid < 0) { errno = EINVAL; return -1; }
+    if (pid < 0) { errno = ESRCH; return -1; }
     void* task = rin_sched_task_get((int)pid);
     if (!task && pid == 0) {
         task = rin_sched_task_current();
     }
     if (!task) { errno = ESRCH; return -1; }
-    return __rin_sched_kernel_result(
-        rin_sched_task_sched_setparam(task, param->sched_priority));
+    int policy = _rinos_priority_to_policy(
+        rin_sched_task_get_priority(task));
+    if (!_rin_sched_policy_priority_valid(policy, param->sched_priority)) {
+        errno = EINVAL;
+        return -1;
+    }
+    /* The current policy determines its scheduler class.  Realtime numeric
+     * ordering is retained in the task parameters once that ABI is available. */
+    int priority = _policy_to_rinos_priority(policy);
+    rin_sched_task_set_priority(task, priority);
+    return 0;
 #else
     (void)pid;
     errno = ENOSYS;
@@ -557,7 +526,7 @@ static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
     uint32_t milliseconds = 0u;
     intptr_t result;
     uint32_t thread_id = pid == 0 ? 0u : (uint32_t)pid;
-    if (pid < 0) { errno = EINVAL; return -1; }
+    if (pid < 0) { errno = ESRCH; return -1; }
     if ((uint64_t)pid > UINT32_MAX) { errno = EOVERFLOW; return -1; }
     if (thread_id == 0u) {
         result = _rin_sched_result(_RIN_SCHED_SYSCALL0(SYS_GETTID));
@@ -577,7 +546,7 @@ static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
     uint32_t milliseconds = 0u;
     int result;
-    if (pid < 0) { errno = EINVAL; return -1; }
+    if (pid < 0) { errno = ESRCH; return -1; }
     result = platform_thread_sched_rr_interval(
         (void*)(pid == 0 ? (uintptr_t)platform_thread_current_tid()
                          : (uintptr_t)pid),

@@ -409,9 +409,6 @@ static inline int ppoll(struct pollfd* fds, nfds_t nfds,
  * select関数 (poll.hに含める)
  * ═══════════════════════════════════════════════════════════════*/
 
-/* `select()` writes the monotonic time remaining to a non-NULL mutable
- * `timeval` after the poll wait returns. `pselect()` takes a const `timespec`
- * and never writes it back. */
 static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
                          fd_set* exceptfds, struct timeval* timeout) {
     int timeout_ms;

@@ -6,7 +6,6 @@
 #include "fcntl.h"
 #include "limits.h"
 #include "pthread.h"
-#include "internal/pthread_cond_interrupt.h"
 #include "signal.h"
 #include "stdlib.h"
 #include "string.h"
@@ -30,17 +29,6 @@ enum RinAioOperation {
     RIN_AIO_OP_FSYNC
 };
 
-typedef struct RinAioRequest RinAioRequest;
-typedef struct RinAioSuspendWaiter RinAioSuspendWaiter;
-
-typedef struct RinAioSubscription {
-    RinAioSuspendWaiter* waiter;
-    RinAioRequest* request;
-    struct RinAioSubscription* waiter_next;
-    struct RinAioSubscription* request_previous;
-    struct RinAioSubscription* request_next;
-} RinAioSubscription;
-
 typedef struct RinAioNotification {
     int kind;
     int signo;
@@ -56,7 +44,7 @@ typedef struct RinAioGroup {
     RinAioNotification notification;
 } RinAioGroup;
 
-struct RinAioRequest {
+typedef struct RinAioRequest {
     struct aiocb* control;
     int state;
     int operation;
@@ -68,14 +56,7 @@ struct RinAioRequest {
     uint64_t barrier_sequence;
     RinAioNotification notification;
     RinAioGroup* group;
-    RinAioSubscription* suspend_waiters;
-};
-
-struct RinAioSuspendWaiter {
-    pthread_cond_t changed;
-    int completed;
-    RinAioSubscription* subscriptions;
-};
+} RinAioRequest;
 
 typedef struct RinAioCallback {
     void (*function)(union sigval);
@@ -95,9 +76,6 @@ static pthread_mutex_t g_rin_aio_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_rin_aio_changed = {
     0u, 0, CLOCK_MONOTONIC, PTHREAD_PROCESS_PRIVATE
 };
-/* Serialize submit-side worker admission while allowing the AIO state mutex
- * to be dropped around pthread_create().  Workers never acquire this mutex. */
-static pthread_mutex_t g_rin_aio_worker_start_mutex = PTHREAD_MUTEX_INITIALIZER;
 static RinAioRequest g_rin_aio_requests[RIN_AIO_CAPACITY];
 static uint32_t g_rin_aio_worker_count;
 static uint32_t g_rin_aio_idle_worker_count;
@@ -118,7 +96,6 @@ static uint32_t g_rin_aio_callback_dispatcher_started;
 
 static void* rin_aio_worker(void* unused);
 static void* rin_aio_callback_dispatcher(void* unused);
-static void rin_aio_suspend_notify_locked(RinAioRequest* request);
 static int rin_aio_callback_start_dispatcher_locked(void);
 static int rin_aio_callback_reserve(void);
 static void rin_aio_callback_release_reservation(void);
@@ -313,7 +290,6 @@ static void* rin_aio_callback_dispatcher(void* unused)
         pthread_cleanup_pop(1);
         pthread_cleanup_pop(0);
     }
-    return NULL;
 }
 
 static void rin_aio_notify(const RinAioNotification* notification)
@@ -376,10 +352,6 @@ static uint32_t rin_aio_queued_count_locked(void)
     return count;
 }
 
-/* Caller holds both g_rin_aio_worker_start_mutex and g_rin_aio_mutex.  The
- * state mutex is released while thread creation allocates stacks, then
- * reacquired before returning.  Requests are published only after this
- * helper succeeds, so failed first-worker creation cannot strand queued AIO. */
 static int rin_aio_start_workers_locked(uint32_t incoming_requests)
 {
     const uint32_t queued = rin_aio_queued_count_locked() +
@@ -393,34 +365,26 @@ static int rin_aio_start_workers_locked(uint32_t incoming_requests)
     if (active > RIN_AIO_WORKERS) active = RIN_AIO_WORKERS;
     target = active + queued;
     if (target > RIN_AIO_WORKERS) target = RIN_AIO_WORKERS;
-    {
-        uint32_t needed = target > g_rin_aio_worker_count
-                              ? target - g_rin_aio_worker_count : 0u;
-        uint32_t started = 0u;
-        (void)pthread_mutex_unlock(&g_rin_aio_mutex);
-        while (started < needed) {
-            pthread_attr_t attributes;
-            pthread_t thread;
-            int attributes_initialized = 0;
-            int result = pthread_attr_init(&attributes);
-            if (result == 0) {
-                attributes_initialized = 1;
-                result = pthread_attr_setstacksize(
-                    &attributes, RIN_AIO_WORKER_STACK);
-            }
-            if (result == 0)
-                result = pthread_attr_setdetachstate(
-                    &attributes, PTHREAD_CREATE_DETACHED);
-            if (result == 0)
-                result = pthread_create(&thread, &attributes,
-                                        rin_aio_worker, NULL);
-            if (attributes_initialized)
-                (void)pthread_attr_destroy(&attributes);
-            if (result != 0) break;
-            ++started;
+    while (g_rin_aio_worker_count < target) {
+        pthread_attr_t attributes;
+        pthread_t thread;
+        int attributes_initialized = 0;
+        int result = pthread_attr_init(&attributes);
+        if (result == 0) {
+            attributes_initialized = 1;
+            result = pthread_attr_setstacksize(&attributes,
+                                               RIN_AIO_WORKER_STACK);
         }
-        (void)pthread_mutex_lock(&g_rin_aio_mutex);
-        g_rin_aio_worker_count += started;
+        if (result == 0)
+            result = pthread_attr_setdetachstate(&attributes,
+                                                 PTHREAD_CREATE_DETACHED);
+        if (result == 0)
+            result = pthread_create(&thread, &attributes, rin_aio_worker,
+                                    NULL);
+        if (attributes_initialized)
+            (void)pthread_attr_destroy(&attributes);
+        if (result != 0) break;
+        ++g_rin_aio_worker_count;
     }
     return g_rin_aio_worker_count != 0u ? 0 : EAGAIN;
 }
@@ -492,13 +456,6 @@ static int rin_aio_submit_prepared(struct aiocb* control, int operation,
 {
     int slot;
     int error = 0;
-    error = pthread_mutex_lock(&g_rin_aio_worker_start_mutex);
-    if (error != 0) {
-        (void)close(held_fd);
-        rin_aio_notification_release(notification);
-        errno = error;
-        return -1;
-    }
     (void)pthread_mutex_lock(&g_rin_aio_mutex);
     if (rin_aio_find_locked(control) >= 0) {
         error = EINVAL;
@@ -521,7 +478,6 @@ static int rin_aio_submit_prepared(struct aiocb* control, int operation,
         (void)pthread_cond_broadcast(&g_rin_aio_changed);
     }
     (void)pthread_mutex_unlock(&g_rin_aio_mutex);
-    (void)pthread_mutex_unlock(&g_rin_aio_worker_start_mutex);
     if (error != 0) {
         (void)close(held_fd);
         rin_aio_notification_release(notification);
@@ -626,7 +582,6 @@ static void* rin_aio_worker(void* unused)
             request->state = RIN_AIO_DONE;
             request->completion_error = saved_errno;
             request->result = operation_result;
-            rin_aio_suspend_notify_locked(request);
             if (request->notification.kind != SIGEV_NONE)
                 completed_notifications[notification_count++] =
                     request->notification;
@@ -750,7 +705,6 @@ int aio_cancel(int fd, struct aiocb* request)
             current->state = RIN_AIO_DONE;
             current->completion_error = ECANCELED;
             current->result = -1;
-            rin_aio_suspend_notify_locked(current);
             memset(&completed, 0, sizeof(completed));
             completed_group = current->group
                                   ? rin_aio_group_complete_locked(
@@ -825,84 +779,16 @@ static int rin_aio_list_has_completion_locked(
     return 0;
 }
 
-static void rin_aio_suspend_subscribe_locked(
-    RinAioSuspendWaiter* waiter, RinAioSubscription* subscription,
-    RinAioRequest* request)
+static void rin_aio_unlock_mutex_cleanup(void* argument)
 {
-    subscription->waiter = waiter;
-    subscription->request = request;
-    subscription->waiter_next = waiter->subscriptions;
-    waiter->subscriptions = subscription;
-    subscription->request_previous = NULL;
-    subscription->request_next = request->suspend_waiters;
-    if (request->suspend_waiters)
-        request->suspend_waiters->request_previous = subscription;
-    request->suspend_waiters = subscription;
-}
-
-/* Completion unlinks the stack-owned subscription before waking its waiter.
- * aio_return() may then recycle the request slot without retaining a pointer
- * into a thread that has not run yet. */
-static void rin_aio_suspend_notify_locked(RinAioRequest* request)
-{
-    RinAioSubscription* subscription;
-    if (!request) return;
-    subscription = request->suspend_waiters;
-    request->suspend_waiters = NULL;
-    while (subscription) {
-        RinAioSubscription* next = subscription->request_next;
-        RinAioSuspendWaiter* waiter = subscription->waiter;
-        subscription->request = NULL;
-        subscription->request_previous = NULL;
-        subscription->request_next = NULL;
-        if (waiter) {
-            waiter->completed = 1;
-            (void)pthread_cond_signal(&waiter->changed);
-        }
-        subscription = next;
-    }
-}
-
-/* Cancellation and normal return both run with g_rin_aio_mutex held. */
-static void rin_aio_suspend_waiter_cleanup(void* argument)
-{
-    RinAioSuspendWaiter* waiter = (RinAioSuspendWaiter*)argument;
-    RinAioSubscription* subscription;
-    if (!waiter) return;
-    subscription = waiter->subscriptions;
-    while (subscription) {
-        RinAioSubscription* next = subscription->waiter_next;
-        RinAioRequest* request = subscription->request;
-        if (request) {
-            if (subscription->request_previous)
-                subscription->request_previous->request_next =
-                    subscription->request_next;
-            else if (request->suspend_waiters == subscription)
-                request->suspend_waiters = subscription->request_next;
-            if (subscription->request_next)
-                subscription->request_next->request_previous =
-                    subscription->request_previous;
-            subscription->request = NULL;
-        }
-        subscription->waiter = NULL;
-        subscription->waiter_next = NULL;
-        subscription->request_previous = NULL;
-        subscription->request_next = NULL;
-        subscription = next;
-    }
-    waiter->subscriptions = NULL;
-    (void)pthread_mutex_unlock(&g_rin_aio_mutex);
-    (void)pthread_cond_destroy(&waiter->changed);
+    pthread_mutex_t* mutex = (pthread_mutex_t*)argument;
+    if (mutex) (void)pthread_mutex_unlock(mutex);
 }
 
 int aio_suspend(const struct aiocb* const requests[], int count,
                 const struct timespec* timeout)
 {
     struct timespec deadline;
-    pthread_condattr_t condition_attributes;
-    RinAioSuspendWaiter waiter;
-    RinAioSubscription subscriptions[AIO_LISTIO_MAX];
-    int subscription_count = 0;
     int index;
     int has_request = 0;
     int wait_error;
@@ -924,88 +810,37 @@ int aio_suspend(const struct aiocb* const requests[], int count,
         }
     }
 
-    memset(&waiter, 0, sizeof(waiter));
-    wait_error = pthread_condattr_init(&condition_attributes);
-    if (wait_error == 0) {
-        wait_error = pthread_condattr_setclock(&condition_attributes,
-                                              CLOCK_MONOTONIC);
-        if (wait_error == 0)
-            wait_error = pthread_cond_init(&waiter.changed,
-                                           &condition_attributes);
-        (void)pthread_condattr_destroy(&condition_attributes);
-    }
-    if (wait_error != 0) {
-        errno = wait_error;
-        return -1;
-    }
-
     wait_error = pthread_mutex_lock(&g_rin_aio_mutex);
     if (wait_error != 0) {
-        (void)pthread_cond_destroy(&waiter.changed);
         errno = wait_error;
         return -1;
     }
-    pthread_cleanup_push(rin_aio_suspend_waiter_cleanup, &waiter);
-    if (rin_aio_list_has_completion_locked(requests, count)) {
-        wait_error = 0;
-    } else {
-        for (index = 0; index < count; ++index) {
-            int earlier;
-            int slot;
-            if (!requests[index]) continue;
-            for (earlier = 0; earlier < index; ++earlier)
-                if (requests[earlier] == requests[index]) break;
-            if (earlier != index) continue;
-            slot = rin_aio_find_locked(requests[index]);
-            if (slot < 0 ||
-                g_rin_aio_requests[slot].state == RIN_AIO_DONE) {
-                waiter.completed = 1;
-                break;
-            }
-            rin_aio_suspend_subscribe_locked(
-                &waiter, &subscriptions[subscription_count++],
-                &g_rin_aio_requests[slot]);
-        }
-        while (wait_error == 0 && !waiter.completed) {
-            if (timeout)
-                wait_error = __rin_pthread_cond_timedwait_interruptible(
-                    &waiter.changed, &g_rin_aio_mutex, &deadline);
-            else
-                wait_error = __rin_pthread_cond_wait_interruptible(
-                    &waiter.changed, &g_rin_aio_mutex);
-            if (wait_error == EINTR) {
-                /* Completion and signal delivery may race as the wait
-                 * reacquires the mutex; completion wins that race. */
-                if (waiter.completed) {
-                    wait_error = 0;
-                    break;
-                }
-                errno = EINTR;
-                break;
-            }
-            if (wait_error != 0 && wait_error != ETIMEDOUT) {
-                errno = wait_error;
-                break;
-            }
-            if (wait_error == ETIMEDOUT) {
-                if (waiter.completed) {
-                    wait_error = 0;
-                    break;
-                }
-                errno = EAGAIN;
-                wait_error = EAGAIN;
-                break;
-            }
-            if (wait_error == 0 && waiter.completed)
-                break;
-        }
-        if (waiter.completed &&
-            (wait_error == 0 || wait_error == EINTR ||
-             wait_error == ETIMEDOUT)) {
+    pthread_cleanup_push(rin_aio_unlock_mutex_cleanup, &g_rin_aio_mutex);
+    for (;;) {
+        if (rin_aio_list_has_completion_locked(requests, count)) {
             wait_error = 0;
+            break;
+        }
+        if (timeout)
+            wait_error = pthread_cond_timedwait(&g_rin_aio_changed,
+                                                &g_rin_aio_mutex, &deadline);
+        else
+            wait_error = pthread_cond_wait(&g_rin_aio_changed,
+                                           &g_rin_aio_mutex);
+        if (wait_error != 0 && wait_error != ETIMEDOUT) {
+            errno = wait_error;
+            break;
+        }
+        if (wait_error == ETIMEDOUT) {
+            if (rin_aio_list_has_completion_locked(requests, count)) {
+                wait_error = 0;
+                break;
+            }
+            errno = EAGAIN;
+            wait_error = EAGAIN;
+            break;
         }
     }
-    (void)subscription_count;
     pthread_cleanup_pop(1);
     return wait_error == 0 ? 0 : -1;
 }
@@ -1100,44 +935,40 @@ int lio_listio(int mode, struct aiocb* const requests[], int count,
     if (error == 0) {
         uint32_t available_slots = 0u;
         uint32_t slot_index;
-        error = pthread_mutex_lock(&g_rin_aio_worker_start_mutex);
-        if (error == 0) {
-            (void)pthread_mutex_lock(&g_rin_aio_mutex);
-            for (index = 0; index < active_count; ++index) {
-                if (rin_aio_find_locked(controls[index]) >= 0) {
-                    error = EINVAL;
-                    break;
-                }
+        (void)pthread_mutex_lock(&g_rin_aio_mutex);
+        for (index = 0; index < active_count; ++index) {
+            if (rin_aio_find_locked(controls[index]) >= 0) {
+                error = EINVAL;
+                break;
             }
-            for (slot_index = 0u; slot_index < RIN_AIO_CAPACITY; ++slot_index)
-                if (g_rin_aio_requests[slot_index].state == RIN_AIO_FREE)
-                    ++available_slots;
-            if (error == 0 && active_count > (int)available_slots)
-                error = EAGAIN;
-            if (error == 0 && active_count != 0)
-                error = rin_aio_start_workers_locked((uint32_t)active_count);
-            if (error == 0) {
-                if (group) group->remaining = (uint32_t)active_count;
-                for (index = 0; index < active_count; ++index) {
-                    const int slot = rin_aio_free_slot_locked();
-                    RinAioRequest* request = &g_rin_aio_requests[slot];
-                    memset(request, 0, sizeof(*request));
-                    request->control = controls[index];
-                    request->state = RIN_AIO_QUEUED;
-                    request->operation = operations[index];
-                    request->original_fd = controls[index]->aio_fildes;
-                    request->held_fd = held_fds[index];
-                    request->notification = request_notifications[index];
-                    request->sequence = g_rin_aio_next_sequence++;
-                    if (g_rin_aio_next_sequence == 0u)
-                        g_rin_aio_next_sequence = 1u;
-                    request->group = group;
-                }
-                (void)pthread_cond_broadcast(&g_rin_aio_changed);
-            }
-            (void)pthread_mutex_unlock(&g_rin_aio_mutex);
-            (void)pthread_mutex_unlock(&g_rin_aio_worker_start_mutex);
         }
+        for (slot_index = 0u; slot_index < RIN_AIO_CAPACITY; ++slot_index)
+            if (g_rin_aio_requests[slot_index].state == RIN_AIO_FREE)
+                ++available_slots;
+        if (error == 0 && active_count > (int)available_slots)
+            error = EAGAIN;
+        if (error == 0 && active_count != 0)
+            error = rin_aio_start_workers_locked((uint32_t)active_count);
+        if (error == 0) {
+            if (group) group->remaining = (uint32_t)active_count;
+            for (index = 0; index < active_count; ++index) {
+                const int slot = rin_aio_free_slot_locked();
+                RinAioRequest* request = &g_rin_aio_requests[slot];
+                memset(request, 0, sizeof(*request));
+                request->control = controls[index];
+                request->state = RIN_AIO_QUEUED;
+                request->operation = operations[index];
+                request->original_fd = controls[index]->aio_fildes;
+                request->held_fd = held_fds[index];
+                request->notification = request_notifications[index];
+                request->sequence = g_rin_aio_next_sequence++;
+                if (g_rin_aio_next_sequence == 0u)
+                    g_rin_aio_next_sequence = 1u;
+                request->group = group;
+            }
+            (void)pthread_cond_broadcast(&g_rin_aio_changed);
+        }
+        (void)pthread_mutex_unlock(&g_rin_aio_mutex);
     }
 
     if (error != 0) {
