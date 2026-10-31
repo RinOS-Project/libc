@@ -56,6 +56,13 @@
         long double: name##l, \
         default: name)(x, y)
 
+#define __RIN_TGMATH_BINARY_REAL_WITH_ARG(name, x, y, arg) \
+    _Generic((__RIN_TGMATH_GENERIC_ARGUMENT(x) + \
+              __RIN_TGMATH_GENERIC_ARGUMENT(y)), \
+        float: name##f, \
+        long double: name##l, \
+        default: name)(x, y, arg)
+
 #define __RIN_TGMATH_BINARY_COMPLEX(name, x, y) \
     _Generic((__RIN_TGMATH_GENERIC_ARGUMENT(x) + \
               __RIN_TGMATH_GENERIC_ARGUMENT(y)), \
@@ -139,6 +146,8 @@
 #define hypot(x, y)      __RIN_TGMATH_BINARY_REAL(hypot, (x), (y))
 #define nextafter(x, y)  __RIN_TGMATH_BINARY_REAL(nextafter, (x), (y))
 #define remainder(x, y)  __RIN_TGMATH_BINARY_REAL(remainder, (x), (y))
+#define remquo(x, y, quo) \
+    __RIN_TGMATH_BINARY_REAL_WITH_ARG(remquo, (x), (y), (quo))
 #define scalbn(x, n)     __RIN_TGMATH_UNARY_REAL_WITH_ARG(scalbn, (x), (n))
 #define scalbln(x, n)    __RIN_TGMATH_UNARY_REAL_WITH_ARG(scalbln, (x), (n))
 
