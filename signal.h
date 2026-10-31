@@ -3,12 +3,24 @@
  * シグナル処理
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__unix__) || defined(__APPLE__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_SIGNAL_SYSCALL0) && \
+    !defined(_RIN_SIGNAL_SYSCALL2) && \
+    !defined(_RIN_SIGNAL_SYSCALL3) && \
+    !defined(_RIN_SIGNAL_SYSCALL4)
+#include_next <signal.h>
+#else
+
 #ifndef _SIGNAL_H
 #define _SIGNAL_H
 
 #include "stddef.h"
 #include "stdint.h"
 #include "sys/syscall.h"
+#include "sys/types.h"
 #include "errno.h"
 #include "internal/pthread_cancel_point.h"
 
@@ -539,12 +551,14 @@ static inline int killpg(int pgrp, int sig) {
 }
 
 /* POSIX declares these thread entry points in both signal.h and pthread.h. */
+int pthread_kill(pthread_t thread, int sig);
+int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset);
 
 static inline int sigqueue(int pid, int signum, union sigval value) {
     siginfo_t information;
     intptr_t result;
     unsigned char* bytes = (unsigned char*)&information;
-    if (pid <= 0 || signum <= 0 || signum >= NSIG ||
+    if (pid <= 0 || signum < 0 || signum >= NSIG ||
         signum == __RIN_SIGCANCEL ||
         signum == SIGKILL || signum == SIGSTOP) {
         errno = EINVAL;
@@ -690,3 +704,5 @@ static inline int pthread_kill_sig(uintptr_t tid, int sig) {
 #endif
 
 #endif /* _SIGNAL_H */
+
+#endif /* hosted POSIX signal delegation */
