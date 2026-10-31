@@ -128,7 +128,7 @@
 #define _POSIX_THREAD_PROCESS_SHARED 200809L
 #endif
 #endif
-#ifndef _POSIX_BARRIERS
+#if defined(RIN_USERSPACE) && !defined(_POSIX_BARRIERS)
 #define _POSIX_BARRIERS 200809L
 #endif
 #if defined(RIN_USERSPACE) && !defined(_POSIX_SPAWN)
@@ -273,11 +273,7 @@ static inline int _rin_unistd_status(intptr_t result) {
 
 /* Keep the fork/pidfd frontend in a dependency-light header.  stdlib and
  * termios can reach it before the rest of unistd is parsed. */
-#if !defined(__has_include) || __has_include("internal/rin_fork_pidfd.h")
-/* The pidfd-fork companion header lands separately; TUs must not
- * fail while it is still uncommitted. Re-export when present. */
 #include "internal/rin_fork_pidfd.h"
-#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * 定数
@@ -2045,7 +2041,9 @@ static inline long sysconf(int name) {
 #endif
         case _SC_THREADS:
         case _SC_READER_WRITER_LOCKS:
+#if defined(RIN_USERSPACE)
         case _SC_BARRIERS:
+#endif
             return 200809L;
 #if defined(RIN_USERSPACE)
         case _SC_SPAWN:
@@ -2116,6 +2114,9 @@ static inline long sysconf(int name) {
         case _SC_THREAD_PRIO_INHERIT:
         case _SC_THREAD_PRIO_PROTECT:
         case _SC_THREAD_PRIORITY_SCHEDULING:
+#if !defined(RIN_USERSPACE)
+        case _SC_BARRIERS:
+#endif
 #if (!defined(__x86_64__) && !defined(_M_X64)) || \
     (defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE))
         case _SC_THREAD_PROCESS_SHARED:
