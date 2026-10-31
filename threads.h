@@ -142,27 +142,10 @@ static inline int mtx_timedlock(mtx_t* mutex, const struct timespec* deadline)
 {
     int error;
     if (!mutex || !deadline) return thrd_error;
-#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    if (deadline->tv_sec < 0 || deadline->tv_nsec < 0 ||
-        deadline->tv_nsec >= 1000000000L)
-        return thrd_error;
-    for (;;) {
-        struct timespec now;
-        error = pthread_mutex_trylock(mutex);
-        if (error == 0) return thrd_success;
-        if (error != EBUSY) return thrd_error;
-        if (clock_gettime(CLOCK_REALTIME, &now) != 0) return thrd_error;
-        if (now.tv_sec > deadline->tv_sec ||
-            (now.tv_sec == deadline->tv_sec &&
-             now.tv_nsec >= deadline->tv_nsec))
-            return thrd_timedout;
-        sched_yield();
-    }
-#else
+    /* The pthread owner uses the kernel's absolute-deadline futex wait. */
     error = pthread_mutex_timedlock(mutex, deadline);
     if (error == 0) return thrd_success;
     return error == ETIMEDOUT ? thrd_timedout : thrd_error;
-#endif
 }
 
 static inline int mtx_trylock(mtx_t* mutex)
@@ -223,7 +206,7 @@ static inline int tss_create(tss_t* key, tss_dtor_t destructor)
     if (!key) return thrd_error;
     error = pthread_key_create(key, destructor);
     if (error == 0) return thrd_success;
-    return error == EAGAIN || error == ENOMEM ? thrd_nomem : thrd_error;
+    return error == ENOMEM ? thrd_nomem : thrd_error;
 }
 
 static inline void tss_delete(tss_t key)
