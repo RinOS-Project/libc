@@ -22,6 +22,9 @@
 #include "errno.h"
 #include "limits.h"
 #include "sys/syscall.h"
+#if defined(RIN_FREESTANDING) || defined(__RINOS__)
+#include "fcntl.h"
+#endif
 #include "fcntl.h"
 #include "fcntl_flags.h"
 #include "termios.h"
@@ -436,6 +439,7 @@ static inline int _rin_stdio_format_hex_float_candidate(
         int unbiased;
         unsigned int nib[16];
         unsigned int ni;
+#if defined(__LDBL_MAX_EXP__) && __LDBL_MAX_EXP__ > 16382
         if (scan < 0x1p-16382L) {
             /* Denormal: scale straight to the hardware mantissa
              * (value * 2^16445).  Every step is an exact power of two
@@ -446,6 +450,9 @@ static inline int _rin_stdio_format_hex_float_candidate(
             mantissa = (uint64_t)scan;
             unbiased = -16382;
         } else {
+#else
+        {
+#endif
             long double fracbit;
             unsigned int bit;
             unbiased = 0;
@@ -849,7 +856,7 @@ _RIN_STDIO_API int fseek(FILE* stream, long offset, int whence);
 /* The product stdio owner supplies one process-wide counter.  SDK split
  * objects only need a local fallback: they must not pull the product stdio
  * owner into rincrt merely by including a header with inline fallbacks. */
-#if defined(RINSDK_SPLIT_BUILD)
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_STDIO_OWNER_BUILD)
 static inline uint32_t _rin_stdio_tmpnam_next_sequence(void) {
     static volatile uint32_t sequence;
     const uint32_t limit = (uint32_t)TMP_MAX;
@@ -2135,16 +2142,12 @@ _RIN_STDIO_INTERNAL size_t _rin_stdio_write_buffered(FILE* stream,
             for (size_t index = 0u; index < chunk; ++index) {
                 if ((unsigned char)data[copied + index] == (unsigned char)'\n') {
                     chunk = index + 1u;
+                    flush_line = 1;
                     break;
                 }
             }
         }
-        for (size_t index = 0u; index < chunk; ++index) {
-            unsigned char value = (unsigned char)data[copied + index];
-            stream->buf[stream->buf_pos + index] = value;
-            if (stream->buf_mode == _IOLBF && value == (unsigned char)'\n')
-                flush_line = 1;
-        }
+        memcpy(stream->buf + stream->buf_pos, data + copied, chunk);
         stream->buf_pos += chunk;
         copied += chunk;
         if (stream->buf_pos == stream->buf_size || flush_line) {
