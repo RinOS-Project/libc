@@ -159,9 +159,6 @@ typedef struct __rin_netdb_runtime_state_v1 {
     char* aliases[1];
     struct hostent hostent;
     char hostname[256];
-    char host_alias_storage[RIN_NETDB_DATABASE_MAX_ALIASES]
-                          [RIN_NETDB_DATABASE_NAME_MAX];
-    char* host_aliases[RIN_NETDB_DATABASE_MAX_ALIASES + 1u];
     struct servent service_result;
     char service_name[RIN_NETDB_DATABASE_NAME_MAX];
     char service_protocol[RIN_NETDB_DATABASE_NAME_MAX];
@@ -191,6 +188,9 @@ typedef struct __rin_netdb_runtime_state_v1 {
     FILE* network_file;
     long network_file_offset;
     int network_stayopen;
+    char host_alias_storage[RIN_NETDB_DATABASE_MAX_ALIASES]
+                          [RIN_NETDB_DATABASE_NAME_MAX];
+    char* host_aliases[RIN_NETDB_DATABASE_MAX_ALIASES + 1u];
 } __rin_netdb_runtime_state_v1;
 
 extern RIN_NETDB_THREAD_LOCAL __rin_netdb_runtime_state_v1
