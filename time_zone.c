@@ -3,6 +3,7 @@
 #include "errno.h"
 #include "limits.h"
 #include "stdlib.h"
+#include "stdint.h"
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
     defined(RIN_USERSPACE) && RIN_USERSPACE
 #include "internal/rin_environment_runtime.h"
@@ -112,6 +113,15 @@ extern int rin_system_timezone_offset(const char* zone,
                                       int64_t epoch_seconds,
                                       int* offset_minutes,
                                       int* in_dst) __attribute__((weak));
+extern int rin_system_timezone_offset_seconds(const char* zone,
+                                             int64_t epoch_seconds,
+                                             int32_t* offset_seconds,
+                                             int* in_dst)
+    __attribute__((weak));
+extern int rin_system_timezone_name_at(const char* zone,
+                                       int64_t epoch_seconds,
+                                       char* output, size_t capacity)
+    __attribute__((weak));
 
 enum {
     RIN_TIME_ZONE_CACHE_SOURCE_ENVIRONMENT = 1u,
@@ -165,6 +175,47 @@ static void rin_time_zone_acquire(void) {
 
 static void rin_time_zone_release(void) {
     __atomic_clear(&rin_time_zone_lock, __ATOMIC_RELEASE);
+}
+
+static int rin_time_zone_remote_offset(const char* zone, int64_t epoch,
+                                       long* offset_seconds, int* in_dst) {
+    int is_daylight = 0;
+    if (!zone || !offset_seconds || !in_dst) return 0;
+    if (rin_system_timezone_offset_seconds) {
+        int32_t exact_offset = 0;
+        if (!rin_system_timezone_offset_seconds(zone, epoch, &exact_offset,
+                                                &is_daylight) ||
+            exact_offset < -86400 || exact_offset > 86400) {
+            errno = EIO;
+            return 0;
+        }
+        *offset_seconds = (long)exact_offset;
+        *in_dst = is_daylight != 0;
+        return 1;
+    }
+    if (rin_system_timezone_offset) {
+        int offset_minutes = 0;
+        if (!rin_system_timezone_offset(zone, epoch, &offset_minutes,
+                                        &is_daylight) ||
+            offset_minutes < -1440 || offset_minutes > 1440) {
+            errno = EIO;
+            return 0;
+        }
+        *offset_seconds = (long)offset_minutes * 60L;
+        *in_dst = is_daylight != 0;
+        return 1;
+    }
+    errno = EIO;
+    return 0;
+}
+
+static int rin_time_zone_name_is_iana_id(const char* text) {
+    return text && strchr(text, '/') != NULL && strchr(text, ',') == NULL;
+}
+
+static int rin_time_zone_remote_provider_available(void) {
+    return rin_system_timezone_offset_seconds != NULL ||
+           rin_system_timezone_offset != NULL;
 }
 
 static void rin_cxx_tm_timezone_acquire(void) {
@@ -959,48 +1010,48 @@ int rin_time_zone_resolve_name(const char* input, size_t length, long* offset) {
 
 static int rin_time_zone_remote(const char* text, RinTimeZone* output) {
     RinTimeZone candidate = {0};
-    int offset_minutes = 0;
+    long offset_seconds = 0L;
     int in_dst = 0;
-    int summer_offset = 0;
+    long summer_offset = 0L;
     int summer_dst = 0;
-    int winter_offset = 0;
+    long winter_offset = 0L;
     int winter_dst = 0;
-    int standard_minutes = 0;
+    long standard_offset = 0L;
     int have_standard = 0;
     size_t length = 0u;
-    if (!rin_system_timezone_offset || !text || !output) return 0;
+    if (!text || !output) return 0;
     while (length <= RIN_TZ_TEXT_MAX && text[length] != '\0') ++length;
     if (length == 0u || length > RIN_TZ_TEXT_MAX) return 0;
-    if (!rin_system_timezone_offset(text, 0, &offset_minutes, &in_dst))
+    if (!rin_time_zone_remote_offset(text, 0, &offset_seconds, &in_dst))
         return 0;
     /* Probe representative seasons so the legacy globals remain useful even
      * for a remote zone whose current instant is in standard time. */
-    (void)rin_system_timezone_offset(text, 946684800LL, &winter_offset,
-                                     &winter_dst); /* 2000-01-01 */
-    (void)rin_system_timezone_offset(text, 962409600LL, &summer_offset,
-                                     &summer_dst); /* 2000-07-01 */
+    (void)rin_time_zone_remote_offset(text, 946684800LL, &winter_offset,
+                                      &winter_dst); /* 2000-01-01 */
+    (void)rin_time_zone_remote_offset(text, 962409600LL, &summer_offset,
+                                      &summer_dst); /* 2000-07-01 */
     if (!winter_dst) {
-        standard_minutes = winter_offset;
+        standard_offset = winter_offset;
         have_standard = 1;
     } else if (!summer_dst) {
-        standard_minutes = summer_offset;
+        standard_offset = summer_offset;
         have_standard = 1;
     } else if (!in_dst) {
-        standard_minutes = offset_minutes;
+        standard_offset = offset_seconds;
         have_standard = 1;
     }
     rin_time_zone_set_names(&candidate, "LOCAL", "LOCAL-DST");
     candidate.remote = 1;
     rin_time_zone_copy(candidate.remote_id, text, sizeof(candidate.remote_id));
-    candidate.standard_offset = (long)(have_standard ? standard_minutes :
-                                       offset_minutes) * 60L;
+    candidate.standard_offset = have_standard ? standard_offset :
+                                                 offset_seconds;
     candidate.daylight_offset = candidate.standard_offset;
     if (summer_dst) {
         candidate.has_daylight = 1;
-        candidate.daylight_offset = (long)summer_offset * 60L;
+        candidate.daylight_offset = summer_offset;
     } else if (in_dst) {
         candidate.has_daylight = 1;
-        candidate.daylight_offset = (long)offset_minutes * 60L;
+        candidate.daylight_offset = offset_seconds;
     }
     *output = candidate;
     return 1;
@@ -1010,9 +1061,29 @@ static int rin_time_zone_parse(const char* text, RinTimeZone* output) {
     RinTimeZoneParser parser = {text, 0u};
     RinTimeZone candidate = {0};
     if (text[0] == ':') {
+        if (rin_time_zone_name_is_iana_id(text + 1)) {
+            if (rin_time_zone_remote(text + 1, output)) return 1;
+            /* Hosted differential consumers may intentionally link libc
+             * without the product runtime bridge. Keep their known fixed
+             * subset, while a present-but-failing product bridge stays
+             * fail-closed instead of using stale regional rules. */
+            if (!rin_time_zone_remote_provider_available() &&
+                rin_time_zone_named(text + 1, output))
+                return 1;
+            errno = EIO;
+            return 0;
+        }
         if (rin_time_zone_named(text + 1, output)) return 1;
         if (rin_time_zone_remote(text + 1, output)) return 1;
         errno = EINVAL;
+        return 0;
+    }
+    if (rin_time_zone_name_is_iana_id(text)) {
+        if (rin_time_zone_remote(text, output)) return 1;
+        if (!rin_time_zone_remote_provider_available() &&
+            rin_time_zone_named(text, output))
+            return 1;
+        errno = EIO;
         return 0;
     }
     if (rin_time_zone_named(text, output)) return 1;
@@ -1186,6 +1257,28 @@ static int rin_time_epoch_value(int64_t value, time_t* output) {
     return 1;
 }
 
+static int rin_time_add_seconds(int64_t value, int64_t delta,
+                                int64_t* output) {
+    if (!output || (delta > 0 && value > INT64_MAX - delta) ||
+        (delta < 0 && value < INT64_MIN - delta)) {
+        errno = EOVERFLOW;
+        return 0;
+    }
+    *output = value + delta;
+    return 1;
+}
+
+static int rin_time_subtract_seconds(int64_t value, int64_t delta,
+                                     int64_t* output) {
+    if (!output || (delta > 0 && value < INT64_MIN + delta) ||
+        (delta < 0 && value > INT64_MAX + delta)) {
+        errno = EOVERFLOW;
+        return 0;
+    }
+    *output = value - delta;
+    return 1;
+}
+
 static int rin_time_split(time_t epoch, long offset, int is_daylight,
                           const char* zone, struct tm* output) {
     int64_t value = (int64_t)epoch;
@@ -1343,14 +1436,22 @@ static int rin_time_local_with_zone(const RinTimeZone* zone, time_t epoch,
     long offset;
     const char* zone_name;
     if (zone && zone->remote) {
-        int offset_minutes = 0;
-        if (!rin_system_timezone_offset ||
-            !rin_system_timezone_offset(zone->remote_id, (int64_t)epoch,
-                                        &offset_minutes, &is_daylight))
+        char dynamic_zone_name[RIN_TZ_NAME_MAX + 1u];
+        RinTimeZone named_zone = {0};
+        if (!rin_time_zone_remote_offset(zone->remote_id, (int64_t)epoch,
+                                         &offset, &is_daylight))
             return 0;
-        offset = (long)offset_minutes * 60L;
         zone_name = is_daylight ? zone->daylight_name_snapshot
                                 : zone->standard_name_snapshot;
+        if (rin_system_timezone_name_at &&
+            rin_system_timezone_name_at(zone->remote_id, (int64_t)epoch,
+                                        dynamic_zone_name,
+                                        sizeof(dynamic_zone_name))) {
+            rin_time_zone_set_names(&named_zone, dynamic_zone_name,
+                                    dynamic_zone_name);
+            if (!rin_time_zone_snapshot_names(&named_zone)) return 0;
+            zone_name = named_zone.standard_name_snapshot;
+        }
         return rin_time_split(epoch, offset, is_daylight, zone_name, output);
     }
     if (!rin_time_zone_is_daylight(zone, epoch, &is_daylight)) return 0;
@@ -1541,35 +1642,39 @@ static int rin_time_mktime_remote(const RinTimeZone* zone, int64_t wall,
     int64_t sample_epoch;
     size_t index;
     if (!zone || !zone->remote || !normalized || !original ||
-        !output_epoch || !output_value || !rin_system_timezone_offset)
+        !output_epoch || !output_value ||
+        (!rin_system_timezone_offset_seconds &&
+         !rin_system_timezone_offset))
         return 0;
     for (index = 0u; index < sizeof(sample_deltas) / sizeof(sample_deltas[0]); ++index) {
-        int offset_minutes = 0;
+        long offset_seconds = 0L;
         int in_dst = 0;
-        sample_epoch = wall + sample_deltas[index];
-        if (!rin_system_timezone_offset(zone->remote_id, sample_epoch,
-                                        &offset_minutes, &in_dst))
+        if (!rin_time_add_seconds(wall, sample_deltas[index], &sample_epoch) ||
+            !rin_time_zone_remote_offset(zone->remote_id, sample_epoch,
+                                         &offset_seconds, &in_dst))
             continue;
         for (size_t offset_index = 0u; offset_index < offset_count; ++offset_index)
-            if (offsets[offset_index] == (long)offset_minutes * 60L)
+            if (offsets[offset_index] == offset_seconds)
                 goto next_sample;
         if (offset_count < sizeof(offsets) / sizeof(offsets[0]))
-            offsets[offset_count++] = (long)offset_minutes * 60L;
+            offsets[offset_count++] = offset_seconds;
 next_sample:
         ;
     }
     for (index = 0u; index < offset_count; ++index) {
-        int64_t candidate_seconds = wall - (int64_t)offsets[index];
-        int actual_offset_minutes = 0;
+        int64_t candidate_seconds;
+        long actual_offset_seconds = 0L;
         int in_dst = 0;
         time_t candidate_epoch;
         struct tm converted;
         struct tm converted_normalized;
-        if (!rin_time_epoch_value(candidate_seconds, &candidate_epoch) ||
-            !rin_system_timezone_offset(zone->remote_id, candidate_seconds,
-                                        &actual_offset_minutes, &in_dst) ||
-            actual_offset_minutes * 60L != offsets[index] ||
-            !rin_time_split(candidate_epoch, (long)actual_offset_minutes * 60L,
+        if (!rin_time_subtract_seconds(wall, (int64_t)offsets[index],
+                                       &candidate_seconds) ||
+            !rin_time_epoch_value(candidate_seconds, &candidate_epoch) ||
+            !rin_time_zone_remote_offset(zone->remote_id, candidate_seconds,
+                                         &actual_offset_seconds, &in_dst) ||
+            actual_offset_seconds != offsets[index] ||
+            !rin_time_split(candidate_epoch, actual_offset_seconds,
                             in_dst, in_dst ? zone->daylight_name : zone->standard_name,
                             &converted))
             continue;
@@ -1587,10 +1692,21 @@ next_sample:
             }
         } else if (!gap.valid) {
             int64_t converted_wall;
+            int64_t wall_delta;
+            int gap_preference_matches;
             if (rin_time_wall_seconds(&converted, &converted_wall,
                                       &converted_normalized) &&
-                converted_wall >= wall && converted_wall - wall <= 7200LL &&
-                (original->tm_isdst < 0 || original->tm_isdst == in_dst)) {
+                rin_time_subtract_seconds(converted_wall, wall,
+                                          &wall_delta) &&
+                wall_delta != 0 && wall_delta >= -172800LL &&
+                wall_delta <= 172800LL) {
+                if (original->tm_isdst > 0)
+                    gap_preference_matches = in_dst;
+                else if (original->tm_isdst == 0)
+                    gap_preference_matches = !in_dst;
+                else
+                    gap_preference_matches = wall_delta > 0;
+                if (!gap_preference_matches) continue;
                 gap.epoch = candidate_epoch;
                 gap.value = converted;
                 gap.valid = 1;
