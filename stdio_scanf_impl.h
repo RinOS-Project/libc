@@ -5,6 +5,7 @@
 #define _RIN_STDIO_SCANF_IMPL_H
 
 #include "wchar.h"
+#include "stdlib.h"
 #include "stdio_scanf_float_impl.h"
 
 #define RIN_SSCANF_MAX_CONVERSIONS 64u
@@ -67,12 +68,46 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
     spec->scanset_invert = 0;
     spec->scanset_data = NULL;
     spec->scanset_bytes = 0u;
+    spec->argument_index = 0u;
+    spec->argument_override = NULL;
+    spec->has_argument_override = 0;
+    spec->allocate = 0;
     for (size_t index = 0u; index < sizeof(spec->scanset); ++index)
         spec->scanset[index] = 0u;
     if (format[current] == '%') {
         spec->conversion = '%';
         *offset = current + 1u;
         return 0;
+    }
+    {
+        size_t probe = current;
+        size_t argument_index = 0u;
+        int have_argument_digits = 0;
+        while (probe <= RIN_SSCANF_MAX_INPUT &&
+               format[probe] >= '0' && format[probe] <= '9') {
+            size_t digit = (size_t)(format[probe] - '0');
+            have_argument_digits = 1;
+            if (argument_index >
+                (RIN_SSCANF_MAX_INPUT - digit) / 10u) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            argument_index = argument_index * 10u + digit;
+            ++probe;
+        }
+        if (probe > RIN_SSCANF_MAX_INPUT) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        if (have_argument_digits && format[probe] == '$') {
+            if (argument_index == 0u ||
+                argument_index > RIN_SSCANF_MAX_CONVERSIONS) {
+                errno = EINVAL;
+                return -1;
+            }
+            spec->argument_index = argument_index;
+            current = probe + 1u;
+        }
     }
     if (format[current] == '*') {
         spec->suppress = 1;
@@ -124,6 +159,10 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
         current = (size_t)(width_format - format);
         spec->length = spec->width_fast
             ? RIN_SSCANF_LENGTH_FAST_WIDTH : RIN_SSCANF_LENGTH_WIDTH;
+    }
+    if (format[current] == 'm') {
+        spec->allocate = 1;
+        ++current;
     }
     if (format[current] == '\0') {
         errno = EINVAL;
@@ -255,17 +294,235 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
         errno = ENOSYS;
         return -1;
     }
+    if (spec->allocate && spec->conversion != 'c' &&
+        spec->conversion != 's' && spec->conversion != '[') {
+        errno = EINVAL;
+        return -1;
+    }
+    if (spec->argument_index != 0u && spec->suppress) {
+        errno = EINVAL;
+        return -1;
+    }
     *offset = current;
     return 0;
 }
 
-static int rin_sscanf_validate_format(const char* format) {
+enum RinSscanfArgumentKind {
+    RIN_SSCANF_ARG_NONE = 0,
+    RIN_SSCANF_ARG_VOID_POINTER,
+    RIN_SSCANF_ARG_FLOAT_POINTER,
+    RIN_SSCANF_ARG_DOUBLE_POINTER,
+    RIN_SSCANF_ARG_LONG_DOUBLE_POINTER,
+    RIN_SSCANF_ARG_CHAR_POINTER,
+    RIN_SSCANF_ARG_WCHAR_POINTER,
+    RIN_SSCANF_ARG_CHAR_POINTER_POINTER,
+    RIN_SSCANF_ARG_WCHAR_POINTER_POINTER,
+    RIN_SSCANF_ARG_INT_POINTER,
+    RIN_SSCANF_ARG_SHORT_POINTER,
+    RIN_SSCANF_ARG_SCHAR_POINTER,
+    RIN_SSCANF_ARG_LONG_POINTER,
+    RIN_SSCANF_ARG_LLONG_POINTER,
+    RIN_SSCANF_ARG_INTMAX_POINTER,
+    RIN_SSCANF_ARG_PTRDIFF_POINTER,
+    RIN_SSCANF_ARG_UINT_POINTER,
+    RIN_SSCANF_ARG_USHORT_POINTER,
+    RIN_SSCANF_ARG_UCHAR_POINTER,
+    RIN_SSCANF_ARG_ULONG_POINTER,
+    RIN_SSCANF_ARG_ULLONG_POINTER,
+    RIN_SSCANF_ARG_UINTMAX_POINTER,
+    RIN_SSCANF_ARG_SIZE_POINTER,
+    RIN_SSCANF_ARG_WIDTH_I8_POINTER,
+    RIN_SSCANF_ARG_WIDTH_I16_POINTER,
+    RIN_SSCANF_ARG_WIDTH_I32_POINTER,
+    RIN_SSCANF_ARG_WIDTH_I64_POINTER,
+    RIN_SSCANF_ARG_WIDTH_U8_POINTER,
+    RIN_SSCANF_ARG_WIDTH_U16_POINTER,
+    RIN_SSCANF_ARG_WIDTH_U32_POINTER,
+    RIN_SSCANF_ARG_WIDTH_U64_POINTER,
+    RIN_SSCANF_ARG_FAST_I8_POINTER,
+    RIN_SSCANF_ARG_FAST_I16_POINTER,
+    RIN_SSCANF_ARG_FAST_I32_POINTER,
+    RIN_SSCANF_ARG_FAST_I64_POINTER,
+    RIN_SSCANF_ARG_FAST_U8_POINTER,
+    RIN_SSCANF_ARG_FAST_U16_POINTER,
+    RIN_SSCANF_ARG_FAST_U32_POINTER,
+    RIN_SSCANF_ARG_FAST_U64_POINTER
+};
+
+struct RinSscanfArgumentSlot {
+    enum RinSscanfArgumentKind kind;
+    void* value;
+};
+
+struct RinSscanfArgumentPlan {
+    struct RinSscanfArgumentSlot slots[RIN_SSCANF_MAX_CONVERSIONS];
+    size_t maximum_index;
+    size_t sequential_count;
+    int positional;
+};
+
+static enum RinSscanfArgumentKind rin_sscanf_argument_kind(
+        const struct RinSscanfSpec* spec) {
+    int is_signed;
+    if (!spec || spec->suppress || spec->conversion == '%')
+        return RIN_SSCANF_ARG_NONE;
+    if (spec->conversion == 'p') return RIN_SSCANF_ARG_VOID_POINTER;
+    if (spec->conversion == 'a' || spec->conversion == 'A' ||
+        spec->conversion == 'e' || spec->conversion == 'E' ||
+        spec->conversion == 'f' || spec->conversion == 'F' ||
+        spec->conversion == 'g' || spec->conversion == 'G')
+        return spec->length == RIN_SSCANF_LENGTH_NONE
+            ? RIN_SSCANF_ARG_FLOAT_POINTER
+            : spec->length == RIN_SSCANF_LENGTH_LONG
+                ? RIN_SSCANF_ARG_DOUBLE_POINTER
+                : RIN_SSCANF_ARG_LONG_DOUBLE_POINTER;
+    if (spec->conversion == 'c' || spec->conversion == 's' ||
+        spec->conversion == '[') {
+        if (spec->allocate)
+            return spec->length == RIN_SSCANF_LENGTH_LONG
+                ? RIN_SSCANF_ARG_WCHAR_POINTER_POINTER
+                : RIN_SSCANF_ARG_CHAR_POINTER_POINTER;
+        return spec->length == RIN_SSCANF_LENGTH_LONG
+            ? RIN_SSCANF_ARG_WCHAR_POINTER
+            : RIN_SSCANF_ARG_CHAR_POINTER;
+    }
+    is_signed = spec->conversion == 'd' || spec->conversion == 'i' ||
+                spec->conversion == 'n';
+    if (spec->length == RIN_SSCANF_LENGTH_WIDTH ||
+        spec->length == RIN_SSCANF_LENGTH_FAST_WIDTH) {
+        int fast = spec->length == RIN_SSCANF_LENGTH_FAST_WIDTH;
+        if (is_signed) {
+            if (spec->width_bits == 8u)
+                return fast ? RIN_SSCANF_ARG_FAST_I8_POINTER
+                            : RIN_SSCANF_ARG_WIDTH_I8_POINTER;
+            if (spec->width_bits == 16u)
+                return fast ? RIN_SSCANF_ARG_FAST_I16_POINTER
+                            : RIN_SSCANF_ARG_WIDTH_I16_POINTER;
+            if (spec->width_bits == 32u)
+                return fast ? RIN_SSCANF_ARG_FAST_I32_POINTER
+                            : RIN_SSCANF_ARG_WIDTH_I32_POINTER;
+            if (spec->width_bits == 64u)
+                return fast ? RIN_SSCANF_ARG_FAST_I64_POINTER
+                            : RIN_SSCANF_ARG_WIDTH_I64_POINTER;
+        } else {
+            if (spec->width_bits == 8u)
+                return fast ? RIN_SSCANF_ARG_FAST_U8_POINTER
+                            : RIN_SSCANF_ARG_WIDTH_U8_POINTER;
+            if (spec->width_bits == 16u)
+                return fast ? RIN_SSCANF_ARG_FAST_U16_POINTER
+                            : RIN_SSCANF_ARG_WIDTH_U16_POINTER;
+            if (spec->width_bits == 32u)
+                return fast ? RIN_SSCANF_ARG_FAST_U32_POINTER
+                            : RIN_SSCANF_ARG_WIDTH_U32_POINTER;
+            if (spec->width_bits == 64u)
+                return fast ? RIN_SSCANF_ARG_FAST_U64_POINTER
+                            : RIN_SSCANF_ARG_WIDTH_U64_POINTER;
+        }
+        return RIN_SSCANF_ARG_NONE;
+    }
+    if (is_signed) {
+        switch (spec->length) {
+        case RIN_SSCANF_LENGTH_SHORT: return RIN_SSCANF_ARG_SHORT_POINTER;
+        case RIN_SSCANF_LENGTH_CHAR: return RIN_SSCANF_ARG_SCHAR_POINTER;
+        case RIN_SSCANF_LENGTH_LONG: return RIN_SSCANF_ARG_LONG_POINTER;
+        case RIN_SSCANF_LENGTH_LONG_LONG:
+            return RIN_SSCANF_ARG_LLONG_POINTER;
+        case RIN_SSCANF_LENGTH_SIZE:
+        case RIN_SSCANF_LENGTH_PTRDIFF:
+            return RIN_SSCANF_ARG_PTRDIFF_POINTER;
+        case RIN_SSCANF_LENGTH_INTMAX:
+            return RIN_SSCANF_ARG_INTMAX_POINTER;
+        default: return RIN_SSCANF_ARG_INT_POINTER;
+        }
+    }
+    switch (spec->length) {
+    case RIN_SSCANF_LENGTH_SHORT: return RIN_SSCANF_ARG_USHORT_POINTER;
+    case RIN_SSCANF_LENGTH_CHAR: return RIN_SSCANF_ARG_UCHAR_POINTER;
+    case RIN_SSCANF_LENGTH_LONG: return RIN_SSCANF_ARG_ULONG_POINTER;
+    case RIN_SSCANF_LENGTH_LONG_LONG:
+        return RIN_SSCANF_ARG_ULLONG_POINTER;
+    case RIN_SSCANF_LENGTH_SIZE:
+    case RIN_SSCANF_LENGTH_PTRDIFF:
+        return RIN_SSCANF_ARG_SIZE_POINTER;
+    case RIN_SSCANF_LENGTH_INTMAX:
+        return RIN_SSCANF_ARG_UINTMAX_POINTER;
+    default: return RIN_SSCANF_ARG_UINT_POINTER;
+    }
+}
+
+static void* rin_sscanf_capture_argument(
+        va_list* arguments, enum RinSscanfArgumentKind kind) {
+#define RIN_SSCANF_CAPTURE(tag, type) \
+    case tag: return (void*)va_arg(*arguments, type*)
+    switch (kind) {
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_VOID_POINTER, void*);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_FLOAT_POINTER, float);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_DOUBLE_POINTER, double);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_LONG_DOUBLE_POINTER, long double);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_CHAR_POINTER, char);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_WCHAR_POINTER, wchar_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_CHAR_POINTER_POINTER, char*);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_WCHAR_POINTER_POINTER, wchar_t*);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_INT_POINTER, int);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_SHORT_POINTER, short);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_SCHAR_POINTER, signed char);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_LONG_POINTER, long);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_LLONG_POINTER, long long);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_INTMAX_POINTER, intmax_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_PTRDIFF_POINTER, ptrdiff_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_UINT_POINTER, unsigned int);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_USHORT_POINTER, unsigned short);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_UCHAR_POINTER, unsigned char);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_ULONG_POINTER, unsigned long);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_ULLONG_POINTER, unsigned long long);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_UINTMAX_POINTER, uintmax_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_SIZE_POINTER, size_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_WIDTH_I8_POINTER, int8_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_WIDTH_I16_POINTER, int16_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_WIDTH_I32_POINTER, int32_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_WIDTH_I64_POINTER, int64_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_WIDTH_U8_POINTER, uint8_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_WIDTH_U16_POINTER, uint16_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_WIDTH_U32_POINTER, uint32_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_WIDTH_U64_POINTER, uint64_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_FAST_I8_POINTER, int_fast8_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_FAST_I16_POINTER, int_fast16_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_FAST_I32_POINTER, int_fast32_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_FAST_I64_POINTER, int_fast64_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_FAST_U8_POINTER, uint_fast8_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_FAST_U16_POINTER, uint_fast16_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_FAST_U32_POINTER, uint_fast32_t);
+    RIN_SSCANF_CAPTURE(RIN_SSCANF_ARG_FAST_U64_POINTER, uint_fast64_t);
+    default: errno = EINVAL; return NULL;
+    }
+#undef RIN_SSCANF_CAPTURE
+}
+
+static void* rin_sscanf_argument_pointer(
+        va_list* arguments, const struct RinSscanfSpec* spec,
+        enum RinSscanfArgumentKind kind) {
+    if (spec && spec->has_argument_override)
+        return spec->argument_override;
+    return rin_sscanf_capture_argument(arguments, kind);
+}
+
+static int rin_sscanf_validate_format(
+        const char* format, struct RinSscanfArgumentPlan* plan) {
     size_t index = 0u;
     size_t conversions = 0u;
-    if (!format) {
+    int saw_positional = 0;
+    int saw_sequential = 0;
+    if (!format || !plan) {
         errno = EINVAL;
         return -1;
     }
+    for (size_t slot = 0u; slot < RIN_SSCANF_MAX_CONVERSIONS; ++slot) {
+        plan->slots[slot].kind = RIN_SSCANF_ARG_NONE;
+        plan->slots[slot].value = NULL;
+    }
+    plan->maximum_index = 0u;
+    plan->sequential_count = 0u;
+    plan->positional = 0;
     for (;;) {
         unsigned char value;
         if (index > RIN_SSCANF_MAX_INPUT) {
@@ -273,7 +530,7 @@ static int rin_sscanf_validate_format(const char* format) {
             return -1;
         }
         value = (unsigned char)format[index];
-        if (value == '\0') return 0;
+        if (value == '\0') break;
         if (index == RIN_SSCANF_MAX_INPUT) {
             errno = EOVERFLOW;
             return -1;
@@ -281,12 +538,92 @@ static int rin_sscanf_validate_format(const char* format) {
         ++index;
         if (value == '%') {
             struct RinSscanfSpec spec;
+            enum RinSscanfArgumentKind kind;
+            size_t argument_index;
             if (++conversions > RIN_SSCANF_MAX_CONVERSIONS) {
                 errno = EOVERFLOW;
                 return -1;
             }
             if (rin_sscanf_parse_spec(format, &index, &spec) != 0) return -1;
+            kind = rin_sscanf_argument_kind(&spec);
+            if (kind == RIN_SSCANF_ARG_NONE) continue;
+            argument_index = spec.argument_index;
+            if (argument_index != 0u) {
+                saw_positional = 1;
+                if (argument_index > RIN_SSCANF_MAX_CONVERSIONS) {
+                    errno = EOVERFLOW;
+                    return -1;
+                }
+            } else {
+                saw_sequential = 1;
+                argument_index = ++plan->sequential_count;
+            }
+            if (saw_positional && saw_sequential) {
+                errno = EINVAL;
+                return -1;
+            }
+            if (argument_index > RIN_SSCANF_MAX_CONVERSIONS) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            if (plan->slots[argument_index - 1u].kind !=
+                    RIN_SSCANF_ARG_NONE &&
+                plan->slots[argument_index - 1u].kind != kind) {
+                errno = EINVAL;
+                return -1;
+            }
+            plan->slots[argument_index - 1u].kind = kind;
+            if (argument_index > plan->maximum_index)
+                plan->maximum_index = argument_index;
         }
+    }
+    if (saw_positional) {
+        plan->positional = 1;
+        for (size_t slot = 0u; slot < plan->maximum_index; ++slot) {
+            if (plan->slots[slot].kind == RIN_SSCANF_ARG_NONE) {
+                errno = EINVAL;
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int rin_sscanf_prepare_arguments(
+        const char* format, va_list ap,
+        struct RinSscanfArgumentPlan* plan) {
+    if (rin_sscanf_validate_format(format, plan) != 0) return -1;
+    if (!plan->positional) return 0;
+    {
+        va_list cursor;
+        va_copy(cursor, ap);
+        for (size_t slot = 0u; slot < plan->maximum_index; ++slot)
+            plan->slots[slot].value = rin_sscanf_capture_argument(
+                &cursor, plan->slots[slot].kind);
+        va_end(cursor);
+    }
+    return 0;
+}
+
+static int rin_sscanf_capture_positional_arguments(
+        va_list ap, struct RinSscanfArgumentPlan* plan) {
+    va_list cursor;
+    if (!plan || !plan->positional) return 0;
+    va_copy(cursor, ap);
+    for (size_t slot = 0u; slot < plan->maximum_index; ++slot)
+        plan->slots[slot].value = rin_sscanf_capture_argument(
+            &cursor, plan->slots[slot].kind);
+    va_end(cursor);
+    return 0;
+}
+
+static void rin_sscanf_bind_argument(
+        struct RinSscanfSpec* spec,
+        const struct RinSscanfArgumentPlan* plan) {
+    if (spec && plan && plan->positional && spec->argument_index != 0u) {
+        spec->argument_override =
+            plan->slots[spec->argument_index - 1u].value;
+        spec->has_argument_override = 1;
     }
 }
 
@@ -434,13 +771,19 @@ static int rin_sscanf_store_integer(va_list* arguments,
     int is_signed = spec->conversion == 'd' || spec->conversion == 'i';
     if (!rin_sscanf_integer_in_range(spec, magnitude, negative)) return -1;
     if (spec->conversion == 'p') {
-        void** output = va_arg(*arguments, void**);
+        void** output = (void**)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_VOID_POINTER);
         if (!output) { errno = EFAULT; return -1; }
         *output = (void*)(uintptr_t)magnitude;
         return 0;
     }
     if (spec->length == RIN_SSCANF_LENGTH_WIDTH ||
         spec->length == RIN_SSCANF_LENGTH_FAST_WIDTH) {
+        if (spec->has_argument_override)
+            return rin_stdio_store_width_integer_from(
+                arguments, spec->argument_override, 1, spec->width_bits,
+                spec->length == RIN_SSCANF_LENGTH_FAST_WIDTH,
+                spec->conversion, magnitude, negative);
         return rin_stdio_store_width_integer(
             arguments, spec->width_bits,
             spec->length == RIN_SSCANF_LENGTH_FAST_WIDTH,
@@ -454,71 +797,88 @@ static int rin_sscanf_store_integer(va_list* arguments,
         else
             value = -(int64_t)magnitude;
         if (spec->length == RIN_SSCANF_LENGTH_LONG_LONG) {
-            long long* output = va_arg(*arguments, long long*);
+            long long* output = (long long*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_LLONG_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (long long)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_LONG) {
-            long* output = va_arg(*arguments, long*);
+            long* output = (long*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_LONG_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (long)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_SIZE) {
-            ptrdiff_t* output = va_arg(*arguments, ptrdiff_t*);
+            ptrdiff_t* output = (ptrdiff_t*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_PTRDIFF_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (ptrdiff_t)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_SHORT) {
-            short* output = va_arg(*arguments, short*);
+            short* output = (short*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_SHORT_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (short)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_CHAR) {
-            signed char* output = va_arg(*arguments, signed char*);
+            signed char* output = (signed char*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_SCHAR_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (signed char)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_INTMAX) {
-            intmax_t* output = va_arg(*arguments, intmax_t*);
+            intmax_t* output = (intmax_t*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_INTMAX_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (intmax_t)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_PTRDIFF) {
-            ptrdiff_t* output = va_arg(*arguments, ptrdiff_t*);
+            ptrdiff_t* output = (ptrdiff_t*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_PTRDIFF_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (ptrdiff_t)value;
         } else {
-            int* output = va_arg(*arguments, int*);
+            int* output = (int*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_INT_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (int)value;
         }
     } else {
         uint64_t value = negative ? UINT64_C(0) - magnitude : magnitude;
         if (spec->length == RIN_SSCANF_LENGTH_LONG_LONG) {
-            unsigned long long* output = va_arg(*arguments,
-                                                unsigned long long*);
+            unsigned long long* output =
+                (unsigned long long*)rin_sscanf_argument_pointer(
+                    arguments, spec, RIN_SSCANF_ARG_ULLONG_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (unsigned long long)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_LONG) {
-            unsigned long* output = va_arg(*arguments, unsigned long*);
+            unsigned long* output = (unsigned long*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_ULONG_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (unsigned long)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_SIZE) {
-            size_t* output = va_arg(*arguments, size_t*);
+            size_t* output = (size_t*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_SIZE_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (size_t)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_SHORT) {
-            unsigned short* output = va_arg(*arguments, unsigned short*);
+            unsigned short* output =
+                (unsigned short*)rin_sscanf_argument_pointer(
+                    arguments, spec, RIN_SSCANF_ARG_USHORT_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (unsigned short)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_CHAR) {
-            unsigned char* output = va_arg(*arguments, unsigned char*);
+            unsigned char* output = (unsigned char*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_UCHAR_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (unsigned char)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_INTMAX) {
-            uintmax_t* output = va_arg(*arguments, uintmax_t*);
+            uintmax_t* output = (uintmax_t*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_UINTMAX_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (uintmax_t)value;
         } else if (spec->length == RIN_SSCANF_LENGTH_PTRDIFF) {
-            size_t* output = va_arg(*arguments, size_t*);
+            size_t* output = (size_t*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_SIZE_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (size_t)value;
         } else {
-            unsigned int* output = va_arg(*arguments, unsigned int*);
+            unsigned int* output = (unsigned int*)rin_sscanf_argument_pointer(
+                arguments, spec, RIN_SSCANF_ARG_UINT_POINTER);
             if (!output) { errno = EFAULT; return -1; }
             *output = (unsigned int)value;
         }
@@ -540,6 +900,10 @@ static int rin_sscanf_store_count(va_list* arguments,
                                   size_t count) {
     if (spec->length == RIN_SSCANF_LENGTH_WIDTH ||
         spec->length == RIN_SSCANF_LENGTH_FAST_WIDTH) {
+        if (spec->has_argument_override)
+            return rin_stdio_store_width_count_from(
+                arguments, spec->argument_override, 1, spec->width_bits,
+                spec->length == RIN_SSCANF_LENGTH_FAST_WIDTH, count);
         return rin_stdio_store_width_count(
             arguments, spec->width_bits,
             spec->length == RIN_SSCANF_LENGTH_FAST_WIDTH, count);
@@ -551,7 +915,8 @@ static int rin_sscanf_store_count(va_list* arguments,
             errno = ERANGE;
             return -1;
         }
-        output = va_arg(*arguments, long long*);
+        output = (long long*)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_LLONG_POINTER);
         if (!output) { errno = EFAULT; return -1; }
         *output = (long long)count;
     } else if (spec->length == RIN_SSCANF_LENGTH_LONG) {
@@ -560,7 +925,8 @@ static int rin_sscanf_store_count(va_list* arguments,
             errno = ERANGE;
             return -1;
         }
-        output = va_arg(*arguments, long*);
+        output = (long*)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_LONG_POINTER);
         if (!output) { errno = EFAULT; return -1; }
         *output = (long)count;
     } else if (spec->length == RIN_SSCANF_LENGTH_SIZE) {
@@ -569,7 +935,8 @@ static int rin_sscanf_store_count(va_list* arguments,
             errno = ERANGE;
             return -1;
         }
-        output = va_arg(*arguments, ptrdiff_t*);
+        output = (ptrdiff_t*)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_PTRDIFF_POINTER);
         if (!output) { errno = EFAULT; return -1; }
         *output = (ptrdiff_t)count;
     } else if (spec->length == RIN_SSCANF_LENGTH_SHORT) {
@@ -578,7 +945,8 @@ static int rin_sscanf_store_count(va_list* arguments,
             errno = ERANGE;
             return -1;
         }
-        output = va_arg(*arguments, short*);
+        output = (short*)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_SHORT_POINTER);
         if (!output) { errno = EFAULT; return -1; }
         *output = (short)count;
     } else if (spec->length == RIN_SSCANF_LENGTH_CHAR) {
@@ -587,7 +955,8 @@ static int rin_sscanf_store_count(va_list* arguments,
             errno = ERANGE;
             return -1;
         }
-        output = va_arg(*arguments, signed char*);
+        output = (signed char*)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_SCHAR_POINTER);
         if (!output) { errno = EFAULT; return -1; }
         *output = (signed char)count;
     } else if (spec->length == RIN_SSCANF_LENGTH_INTMAX) {
@@ -597,7 +966,8 @@ static int rin_sscanf_store_count(va_list* arguments,
             errno = ERANGE;
             return -1;
         }
-        output = va_arg(*arguments, intmax_t*);
+        output = (intmax_t*)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_INTMAX_POINTER);
         if (!output) { errno = EFAULT; return -1; }
         *output = (intmax_t)count;
     } else if (spec->length == RIN_SSCANF_LENGTH_PTRDIFF) {
@@ -606,7 +976,8 @@ static int rin_sscanf_store_count(va_list* arguments,
             errno = ERANGE;
             return -1;
         }
-        output = va_arg(*arguments, ptrdiff_t*);
+        output = (ptrdiff_t*)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_PTRDIFF_POINTER);
         if (!output) { errno = EFAULT; return -1; }
         *output = (ptrdiff_t)count;
     } else {
@@ -615,7 +986,8 @@ static int rin_sscanf_store_count(va_list* arguments,
             errno = ERANGE;
             return -1;
         }
-        output = va_arg(*arguments, int*);
+        output = (int*)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_INT_POINTER);
         if (!output) { errno = EFAULT; return -1; }
         *output = (int)count;
     }
@@ -796,21 +1168,63 @@ static int rin_sscanf_store_wide_field(
         const char* candidate, size_t byte_count, int suppress) {
     wchar_t wide_candidate[RIN_SSCANF_MAX_INPUT + 1u];
     size_t wide_count = 0u;
+    int terminate = spec->conversion == 's' || spec->conversion == '[';
     if (rin_sscanf_decode_wide_candidate(
             candidate, byte_count, wide_candidate,
             sizeof(wide_candidate) / sizeof(wide_candidate[0]),
             &wide_count) != 0) return -1;
     if (suppress) return 0;
-    {
-        wchar_t* output = va_arg(*arguments, wchar_t*);
-        if (!output) {
-            errno = EFAULT;
+    if (spec->allocate) {
+        size_t allocation_count = wide_count + (terminate ? 1u : 0u);
+        wchar_t* storage;
+        wchar_t** output = (wchar_t**)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_WCHAR_POINTER_POINTER);
+        if (!output) { errno = EFAULT; return -1; }
+        if (allocation_count > SIZE_MAX / sizeof(wchar_t)) {
+            errno = EOVERFLOW;
             return -1;
         }
+        storage = (wchar_t*)malloc(allocation_count * sizeof(wchar_t));
+        if (!storage) { errno = ENOMEM; return -1; }
+        for (size_t index = 0u; index < wide_count; ++index)
+            storage[index] = wide_candidate[index];
+        if (terminate) storage[wide_count] = L'\0';
+        *output = storage;
+    } else {
+        wchar_t* output = (wchar_t*)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_WCHAR_POINTER);
+        if (!output) { errno = EFAULT; return -1; }
         for (size_t index = 0u; index < wide_count; ++index)
             output[index] = wide_candidate[index];
-        if (spec->conversion == 's' || spec->conversion == '[')
-            output[wide_count] = L'\0';
+        if (terminate) output[wide_count] = L'\0';
+    }
+    return 0;
+}
+
+static int rin_sscanf_store_narrow_field(
+        va_list* arguments, const struct RinSscanfSpec* spec,
+        const char* candidate, size_t count, int terminate) {
+    if (spec->suppress) return 0;
+    if (spec->allocate) {
+        size_t allocation_count = count + (terminate ? 1u : 0u);
+        char* storage;
+        char** output = (char**)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_CHAR_POINTER_POINTER);
+        if (!output) { errno = EFAULT; return -1; }
+        if (allocation_count == 0u) allocation_count = 1u;
+        storage = (char*)malloc(allocation_count);
+        if (!storage) { errno = ENOMEM; return -1; }
+        for (size_t index = 0u; index < count; ++index)
+            storage[index] = candidate[index];
+        if (terminate) storage[count] = '\0';
+        *output = storage;
+    } else {
+        char* output = (char*)rin_sscanf_argument_pointer(
+            arguments, spec, RIN_SSCANF_ARG_CHAR_POINTER);
+        if (!output) { errno = EFAULT; return -1; }
+        for (size_t index = 0u; index < count; ++index)
+            output[index] = candidate[index];
+        if (terminate) output[count] = '\0';
     }
     return 0;
 }
@@ -828,6 +1242,7 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
     size_t format_offset = 0u;
     int assignments = 0;
     va_list arguments;
+    struct RinSscanfArgumentPlan argument_plan;
     /* GCC knows vsscanf as a builtin with nonnull format; the check
      * below intentionally tolerates a null format defensively. */
 #if defined(__GNUC__) || defined(__clang__)
@@ -841,7 +1256,8 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
-    if (rin_sscanf_validate_format(format) != 0) return EOF;
+    if (rin_sscanf_prepare_arguments(format, ap, &argument_plan) != 0)
+        return EOF;
     while (input_size <= RIN_SSCANF_MAX_INPUT && string[input_size] != '\0')
         ++input_size;
     if (input_size > RIN_SSCANF_MAX_INPUT) {
@@ -881,6 +1297,7 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
                 va_end(arguments);
                 return rin_sscanf_input_error_result(assignments);
             }
+            rin_sscanf_bind_argument(&spec, &argument_plan);
             if (spec.conversion == '%') {
                 if (input_offset == input_size) {
                     va_end(arguments);
@@ -1005,15 +1422,11 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
                         rin_sscanf_input_error_result(assignments) : assignments;
                 }
                 if (!spec.suppress) {
-                    char* output = va_arg(arguments, char*);
-                    if (!output) {
-                        errno = EFAULT;
+                    if (rin_sscanf_store_narrow_field(
+                            &arguments, &spec, input + begin, count, 1) != 0) {
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
-                    for (size_t index = 0u; index < count; ++index)
-                        output[index] = input[begin + index];
-                    output[count] = '\0';
                     ++assignments;
                 }
                 continue;
@@ -1025,14 +1438,12 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
                     return rin_sscanf_input_error_result(assignments);
                 }
                 if (!spec.suppress) {
-                    char* output = va_arg(arguments, char*);
-                    if (!output) {
-                        errno = EFAULT;
+                    if (rin_sscanf_store_narrow_field(
+                            &arguments, &spec, input + input_offset, count,
+                            0) != 0) {
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
-                    for (size_t index = 0u; index < count; ++index)
-                        output[index] = input[input_offset + index];
                     ++assignments;
                 }
                 input_offset += count;
@@ -1060,15 +1471,11 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
                     return assignments;
                 }
                 if (!spec.suppress) {
-                    char* output = va_arg(arguments, char*);
-                    if (!output) {
-                        errno = EFAULT;
+                    if (rin_sscanf_store_narrow_field(
+                            &arguments, &spec, input + begin, count, 1) != 0) {
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
-                    for (size_t index = 0u; index < count; ++index)
-                        output[index] = input[begin + index];
-                    output[count] = '\0';
                     ++assignments;
                 }
             }
@@ -1795,9 +2202,10 @@ parse_candidate:
 
 /* Validate every supported stream conversion before the first read.  Unsupported
  * grammar stays outside the cursor so it cannot consume a partial line. */
-static int rin_fscanf_validate_format(const char* format) {
+static int rin_fscanf_validate_format(
+        const char* format, struct RinSscanfArgumentPlan* plan) {
     size_t offset = 0u;
-    if (rin_sscanf_validate_format(format) != 0) return -1;
+    if (rin_sscanf_validate_format(format, plan) != 0) return -1;
     while (format[offset] != '\0') {
         struct RinSscanfSpec spec;
         if (format[offset++] != '%') continue;
@@ -1834,6 +2242,7 @@ static int rin_fscanf_validate_format(const char* format) {
  * before caller output is published. */
 static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_list ap) {
     struct RinFscanfStreamInput input;
+    struct RinSscanfArgumentPlan argument_plan;
     va_list arguments;
     size_t format_offset = 0u;
     int assignments = 0;
@@ -1841,7 +2250,9 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
         errno = EINVAL;
         return EOF;
     }
-    if (rin_fscanf_validate_format(format) != 0) return EOF;
+    if (rin_fscanf_validate_format(format, &argument_plan) != 0) return EOF;
+    if (rin_sscanf_capture_positional_arguments(ap, &argument_plan) != 0)
+        return EOF;
     if (!_rin_stdio_claim_byte_orientation(stream)) return EOF;
     input.stream = stream;
     input.consumed = 0u;
@@ -1888,6 +2299,7 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
                 va_end(arguments);
                 return rin_sscanf_input_error_result(assignments);
             }
+            rin_sscanf_bind_argument(&spec, &argument_plan);
             if (spec.conversion == '%') {
                 unsigned char value = '\0';
                 int status = rin_fscanf_stream_read(&input, &value);
@@ -2029,15 +2441,11 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
                         rin_sscanf_input_error_result(assignments) : assignments;
                 }
                 if (!spec.suppress) {
-                    char* output = va_arg(arguments, char*);
-                    if (!output) {
-                        errno = EFAULT;
+                    if (rin_sscanf_store_narrow_field(
+                            &arguments, &spec, candidate, count, 1) != 0) {
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
-                    for (size_t index = 0u; index < count; ++index)
-                        output[index] = candidate[index];
-                    output[count] = '\0';
                     ++assignments;
                 }
                 continue;
@@ -2054,14 +2462,11 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
                     candidate[index] = (char)value;
                 }
                 if (!spec.suppress) {
-                    char* output = va_arg(arguments, char*);
-                    if (!output) {
-                        errno = EFAULT;
+                    if (rin_sscanf_store_narrow_field(
+                            &arguments, &spec, candidate, count, 0) != 0) {
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
-                    for (size_t index = 0u; index < count; ++index)
-                        output[index] = candidate[index];
                     ++assignments;
                 }
                 continue;
@@ -2096,15 +2501,11 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
                     return rin_sscanf_input_error_result(assignments);
                 }
                 if (!spec.suppress) {
-                    char* output = va_arg(arguments, char*);
-                    if (!output) {
-                        errno = EFAULT;
+                    if (rin_sscanf_store_narrow_field(
+                            &arguments, &spec, candidate, count, 1) != 0) {
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
-                    for (size_t index = 0u; index < count; ++index)
-                        output[index] = candidate[index];
-                    output[count] = '\0';
                     ++assignments;
                 }
             }

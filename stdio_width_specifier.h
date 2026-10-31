@@ -58,9 +58,10 @@ static inline int rin_stdio_width_integer_in_range(
     return 1;
 }
 
-static inline int rin_stdio_store_width_integer(
-        va_list* arguments, unsigned int bits, int fast, char conversion,
-        uint64_t magnitude, int negative) {
+static inline int rin_stdio_store_width_integer_from(
+        va_list* arguments, void* argument_override, int has_override,
+        unsigned int bits, int fast, char conversion, uint64_t magnitude,
+        int negative) {
     int is_signed = conversion == 'd' || conversion == 'i';
     int64_t signed_value = 0;
     uint64_t unsigned_value = negative
@@ -76,13 +77,15 @@ static inline int rin_stdio_store_width_integer(
                 (int64_t)magnitude;
     }
 #define RIN_STDIO_STORE_WIDTH_SIGNED(type) do { \
-        type* output = va_arg(*arguments, type*); \
+        type* output = has_override ? (type*)argument_override : \
+            va_arg(*arguments, type*); \
         if (!output) { errno = EFAULT; return -1; } \
         *output = (type)signed_value; \
         return 0; \
     } while (0)
 #define RIN_STDIO_STORE_WIDTH_UNSIGNED(type) do { \
-        type* output = va_arg(*arguments, type*); \
+        type* output = has_override ? (type*)argument_override : \
+            va_arg(*arguments, type*); \
         if (!output) { errno = EFAULT; return -1; } \
         *output = (type)unsigned_value; \
         return 0; \
@@ -124,9 +127,16 @@ static inline int rin_stdio_store_width_integer(
     return -1;
 }
 
-static inline int rin_stdio_store_width_count(va_list* arguments,
-                                              unsigned int bits, int fast,
-                                              size_t count) {
+static inline int rin_stdio_store_width_integer(
+        va_list* arguments, unsigned int bits, int fast, char conversion,
+        uint64_t magnitude, int negative) {
+    return rin_stdio_store_width_integer_from(
+        arguments, NULL, 0, bits, fast, conversion, magnitude, negative);
+}
+
+static inline int rin_stdio_store_width_count_from(
+        va_list* arguments, void* argument_override, int has_override,
+        unsigned int bits, int fast, size_t count) {
     uint64_t maximum;
     if (rin_stdio_width_maximum(bits, fast, 1, &maximum) != 0) return -1;
     if ((uint64_t)count > maximum) {
@@ -134,7 +144,8 @@ static inline int rin_stdio_store_width_count(va_list* arguments,
         return -1;
     }
 #define RIN_STDIO_STORE_WIDTH_COUNT(type) do { \
-        type* output = va_arg(*arguments, type*); \
+        type* output = has_override ? (type*)argument_override : \
+            va_arg(*arguments, type*); \
         if (!output) { errno = EFAULT; return -1; } \
         *output = (type)count; \
         return 0; \
@@ -157,6 +168,13 @@ static inline int rin_stdio_store_width_count(va_list* arguments,
 #undef RIN_STDIO_STORE_WIDTH_COUNT
     errno = ENOSYS;
     return -1;
+}
+
+static inline int rin_stdio_store_width_count(va_list* arguments,
+                                              unsigned int bits, int fast,
+                                              size_t count) {
+    return rin_stdio_store_width_count_from(
+        arguments, NULL, 0, bits, fast, count);
 }
 
 /* Parse the length modifier beginning at *format.  Only widths represented by

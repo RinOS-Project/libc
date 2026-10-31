@@ -9,6 +9,7 @@
 #include "stddef.h"
 #include "stdint.h"
 #include "wchar.h"
+#include "stdio_width_specifier.h"
 
 #define RIN_SSCANF_MAX_INPUT 4096u
 
@@ -21,20 +22,36 @@ enum RinSscanfLength {
     RIN_SSCANF_LENGTH_CHAR = 5,
     RIN_SSCANF_LENGTH_INTMAX = 6,
     RIN_SSCANF_LENGTH_PTRDIFF = 7,
-    RIN_SSCANF_LENGTH_LONG_DOUBLE = 8
+    RIN_SSCANF_LENGTH_LONG_DOUBLE = 8,
+    RIN_SSCANF_LENGTH_WIDTH = 9,
+    RIN_SSCANF_LENGTH_FAST_WIDTH = 10
 };
 
 struct RinSscanfSpec {
     enum RinSscanfLength length;
     size_t width;
+    unsigned int width_bits;
     char conversion;
     int has_width;
     int suppress;
+    int width_fast;
     unsigned char scanset[32];
     int scanset_invert;
     const char* scanset_data;
     size_t scanset_bytes;
+    /* Narrow scanf pre-validates positional arguments before consuming input.
+     * The wide scanner leaves this clear and uses its ordinary va_list. */
+    size_t argument_index;
+    void* argument_override;
+    int has_argument_override;
+    int allocate;
 };
+
+#if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
+typedef long double rin_sscanf_long_float_t;
+#else
+typedef double rin_sscanf_long_float_t;
+#endif
 
 static inline int rin_sscanf_space(unsigned char value) {
     return value == ' ' || value == '\t' || value == '\n' ||
@@ -43,7 +60,7 @@ static inline int rin_sscanf_space(unsigned char value) {
 
 struct RinSscanfFloat {
     uint64_t bits;
-    long double long_value;
+    rin_sscanf_long_float_t long_value;
 };
 
 static inline char rin_sscanf_decimal_point(void) {
@@ -67,7 +84,7 @@ static inline int rin_sscanf_parse_float(
 
     *input_failure_out = 0;
     value_out->bits = 0u;
-    value_out->long_value = 0.0L;
+    value_out->long_value = 0.0;
     while (current < input_size &&
            rin_sscanf_space((unsigned char)input[current]))
         ++current;
@@ -102,6 +119,7 @@ static inline int rin_sscanf_parse_float(
         value_out->bits = parsed.bits;
         parsed_end = parsed.end;
     } else {
+#if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
 #if defined(RIN_FP_HAS_BINARY80)
         rin_long_double_parse_result parsed = rin_float_parse_binary80_radix(
             candidate, decimal_point);
@@ -124,6 +142,10 @@ static inline int rin_sscanf_parse_float(
             parsed.bits);
         parsed_end = parsed.end;
 #endif
+#else
+        errno = EINVAL;
+        return -1;
+#endif
     }
     *offset = current + (size_t)(parsed_end - candidate);
     return 1;
@@ -133,17 +155,28 @@ static inline int rin_sscanf_store_float(va_list* arguments,
                                          const struct RinSscanfSpec* spec,
                                          const struct RinSscanfFloat* value) {
     if (spec->length == RIN_SSCANF_LENGTH_NONE) {
-        float* output = va_arg(*arguments, float*);
+        float* output = spec->has_argument_override
+            ? (float*)spec->argument_override : va_arg(*arguments, float*);
         if (!output) { errno = EFAULT; return -1; }
         *output = rin_float_parse_binary32_value(value->bits);
     } else if (spec->length == RIN_SSCANF_LENGTH_LONG) {
-        double* output = va_arg(*arguments, double*);
+        double* output = spec->has_argument_override
+            ? (double*)spec->argument_override : va_arg(*arguments, double*);
         if (!output) { errno = EFAULT; return -1; }
         *output = rin_float_parse_binary64_value(value->bits);
     } else {
-        long double* output = va_arg(*arguments, long double*);
+#if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
+        long double* output = spec->has_argument_override
+            ? (long double*)spec->argument_override
+            : va_arg(*arguments, long double*);
         if (!output) { errno = EFAULT; return -1; }
         *output = value->long_value;
+#else
+        (void)arguments;
+        (void)value;
+        errno = EINVAL;
+        return -1;
+#endif
     }
     return 0;
 }
