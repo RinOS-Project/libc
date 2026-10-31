@@ -85,10 +85,11 @@ typedef struct rin_thread_stack_info_v1 {
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
- * Linux互換小文字エイリアス (Abseil等で使用)
+ * Linux風小文字source alias (Abseil等で使用)
  * ═══════════════════════════════════════════════════════════════*/
 
-/* Use linux/unistd.h numbers for Linux-compatible syscall names */
+/* Map Linux-style spellings to RinOS syscall IDs. The numbers and argument /
+ * return contracts remain RinOS-specific; these are not Linux ABI numbers. */
 #define SYS_write           SYS_WRITE
 #define SYS_read            SYS_READ
 #define SYS_open            SYS_OPEN
