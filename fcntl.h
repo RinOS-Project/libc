@@ -15,15 +15,39 @@
 #include_next <fcntl.h>
 #else
 
-#ifndef _FCNTL_H
-#define _FCNTL_H
+#ifndef RINOS_LIBC_FCNTL_H
+#define RINOS_LIBC_FCNTL_H
+
+/* Publish the descriptor-relative path flags before any dependent header can
+ * recurse through stat.h, so path-at users see the same ABI constants as
+ * direct fcntl consumers. */
+#ifndef AT_FDCWD
+#define AT_FDCWD            (-100) /* カレントディレクトリ */
+#endif
+#ifndef AT_SYMLINK_NOFOLLOW
+#define AT_SYMLINK_NOFOLLOW 0x100  /* シンボリックリンクを辿らない */
+#endif
+#ifndef AT_REMOVEDIR
+#define AT_REMOVEDIR        0x200  /* ディレクトリを削除 */
+#endif
+#ifndef AT_SYMLINK_FOLLOW
+#define AT_SYMLINK_FOLLOW   0x400  /* シンボリックリンクを辿る */
+#endif
+#ifndef AT_NO_AUTOMOUNT
+#define AT_NO_AUTOMOUNT     0x800  /* 自動マウントしない */
+#endif
+#ifndef AT_EMPTY_PATH
+#define AT_EMPTY_PATH       0x1000 /* 空パスを許可 */
+#endif
+#ifndef AT_EACCESS
+#define AT_EACCESS          0x200  /* 実効IDでアクセスチェック */
+#endif
 
 #include "stddef.h"
 #include "stdarg.h"
 #include "errno.h"
 #include "limits.h"
 #include "fcntl_flags.h"
-#include "sys/socket.h"
 #include "sys/syscall.h"
 #include "sys/types.h"
 #include "internal/pthread_cancel_point.h"
@@ -153,22 +177,6 @@ struct f_owner_ex {
 #define POSIX_FADV_DONTNEED   4
 #define POSIX_FADV_NOREUSE    5
 
-/* ═══════════════════════════════════════════════════════════════
- * AT_* フラグ (xxxat系関数用)
- * ═══════════════════════════════════════════════════════════════*/
-
-/* ═══════════════════════════════════════════════════════════════
- * ファイルディスクリプタ状態保持 (簡易実装)
- * ═══════════════════════════════════════════════════════════════*/
-
-#define _FCNTL_MAX_FDS FD_SETSIZE
-/* The legacy descriptor-cache data symbols remain exported by the SDK v1
- * runtime for binary compatibility. New headers intentionally expose no
- * cache API: all descriptor state is obtained from the kernel owner. */
-
-/* Syscall results travel in the target-width intptr_t carrier.  Never route
- * a successful descriptor result through host `long`/`int` before checking its
- * range: LLP64 hosts make `long` only 32 bits while a valid Rin descriptor is
 /* Linux fallocate(2) mode flags. Modes that the selected filesystem cannot
  * perform are reported by the kernel as EOPNOTSUPP. */
 #ifndef FALLOC_FL_KEEP_SIZE
@@ -193,6 +201,22 @@ struct f_owner_ex {
 #define FALLOC_FL_UNSHARE_RANGE   0x40
 #endif
 
+/* ═══════════════════════════════════════════════════════════════
+ * AT_* フラグ (xxxat系関数用)
+ * ═══════════════════════════════════════════════════════════════*/
+
+/* ═══════════════════════════════════════════════════════════════
+ * ファイルディスクリプタ状態保持 (簡易実装)
+ * ═══════════════════════════════════════════════════════════════*/
+
+#define _FCNTL_MAX_FDS FD_SETSIZE
+/* The legacy descriptor-cache data symbols remain exported by the SDK v1
+ * runtime for binary compatibility. New headers intentionally expose no
+ * cache API: all descriptor state is obtained from the kernel owner. */
+
+/* Syscall results travel in the target-width intptr_t carrier.  Never route
+ * a successful descriptor result through host `long`/`int` before checking its
+ * range: LLP64 hosts make `long` only 32 bits while a valid Rin descriptor is
  * still target-word sized.  Unknown negative values are not POSIX errno
  * encodings and must fail closed instead of becoming a wrapped descriptor. */
 static inline int _fcntl_result_to_int(intptr_t raw_result) {
@@ -682,7 +706,7 @@ static inline int _rin_fallocate_result(
     unsigned_offset = (uint64_t)offset;
     unsigned_length = (uint64_t)len;
     if (unsigned_offset > (uint64_t)INT64_MAX - unsigned_length)
-        return EOVERFLOW;
+        return EFBIG;
     result = _RIN_FCNTL_SYSCALL6(
         SYS_FALLOCATE, (uintptr_t)fd,
         (uintptr_t)(uint32_t)unsigned_offset,
@@ -692,6 +716,17 @@ static inline int _rin_fallocate_result(
     if (result == 0) return 0;
     if (result < 0 && result >= (intptr_t)-4095) return (int)-result;
     return EIO;
+}
+
+static inline int fallocate(int fd, int mode, off_t offset, off_t len) {
+    int error = _rin_fallocate_result(fd, mode, offset, len);
+    if (error == 0) return 0;
+    errno = error;
+    return -1;
+}
+
+static inline int posix_fallocate(int fd, off_t offset, off_t len) {
+    return _rin_fallocate_result(fd, 0, offset, len);
 }
 
 /* xxxat系関数 */
@@ -718,17 +753,6 @@ static inline int faccessat(int dirfd, const char* pathname, int mode, int flags
         pathname = ".";
         flags &= ~AT_EMPTY_PATH;
     }
-static inline int fallocate(int fd, int mode, off_t offset, off_t len) {
-    int error = _rin_fallocate_result(fd, mode, offset, len);
-    if (error == 0) return 0;
-    errno = error;
-    return -1;
-}
-
-static inline int posix_fallocate(int fd, off_t offset, off_t len) {
-    return _rin_fallocate_result(fd, 0, offset, len);
-}
-
     _fcntl_path_at_init(&call, RIN_PATH_AT_ACCESS);
     call.dirfd = dirfd;
     call.flags = (uint32_t)(pathname[0] == '\0'
@@ -1011,6 +1035,6 @@ static inline ssize_t readlinkat(int dirfd, const char* pathname, char* buf, siz
 #endif
 #endif /* !MIDL_PASS */
 
-#endif /* _FCNTL_H */
+#endif /* RINOS_LIBC_FCNTL_H */
 
 #endif /* hosted Linux delegates to its native file-control provider */
