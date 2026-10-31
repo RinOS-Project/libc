@@ -323,6 +323,7 @@
 #define LINUX_NR_readlinkat     305
 #define LINUX_NR_fchmodat       306
 #define LINUX_NR_faccessat      307
+#define LINUX_NR_faccessat2     439
 #define LINUX_NR_pselect6       308
 #define LINUX_NR_ppoll          309
 #define LINUX_NR_unshare        310

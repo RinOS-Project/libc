@@ -767,6 +767,25 @@ static inline int posix_fallocate(int fd, off_t offset, off_t len) {
 #endif
 
 /* xxxat系関数 */
+static inline int faccessat2(int dirfd, const char* pathname, int mode,
+                             int flags) {
+    const int allowed_flags = AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH;
+    if (!pathname) {
+        errno = EFAULT;
+        return -1;
+    }
+    if ((mode & ~7) != 0 || (flags & ~allowed_flags) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    /* Keep pathname access inside the kernel's checked-copy and namespace
+     * lookup path.  In particular, do not dereference pathname here to test
+     * for an empty string. */
+    return _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL4(
+        (uintptr_t)SYS_FACCESSAT2, (uintptr_t)(intptr_t)dirfd,
+        (uintptr_t)pathname, (uintptr_t)mode, (uintptr_t)flags));
+}
+
 static inline int faccessat(int dirfd, const char* pathname, int mode, int flags) {
     RinPathAtCallV1 call;
     if (!pathname) {
