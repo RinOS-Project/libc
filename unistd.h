@@ -75,7 +75,7 @@
 #ifndef _POSIX_MAPPED_FILES
 #define _POSIX_MAPPED_FILES 200809L
 #endif
-#ifndef _POSIX_SHARED_MEMORY_OBJECTS
+#if defined(RIN_USERSPACE) && !defined(_POSIX_SHARED_MEMORY_OBJECTS)
 #define _POSIX_SHARED_MEMORY_OBJECTS 200809L
 #endif
 #ifndef _POSIX_FSYNC
@@ -2170,10 +2170,16 @@ static inline long sysconf(int name) {
         case _SC_SYNCHRONIZED_IO:
         case _SC_FSYNC:
         case _SC_MAPPED_FILES:
+#if defined(RIN_USERSPACE)
         case _SC_SHARED_MEMORY_OBJECTS:
+#endif
         case _SC_MEMLOCK_RANGE:
         case _SC_MEMORY_PROTECTION:
             return 200809L;
+#if !defined(RIN_USERSPACE)
+        case _SC_SHARED_MEMORY_OBJECTS:
+            return -1;
+#endif
         case _SC_SIGQUEUE_MAX: {
             struct rlimit signal_limit;
             const rlim_t queue_capacity = (rlim_t)64u;
