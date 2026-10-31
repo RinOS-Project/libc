@@ -24,6 +24,7 @@
 #include "stdint.h"
 #include "errno.h"
 #include "stdarg.h"
+#include "string.h"
 #include "sys/syscall.h"
 
 /* The return trampoline is referenced from inline assembly, so its finish

@@ -151,9 +151,12 @@ RIN_STRING_INLINE char* strcpy(char* dest, const char* src) {
 }
 
 RIN_STRING_INLINE char* strncpy(char* dest, const char* src, size_t n) {
-    char* d = dest;
-    while (n && (*d++ = *src++)) n--;
-    while (n--) *d++ = '\0';
+    size_t i = 0u;
+    while (i < n && src[i] != '\0') {
+        dest[i] = src[i];
+        ++i;
+    }
+    while (i < n) dest[i++] = '\0';
     return dest;
 }
 

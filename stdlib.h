@@ -1623,7 +1623,11 @@ static inline int mbtowc(wchar_t* pwc, const char* s, size_t n) {
 #if defined(RIN_USERSPACE)
     return rin_locale_current_mbtowc32((uint32_t*)pwc, s, n);
 #else
-    return rin_unicode_mbtowc32((uint32_t*)pwc, s, n);
+    {
+        int rc = rin_unicode_mbtowc32((uint32_t*)pwc, s, n);
+        if (rc == -1) errno = EILSEQ;
+        return rc;
+    }
 #endif
 }
 
@@ -1632,7 +1636,11 @@ static inline int wctomb(char* s, wchar_t wc) {
     return rin_locale_current_wctomb32(s, (uint32_t)wc);
 #else
     if (!s) return 0;
-    return rin_unicode_wctomb32(s, (uint32_t)wc);
+    {
+        int rc = rin_unicode_wctomb32(s, (uint32_t)wc);
+        if (rc == -1) errno = EILSEQ;
+        return rc;
+    }
 #endif
 }
 
@@ -1640,7 +1648,11 @@ static inline size_t mbstowcs(wchar_t* dest, const char* src, size_t n) {
 #if defined(RIN_USERSPACE)
     return rin_locale_current_mbstowcs32((uint32_t*)dest, src, n);
 #else
-    return rin_unicode_mbstowcs32((uint32_t*)dest, src, n);
+    {
+        size_t rc = rin_unicode_mbstowcs32((uint32_t*)dest, src, n);
+        if (rc == (size_t)-1) errno = EILSEQ;
+        return rc;
+    }
 #endif
 }
 
@@ -1648,7 +1660,11 @@ static inline size_t wcstombs(char* dest, const wchar_t* src, size_t n) {
 #if defined(RIN_USERSPACE)
     return rin_locale_current_wcstombs32(dest, (const uint32_t*)src, n);
 #else
-    return rin_unicode_wcstombs32(dest, (const uint32_t*)src, n);
+    {
+        size_t rc = rin_unicode_wcstombs32(dest, (const uint32_t*)src, n);
+        if (rc == (size_t)-1) errno = EILSEQ;
+        return rc;
+    }
 #endif
 }
 #endif /* !_MSVCRT_COMPAT */

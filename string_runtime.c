@@ -1,21 +1,31 @@
 /* RinOS libc string runtime state shared by all translation units. */
 
+#define RIN_STRING_IMPLEMENTATION 1
 #define RIN_STRING_RUNTIME_IMPLEMENTATION 1
+#define RIN_WCHAR_IMPLEMENTATION 1
 #include "string.h"
 #include "stdlib.h"
 #include "locale.h"
+#include "wchar.h"
+#include "stdlib.h"
 #include "../libunicode/rin_unicode.h"
 
 char* strdup(const char* string) {
     size_t length = 0u;
     char* copy;
     if (!string) return NULL;
-    while (string[length] != 0) {
-        if (length == SIZE_MAX - 1u) { errno = ENOMEM; return NULL; }
+    while (string[length] != '\0') {
+        if (length == SIZE_MAX - 1u) {
+            errno = ENOMEM;
+            return NULL;
+        }
         ++length;
     }
     copy = (char*)malloc(length + 1u);
-    if (!copy) { errno = ENOMEM; return NULL; }
+    if (!copy) {
+        errno = ENOMEM;
+        return NULL;
+    }
     for (size_t index = 0u; index <= length; ++index)
         copy[index] = string[index];
     return copy;
@@ -25,15 +35,21 @@ char* strndup(const char* string, size_t size) {
     size_t length = 0u;
     char* copy;
     if (!string) return NULL;
-    while (length < size && string[length] != 0) {
-        if (length == SIZE_MAX - 1u) { errno = ENOMEM; return NULL; }
+    while (length < size && string[length] != '\0') {
+        if (length == SIZE_MAX - 1u) {
+            errno = ENOMEM;
+            return NULL;
+        }
         ++length;
     }
     copy = (char*)malloc(length + 1u);
-    if (!copy) { errno = ENOMEM; return NULL; }
+    if (!copy) {
+        errno = ENOMEM;
+        return NULL;
+    }
     for (size_t index = 0u; index < length; ++index)
         copy[index] = string[index];
-    copy[length] = 0;
+    copy[length] = '\0';
     return copy;
 }
 
@@ -92,4 +108,95 @@ int strcoll_l(const char* left, const char* right, locale_t locale) {
 size_t strxfrm_l(char* destination, const char* source, size_t capacity,
                  locale_t locale) {
     return rin_locale_strxfrm(locale, destination, source, capacity);
+}
+
+size_t strlcpy(char* destination, const char* source, size_t size) {
+    size_t source_length = 0u;
+    size_t copied = 0u;
+    while (source[source_length] != '\0') ++source_length;
+    if (size != 0u) {
+        while (copied < size - 1u && source[copied] != '\0') {
+            destination[copied] = source[copied];
+            ++copied;
+        }
+        destination[copied] = '\0';
+    }
+    return source_length;
+}
+
+size_t strlcat(char* destination, const char* source, size_t size) {
+    size_t destination_length = 0u;
+    size_t source_length = 0u;
+    size_t copied = 0u;
+    while (destination_length < size &&
+           destination[destination_length] != '\0')
+        ++destination_length;
+    while (source[source_length] != '\0') ++source_length;
+    if (destination_length == size) return size + source_length;
+    while (copied < size - destination_length - 1u &&
+           source[copied] != '\0') {
+        destination[destination_length + copied] = source[copied];
+        ++copied;
+    }
+    destination[destination_length + copied] = '\0';
+    return destination_length + source_length;
+}
+
+size_t wcsnlen(const wchar_t* string, size_t maxlen) {
+    size_t length = 0u;
+    while (length < maxlen && string[length] != L'\0') ++length;
+    return length;
+}
+
+wchar_t* wcsdup(const wchar_t* string) {
+    const size_t max_elements = SIZE_MAX / sizeof(wchar_t);
+    size_t length = 0u;
+    wchar_t* copy;
+    while (string[length] != L'\0') {
+        if (length >= max_elements - 1u) {
+            errno = ENOMEM;
+            return NULL;
+        }
+        ++length;
+    }
+    copy = (wchar_t*)malloc((length + 1u) * sizeof(wchar_t));
+    if (copy == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    for (size_t index = 0u; index <= length; ++index)
+        copy[index] = string[index];
+    return copy;
+}
+
+size_t wcslcpy(wchar_t* destination, const wchar_t* source, size_t size) {
+    size_t source_length = 0u;
+    size_t copied = 0u;
+    while (source[source_length] != L'\0') ++source_length;
+    if (size != 0u) {
+        while (copied < size - 1u && source[copied] != L'\0') {
+            destination[copied] = source[copied];
+            ++copied;
+        }
+        destination[copied] = L'\0';
+    }
+    return source_length;
+}
+
+size_t wcslcat(wchar_t* destination, const wchar_t* source, size_t size) {
+    size_t destination_length = 0u;
+    size_t source_length = 0u;
+    size_t copied = 0u;
+    while (destination_length < size &&
+           destination[destination_length] != L'\0')
+        ++destination_length;
+    while (source[source_length] != L'\0') ++source_length;
+    if (destination_length == size) return size + source_length;
+    while (copied < size - destination_length - 1u &&
+           source[copied] != L'\0') {
+        destination[destination_length + copied] = source[copied];
+        ++copied;
+    }
+    destination[destination_length + copied] = L'\0';
+    return destination_length + source_length;
 }
