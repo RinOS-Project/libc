@@ -519,7 +519,12 @@ static void rin_pthread_cancel_fork_child(void) {
 static RinPthreadCancelRecord* rin_pthread_cancel_self_cached(
     pthread_t self) {
     RinPthreadCancelRecord* cached = t_rin_pthread_cancel_self;
-    if (cached != NULL && cached->thread == self) return cached;
+    /* An exited thread keeps its record for the joiner, and pure queries
+     * re-cache it; a later call on the revived TID must fall through to
+     * the revive path instead of operating on the dead record. */
+    if (cached != NULL && cached->thread == self &&
+        __atomic_load_n(&cached->active, __ATOMIC_ACQUIRE))
+        return cached;
     return NULL;
 }
 
