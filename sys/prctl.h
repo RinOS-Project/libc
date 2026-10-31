@@ -274,6 +274,8 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
     if (option == PR_GET_ENDIAN || option == PR_SET_NO_NEW_PRIVS ||
         option == PR_GET_NO_NEW_PRIVS ||
         option == PR_SET_SECCOMP || option == PR_GET_SECCOMP ||
+        option == PR_GET_SPECULATION_CTRL ||
+        option == PR_SET_SPECULATION_CTRL ||
         option == PR_SET_TSC || option == PR_GET_TSC ||
         option == PR_SET_PDEATHSIG || option == PR_GET_PDEATHSIG ||
         option == PR_SET_DUMPABLE || option == PR_GET_DUMPABLE ||
@@ -315,7 +317,9 @@ static inline int prctl(int option, ...) {
         option == PR_SET_DUMPABLE || option == PR_SET_NO_NEW_PRIVS ||
         option == PR_SET_SECCOMP || option == PR_SET_KEEPCAPS ||
         option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP ||
-        option == PR_SET_SECUREBITS || option == PR_CAP_AMBIENT) {
+        option == PR_SET_SECUREBITS || option == PR_CAP_AMBIENT ||
+        option == PR_GET_SPECULATION_CTRL ||
+        option == PR_SET_SPECULATION_CTRL) {
         __builtin_va_list args;
         __builtin_va_start(args, option);
         if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
@@ -331,6 +335,11 @@ static inline int prctl(int option, ...) {
         } else if (option == PR_CAP_AMBIENT) {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
             arg3 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+        } else if (option == PR_GET_SPECULATION_CTRL ||
+                   option == PR_SET_SPECULATION_CTRL) {
+            arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+            if (option == PR_SET_SPECULATION_CTRL)
+                arg3 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
         } else {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
         }
