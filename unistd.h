@@ -806,6 +806,11 @@ static inline int chdir(const char* path) {
     return _rin_unistd_status(_RIN_UNISTD_SYSCALL1(SYS_CHDIR, (uintptr_t)path));
 }
 
+static inline int fchdir(int fd) {
+    return _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
+        SYS_FCHDIR, (uintptr_t)(intptr_t)fd));
+}
+
 static inline char* getcwd(char* buf, size_t size) {
     intptr_t ret;
     int allocated = 0;
@@ -1529,6 +1534,49 @@ static inline int execve(const char* pathname, char* const argv[], char* const e
     return -1;
 }
 
+static inline ssize_t __rin_unistd_readlink_fd(
+    int fd, char* target, size_t target_capacity) {
+    static const char prefix[] = "/proc/self/fd/";
+    char path[sizeof(prefix) + 10u];
+    char digits[10];
+    size_t prefix_length = sizeof(prefix) - 1u;
+    size_t digit_count = 0u;
+    size_t path_length = 0u;
+    unsigned int value;
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    if (!target) {
+        errno = EFAULT;
+        return -1;
+    }
+    for (size_t index = 0u; index < prefix_length; ++index)
+        path[path_length++] = prefix[index];
+    value = (unsigned int)fd;
+    do {
+        digits[digit_count++] = (char)('0' + value % 10u);
+        value /= 10u;
+    } while (value != 0u);
+    while (digit_count != 0u)
+        path[path_length++] = digits[--digit_count];
+    path[path_length] = '\0';
+
+    const ssize_t result = readlinkat(AT_FDCWD, path, target,
+                                      target_capacity);
+    if (result < 0) return -1;
+    if ((size_t)result >= target_capacity) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    target[result] = '\0';
+    if (target[0] != '/') {
+        errno = ENOENT;
+        return -1;
+    }
+    return result;
+}
+
 static inline int fexecve(int fd, char* const argv[], char* const envp[]) {
     struct stat file_info;
     char target[4096u + 1u];
@@ -1542,7 +1590,7 @@ static inline int fexecve(int fd, char* const argv[], char* const envp[]) {
         errno = EACCES;
         return -1;
     }
-    if (__rin_statvfs_readlink_fd(fd, target, sizeof(target)) < 0)
+    if (__rin_unistd_readlink_fd(fd, target, sizeof(target)) < 0)
         return -1;
     return execve(target, argv, envp);
 }
@@ -1959,7 +2007,25 @@ static inline long sysconf(int name) {
         case _SC_ARG_MAX:
             return ARG_MAX;
         case _SC_CHILD_MAX:
+#if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
+        {
+            uint64_t maximum = 0u;
+            int saved_errno = errno;
+            if (__rin_resource_limit_effective_child_max(&maximum) != 0)
+                return -1;
+            if (maximum == UINT64_MAX) {
+                errno = saved_errno;
+                return -1;
+            }
+            if (maximum > (uint64_t)LONG_MAX) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            return (long)maximum;
+        }
+#else
             return CHILD_MAX;
+#endif
         case _SC_PAGESIZE:
             return 4096;
         case _SC_CLK_TCK:

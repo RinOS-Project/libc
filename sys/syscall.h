@@ -112,6 +112,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_getrusage       SYS_GETRUSAGE
 #define SYS_getpriority     SYS_GETPRIORITY
 #define SYS_setpriority     SYS_SETPRIORITY
+#define SYS_nice            SYS_NICE
 #define SYS_kill            SYS_KILL
 #define SYS_getpid          SYS_GETPID
 #define SYS_umask           SYS_UMASK
@@ -194,6 +195,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_getppid        SYS_GETPPID
 #define __NR_waitpid        SYS_WAIT4
 #define __NR_chdir          SYS_CHDIR
+#define __NR_fchdir         SYS_FCHDIR
 #define __NR_unlink         SYS_UNLINK
 #define __NR_rename         SYS_RENAME
 #define __NR_mkdir          SYS_MKDIR
@@ -231,6 +233,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_getrusage      SYS_GETRUSAGE
 #define __NR_getpriority    SYS_GETPRIORITY
 #define __NR_setpriority    SYS_SETPRIORITY
+#define __NR_nice           SYS_NICE
 #define __NR_wait4          SYS_WAIT4
 #define __NR_gettid         SYS_GETTID
 #if defined(RIN_HOST_LINUX_FUTEX_TEST)
