@@ -37,7 +37,6 @@ enum {
 typedef struct RinLibcMqNotifySlot {
     volatile uint32_t state;
     uint32_t notification;
-    mqd_t queue;
     RinEvent event;
     void (*function)(union sigval);
     union sigval value;
@@ -616,7 +615,6 @@ static void* mq_notify_worker(void* argument)
     }
     (void)mq_close_handle(slot->event);
     slot->event = RIN_OBJECT_HANDLE_INVALID;
-    slot->queue = RIN_OBJECT_HANDLE_INVALID;
     slot->function = NULL;
     slot->value.sival_ptr = NULL;
     __atomic_store_n(&slot->state, 0u, __ATOMIC_RELEASE);
@@ -899,7 +897,6 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
                                     RIN_LIBC_SDK_IPC_EVENT_CREATE, 0);
     }
     slot->notification = (uint32_t)event_copy.sigev_notify;
-    slot->queue = mqdes;
     slot->event = event;
     slot->function = event_copy.sigev_notify_function;
     slot->value = event_copy.sigev_value;
