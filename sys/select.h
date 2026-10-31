@@ -3,6 +3,12 @@
  * select関数 (poll.hから再エクスポート)
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_POLL_SYSCALL5)
+#include_next <sys/select.h>
+#else
 #ifndef _SYS_SELECT_H
 #define _SYS_SELECT_H
 
@@ -29,3 +35,4 @@ extern "C" {
 #endif
 
 #endif /* _SYS_SELECT_H */
+#endif /* hosted Linux delegates to native select */
