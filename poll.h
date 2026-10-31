@@ -206,21 +206,23 @@ static inline int __rin_select_unpack_pollfds(
 
     __rin_select_clear_sets(readfds, writefds, exceptfds);
     for (nfds_t i = 0u; i < poll_count; ++i) {
+        int fd_ready = 0;
         if (readfds && (pollfds[i].events & POLLIN) != 0 &&
             (pollfds[i].revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
             FD_SET(pollfds[i].fd, readfds);
-            ++ready_count;
+            fd_ready = 1;
         }
         if (writefds && (pollfds[i].events & POLLOUT) != 0 &&
             (pollfds[i].revents & (POLLOUT | POLLERR)) != 0) {
             FD_SET(pollfds[i].fd, writefds);
-            ++ready_count;
+            fd_ready = 1;
         }
         if (exceptfds && (pollfds[i].events & POLLPRI) != 0 &&
             (pollfds[i].revents & POLLPRI) != 0) {
             FD_SET(pollfds[i].fd, exceptfds);
-            ++ready_count;
+            fd_ready = 1;
         }
+        if (fd_ready) ++ready_count;
     }
     return ready_count;
 }
@@ -409,6 +411,9 @@ static inline int ppoll(struct pollfd* fds, nfds_t nfds,
  * select関数 (poll.hに含める)
  * ═══════════════════════════════════════════════════════════════*/
 
+/* `select()` writes the monotonic time remaining to a non-NULL mutable
+ * `timeval` after the poll wait returns. `pselect()` takes a const `timespec`
+ * and never writes it back. */
 static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
                          fd_set* exceptfds, struct timeval* timeout) {
     int timeout_ms;
