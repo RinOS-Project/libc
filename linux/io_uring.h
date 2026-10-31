@@ -81,6 +81,13 @@ struct io_uring_params {
     struct io_cqring_offsets cq_off;
 };
 
+struct io_uring_getevents_arg {
+    __u64 sigmask;
+    __u32 sigmask_sz;
+    __u32 pad;
+    __u64 ts;
+};
+
 struct io_uring_files_update {
     __u32 offset;
     __u32 resv;
