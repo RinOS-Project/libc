@@ -2236,11 +2236,20 @@ _RIN_STDIO_API int putc_unlocked(int c, FILE* stream) {
 
 _RIN_STDIO_API int fputs(const char* s, FILE* stream) {
     size_t length = 0;
+    /* GCC knows fputs as a builtin with nonnull args; the checks
+     * below intentionally tolerate nulls defensively. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnonnull-compare"
+#endif
     if (!s) {
         errno = EINVAL;
         if (stream) stream->error = 1;
         return EOF;
     }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     while (s[length]) ++length;
     return _rin_stdio_write_all(stream, s, length) == 0 ? 0 : EOF;
 }
