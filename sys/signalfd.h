@@ -1,5 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 /* RinOS POSIX signalfd interface. */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
+#include_next <sys/signalfd.h>
+#else
 #ifndef _SYS_SIGNALFD_H
 #define _SYS_SIGNALFD_H
 
@@ -48,4 +53,5 @@ int signalfd4(int fd, const sigset_t* mask, int sizemask, int flags);
 }
 #endif
 
+#endif /* hosted Linux delegates to native provider */
 #endif /* _SYS_SIGNALFD_H */

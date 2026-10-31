@@ -1,5 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 /* RinOS POSIX timerfd interface. */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
+#include_next <sys/timerfd.h>
+#else
 #ifndef _SYS_TIMERFD_H
 #define _SYS_TIMERFD_H
 
@@ -31,4 +36,5 @@ int timerfd_gettime(int fd, struct itimerspec* value);
 }
 #endif
 
+#endif /* hosted Linux delegates to native provider */
 #endif /* _SYS_TIMERFD_H */
