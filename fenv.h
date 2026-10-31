@@ -24,6 +24,12 @@ typedef struct {
     unsigned int __others[4];
 } fenv_t;
 
+/* Dynamic floating-point control modes, separate from exception status. */
+typedef struct {
+    unsigned int __x87_control;
+    unsigned int __mxcsr_control;
+} femode_t;
+
 /* 浮動小数点例外フラグ */
 typedef unsigned int fexcept_t;
 
@@ -59,6 +65,9 @@ static const fenv_t __fe_dfl_env = {
     0x037F, 0, 0xFFFF, {0x1F80u, 0, 0, 0}
 };
 #define FE_DFL_ENV (&__fe_dfl_env)
+
+static const femode_t __fe_dfl_mode = {0x037Fu, 0x1F80u};
+#define FE_DFL_MODE (&__fe_dfl_mode)
 
 #if defined(__i386__) || defined(__x86_64__)
 typedef struct __attribute__((packed)) {
@@ -232,6 +241,36 @@ static inline int fesetround(int round) {
     return 0;
 #else
     return round == FE_TONEAREST ? 0 : -1;
+#endif
+}
+
+/* Capture and restore control modes without changing exception status. */
+static inline int fegetmode(femode_t* modep) {
+    if (!modep) return -1;
+
+#if defined(__i386__) || defined(__x86_64__)
+    unsigned short x87_control;
+    __asm__ volatile ("fnstcw %0" : "=m"(x87_control) : : "memory");
+    modep->__x87_control = (unsigned int)x87_control;
+    modep->__mxcsr_control = __rin_mxcsr_get() & ~0x3Fu;
+    return 0;
+#else
+    return -1;
+#endif
+}
+
+static inline int fesetmode(const femode_t* modep) {
+    if (!modep) return -1;
+
+#if defined(__i386__) || defined(__x86_64__)
+    unsigned short x87_control = (unsigned short)modep->__x87_control;
+    unsigned int mxcsr_status = __rin_mxcsr_get() & 0x3Fu;
+    __asm__ volatile ("fldcw %0" : : "m"(x87_control) : "memory");
+    __rin_mxcsr_set(
+        mxcsr_status | (modep->__mxcsr_control & 0x0000FFC0u));
+    return 0;
+#else
+    return -1;
 #endif
 }
 
