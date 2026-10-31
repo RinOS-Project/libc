@@ -291,6 +291,8 @@ static inline int _rin_unistd_status(intptr_t result) {
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
+#define SEEK_DATA 3
+#define SEEK_HOLE 4
 
 /* 標準ファイルディスクリプタ */
 #define STDIN_FILENO  0
