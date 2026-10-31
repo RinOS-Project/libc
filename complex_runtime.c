@@ -290,6 +290,8 @@ float complex cprojf(float complex value) {
 double complex cexp(double complex value) {
     double x = cx_real(value), y = cx_imag(value);
     double scale;
+    if (isinf(x) && x < 0.0 && y == 0.0)
+        return cx_make(0.0, copysign(0.0, y));
     if (isinf(y)) {
         if (isinf(x) && x < 0.0) return cx_make(0.0, 0.0);
         if (isinf(x) && x > 0.0) {
@@ -309,7 +311,10 @@ double complex cexp(double complex value) {
         return cx_make(NAN, NAN);
     }
     if (isinf(x)) {
-        if (x < 0.0) return cx_make(0.0 * cos(y), 0.0 * sin(y));
+        if (x < 0.0) {
+            double cosine = cos(y), sine = sin(y);
+            return cx_make(copysign(0.0, cosine), copysign(0.0, sine));
+        }
         if (y == 0.0) return cx_make(INFINITY, copysign(0.0, y));
         return cx_make(INFINITY * cos(y), INFINITY * sin(y));
     }
