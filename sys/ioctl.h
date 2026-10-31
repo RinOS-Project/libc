@@ -127,8 +127,8 @@ extern "C" {
 #define FIONREAD    0x541B  /* 読み取り可能バイト数 */
 #define TIOCINQ     FIONREAD
 /* Reserved Linux VT control requests. RinOS has no virtual-console
- * control or kernel-console redirection owner; ioctl returns ENOTTY for
- * every descriptor. Keep these numbers for source compatibility. */
+ * control or kernel-console redirection owner. Valid-descriptor requests
+ * return ENOTTY; invalid descriptors retain the normal EBADF result. */
 #define TIOCLINUX   0x541C
 #define TIOCCONS    0x541D
 #ifndef TIOCPKT
