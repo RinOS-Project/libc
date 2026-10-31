@@ -4,7 +4,7 @@
 #include "stdint.h"
 
 void* memalign(size_t alignment, size_t size) {
-    return _rin_aligned_alloc_internal(alignment, size, 0);
+    return _rin_aligned_alloc_internal(alignment, size);
 }
 
 void free_sized(void* ptr, size_t size) {

@@ -1044,8 +1044,7 @@ static inline int _rin_is_power_of_two_size(size_t value) {
     return value != 0 && (value & (value - 1)) == 0;
 }
 
-static inline void* _rin_aligned_alloc_internal(size_t alignment, size_t size,
-                                                int require_size_multiple) {
+static inline void* _rin_aligned_alloc_internal(size_t alignment, size_t size) {
     size_t total;
     size_t aligned_addr;
     size_t addr;
@@ -1055,7 +1054,6 @@ static inline void* _rin_aligned_alloc_internal(size_t alignment, size_t size,
     void* raw;
 
     if (!_rin_is_power_of_two_size(alignment)) return NULL;
-    if (require_size_multiple && ((size & (alignment - 1)) != 0)) return NULL;
 
     /* Keep the metadata naturally aligned even when aligned_alloc() is asked
      * for a valid fundamental alignment smaller than a pointer. Returning a
@@ -1088,16 +1086,15 @@ void* aligned_alloc(size_t alignment, size_t size);
 void* memalign(size_t alignment, size_t size);
 int posix_memalign(void** memptr, size_t alignment, size_t size);
 #else
-/* aligned_alloc - C11準拠アラインドメモリ確保 */
+/* aligned_alloc - C23準拠アラインドメモリ確保 */
 static inline void* aligned_alloc(size_t alignment, size_t size) {
-    return _rin_aligned_alloc_internal(alignment, size, 1);
+    return _rin_aligned_alloc_internal(alignment, size);
 }
 
-/* GNU/POSIX compatibility used by bundled native libraries.  Unlike
- * aligned_alloc, memalign does not require size to be a multiple of the
- * alignment. */
+/* GNU/POSIX compatibility used by bundled native libraries.  These APIs
+ * accept allocation sizes that are not multiples of the alignment. */
 static inline void* memalign(size_t alignment, size_t size) {
-    return _rin_aligned_alloc_internal(alignment, size, 0);
+    return _rin_aligned_alloc_internal(alignment, size);
 }
 
 /* posix_memalign - POSIX準拠アラインドメモリ確保 */
@@ -1108,7 +1105,7 @@ static inline int posix_memalign(void** memptr, size_t alignment, size_t size) {
     if (alignment < sizeof(void*) || !_rin_is_power_of_two_size(alignment))
         return EINVAL;
     saved_errno = errno;
-    ptr = _rin_aligned_alloc_internal(alignment, size, 0);
+    ptr = _rin_aligned_alloc_internal(alignment, size);
     errno = saved_errno;
     if (!ptr) return ENOMEM;
     *memptr = ptr;

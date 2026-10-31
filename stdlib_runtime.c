@@ -17,7 +17,7 @@ int getsubopt(char** optionp, char* const* keylistp, char** valuep) {
 }
 
 void* aligned_alloc(size_t alignment, size_t size) {
-    return _rin_aligned_alloc_internal(alignment, size, 1);
+    return _rin_aligned_alloc_internal(alignment, size);
 }
 
 int posix_memalign(void** memptr, size_t alignment, size_t size) {
@@ -27,7 +27,7 @@ int posix_memalign(void** memptr, size_t alignment, size_t size) {
     if (alignment < sizeof(void*) || !_rin_is_power_of_two_size(alignment))
         return EINVAL;
     saved_errno = errno;
-    ptr = _rin_aligned_alloc_internal(alignment, size, 0);
+    ptr = _rin_aligned_alloc_internal(alignment, size);
     errno = saved_errno;
     if (!ptr) return ENOMEM;
     *memptr = ptr;
