@@ -96,6 +96,8 @@ extern "C" {
 #define F_GETLK     5   /* ロックを取得 */
 #define F_SETLK     6   /* ロックを設定 */
 #define F_SETLKW    7   /* ロックを設定 (ブロッキング) */
+#define F_SETPIPE_SZ 1031 /* Change pipe capacity */
+#define F_GETPIPE_SZ 1032 /* Query pipe capacity */
 
 /* ファイルディスクリプタフラグ */
 #define FD_CLOEXEC  1   /* exec時にクローズ */
@@ -130,7 +132,7 @@ struct flock {
  * ═══════════════════════════════════════════════════════════════*/
 
 #define F_DUPFD_CLOEXEC 1030 /* F_DUPFDと同様だがCLOEXECを設定 */
-#define F_DUPFD_CLOFORK 1031 /* F_DUPFDと同様だがCLOFORKを設定 */
+#define F_DUPFD_CLOFORK 0x52494E01 /* RinOS private CLOFORK extension */
 #define F_SETOWN        8    /* シグナル送信先プロセスを設定 */
 #define F_GETOWN        9    /* シグナル送信先プロセスを取得 */
 #define F_SETSIG        10   /* シグナル番号を設定 */
@@ -549,6 +551,30 @@ static inline int fcntl(int fd, int cmd, ...) {
                 (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
                 (uintptr_t)F_GETFL, 0u));
             break;
+
+        case F_GETPIPE_SZ:
+            if (fd < 0 || fd >= _FCNTL_MAX_FDS) {
+                errno = EBADF;
+                result = -1;
+                break;
+            }
+            result = _fcntl_result_to_int(_RIN_FCNTL_SYSCALL3(
+                (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
+                (uintptr_t)F_GETPIPE_SZ, 0u));
+            break;
+
+        case F_SETPIPE_SZ: {
+            int requested = va_arg(ap, int);
+            if (fd < 0 || fd >= _FCNTL_MAX_FDS) {
+                errno = EBADF;
+                result = -1;
+                break;
+            }
+            result = _fcntl_result_to_int(_RIN_FCNTL_SYSCALL3(
+                (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
+                (uintptr_t)F_SETPIPE_SZ, (uintptr_t)requested));
+            break;
+        }
 
         case F_SETFL: {
             int flags = va_arg(ap, int);
