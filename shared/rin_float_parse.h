@@ -75,7 +75,8 @@ static inline rin_fp_traits rin_fp_binary32_traits(void)
     traits.maximum_exponent = 127;
     traits.sign = 0x80000000u;
     traits.infinity = 0x7f800000u;
-    traits.nan = 0x7fc00001u;
+    /* BATCH41: default quiet-NaN payload 0 (glibc/musl/UCRT parity). */
+    traits.nan = 0x7fc00000u;
     traits.maximum_finite = 0x7f7fffffu;
     return traits;
 }
@@ -91,7 +92,7 @@ static inline rin_fp_traits rin_fp_binary64_traits(void)
     traits.sign = ((rin_fp_u64)1u) << 63u;
     traits.infinity = ((rin_fp_u64)0x7ffu) << 52u;
     traits.nan = (((rin_fp_u64)0x7ffu) << 52u) |
-                 (((rin_fp_u64)1u) << 51u) | 1u;
+                 (((rin_fp_u64)1u) << 51u);
     traits.maximum_finite = (rin_fp_u64)0x7fefffffffffffffULL;
     return traits;
 }
@@ -1217,7 +1218,7 @@ static inline rin_long_double_parse_result rin_float_parse_binary80_radix(
         }
         result.end = special_end;
         result.value = rin_fp_binary80_value(
-            0xc000000000000001ULL, 0x7fffu, negative);
+            0xc000000000000000ULL, 0x7fffu, negative);
         result.converted = 1;
         return result;
     }
