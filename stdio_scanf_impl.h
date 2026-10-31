@@ -1420,20 +1420,18 @@ static int rin_fscanf_stream_parse_float_candidate(
     return parsed;
 }
 
-/* `inf` is a complete conversion, while an optional incomplete `inity`
- * suffix belongs back in the cursor.  A malformed base word remains a
- * matching failure with its bounded candidate restored. */
+/* Preserve the longest special-float input item. Partial `inf`/`nan` words,
+ * `infinity` suffixes, and `nan(...)` payloads fail as a whole instead of
+ * rolling back to the shorter `inf` or `nan` conversion. */
 static int rin_fscanf_stream_parse_special_float(
         struct RinFscanfStreamInput* input,
         const struct RinSscanfSpec* spec, char* candidate, size_t count,
         unsigned char first, struct RinSscanfFloat* value_out,
         int* input_failure_out) {
-    unsigned char tail[5];
     const char* base_suffix =
         rin_fscanf_stream_case_equal(first, 'i') ? "nf" : "an";
     size_t limit = spec->has_width ? spec->width : RIN_SSCANF_MAX_INPUT;
     size_t suffix_index;
-    size_t tail_count;
     int status;
     unsigned char value = '\0';
 
@@ -1441,13 +1439,7 @@ static int rin_fscanf_stream_parse_special_float(
     candidate[count++] = (char)first;
     for (suffix_index = 0u; base_suffix[suffix_index] != '\0';
          ++suffix_index) {
-        if (count == limit) {
-            for (tail_count = 0u; tail_count < count; ++tail_count)
-                tail[tail_count] = (unsigned char)candidate[tail_count];
-            if (rin_fscanf_stream_unread_float_tail(input, tail, count) != 0)
-                return -1;
-            return 0;
-        }
+        if (count == limit) return 0;
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
         if (status == 0) {
@@ -1455,12 +1447,7 @@ static int rin_fscanf_stream_parse_special_float(
             return 0;
         }
         if (!rin_fscanf_stream_case_equal(value, base_suffix[suffix_index])) {
-            for (tail_count = 0u; tail_count < count; ++tail_count)
-                tail[tail_count] = (unsigned char)candidate[tail_count];
-            tail[count] = value;
-            if (rin_fscanf_stream_unread_float_tail(input, tail, count + 1u)
-                != 0)
-                return -1;
+            if (rin_fscanf_stream_unread(input, value) != 0) return -1;
             return 0;
         }
         candidate[count++] = (char)value;
@@ -1470,69 +1457,48 @@ static int rin_fscanf_stream_parse_special_float(
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
         if (status > 0 && value == '(') {
-            unsigned char payload_tail[RIN_SSCANF_MAX_INPUT];
-            size_t payload_start = count;
-            size_t payload_tail_count = 1u;
-
             candidate[count++] = (char)value;
-            payload_tail[0] = value;
             for (;;) {
-                if (count == limit) {
-                    goto rollback_nan_payload;
-                }
+                if (count == limit) return 0;
                 status = rin_fscanf_stream_read(input, &value);
                 if (status < 0) return -1;
-                if (status == 0) {
-                    goto rollback_nan_payload;
-                }
+                if (status == 0) return 0;
                 if (value == ')') {
                     candidate[count++] = (char)value;
                     goto parse_candidate;
                 }
                 if (!rin_fscanf_stream_nan_payload_char(value)) {
-                    payload_tail[payload_tail_count++] = value;
-                    goto rollback_nan_payload;
+                    if (rin_fscanf_stream_unread(input, value) != 0)
+                        return -1;
+                    return 0;
                 }
                 candidate[count++] = (char)value;
-                payload_tail[payload_tail_count++] = value;
             }
-
-rollback_nan_payload:
-            count = payload_start;
-            if (rin_fscanf_stream_unread_float_tail(
-                    input, payload_tail, payload_tail_count) != 0)
-                return -1;
-            goto parse_candidate;
         }
         if (status > 0 && rin_fscanf_stream_unread(input, value) != 0)
             return -1;
     }
 
-    if (rin_fscanf_stream_case_equal(first, 'i') && limit - count >= 5u) {
+    if (rin_fscanf_stream_case_equal(first, 'i') && count < limit) {
         static const char infinity_suffix[] = "nity";
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
         if (status > 0 && rin_fscanf_stream_case_equal(value, 'i')) {
-            tail[0] = value;
-            tail_count = 1u;
+            candidate[count++] = (char)value;
             for (suffix_index = 0u; infinity_suffix[suffix_index] != '\0';
                  ++suffix_index) {
+                if (count == limit) return 0;
                 status = rin_fscanf_stream_read(input, &value);
                 if (status < 0) return -1;
-                if (status == 0 ||
-                    !rin_fscanf_stream_case_equal(
+                if (status == 0) return 0;
+                if (!rin_fscanf_stream_case_equal(
                         value, infinity_suffix[suffix_index])) {
-                    if (status > 0) tail[tail_count++] = value;
-                    if (rin_fscanf_stream_unread_float_tail(
-                            input, tail, tail_count) != 0)
+                    if (rin_fscanf_stream_unread(input, value) != 0)
                         return -1;
-                    goto parse_candidate;
+                    return 0;
                 }
-                tail[tail_count++] = value;
+                candidate[count++] = (char)value;
             }
-            for (suffix_index = 0u; suffix_index < tail_count;
-                 ++suffix_index)
-                candidate[count++] = (char)tail[suffix_index];
         } else if (status > 0 && rin_fscanf_stream_unread(input, value) != 0) {
             return -1;
         }
