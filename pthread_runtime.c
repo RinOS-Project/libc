@@ -1108,6 +1108,9 @@ int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexattr_t* attr) 
         int pshared = attr->pshared & RIN_PTHREAD_MUTEXATTR_PSHARED_MASK;
         if (pshared != PTHREAD_PROCESS_PRIVATE &&
             pshared != PTHREAD_PROCESS_SHARED) return EINVAL;
+#if defined(RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED)
+        if (pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
+#endif
     }
     mutex->locked = 0;
     __rin_pthread_mutex_owner_store(mutex, 0);
@@ -1491,6 +1494,9 @@ int pthread_cond_init(pthread_cond_t* cond, const pthread_condattr_t* attr) {
     if (attr && attr->pshared != PTHREAD_PROCESS_PRIVATE &&
         attr->pshared != PTHREAD_PROCESS_SHARED)
         return EINVAL;
+#if defined(RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED)
+    if (attr && attr->pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
+#endif
     cond->generation = 0;
     cond->waiting = 0;
     cond->clock_id = attr ? attr->clock_id : CLOCK_REALTIME;
@@ -1779,6 +1785,9 @@ int pthread_rwlock_init(pthread_rwlock_t* rwlock, const pthread_rwlockattr_t* at
     if (pshared != PTHREAD_PROCESS_PRIVATE &&
         pshared != PTHREAD_PROCESS_SHARED)
         return EINVAL;
+#if defined(RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED)
+    if (pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
+#endif
     result = pthread_mutexattr_init(&mutex_attr);
     if (result != 0) return result;
     result = pthread_condattr_init(&cond_attr);
@@ -2204,6 +2213,9 @@ static int rin_pthread_spin_init_impl(pthread_spinlock_t* lock, int pshared)
     if (lock == NULL || (pshared != PTHREAD_PROCESS_PRIVATE &&
                          pshared != PTHREAD_PROCESS_SHARED))
         return EINVAL;
+#if defined(RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED)
+    if (pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
+#endif
     /* Process-shared locks use the same lock-free word in shared mappings. */
     __atomic_store_n(&lock->state, RIN_PTHREAD_SPIN_SIGNATURE,
                      __ATOMIC_RELEASE);

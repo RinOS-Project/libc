@@ -78,6 +78,9 @@ int pthread_barrier_init(pthread_barrier_t* barrier,
         if (attr->pshared != PTHREAD_PROCESS_PRIVATE &&
             attr->pshared != PTHREAD_PROCESS_SHARED)
             return EINVAL;
+#if defined(RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED)
+        if (attr->pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
+#endif
         pshared = (uint32_t)attr->pshared;
     }
     barrier->count = count;

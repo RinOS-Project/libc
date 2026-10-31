@@ -26,6 +26,10 @@
 /* Let C++ wrappers distinguish this ABI from a hosted provider even when
  * both headers use the conventional `_PTHREAD_H` include guard. */
 #define RIN_LIBC_PTHREAD_HEADER 1
+#if defined(RIN_FREESTANDING) && \
+    (!defined(RIN_USERSPACE) || defined(__i386__) || defined(_M_IX86))
+#define RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED 1
+#endif
 #if defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
 #define _RIN_PTHREAD_ATTR_SCHED_INLINE
 #elif defined(RINSDK_SPLIT_BUILD)
@@ -929,7 +933,7 @@ extern int pthread_mutexattr_setpshared(pthread_mutexattr_t* attr, int pshared);
 _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_mutexattr_setpshared(pthread_mutexattr_t* attr, int pshared) {
     if (!attr) return EINVAL;
     if (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED) return EINVAL;
-#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+#if defined(RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED)
     if (pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
 #endif
     attr->pshared = (attr->pshared & RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG) |
@@ -1269,7 +1273,7 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_condattr_setpshared(pthread_condattr_
     if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
                   pshared != PTHREAD_PROCESS_SHARED))
         return EINVAL;
-#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+#if defined(RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED)
     if (pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
 #endif
     attr->pshared = pshared;
@@ -1483,7 +1487,7 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_rwlockattr_setpshared(pthread_rwlocka
     if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
                   pshared != PTHREAD_PROCESS_SHARED))
         return EINVAL;
-#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+#if defined(RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED)
     if (pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
 #endif
     attr->pshared = pshared;
@@ -1747,6 +1751,9 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_barrierattr_setpshared(pthread_barrie
     if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
                   pshared != PTHREAD_PROCESS_SHARED))
         return EINVAL;
+#if defined(RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED)
+    if (pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
+#endif
     attr->pshared = pshared;
     return 0;
 }
