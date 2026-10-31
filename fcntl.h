@@ -891,6 +891,23 @@ static inline int rin_rmdirat_if_same(int dirfd, const char* pathname,
     return _fcntl_path_at_zero(&call);
 }
 
+/* Remove a file or symlink only while the name still resolves to the object
+ * held by expected_fd.  The kernel compares the pinned inode identity and
+ * performs the unlink in the same namespace transaction. */
+static inline int rin_unlinkat_if_same(int dirfd, const char* pathname,
+                                       int expected_fd) {
+    RinPathAtCallV1 call;
+    if (!pathname) {
+        errno = EFAULT;
+        return -1;
+    }
+    _fcntl_path_at_init(&call, RIN_PATH_AT_UNLINK_MATCH);
+    call.dirfd = dirfd;
+    call.secondary_dirfd = expected_fd;
+    call.path1 = (uint64_t)(uintptr_t)pathname;
+    return _fcntl_path_at_zero(&call);
+}
+
 static inline int rin_mkdirat_beneath(int dirfd, const char* pathname,
                                       mode_t mode) {
     intptr_t result;

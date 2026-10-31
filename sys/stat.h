@@ -332,6 +332,33 @@ static inline int fstat(int fd, struct stat* statbuf) {
 #endif
 }
 
+/* Return the mount/object generation pinned by an open VFS descriptor.
+ * Directory descriptors are accepted by the path-at owner as well as files. */
+static inline int rin_fgetidentity(
+    int fd, RinPathAtFileIdentityV1* identity_out) {
+    RinPathAtCallV1 call;
+    intptr_t result;
+    if (!identity_out) {
+        errno = EFAULT;
+        return -1;
+    }
+    __rin_stat_path_at_init(&call, RIN_PATH_AT_FGETIDENTITY);
+    call.flags = AT_EMPTY_PATH;
+    call.dirfd = fd;
+    call.user_buffer = (uint64_t)(uintptr_t)identity_out;
+    call.buffer_size = (uint64_t)sizeof(*identity_out);
+    result = _RIN_STAT_PATH_AT_CALL(&call);
+    if (result < 0) {
+        errno = result >= -4095 ? (int)-result : EIO;
+        return -1;
+    }
+    if ((uint64_t)result != sizeof(*identity_out)) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+
 static inline int lstat(const char* pathname, struct stat* statbuf) {
 #if defined(__RIN_STAT_TIME64_ABI)
     return __rin_stat_time64_pathat(AT_FDCWD, pathname, statbuf,
