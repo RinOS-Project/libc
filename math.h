@@ -987,7 +987,6 @@ static inline double log(double x) {
         return NAN;
     }
     if (__builtin_isinf(x)) return x;
-    if (__builtin_isinf(x)) return x;
     if (x == 1.0) return 0.0;
 
     /* x = m * 2^e として分解する。frexpを使うことで、subnormalでも
