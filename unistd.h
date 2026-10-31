@@ -1959,7 +1959,25 @@ static inline long sysconf(int name) {
         case _SC_ARG_MAX:
             return ARG_MAX;
         case _SC_CHILD_MAX:
+#if RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL
+        {
+            uint64_t maximum = 0u;
+            int saved_errno = errno;
+            if (__rin_resource_limit_effective_child_max(&maximum) != 0)
+                return -1;
+            if (maximum == UINT64_MAX) {
+                errno = saved_errno;
+                return -1;
+            }
+            if (maximum > (uint64_t)LONG_MAX) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            return (long)maximum;
+        }
+#else
             return CHILD_MAX;
+#endif
         case _SC_PAGESIZE:
             return 4096;
         case _SC_CLK_TCK:
