@@ -98,9 +98,8 @@
 #ifndef _POSIX_THREADS
 #define _POSIX_THREADS 200809L
 #endif
-/* The mutex/cond/rwlock/sem/mqueue timed APIs are implemented and host
- * accepted; advertise the TIMEOUTS option they jointly provide. */
-#ifndef _POSIX_TIMEOUTS
+/* The complete timed API set is provided by the user-space libc runtime. */
+#if defined(RIN_USERSPACE) && !defined(_POSIX_TIMEOUTS)
 #define _POSIX_TIMEOUTS 200809L
 #endif
 #ifndef _POSIX_READER_WRITER_LOCKS
@@ -2146,8 +2145,13 @@ static inline long sysconf(int name) {
             return -1;
         case _SC_THREAD_ROBUST_PRIO_INHERIT:
             return 200809L;
+#if defined(RIN_USERSPACE)
         case _SC_TIMEOUTS:
             return 200809L;
+#else
+        case _SC_TIMEOUTS:
+            return -1;
+#endif
         case _SC_CLOCK_SELECTION:
         case _SC_MONOTONIC_CLOCK:
         case _SC_SYNCHRONIZED_IO:
