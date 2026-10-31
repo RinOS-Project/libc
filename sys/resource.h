@@ -242,42 +242,6 @@ static inline int __rin_resource_limit_wire_call(
         operation, flags, target_process_id, target_instance_cookie, resource,
         new_limit, old_limit, 0);
 }
-
-static inline int __rin_resource_limit_effective_child_max(
-    uint64_t* maximum_out)
-{
-    RinResourceLimitCallRequestV1 request = {0};
-    RinResourceLimitCallResponseV1 response = {0};
-    intptr_t raw_result;
-    if (maximum_out == NULL) {
-        errno = EFAULT;
-        return -1;
-    }
-    request.struct_size = RIN_RESOURCE_LIMIT_CALL_SIZE;
-    request.version = RIN_RESOURCE_LIMIT_ABI_VERSION;
-    request.operation =
-        RIN_RESOURCE_LIMIT_CALL_GET_EFFECTIVE_CHILD_MAX;
-    request.resource = RIN_RESOURCE_LIMIT_CALL_NPROC;
-    raw_result = _RIN_RESOURCE_LIMIT_SYSCALL2(
-        SYS_RESOURCE_LIMIT_CALL, &request, &response);
-    raw_result = __rin_syscall_posixize(raw_result);
-    if (raw_result == -1) return -1;
-    if (raw_result != 0 || response.struct_size !=
-            RIN_RESOURCE_LIMIT_CALL_SIZE ||
-        response.version != request.version ||
-        response.operation != request.operation || response.status != 0 ||
-        response.resource != request.resource ||
-        response.target_process_id != 0u ||
-        response.target_instance_cookie != 0u ||
-        response.reserved0 != 0u || response.reserved[0] != 0u ||
-        response.reserved[1] != 0u ||
-        response.current != response.maximum) {
-        errno = EIO;
-        return -1;
-    }
-    *maximum_out = response.current;
-    return 0;
-}
 #endif
 
 /* ═══════════════════════════════════════════════════════════════

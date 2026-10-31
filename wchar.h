@@ -136,10 +136,6 @@ static inline int wcsncmp(const wchar_t* s1, const wchar_t* s2, size_t n) {
     return n ? (*s1 < *s2 ? -1 : (*s1 > *s2 ? 1 : 0)) : 0;
 }
 
-/* POSIX case-insensitive comparisons use the calling thread's LC_CTYPE. */
-int wcscasecmp(const wchar_t* left, const wchar_t* right);
-int wcsncasecmp(const wchar_t* left, const wchar_t* right, size_t count);
-
 static inline wchar_t* wcschr(const wchar_t* s, wchar_t c) {
     while (*s) {
         if (*s == c) return (wchar_t*)s;

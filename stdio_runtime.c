@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 /* Process-global narrow stdio owner for each user process runtime. */
 
+/* This object is linked separately from the inline process/system owner. */
+#ifndef RINSDK_SPLIT_BUILD
+#define RINSDK_SPLIT_BUILD 1
+#endif
 #define RIN_STDIO_OWNER_BUILD 1
 #define _STDIO_GLOBAL_IMPL 1
 #include "stdio_impl.h"
@@ -193,6 +197,11 @@ static intptr_t _rin_stdio_memstream_write_bytes(
         return -1;
     }
     if (owner->kind == RIN_STDIO_MEMSTREAM_FIXED) {
+        /* This backend reports byte counts through intptr_t. Bound each
+         * transfer before the conversion so large fmemopen() objects use
+         * ordinary short-write retries instead of returning a negative
+         * count after signed overflow. */
+        if (length > (size_t)INTPTR_MAX) length = (size_t)INTPTR_MAX;
         if ((owner->stream->mode & O_APPEND) != 0)
             owner->position = owner->length;
         position = owner->position;

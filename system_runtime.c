@@ -9,19 +9,6 @@
 #include "rin_atomic_wait.h"
 #include "internal/rin_system_owner.h"
 
-int nice(int incr);
-
-int nice(int incr) {
-    intptr_t result = __rin_syscall_posixize(_RIN_UNISTD_SYSCALL1(
-        SYS_NICE, (uintptr_t)(intptr_t)incr));
-    if (result < 0) return -1;
-    if (result > 40) {
-        errno = EIO;
-        return -1;
-    }
-    return 20 - (int)result;
-}
-
 int __rin_stdlib_system_available(void) {
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
     defined(RIN_USERSPACE) && RIN_USERSPACE

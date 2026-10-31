@@ -511,13 +511,8 @@ static inline void* dlopen(const char* filename, int flags) {
      * RTLD_LAZY is therefore a valid request with eager binding semantics,
      * which is permitted when the implementation elects to resolve symbols
      * before returning.  Scope-bearing requests use the native two-word
-     * loader ABI so RTLD_GLOBAL is published to the process namespace.
-     * RTLD_DEEPBIND has no supported symbol-precedence contract in RinOS. */
-    if ((flags & RTLD_DEEPBIND) != 0) {
-        errno = ENOTSUP;
-        _dl_set_error("dlopen: RTLD_DEEPBIND is unsupported");
-        return NULL;
-    }
+     * loader ABI so RTLD_GLOBAL is published to the process namespace and
+     * RTLD_DEEPBIND is retained as an explicit policy bit. */
 
     /* 初期化 (初回のみ) */
     static int initialized = 0;

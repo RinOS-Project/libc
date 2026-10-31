@@ -26,11 +26,7 @@
 #define _POSIX_MESSAGE_PASSING 200809L
 #endif
 
-/* Keep the explicit GNU request for the individual extension owners that
- * implement a GNU ABI, while leaving the broader GNU namespace disabled. */
-#if defined(_GNU_SOURCE)
-#define _RIN_USE_GNU_QSORT_R 1
-#endif
+/* GNU extensions disabled */
 #undef _GNU_SOURCE
 #undef __USE_GNU
 
