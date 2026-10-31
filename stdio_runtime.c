@@ -496,11 +496,10 @@ FILE* fmemopen(void* buffer, size_t size, const char* mode) {
     size_t length;
     unsigned char* data = (unsigned char*)buffer;
     FILE* stream;
-    if (size == 0u || _rin_stdio_memstream_mode(mode, &flags, &append) != 0) {
-        if (size == 0u) errno = EINVAL;
+    if (_rin_stdio_memstream_mode(mode, &flags, &append) != 0) {
         return NULL;
     }
-    if (!data) {
+    if (!data && size != 0u) {
         data = (unsigned char*)RIN_STDIO_MEMSTREAM_MALLOC(size);
         if (!data) { errno = ENOMEM; return NULL; }
         owns_data = 1;
@@ -522,7 +521,7 @@ FILE* fmemopen(void* buffer, size_t size, const char* mode) {
         owner->length = length;
         owner->position = append ? length : 0u;
     }
-    if (mode[0] == 'w') data[0] = 0u;
+    if (mode[0] == 'w' && size != 0u) data[0] = 0u;
     return stream;
 }
 

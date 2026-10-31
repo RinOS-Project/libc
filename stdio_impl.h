@@ -2912,8 +2912,13 @@ static inline int _rin_setvbuf_unlocked(FILE* stream, char* buf, int mode, size_
         return -1;
     }
     if (mode != _IONBF && size == 0u) {
-        errno = EINVAL;
-        return -1;
+        if (buf) {
+            errno = EINVAL;
+            return -1;
+        }
+        /* A zero size with no caller buffer requests the implementation's
+         * default buffer, as in the hosted libc contract. */
+        size = BUFSIZ;
     }
     if (mode != _IONBF && size > _RIN_STDIO_BUFFER_POSITION_MASK) {
         errno = EOVERFLOW;
