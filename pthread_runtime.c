@@ -159,6 +159,22 @@ static void rin_pthread_mutex_robust_owner_release(pthread_mutex_t* mutex,
                   NULL, 0);
 }
 
+/* True when the absolute deadline has already passed on clock_id. Timed
+ * waits re-check this after a wakeup whose scheduling may have crossed
+ * the deadline (the EINTR/resume race): without the check, a mutex
+ * released only after the deadline turns into a successful
+ * post-deadline acquire. A clock read failure cannot prove expiry, so
+ * it preserves the historical retry behavior. */
+static int rin_pthread_mutex_abs_deadline_expired(
+    clockid_t clock_id, const struct timespec* abstime) {
+    struct timespec now;
+    if (!abstime) return 0;
+    if (clock_gettime(clock_id, &now) != 0) return 0;
+    return now.tv_sec > abstime->tv_sec ||
+           (now.tv_sec == abstime->tv_sec &&
+            now.tv_nsec >= abstime->tv_nsec);
+}
+
 static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                                         pthread_t owner, int type,
                                         int try_only,
@@ -227,7 +243,8 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
             /* A negative absolute clock deadline is already expired. Retry
              * the atomic acquisition check once before returning timeout,
              * and never pass an invalid absolute time to the futex ABI. */
-            if (abstime && abstime->tv_sec < 0) {
+            if (abstime && clock_id == CLOCK_MONOTONIC &&
+                abstime->tv_sec < 0) {
                 timed_out = 1;
                 continue;
             }
@@ -250,6 +267,14 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
             if (wait_error == ETIMEDOUT && abstime) {
                 /* An unlock can race with the deadline; retry acquisition
                  * before deciding that the timed operation has failed. */
+                timed_out = 1;
+                continue;
+            }
+            if (abstime && (wait_error == 0 || wait_error == EINTR) &&
+                rin_pthread_mutex_abs_deadline_expired(clock_id,
+                                                       abstime)) {
+                /* Resumed (EINTR/spurious wake) past the deadline: same
+                 * single acquisition retry as an ETIMEDOUT wake. */
                 timed_out = 1;
                 continue;
             }
@@ -318,14 +343,13 @@ typedef struct {
     pthread_t tid;
     void* alloc_base;
     uintptr_t alloc_size;
-    int alloc_kind; /* 1=malloc, 2=mmap */
+    int alloc_kind; /* 1=mmap */
     int detached;
 } rin_thread_stack_rec_t;
 
 enum {
     RIN_THREAD_ALLOC_NONE = 0,
-    RIN_THREAD_ALLOC_MALLOC = 1,
-    RIN_THREAD_ALLOC_MMAP = 2
+    RIN_THREAD_ALLOC_MMAP = 1
 };
 
 #define RIN_THREAD_STACK_REC_MAX 256
@@ -805,8 +829,6 @@ static int rin_pthread_create_impl(pthread_t* thread,
     if (!stack_usable_base || stack_usable_size < 32) {
         if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
             (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base, alloc_size);
-        } else if (alloc_kind == RIN_THREAD_ALLOC_MALLOC) {
-            free(alloc_base);
         }
         return EAGAIN;
     }
@@ -814,11 +836,6 @@ static int rin_pthread_create_impl(pthread_t* thread,
     /* Private anonymous mmap stacks are zero-filled by the VMM on demand:
      * untouched pages map the pinned zero page and writes use zeroed COW
      * pages.  Do not fault in the full stack before the new thread runs. */
-    if (alloc_kind != RIN_THREAD_ALLOC_MMAP &&
-        !(attr && attr->stackaddr != NULL)) {
-        memset(stack_usable_base, 0, (size_t)stack_usable_size);
-    }
-
     {
         uintptr_t stack_top = 0;
         uintptr_t record_addr = 0;
@@ -832,8 +849,6 @@ static int rin_pthread_create_impl(pthread_t* thread,
                 if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
                     (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base,
                                                       alloc_size);
-                } else if (alloc_kind == RIN_THREAD_ALLOC_MALLOC) {
-                    free(alloc_base);
                 }
                 return EINVAL;
             }
@@ -848,8 +863,6 @@ static int rin_pthread_create_impl(pthread_t* thread,
             if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
                 (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base,
                                                   alloc_size);
-            } else if (alloc_kind == RIN_THREAD_ALLOC_MALLOC) {
-                free(alloc_base);
             }
             return EAGAIN;
         }
@@ -876,8 +889,6 @@ static int rin_pthread_create_impl(pthread_t* thread,
             free(record);
             if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
                 (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base, alloc_size);
-            } else if (alloc_kind == RIN_THREAD_ALLOC_MALLOC) {
-                free(alloc_base);
             }
             return err;
         }
@@ -967,8 +978,6 @@ static int rin_pthread_join_impl(pthread_t thread, void** retval) {
         if (rin_thread_stack_take(thread, &alloc_base, &alloc_size, &alloc_kind, &ignored_detached) == 0) {
             if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
                 (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base, alloc_size);
-            } else if (alloc_kind == RIN_THREAD_ALLOC_MALLOC) {
-                free(alloc_base);
             }
         }
     }
@@ -1174,7 +1183,7 @@ static int rin_pthread_mutex_timedlock_impl(
             if (c != 2)
                 c = __atomic_exchange_n(&mutex->locked, 2, __ATOMIC_ACQUIRE);
             while (c != 0) {
-                if (abstime->tv_sec < 0) {
+                if (clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
                     int unlocked = 0;
                     if (__atomic_compare_exchange_n(
                             &mutex->locked, &unlocked, 2, 0,
@@ -1191,6 +1200,10 @@ static int rin_pthread_mutex_timedlock_impl(
                     2, abstime, FUTEX_BITSET_MATCH_ANY);
                 int wait_error = rin_pthread_futex_wait_error(wait_result,
                                                                errno);
+                if ((wait_error == 0 || wait_error == EINTR) &&
+                    rin_pthread_mutex_abs_deadline_expired(clock_id,
+                                                           abstime))
+                    return ETIMEDOUT;
                 if (wait_error == EINTR) {
                     c = __atomic_exchange_n(&mutex->locked, 2,
                                             __ATOMIC_ACQUIRE);
@@ -2265,4 +2278,36 @@ int pthread_spin_unlock(pthread_spinlock_t* lock)
     int result = rin_pthread_spin_unlock_impl(lock);
     errno = saved_errno;
     return result;
+}
+
+int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset)
+{
+    intptr_t result;
+    int saved_errno = errno;
+    if (set && how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK)
+        return EINVAL;
+    result = _RIN_PTHREAD_SIGMASK_SYSCALL4(
+        SYS_rt_sigprocmask, how, set, oldset, sizeof(sigset_t));
+    int error = _rin_pthread_error_from_result(result);
+    errno = saved_errno;
+    return error;
+}
+
+int pthread_kill(pthread_t thread, int sig)
+{
+    intptr_t result;
+    intptr_t process_id;
+    int saved_errno = errno;
+    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL) return EINVAL;
+    process_id = _RIN_PTHREAD_SYSCALL0(SYS_GETPID);
+    if (process_id <= 0) {
+        int error = _rin_pthread_error_from_result(process_id);
+        errno = saved_errno;
+        return error;
+    }
+    result = _syscall3((uintptr_t)SYS_tgkill, (uintptr_t)process_id,
+                       (uintptr_t)thread, (uintptr_t)sig);
+    int error = _rin_pthread_error_from_result(result);
+    errno = saved_errno;
+    return error;
 }
