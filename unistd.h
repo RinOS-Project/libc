@@ -220,6 +220,14 @@ extern int rinfs_exec_status_to_errno(int status) __attribute__((weak));
 extern char** environ;
 #endif
 
+/* nice() is an XSI interface.  Keep it visible in the default namespace,
+ * when the caller requests the default/GNU extensions, or for XSI 500+. */
+#if (!defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE) && \
+     !defined(_XOPEN_SOURCE)) || defined(_DEFAULT_SOURCE) || \
+    defined(_GNU_SOURCE) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500)
+int nice(int incr);
+#endif
 static inline char** __rin_unistd_environment_snapshot(
     unsigned int* epoch_out) {
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
