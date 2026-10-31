@@ -231,26 +231,43 @@ static inline int sem_trywait(sem_t* sem) {
     }
 }
 
-/* セマフォのタイムアウト付きデクリメント */
-static inline int sem_timedwait(sem_t* sem, const struct timespec* abstime) {
+/* POSIX absolute-clock semaphore wait.  Named and unnamed semaphores share
+ * this futex path; the waiter state selects a private or shared futex key. */
+static inline int __rin_sem_clockwait_impl(
+    sem_t* sem, clockid_t clock_id, const struct timespec* abstime) {
     __rin_pthread_cancel_point_if_linked();
-    if (!sem || !abstime) {
+    if (!sem || (clock_id != CLOCK_REALTIME &&
+                 clock_id != CLOCK_MONOTONIC)) {
         errno = EINVAL;
         return -1;
     }
 
-    while (1) {
+    for (;;) {
         int val = __atomic_load_n(&sem->value, __ATOMIC_RELAXED);
         if (val > 0) {
-            if (__atomic_compare_exchange_n(&sem->value, &val, val - 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            if (__atomic_compare_exchange_n(&sem->value, &val, val - 1, 0,
+                                            __ATOMIC_ACQUIRE,
+                                            __ATOMIC_RELAXED))
                 return 0;
-            }
             continue;
         }
 
-        if (abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
+        /* As with sem_timedwait(), an available token succeeds without
+         * inspecting the caller's timeout object. */
+        if (!abstime || abstime->tv_nsec < 0 ||
             abstime->tv_nsec >= 1000000000L) {
             errno = EINVAL;
+            return -1;
+        }
+#if !defined(RIN_TIME_ABI64)
+        if (clock_id == CLOCK_REALTIME && abstime->tv_sec < 0) {
+            errno = EINVAL;
+            return -1;
+        }
+#endif
+        if (clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
+            if (sem_trywait(sem) == 0) return 0;
+            errno = ETIMEDOUT;
             return -1;
         }
 

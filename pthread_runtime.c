@@ -1519,44 +1519,18 @@ static int rin_pthread_cond_timedwait_impl(
     if (result == 0) cancel_wait_registered = 1;
     while (result == 0 &&
            __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-#if !defined(RIN_TIME_ABI64)
-        if (abstime->tv_sec < 0) {
+        /* FUTEX_WAIT_BITSET rejects negative monotonic deadlines as EINVAL,
+         * but an absolute deadline before monotonic time zero has expired. */
+        if (cond->clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
             result = ETIMEDOUT;
             break;
         }
-#endif
         int operation = FUTEX_WAIT_BITSET |
             (cond->clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
-        struct timespec relative_timeout;
-        const struct timespec* timeout = abstime;
-        int use_relative_timeout = 0;
-#if defined(RIN_TIME_ABI64)
-        if (cond->clock_id == CLOCK_REALTIME) {
-            int deadline_error = _rin_time_realtime_deadline_relative(
-                abstime, &relative_timeout, &use_relative_timeout);
-            if (deadline_error == ETIMEDOUT) {
-                result = ETIMEDOUT;
-                break;
-            }
-            if (deadline_error != 0) {
-                result = deadline_error;
-                break;
-            }
-            if (use_relative_timeout) {
-                operation = FUTEX_WAIT;
-                timeout = &relative_timeout;
-            }
-        }
-#endif
-        long ret = use_relative_timeout
-            ? _RIN_PTHREAD_RUNTIME_FUTEX(
-                  &cond->generation,
-                  rin_pthread_cond_futex_operation(cond, operation),
-                  (int)gen, timeout)
-            : _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
-                  &cond->generation,
-                  rin_pthread_cond_futex_operation(cond, operation),
-                  (int)gen, timeout, FUTEX_BITSET_MATCH_ANY);
+        long ret = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
+            &cond->generation,
+            rin_pthread_cond_futex_operation(cond, operation),
+            (int)gen, abstime, FUTEX_BITSET_MATCH_ANY);
         int signal_interrupted = ret == -1 && errno == EINTR;
         int wait_error = rin_pthread_futex_wait_error(ret, errno);
         if (wait_error == ETIMEDOUT) {

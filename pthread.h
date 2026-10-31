@@ -1160,30 +1160,8 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* 
             (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
              FUTEX_PRIVATE_FLAG) |
             (cond->clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
-        struct timespec relative_timeout;
-        const struct timespec* timeout = abstime;
-        int use_relative_timeout = 0;
-#if defined(RIN_TIME_ABI64)
-        if (cond->clock_id == CLOCK_REALTIME) {
-            int deadline_error = _rin_time_realtime_deadline_relative(
-                abstime, &relative_timeout, &use_relative_timeout);
-            if (deadline_error != 0) {
-                result = deadline_error;
-                break;
-            }
-            if (use_relative_timeout) {
-                operation = FUTEX_WAIT |
-                    (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
-                     FUTEX_PRIVATE_FLAG);
-                timeout = &relative_timeout;
-            }
-        }
-#endif
-        long ret = use_relative_timeout
-            ? syscall(SYS_futex, &cond->generation, operation, (int)gen,
-                      timeout, NULL, 0)
-            : syscall(SYS_futex, &cond->generation, operation, (int)gen,
-                      timeout, NULL, FUTEX_BITSET_MATCH_ANY);
+        long ret = syscall(SYS_futex, &cond->generation, operation, (int)gen,
+                           abstime, NULL, FUTEX_BITSET_MATCH_ANY);
         if (ret < 0) {
             int err = errno;
             if (err == ETIMEDOUT) {
