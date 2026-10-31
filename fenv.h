@@ -191,6 +191,20 @@ static inline int feraiseexcept(int excepts) {
 #endif
 }
 
+/* Set exception status without the side effects of raising an exception. */
+static inline int fesetexcept(int excepts) {
+    unsigned int requested = (unsigned int)excepts & FE_ALL_EXCEPT;
+    if (requested == 0u) return 0;
+
+#if defined(__i386__) || defined(__x86_64__)
+    __rin_x87_update_excepts(0u, requested);
+    __rin_mxcsr_set(__rin_mxcsr_get() | requested);
+    return 0;
+#else
+    return -1;
+#endif
+}
+
 /* 例外フラグを保存 */
 static inline int fegetexceptflag(fexcept_t* flagp, int excepts) {
     if (!flagp) return -1;
@@ -198,11 +212,29 @@ static inline int fegetexceptflag(fexcept_t* flagp, int excepts) {
     return 0;
 }
 
+/* Test the saved flags, independent of the current floating environment. */
+static inline int fetestexceptflag(const fexcept_t* flagp, int excepts) {
+    unsigned int requested = (unsigned int)excepts & FE_ALL_EXCEPT;
+    if (!flagp) return 0;
+    return (int)((unsigned int)*flagp & requested);
+}
+
 /* 例外フラグを復元 */
 static inline int fesetexceptflag(const fexcept_t* flagp, int excepts) {
     if (!flagp) return -1;
-    if (feclearexcept(excepts) != 0) return -1;
-    return feraiseexcept((int)(*flagp) & excepts);
+    unsigned int requested = (unsigned int)excepts & FE_ALL_EXCEPT;
+    if (requested == 0u) return 0;
+
+#if defined(__i386__) || defined(__x86_64__)
+    unsigned int flags = (unsigned int)*flagp & requested;
+    __rin_x87_update_excepts(requested & ~flags, flags);
+    unsigned int mxcsr = __rin_mxcsr_get();
+    mxcsr = (mxcsr & ~requested) | flags;
+    __rin_mxcsr_set(mxcsr);
+    return 0;
+#else
+    return -1;
+#endif
 }
 
 /* ═══════════════════════════════════════════════════════════════
