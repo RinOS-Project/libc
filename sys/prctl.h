@@ -280,6 +280,7 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_PDEATHSIG || option == PR_GET_PDEATHSIG ||
         option == PR_SET_DUMPABLE || option == PR_GET_DUMPABLE ||
         option == PR_SET_VMA ||
+        option == PR_SET_PTRACER ||
         option == PR_GET_KEEPCAPS || option == PR_SET_KEEPCAPS ||
         option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP ||
         option == PR_GET_SECUREBITS || option == PR_SET_SECUREBITS ||
@@ -315,6 +316,7 @@ static inline int prctl(int option, ...) {
         option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE ||
         option == PR_SET_NAME || option == PR_GET_NAME ||
         option == PR_SET_VMA ||
+        option == PR_SET_PTRACER ||
         option == PR_SET_TSC || option == PR_SET_PDEATHSIG ||
         option == PR_SET_DUMPABLE || option == PR_SET_NO_NEW_PRIVS ||
         option == PR_SET_SECCOMP || option == PR_SET_KEEPCAPS ||
