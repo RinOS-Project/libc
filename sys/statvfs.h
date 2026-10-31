@@ -17,7 +17,6 @@
 #include "../limits.h"
 #include "types.h"
 #include "syscall.h"
-#include "stat.h"
 #include <rin/contract_abi.h>
 
 #ifdef __cplusplus
@@ -109,73 +108,25 @@ static inline int statvfs(const char* path, struct statvfs* buf) {
 }
 
 
-/* Decimal writer for /proc/self/fd/<fd> (sys headers avoid stdio here). */
-static inline void __rin_statvfs_write_uint(char* out, size_t* length,
-                                            unsigned int value) {
-    char digits[10];
-    size_t count = 0u;
-    size_t index;
-    do {
-        digits[count++] = (char)('0' + value % 10u);
-        value /= 10u;
-    } while (value != 0u);
-    for (index = 0u; index < count; ++index)
-        out[(*length)++] = digits[count - index - 1u];
-}
-
-/* readlink(/proc/self/fd/<fd>) via direct syscall: unistd.h owns the
- * public readlink, but including it here would cycle (unistd.h includes
- * this header).  Result is NUL-terminated; unlinked fds and missing
- * procfs surface as ENOENT from the kernel. */
-static inline ssize_t __rin_statvfs_readlink_fd(int fd, char* buf,
-                                                size_t size) {
-    static const char prefix[] = "/proc/self/fd/";
-    char path[14u + 10u + 1u];
-    size_t length = 0u;
-    size_t index;
-    intptr_t result;
-    if (!buf || size < 2u) {
-        errno = EINVAL;
-        return -1;
-    }
-    for (index = 0u; prefix[index] != '\0'; ++index)
-        path[length++] = prefix[index];
-    __rin_statvfs_write_uint(path, &length, (unsigned int)fd);
-    path[length] = '\0';
-    result = __rin_syscall_posixize(_RIN_STATVFS_SYSCALL3(
-        SYS_READLINK, path, buf, size - 1u));
-    if (result < 0) return -1;
-    if ((uintptr_t)result >= (uintptr_t)(size - 1u)) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    if ((uintptr_t)result > (uintptr_t)SSIZE_MAX) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    buf[result] = '\0';
-    return (ssize_t)result;
-}
-
 static inline int fstatvfs(int fd, struct statvfs* buf) {
-    struct stat file_info;
-    char target[4096u + 1u];
+    RinStatVfsFdRequestV1 request;
+    intptr_t result;
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
     if (!buf) {
         errno = EFAULT;
         return -1;
     }
-    /* fstat supplies POSIX EBADF (procfs readlink reports ENOENT for
-     * dead fds) and gates non-file fds to honest EINVAL: pipes and
-     * sockets have no path to re-resolve.  True kernel fd-usage
-     * (unlinked-safe, fstype-complete) is tracked separately. */
-    if (fstat(fd, &file_info) != 0) return -1;
-    if (!S_ISREG(file_info.st_mode) && !S_ISDIR(file_info.st_mode)) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (__rin_statvfs_readlink_fd(fd, target, sizeof(target)) < 0)
-        return -1;
-    return statvfs(target, buf);
+    request.struct_size = sizeof(request);
+    request.version = RIN_STATVFS_ABI_VERSION;
+    request.word_size = sizeof(unsigned long);
+    request.fd = fd;
+    request.reserved0 = 0u;
+    request.buffer = (uint64_t)(uintptr_t)buf;
+    result = _RIN_STATVFS_SYSCALL1(RIN_SYS_STATVFS_GET_FD, &request);
+    return __rin_statvfs_status_result(result);
 }
 #ifdef __cplusplus
 }
