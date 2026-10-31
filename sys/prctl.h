@@ -48,8 +48,8 @@ extern "C" {
 #define PR_SET_DUMPABLE     4   /* Set dumpable flag */
 #define PR_GET_UNALIGN      5   /* Get unaligned access control */
 #define PR_SET_UNALIGN      6   /* Set unaligned access control */
-#define PR_GET_KEEPCAPS     7   /* Get capability bounding set */
-#define PR_SET_KEEPCAPS     8   /* Set capability bounding set */
+#define PR_GET_KEEPCAPS     7   /* Get keep-capabilities flag */
+#define PR_SET_KEEPCAPS     8   /* Keep capabilities across UID changes */
 #define PR_GET_FPEMU        9   /* Get floating-point emulation */
 #define PR_SET_FPEMU        10  /* Set floating-point emulation */
 #define PR_GET_FPEXC        11  /* Get floating-point exception mode */
@@ -87,6 +87,12 @@ extern "C" {
 #define PR_SET_FP_MODE      45  /* Set FP mode */
 #define PR_GET_FP_MODE      46  /* Get FP mode */
 #define PR_CAP_AMBIENT      47  /* Ambient capabilities */
+
+/* Linux capability sets are deliberately unavailable.  Their prctl options
+ * return ENOTSUP, while capget/capset syscall numbers remain unregistered and
+ * return ENOSYS; RinOS capabilities are not translated into Linux bits. */
+#define RIN_LINUX_CAPABILITY_SETS_SUPPORTED 0
+#define RIN_LINUX_PRCTL_CAPABILITY_OPTIONS_SUPPORTED 0
 #define PR_SVE_SET_VL       50  /* Set SVE vector length */
 #define PR_SVE_GET_VL       51  /* Get SVE vector length */
 #define PR_GET_SPECULATION_CTRL 52
@@ -273,7 +279,11 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_SECCOMP || option == PR_GET_SECCOMP ||
         option == PR_SET_TSC || option == PR_GET_TSC ||
         option == PR_SET_PDEATHSIG || option == PR_GET_PDEATHSIG ||
-        option == PR_SET_DUMPABLE || option == PR_GET_DUMPABLE) {
+        option == PR_SET_DUMPABLE || option == PR_GET_DUMPABLE ||
+        option == PR_GET_KEEPCAPS || option == PR_SET_KEEPCAPS ||
+        option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP ||
+        option == PR_GET_SECUREBITS || option == PR_SET_SECUREBITS ||
+        option == PR_CAP_AMBIENT) {
         result = _RIN_PRCTL_SYSCALL5(SYS_PRCTL, (uintptr_t)option, arg2,
                                      arg3, arg4, arg5);
         if (result < 0) {
