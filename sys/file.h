@@ -1,12 +1,13 @@
 /*
  * RinOS libc - sys/file.h
- * BSD-style whole-file locking mapped to the RinOS fcntl lock ABI.
+ * BSD-style whole-file locking using the RinOS OFD-owned flock namespace.
  */
 
 #ifndef _SYS_FILE_H
 #define _SYS_FILE_H
 
 #include <fcntl.h>
+#include <unistd.h>
 
 #ifndef LOCK_SH
 #define LOCK_SH 0x01
@@ -40,7 +41,8 @@ static inline int flock(int fd, int operation)
     lock.l_start = 0;
     lock.l_len = 0;
     lock.l_pid = 0;
-    command = (operation & LOCK_NB) != 0 ? F_SETLK : F_SETLKW;
+    command = (operation & LOCK_NB) != 0
+        ? F_RIN_FLOCK_SETLK : F_RIN_FLOCK_SETLKW;
     return fcntl(fd, command, &lock);
 }
 #endif /* !MIDL_PASS */
