@@ -196,12 +196,10 @@ static intptr_t _rin_stdio_memstream_write_bytes(
         owner->stream->error = 1;
         return -1;
     }
+    /* The backend reports byte counts through intptr_t. Bound each transfer
+     * so callers can retry the remaining bytes without signed overflow. */
+    if (length > (size_t)INTPTR_MAX) length = (size_t)INTPTR_MAX;
     if (owner->kind == RIN_STDIO_MEMSTREAM_FIXED) {
-        /* This backend reports byte counts through intptr_t. Bound each
-         * transfer before the conversion so large fmemopen() objects use
-         * ordinary short-write retries instead of returning a negative
-         * count after signed overflow. */
-        if (length > (size_t)INTPTR_MAX) length = (size_t)INTPTR_MAX;
         if ((owner->stream->mode & O_APPEND) != 0)
             owner->position = owner->length;
         position = owner->position;
@@ -225,8 +223,7 @@ static intptr_t _rin_stdio_memstream_write_bytes(
         return (intptr_t)copied;
     }
     position = owner->position;
-    if (length > (size_t)INTPTR_MAX ||
-        position > (size_t)-1 - length - 1u) {
+    if (position > (size_t)-1 - length - 1u) {
         errno = EOVERFLOW;
         owner->stream->error = 1;
         return -1;
