@@ -27,6 +27,11 @@ int posix_madvise(void* addr, size_t length, int advice) {
     /* POSIX advice may influence performance but must not change memory
      * contents. Linux MADV_DONTNEED is destructive, so treat the POSIX
      * DONTNEED hint as NORMAL while retaining kernel range validation. */
+    if (advice != POSIX_MADV_NORMAL && advice != POSIX_MADV_RANDOM &&
+        advice != POSIX_MADV_SEQUENTIAL &&
+        advice != POSIX_MADV_WILLNEED &&
+        advice != POSIX_MADV_DONTNEED)
+        return EINVAL;
     if (advice == POSIX_MADV_DONTNEED)
         advice = MADV_NORMAL;
     if (madvise(addr, length, advice) == 0) {
