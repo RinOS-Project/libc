@@ -436,9 +436,16 @@ static inline int prlimit64(pid_t pid, int resource,
 
 /* getrusage - リソース使用量を取得 */
 #ifndef _RIN_GETRUSAGE_SYSCALL2
+#if defined(_WIN32) && defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING))
+#define _RIN_GETRUSAGE_SYSCALL2(number, argument1, argument2) \
+    ((void)(number), (void)(argument1), (void)(argument2), \
+     -(intptr_t)ENOSYS)
+#else
 #define _RIN_GETRUSAGE_SYSCALL2(number, argument1, argument2) \
     _syscall2((uintptr_t)(number), (uintptr_t)(argument1), \
               (uintptr_t)(argument2))
+#endif
 #endif
 
 /* getrusage exposes an int status but receives a target-width syscall word.
