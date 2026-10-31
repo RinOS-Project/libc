@@ -670,7 +670,8 @@ static inline int fcntl(int fd, int cmd, ...) {
  * 追加関数
  * ═══════════════════════════════════════════════════════════════*/
 
-static inline int posix_fadvise(int fd, off_t offset, off_t len, int advice) {
+static inline int _rin_posix_fadvise_result(
+    int fd, off_t offset, off_t len, int advice) {
     uint64_t unsigned_offset;
     uint64_t unsigned_length;
     intptr_t result;
@@ -725,9 +726,19 @@ static inline int fallocate(int fd, int mode, off_t offset, off_t len) {
     return -1;
 }
 
+#if (defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)) || \
+    defined(RIN_FCNTL_ADVISE_RUNTIME_IMPLEMENTATION)
+int posix_fadvise(int fd, off_t offset, off_t len, int advice);
+int posix_fallocate(int fd, off_t offset, off_t len);
+#else
+static inline int posix_fadvise(int fd, off_t offset, off_t len, int advice) {
+    return _rin_posix_fadvise_result(fd, offset, len, advice);
+}
+
 static inline int posix_fallocate(int fd, off_t offset, off_t len) {
     return _rin_fallocate_result(fd, 0, offset, len);
 }
+#endif
 
 /* xxxat系関数 */
 static inline int faccessat(int dirfd, const char* pathname, int mode, int flags) {

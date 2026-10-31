@@ -275,6 +275,10 @@ static inline int madvise(void* addr, size_t length, int advice) {
     return __rin_mman_zero_result(ret);
 }
 
+#if (defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)) || \
+    defined(RIN_MMAN_POSIX_ADVISE_RUNTIME_IMPLEMENTATION)
+int posix_madvise(void* addr, size_t length, int advice);
+#else
 static inline int posix_madvise(void* addr, size_t length, int advice) {
     int saved_errno = errno;
     int error;
@@ -291,6 +295,7 @@ static inline int posix_madvise(void* addr, size_t length, int advice) {
     errno = saved_errno;
     return error;
 }
+#endif
 
 static inline int mlock(const void* addr, size_t length) {
     intptr_t ret = _RIN_MMAN_SYSCALL2(
