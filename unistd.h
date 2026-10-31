@@ -85,8 +85,8 @@
 #define _POSIX_SYNCHRONIZED_IO 200809L
 #endif
 
-/* Asynchronous I/O is implemented by the libc AIO runtime. */
-#ifndef _POSIX_ASYNCHRONOUS_IO
+/* Asynchronous I/O is provided by the user-space libc AIO runtime. */
+#if defined(RIN_USERSPACE) && !defined(_POSIX_ASYNCHRONOUS_IO)
 #define _POSIX_ASYNCHRONOUS_IO 200809L
 #endif
 #ifndef _POSIX_CLOCK_SELECTION
@@ -1991,10 +1991,19 @@ static inline long sysconf(int name) {
             return MQ_PRIO_MAX;
         case _SC_MEMLOCK:
             return _POSIX_MEMLOCK;
+#if defined(RIN_USERSPACE)
         case _SC_ASYNCHRONOUS_IO:
             return _POSIX_ASYNCHRONOUS_IO;
+#else
+        case _SC_ASYNCHRONOUS_IO:
+        case _SC_AIO_LISTIO_MAX:
+        case _SC_AIO_MAX:
+        case _SC_AIO_PRIO_DELTA_MAX:
+            return -1;
+#endif
         case _SC_IPV6:
             return _POSIX_IPV6;
+#if defined(RIN_USERSPACE)
         case _SC_AIO_LISTIO_MAX:
             return AIO_LISTIO_MAX;
         case _SC_AIO_MAX:
@@ -2003,6 +2012,10 @@ static inline long sysconf(int name) {
             return RTSIG_MAX;
         case _SC_AIO_PRIO_DELTA_MAX:
             return AIO_PRIO_DELTA_MAX;
+#else
+        case _SC_RTSIG_MAX:
+            return RTSIG_MAX;
+#endif
         case _SC_ATEXIT_MAX:
             return ATEXIT_MAX;
         case _SC_SEM_NSEMS_MAX:
