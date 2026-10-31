@@ -14,6 +14,13 @@
 
 #ifndef _SPAWN_H
 #define _SPAWN_H
+#ifndef _RIN_POSIX_SPAWN_API_INLINE
+#if defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+#define _RIN_POSIX_SPAWN_API_INLINE
+#else
+#define _RIN_POSIX_SPAWN_API_INLINE static inline
+#endif
+#endif
 
 #include "errno.h"
 #include "fcntl.h"
@@ -94,7 +101,10 @@ _Static_assert(sizeof(_rin_posix_spawn_file_action_t) ==
                "posix_spawn action ABI drift");
 #endif
 
-static inline int posix_spawnattr_init(posix_spawnattr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_init(posix_spawnattr_t* attr);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_init(posix_spawnattr_t* attr) {
     if (!attr)
         return EINVAL;
     attr->flags = 0;
@@ -105,8 +115,12 @@ static inline int posix_spawnattr_init(posix_spawnattr_t* attr) {
     attr->sched_priority = 0;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_destroy(posix_spawnattr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_destroy(posix_spawnattr_t* attr);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_destroy(posix_spawnattr_t* attr) {
     if (!attr)
         return EINVAL;
     attr->flags = 0;
@@ -117,8 +131,13 @@ static inline int posix_spawnattr_destroy(posix_spawnattr_t* attr) {
     attr->sched_priority = 0;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_setflags(posix_spawnattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_setflags(posix_spawnattr_t* attr,
+                                           short flags);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_setflags(posix_spawnattr_t* attr,
                                            short flags)
 {
     if (!attr) return EINVAL;
@@ -132,50 +151,85 @@ static inline int posix_spawnattr_setflags(posix_spawnattr_t* attr,
     attr->flags = flags;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_setpgroup(posix_spawnattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_setpgroup(posix_spawnattr_t* attr,
+                                            pid_t pgroup);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_setpgroup(posix_spawnattr_t* attr,
                                             pid_t pgroup) {
     if (!attr || pgroup < 0) return EINVAL;
     attr->pgroup = pgroup;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_getpgroup(const posix_spawnattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_getpgroup(const posix_spawnattr_t* attr,
+                                            pid_t* pgroup);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_getpgroup(const posix_spawnattr_t* attr,
                                             pid_t* pgroup) {
     if (!attr || !pgroup) return EINVAL;
     *pgroup = attr->pgroup;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_setsigdefault(posix_spawnattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_setsigdefault(posix_spawnattr_t* attr,
+                                                const sigset_t* set);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_setsigdefault(posix_spawnattr_t* attr,
                                                 const sigset_t* set) {
     if (!attr || !set) return EINVAL;
     attr->sigdefault = *set;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_getsigdefault(const posix_spawnattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_getsigdefault(const posix_spawnattr_t* attr,
+                                                sigset_t* set);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_getsigdefault(const posix_spawnattr_t* attr,
                                                 sigset_t* set) {
     if (!attr || !set) return EINVAL;
     *set = attr->sigdefault;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_setsigmask(posix_spawnattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_setsigmask(posix_spawnattr_t* attr,
+                                             const sigset_t* set);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_setsigmask(posix_spawnattr_t* attr,
                                              const sigset_t* set) {
     if (!attr || !set) return EINVAL;
     attr->sigmask = *set;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_getsigmask(const posix_spawnattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_getsigmask(const posix_spawnattr_t* attr,
+                                             sigset_t* set);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_getsigmask(const posix_spawnattr_t* attr,
                                              sigset_t* set) {
     if (!attr || !set) return EINVAL;
     *set = attr->sigmask;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_setschedparam(
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_setschedparam(
+    posix_spawnattr_t* attr, const struct sched_param* param);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_setschedparam(
     posix_spawnattr_t* attr, const struct sched_param* param) {
     if (!attr || !param)
         return EINVAL;
@@ -184,16 +238,26 @@ static inline int posix_spawnattr_setschedparam(
     attr->sched_priority = param->sched_priority;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_getschedparam(
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_getschedparam(
+    const posix_spawnattr_t* attr, struct sched_param* param);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_getschedparam(
     const posix_spawnattr_t* attr, struct sched_param* param) {
     if (!attr || !param)
         return EINVAL;
     param->sched_priority = attr->sched_priority;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_setschedpolicy(
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_setschedpolicy(
+    posix_spawnattr_t* attr, int policy);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_setschedpolicy(
     posix_spawnattr_t* attr, int policy) {
     int minimum;
     int maximum;
@@ -206,26 +270,42 @@ static inline int posix_spawnattr_setschedpolicy(
     attr->sched_policy = policy;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_getschedpolicy(
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_getschedpolicy(
+    const posix_spawnattr_t* attr, int* policy);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_getschedpolicy(
     const posix_spawnattr_t* attr, int* policy) {
     if (!attr || !policy)
         return EINVAL;
     *policy = attr->sched_policy;
     return 0;
 }
+#endif
 
-static inline int posix_spawnattr_getflags(const posix_spawnattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnattr_getflags(const posix_spawnattr_t* attr,
+                                           short* flags);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_getflags(const posix_spawnattr_t* attr,
                                            short* flags)
 {
     if (!attr || !flags) return EINVAL;
     *flags = attr->flags;
     return 0;
 }
+#endif
 
+#if !defined(RINSDK_SPLIT_BUILD) || defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
 static _rin_posix_spawn_file_action_t _rin_posix_spawn_empty_action;
+#endif
 
-static inline int posix_spawn_file_actions_init(posix_spawn_file_actions_t* actions) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawn_file_actions_init(posix_spawn_file_actions_t* actions);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_init(posix_spawn_file_actions_t* actions) {
     if (!actions)
         return EINVAL;
     actions->action_count = 0;
@@ -234,8 +314,12 @@ static inline int posix_spawn_file_actions_init(posix_spawn_file_actions_t* acti
     actions->state_cookie = _RIN_POSIX_SPAWN_ACTIONS_MAGIC;
     return 0;
 }
+#endif
 
-static inline int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t* actions) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t* actions);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t* actions) {
     if (!actions)
         return EINVAL;
     if (actions->state_cookie != _RIN_POSIX_SPAWN_ACTIONS_MAGIC ||
@@ -252,6 +336,7 @@ static inline int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t* a
     actions->state_cookie = 0u;
     return 0;
 }
+#endif
 
 /* Never use strlen() for a caller-owned action path.  Apart from making the
  * admission boundary explicit, the bounded scan keeps malformed metadata
@@ -373,7 +458,10 @@ static inline int _rin_posix_spawn_reserve_action(
     return 0;
 }
 
-static inline int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t* actions, int fd, const char* path, int oflag, mode_t mode) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t* actions, int fd, const char* path, int oflag, mode_t mode);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t* actions, int fd, const char* path, int oflag, mode_t mode) {
     _rin_posix_spawn_file_action_t* action;
     size_t path_length;
     int error;
@@ -395,8 +483,12 @@ static inline int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t* a
     memcpy(action->path, path, path_length + 1u);
     return 0;
 }
+#endif
 
-static inline int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t* actions, int fd) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t* actions, int fd);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t* actions, int fd) {
     _rin_posix_spawn_file_action_t* action;
     int error;
     if (fd < 0)
@@ -411,8 +503,12 @@ static inline int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t* 
     action->mode = 0;
     return 0;
 }
+#endif
 
-static inline int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t* actions, int oldfd, int newfd) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t* actions, int oldfd, int newfd);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t* actions, int oldfd, int newfd) {
     _rin_posix_spawn_file_action_t* action;
     int error;
     if (oldfd < 0 || newfd < 0)
@@ -427,6 +523,7 @@ static inline int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t* a
     action->mode = 0;
     return 0;
 }
+#endif
 
 #ifndef _RIN_POSIX_SPAWN_SYSCALL6
 #define _RIN_POSIX_SPAWN_SYSCALL6(path, argv, envp, takeover_fd, takeover_name, flags) \
@@ -746,7 +843,13 @@ static inline int _rin_posix_spawn_direct(
     return 0;
 }
 
-static inline int posix_spawn(
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawn(
+    pid_t* pid, const char* path,
+    const posix_spawn_file_actions_t* file_actions,
+    const posix_spawnattr_t* attr, char* const argv[], char* const envp[]);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawn(
     pid_t* pid, const char* path,
     const posix_spawn_file_actions_t* file_actions,
     const posix_spawnattr_t* attr, char* const argv[], char* const envp[])
@@ -754,8 +857,15 @@ static inline int posix_spawn(
     return _rin_posix_spawn_direct(
         pid, path, file_actions, attr, argv, envp);
 }
+#endif
 
-static inline int posix_spawnp(
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawnp(
+    pid_t* pid, const char* file,
+    const posix_spawn_file_actions_t* file_actions,
+    const posix_spawnattr_t* attr, char* const argv[], char* const envp[]);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawnp(
     pid_t* pid, const char* file,
     const posix_spawn_file_actions_t* file_actions,
     const posix_spawnattr_t* attr, char* const argv[], char* const envp[])
@@ -858,11 +968,13 @@ static inline int posix_spawnp(
     return __rin_unistd_environment_finish(
         saved_error, environment_epoch);
 }
+#endif
 
 #ifdef __cplusplus
 }
 #endif
 
+#undef _RIN_POSIX_SPAWN_API_INLINE
 #endif /* _SPAWN_H */
 
 #endif /* hosted Linux delegates to its native spawn provider */

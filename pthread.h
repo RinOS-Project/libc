@@ -26,6 +26,13 @@
 /* Let C++ wrappers distinguish this ABI from a hosted provider even when
  * both headers use the conventional `_PTHREAD_H` include guard. */
 #define RIN_LIBC_PTHREAD_HEADER 1
+#if defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+#define _RIN_PTHREAD_ATTR_SCHED_INLINE
+#elif defined(RINSDK_SPLIT_BUILD)
+#define _RIN_PTHREAD_ATTR_SCHED_INLINE extern
+#else
+#define _RIN_PTHREAD_ATTR_SCHED_INLINE static inline
+#endif
 
 #include "stddef.h"
 #include "stdint.h"
@@ -318,12 +325,15 @@ extern void  platform_mutex_destroy(void* mutex);
 #define PTHREAD_EXPLICIT_SCHED 1
 #endif
 
-static inline int pthread_getschedparam(pthread_t thread, int* policy,
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_getschedparam(pthread_t thread, int* policy,
                                         struct sched_param* param);
-static inline int pthread_setschedparam(pthread_t thread, int policy,
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_setschedparam(pthread_t thread, int policy,
                                         const struct sched_param* param);
 
-static inline int pthread_attr_init(pthread_attr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_init(pthread_attr_t* attr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_init(pthread_attr_t* attr) {
     if (!attr) return EINVAL;
     attr->detachstate = PTHREAD_CREATE_JOINABLE;
     attr->scope = PTHREAD_SCOPE_SYSTEM;
@@ -335,8 +345,12 @@ static inline int pthread_attr_init(pthread_attr_t* attr) {
     attr->guardsize = _RIN_PTHREAD_DEFAULT_GUARDSIZE;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_destroy(pthread_attr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_destroy(pthread_attr_t* attr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_destroy(pthread_attr_t* attr) {
     if (!attr) return EINVAL;
     attr->detachstate = PTHREAD_CREATE_JOINABLE;
     attr->scope = PTHREAD_SCOPE_SYSTEM;
@@ -348,68 +362,110 @@ static inline int pthread_attr_destroy(pthread_attr_t* attr) {
     attr->guardsize = 0;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_getguardsize(const pthread_attr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_getguardsize(const pthread_attr_t* attr,
+                                             size_t* guardsize);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getguardsize(const pthread_attr_t* attr,
                                              size_t* guardsize) {
     if (!attr || !guardsize) return EINVAL;
     *guardsize = attr->guardsize;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_setguardsize(pthread_attr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_setguardsize(pthread_attr_t* attr,
+                                             size_t guardsize);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_setguardsize(pthread_attr_t* attr,
                                              size_t guardsize) {
     if (!attr || guardsize > SIZE_MAX - (size_t)0xfffu) return EINVAL;
     attr->guardsize = guardsize;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_setscope(pthread_attr_t* attr, int scope) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_setscope(pthread_attr_t* attr, int scope);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_setscope(pthread_attr_t* attr, int scope) {
     if (!attr) return EINVAL;
     if (scope != PTHREAD_SCOPE_SYSTEM) return ENOTSUP;
     attr->scope = scope;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_getscope(const pthread_attr_t* attr, int* scope) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_getscope(const pthread_attr_t* attr, int* scope);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getscope(const pthread_attr_t* attr, int* scope) {
     if (!attr || !scope) return EINVAL;
     *scope = attr->scope;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_setstacksize(pthread_attr_t* attr, size_t stacksize) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_setstacksize(pthread_attr_t* attr, size_t stacksize);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_setstacksize(pthread_attr_t* attr, size_t stacksize) {
     if (!attr || stacksize < PTHREAD_STACK_MIN) return EINVAL;
     attr->stacksize = stacksize;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_getstacksize(const pthread_attr_t* attr, size_t* stacksize) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_getstacksize(const pthread_attr_t* attr, size_t* stacksize);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getstacksize(const pthread_attr_t* attr, size_t* stacksize) {
     if (!attr || !stacksize) return EINVAL;
     *stacksize = attr->stacksize;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_setdetachstate(pthread_attr_t* attr, int detachstate) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_setdetachstate(pthread_attr_t* attr, int detachstate);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_setdetachstate(pthread_attr_t* attr, int detachstate) {
     if (!attr) return EINVAL;
     if (detachstate != PTHREAD_CREATE_JOINABLE && detachstate != PTHREAD_CREATE_DETACHED)
         return EINVAL;
     attr->detachstate = detachstate;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_getdetachstate(const pthread_attr_t* attr, int* detachstate) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_getdetachstate(const pthread_attr_t* attr, int* detachstate);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getdetachstate(const pthread_attr_t* attr, int* detachstate) {
     if (!attr || !detachstate) return EINVAL;
     *detachstate = attr->detachstate;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_getstack(const pthread_attr_t* attr, void** stackaddr, size_t* stacksize) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_getstack(const pthread_attr_t* attr, void** stackaddr, size_t* stacksize);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getstack(const pthread_attr_t* attr, void** stackaddr, size_t* stacksize) {
     if (!attr || !stackaddr || !stacksize) return EINVAL;
     *stackaddr = attr->stackaddr;
     *stacksize = attr->stacksize;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_setstack(pthread_attr_t* attr, void* stackaddr, size_t stacksize) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_setstack(pthread_attr_t* attr, void* stackaddr, size_t stacksize);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_setstack(pthread_attr_t* attr, void* stackaddr, size_t stacksize) {
     if (!attr || !stackaddr) return EINVAL;
     if (stacksize < PTHREAD_STACK_MIN) return EINVAL;
     if (stacksize > UINTPTR_MAX - (uintptr_t)stackaddr) return EINVAL;
@@ -417,6 +473,7 @@ static inline int pthread_attr_setstack(pthread_attr_t* attr, void* stackaddr, s
     attr->stacksize = stacksize;
     return 0;
 }
+#endif
 
 static inline int _rin_pthread_sched_policy_supported(int policy) {
     switch (policy) {
@@ -433,7 +490,11 @@ static inline int _rin_pthread_sched_policy_supported(int policy) {
     }
 }
 
-static inline int pthread_attr_setinheritsched(pthread_attr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_setinheritsched(pthread_attr_t* attr,
+                                                int inheritsched);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_setinheritsched(pthread_attr_t* attr,
                                                 int inheritsched) {
     if (!attr || (inheritsched != PTHREAD_INHERIT_SCHED &&
                   inheritsched != PTHREAD_EXPLICIT_SCHED))
@@ -441,15 +502,25 @@ static inline int pthread_attr_setinheritsched(pthread_attr_t* attr,
     attr->inheritsched = inheritsched;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_getinheritsched(const pthread_attr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_getinheritsched(const pthread_attr_t* attr,
+                                                int* inheritsched);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getinheritsched(const pthread_attr_t* attr,
                                                 int* inheritsched) {
     if (!attr || !inheritsched) return EINVAL;
     *inheritsched = attr->inheritsched;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_setschedpolicy(pthread_attr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_setschedpolicy(pthread_attr_t* attr,
+                                               int policy);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_setschedpolicy(pthread_attr_t* attr,
                                                int policy) {
     if (!attr) return EINVAL;
     if (!_rin_pthread_sched_policy_supported(policy))
@@ -457,15 +528,25 @@ static inline int pthread_attr_setschedpolicy(pthread_attr_t* attr,
     attr->schedpolicy = policy;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_getschedpolicy(const pthread_attr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_getschedpolicy(const pthread_attr_t* attr,
+                                               int* policy);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getschedpolicy(const pthread_attr_t* attr,
                                                int* policy) {
     if (!attr || !policy) return EINVAL;
     *policy = attr->schedpolicy;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_setschedparam(pthread_attr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_setschedparam(pthread_attr_t* attr,
+                                              const struct sched_param* param);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_setschedparam(pthread_attr_t* attr,
                                               const struct sched_param* param) {
     if (!attr || !param) return EINVAL;
     if (!_rin_pthread_sched_policy_supported(attr->schedpolicy))
@@ -476,16 +557,25 @@ static inline int pthread_attr_setschedparam(pthread_attr_t* attr,
     attr->sched_priority = param->sched_priority;
     return 0;
 }
+#endif
 
-static inline int pthread_attr_getschedparam(const pthread_attr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_getschedparam(const pthread_attr_t* attr,
+                                              struct sched_param* param);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getschedparam(const pthread_attr_t* attr,
                                               struct sched_param* param) {
     if (!attr || !param) return EINVAL;
     param->sched_priority = attr->sched_priority;
     return 0;
 }
+#endif
 
 /* GNU extension: get attributes of running thread */
-static inline int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr) {
     const unsigned int known_flags =
         RIN_THREAD_STACK_INFO_FLAG_GROWS_DOWN |
         RIN_THREAD_STACK_INFO_FLAG_HAS_GUARD |
@@ -535,6 +625,7 @@ static inline int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr) {
     attr->guardsize = (size_t)info.guard_size;
     return 0;
 }
+#endif
 
 #if defined(RIN_USERSPACE) || defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
 int pthread_setname_np(pthread_t thread, const char* name);
@@ -740,12 +831,16 @@ static inline int pthread_equal(pthread_t t1, pthread_t t2) {
  * Mutex関数
  * ═══════════════════════════════════════════════════════════════*/
 
-static inline int pthread_mutexattr_init(pthread_mutexattr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_mutexattr_init(pthread_mutexattr_t* attr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_mutexattr_init(pthread_mutexattr_t* attr) {
     if (!attr) return EINVAL;
     attr->type = PTHREAD_MUTEX_DEFAULT;
     attr->pshared = PTHREAD_PROCESS_PRIVATE;
     return 0;
 }
+#endif
 
 #define RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG 0x100
 #define RIN_PTHREAD_MUTEXATTR_PSHARED_MASK 0xff
@@ -753,27 +848,43 @@ static inline int pthread_mutexattr_init(pthread_mutexattr_t* attr) {
 #define RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG 0x100
 #define RIN_PTHREAD_MUTEX_ROBUST_FLAG 0x200
 
-static inline int pthread_mutexattr_destroy(pthread_mutexattr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_mutexattr_destroy(pthread_mutexattr_t* attr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_mutexattr_destroy(pthread_mutexattr_t* attr) {
     if (!attr) return EINVAL;
     attr->type = PTHREAD_MUTEX_DEFAULT;
     attr->pshared = PTHREAD_PROCESS_PRIVATE;
     return 0;
 }
+#endif
 
-static inline int pthread_mutexattr_settype(pthread_mutexattr_t* attr, int type) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_mutexattr_settype(pthread_mutexattr_t* attr, int type);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_mutexattr_settype(pthread_mutexattr_t* attr, int type) {
     if (!attr) return EINVAL;
     if (type < 0 || type > PTHREAD_MUTEX_ERRORCHECK) return EINVAL;
     attr->type = (attr->type & ~RIN_PTHREAD_MUTEXATTR_TYPE_MASK) | type;
     return 0;
 }
+#endif
 
-static inline int pthread_mutexattr_gettype(const pthread_mutexattr_t* attr, int* type) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_mutexattr_gettype(const pthread_mutexattr_t* attr, int* type);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_mutexattr_gettype(const pthread_mutexattr_t* attr, int* type) {
     if (!attr || !type) return EINVAL;
     *type = attr->type & RIN_PTHREAD_MUTEXATTR_TYPE_MASK;
     return 0;
 }
+#endif
 
-static inline int pthread_mutexattr_setprotocol(pthread_mutexattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_mutexattr_setprotocol(pthread_mutexattr_t* attr,
+                                                int protocol);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_mutexattr_setprotocol(pthread_mutexattr_t* attr,
                                                 int protocol) {
     if (!attr) return EINVAL;
     if (protocol == PTHREAD_PRIO_NONE) {
@@ -787,16 +898,25 @@ static inline int pthread_mutexattr_setprotocol(pthread_mutexattr_t* attr,
     if (protocol == PTHREAD_PRIO_PROTECT) return ENOTSUP;
     return EINVAL;
 }
+#endif
 
-static inline int pthread_mutexattr_getprotocol(
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_mutexattr_getprotocol(
+    const pthread_mutexattr_t* attr, int* protocol);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_mutexattr_getprotocol(
     const pthread_mutexattr_t* attr, int* protocol) {
     if (!attr || !protocol) return EINVAL;
     *protocol = (attr->type & RIN_PTHREAD_MUTEXATTR_PRIO_INHERIT_FLAG) != 0
         ? PTHREAD_PRIO_INHERIT : PTHREAD_PRIO_NONE;
     return 0;
 }
+#endif
 
-static inline int pthread_mutexattr_setpshared(pthread_mutexattr_t* attr, int pshared) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_mutexattr_setpshared(pthread_mutexattr_t* attr, int pshared);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_mutexattr_setpshared(pthread_mutexattr_t* attr, int pshared) {
     if (!attr) return EINVAL;
     if (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED) return EINVAL;
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
@@ -806,14 +926,23 @@ static inline int pthread_mutexattr_setpshared(pthread_mutexattr_t* attr, int ps
                     pshared;
     return 0;
 }
+#endif
 
-static inline int pthread_mutexattr_getpshared(const pthread_mutexattr_t* attr, int* pshared) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_mutexattr_getpshared(const pthread_mutexattr_t* attr, int* pshared);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_mutexattr_getpshared(const pthread_mutexattr_t* attr, int* pshared) {
     if (!attr || !pshared) return EINVAL;
     *pshared = attr->pshared & RIN_PTHREAD_MUTEXATTR_PSHARED_MASK;
     return 0;
 }
+#endif
 
-static inline int pthread_mutexattr_setrobust(pthread_mutexattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_mutexattr_setrobust(pthread_mutexattr_t* attr,
+                                               int robust);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_mutexattr_setrobust(pthread_mutexattr_t* attr,
                                                int robust) {
     if (!attr || (robust != PTHREAD_MUTEX_STALLED &&
                   robust != PTHREAD_MUTEX_ROBUST))
@@ -823,14 +952,20 @@ static inline int pthread_mutexattr_setrobust(pthread_mutexattr_t* attr,
              RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG : 0);
     return 0;
 }
+#endif
 
-static inline int pthread_mutexattr_getrobust(const pthread_mutexattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_mutexattr_getrobust(const pthread_mutexattr_t* attr,
+                                               int* robust);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_mutexattr_getrobust(const pthread_mutexattr_t* attr,
                                                int* robust) {
     if (!attr || !robust) return EINVAL;
     *robust = (attr->pshared & RIN_PTHREAD_MUTEXATTR_ROBUST_FLAG) != 0 ?
         PTHREAD_MUTEX_ROBUST : PTHREAD_MUTEX_STALLED;
     return 0;
 }
+#endif
 
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
 static inline int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexattr_t* attr) {
@@ -1034,19 +1169,30 @@ extern int pthread_spin_unlock(pthread_spinlock_t* lock);
  * ═══════════════════════════════════════════════════════════════*/
 
 /* 条件変数属性 */
-static inline int pthread_condattr_init(pthread_condattr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_condattr_init(pthread_condattr_t* attr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_condattr_init(pthread_condattr_t* attr) {
     if (!attr) return EINVAL;
     attr->clock_id = CLOCK_REALTIME;
     attr->pshared = PTHREAD_PROCESS_PRIVATE;
     return 0;
 }
+#endif
 
-static inline int pthread_condattr_destroy(pthread_condattr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_condattr_destroy(pthread_condattr_t* attr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_condattr_destroy(pthread_condattr_t* attr) {
     if (!attr) return EINVAL;
     return 0;
 }
+#endif
 
-static inline int pthread_condattr_setclock(pthread_condattr_t* attr, int clock_id) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_condattr_setclock(pthread_condattr_t* attr, int clock_id);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_condattr_setclock(pthread_condattr_t* attr, int clock_id) {
     if (!attr) return EINVAL;
     if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC) {
         return EINVAL;
@@ -1054,14 +1200,23 @@ static inline int pthread_condattr_setclock(pthread_condattr_t* attr, int clock_
     attr->clock_id = clock_id;
     return 0;
 }
+#endif
 
-static inline int pthread_condattr_getclock(const pthread_condattr_t* attr, int* clock_id) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_condattr_getclock(const pthread_condattr_t* attr, int* clock_id);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_condattr_getclock(const pthread_condattr_t* attr, int* clock_id) {
     if (!attr || !clock_id) return EINVAL;
     *clock_id = attr->clock_id;
     return 0;
 }
+#endif
 
-static inline int pthread_condattr_setpshared(pthread_condattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_condattr_setpshared(pthread_condattr_t* attr,
+                                               int pshared);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_condattr_setpshared(pthread_condattr_t* attr,
                                                int pshared) {
     if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
                   pshared != PTHREAD_PROCESS_SHARED))
@@ -1069,13 +1224,19 @@ static inline int pthread_condattr_setpshared(pthread_condattr_t* attr,
     attr->pshared = pshared;
     return 0;
 }
+#endif
 
-static inline int pthread_condattr_getpshared(const pthread_condattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_condattr_getpshared(const pthread_condattr_t* attr,
+                                               int* pshared);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_condattr_getpshared(const pthread_condattr_t* attr,
                                                int* pshared) {
     if (!attr || !pshared) return EINVAL;
     *pshared = attr->pshared;
     return 0;
 }
+#endif
 
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
 static inline int pthread_cond_init(pthread_cond_t* cond, const pthread_condattr_t* attr) {
@@ -1241,19 +1402,31 @@ extern int pthread_cond_broadcast(pthread_cond_t* cond);
  * 読み書きロック
  * ═══════════════════════════════════════════════════════════════*/
 
-static inline int pthread_rwlockattr_init(pthread_rwlockattr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_rwlockattr_init(pthread_rwlockattr_t* attr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_rwlockattr_init(pthread_rwlockattr_t* attr) {
     if (!attr) return EINVAL;
     attr->pshared = PTHREAD_PROCESS_PRIVATE;
     return 0;
 }
+#endif
 
-static inline int pthread_rwlockattr_destroy(pthread_rwlockattr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_rwlockattr_destroy(pthread_rwlockattr_t* attr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_rwlockattr_destroy(pthread_rwlockattr_t* attr) {
     if (!attr) return EINVAL;
     attr->pshared = PTHREAD_PROCESS_PRIVATE;
     return 0;
 }
+#endif
 
-static inline int pthread_rwlockattr_setpshared(pthread_rwlockattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_rwlockattr_setpshared(pthread_rwlockattr_t* attr,
+                                                 int pshared);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_rwlockattr_setpshared(pthread_rwlockattr_t* attr,
                                                  int pshared) {
     if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
                   pshared != PTHREAD_PROCESS_SHARED))
@@ -1264,8 +1437,13 @@ static inline int pthread_rwlockattr_setpshared(pthread_rwlockattr_t* attr,
     attr->pshared = pshared;
     return 0;
 }
+#endif
 
-static inline int pthread_rwlockattr_getpshared(
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_rwlockattr_getpshared(
+    const pthread_rwlockattr_t* attr, int* pshared);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_rwlockattr_getpshared(
     const pthread_rwlockattr_t* attr, int* pshared) {
     if (!attr || !pshared) return EINVAL;
     if (attr->pshared != PTHREAD_PROCESS_PRIVATE &&
@@ -1274,6 +1452,7 @@ static inline int pthread_rwlockattr_getpshared(
     *pshared = attr->pshared;
     return 0;
 }
+#endif
 
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
 static inline int pthread_rwlock_init(pthread_rwlock_t* rwlock, const pthread_rwlockattr_t* attr) {
@@ -1487,19 +1666,31 @@ extern int pthread_rwlock_unlock(pthread_rwlock_t* rwlock);
  * Barrier
  * ═══════════════════════════════════════════════════════════════*/
 
-static inline int pthread_barrierattr_init(pthread_barrierattr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_barrierattr_init(pthread_barrierattr_t* attr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_barrierattr_init(pthread_barrierattr_t* attr) {
     if (!attr) return EINVAL;
     attr->pshared = PTHREAD_PROCESS_PRIVATE;
     return 0;
 }
+#endif
 
-static inline int pthread_barrierattr_destroy(pthread_barrierattr_t* attr) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_barrierattr_destroy(pthread_barrierattr_t* attr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_barrierattr_destroy(pthread_barrierattr_t* attr) {
     if (!attr) return EINVAL;
     attr->pshared = PTHREAD_PROCESS_PRIVATE;
     return 0;
 }
+#endif
 
-static inline int pthread_barrierattr_setpshared(pthread_barrierattr_t* attr,
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_barrierattr_setpshared(pthread_barrierattr_t* attr,
+                                                  int pshared);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_barrierattr_setpshared(pthread_barrierattr_t* attr,
                                                   int pshared) {
     if (!attr || (pshared != PTHREAD_PROCESS_PRIVATE &&
                   pshared != PTHREAD_PROCESS_SHARED))
@@ -1507,8 +1698,13 @@ static inline int pthread_barrierattr_setpshared(pthread_barrierattr_t* attr,
     attr->pshared = pshared;
     return 0;
 }
+#endif
 
-static inline int pthread_barrierattr_getpshared(
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_barrierattr_getpshared(
+    const pthread_barrierattr_t* attr, int* pshared);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_barrierattr_getpshared(
     const pthread_barrierattr_t* attr, int* pshared) {
     if (!attr || !pshared ||
         (attr->pshared != PTHREAD_PROCESS_PRIVATE &&
@@ -1517,6 +1713,7 @@ static inline int pthread_barrierattr_getpshared(
     *pshared = attr->pshared;
     return 0;
 }
+#endif
 
 extern int pthread_barrier_init(pthread_barrier_t* barrier,
                                 const pthread_barrierattr_t* attr,
@@ -1690,7 +1887,10 @@ void rin_pthread_cancel_take_exit(pthread_t thread, void** value);
  * スケジューリング
  * ═══════════════════════════════════════════════════════════════*/
 
-static inline int pthread_getschedparam(pthread_t thread, int* policy, struct sched_param* param) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_getschedparam(pthread_t thread, int* policy, struct sched_param* param);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_getschedparam(pthread_t thread, int* policy, struct sched_param* param) {
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
     RinThreadSchedParametersV1 parameters = {0};
     intptr_t result;
@@ -1719,8 +1919,12 @@ static inline int pthread_getschedparam(pthread_t thread, int* policy, struct sc
     return ENOSYS;
 #endif
 }
+#endif
 
-static inline int pthread_setschedparam(pthread_t thread, int policy, const struct sched_param* param) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_setschedparam(pthread_t thread, int policy, const struct sched_param* param);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_setschedparam(pthread_t thread, int policy, const struct sched_param* param) {
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
     RinThreadSchedParametersV1 parameters;
     intptr_t result;
@@ -1748,8 +1952,12 @@ static inline int pthread_setschedparam(pthread_t thread, int policy, const stru
     return ENOSYS;
 #endif
 }
+#endif
 
-static inline int pthread_setschedprio(pthread_t thread, int prio) {
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_setschedprio(pthread_t thread, int prio);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_setschedprio(pthread_t thread, int prio) {
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
     int policy = SCHED_OTHER;
     struct sched_param param;
@@ -1770,11 +1978,13 @@ static inline int pthread_setschedprio(pthread_t thread, int prio) {
     return ENOSYS;
 #endif
 }
+#endif
 
 #ifdef __cplusplus
 }
 #endif
 
+#undef _RIN_PTHREAD_ATTR_SCHED_INLINE
 #endif /* _PTHREAD_H */
 
 #endif /* hosted POSIX pthread delegation */

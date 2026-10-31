@@ -17,6 +17,7 @@
  * スレッドローカル errno
  * ═══════════════════════════════════════════════════════════════*/
 
+#if !defined(RINSDK_SPLIT_BUILD)
 #ifdef RIN_LIBC_THREAD_LOCAL
 static RIN_LIBC_THREAD_LOCAL int _errno_val = 0;
 #else
@@ -26,6 +27,7 @@ static __thread int _errno_val = 0;
 int* __errno_location(void) {
     return &_errno_val;
 }
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * Per-thread キーバリューストア
