@@ -907,20 +907,28 @@ static inline struct hostent* _netdb_publish_host(
         return NULL;
     }
     state->addr_list[1] = NULL;
-    /* The shared hostent aliases slot holds only the terminator, matching
-     * gethostbyname.  The re-entrant gethostent_r publishes aliases. */
-    state->aliases[0] = NULL;
+    for (index = 0u; index < RIN_NETDB_DATABASE_MAX_ALIASES; ++index) {
+        state->host_aliases[index] = NULL;
+        if (index < record->alias_count) {
+            if (_netdb_copy_database_name(
+                    state->host_alias_storage[index],
+                    sizeof(state->host_alias_storage[index]),
+                    record->aliases[index]) != 0)
+                return NULL;
+            state->host_aliases[index] = state->host_alias_storage[index];
+        }
+    }
+    state->host_aliases[RIN_NETDB_DATABASE_MAX_ALIASES] = NULL;
     for (index = 0u; index < 256u; ++index) {
         state->hostname[index] = record->name[index];
         if (record->name[index] == '\0') break;
     }
     state->hostname[255] = '\0';
     state->hostent.h_name = state->hostname;
-    state->hostent.h_aliases = state->aliases;
+    state->hostent.h_aliases = state->host_aliases;
     state->hostent.h_addrtype = record->family;
     state->hostent.h_length = (int)record->address_length;
     state->hostent.h_addr_list = state->addr_list;
-    (void)index;
     return &state->hostent;
 }
 
