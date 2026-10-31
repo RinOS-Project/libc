@@ -681,13 +681,13 @@ static inline double pow(double base, double exponent) {
         if (exponent < 0.0) grows = !grows;
         return grows ? INFINITY : 0.0;
     }
-    if (__builtin_isinf(base)) {
-        double result = neg_exp ? 0.0 : INFINITY;
-        return (negative_base && odd_exp) ? -result : result;
-    }
     if (!integral_exp && base < 0.0) {
         (void)feraiseexcept(FE_INVALID);
         return NAN;
+    }
+    if (__builtin_isinf(base)) {
+        double result = neg_exp ? 0.0 : INFINITY;
+        return (negative_base && odd_exp) ? -result : result;
     }
     if (base == 0.0) {
         if (neg_exp) (void)feraiseexcept(FE_DIVBYZERO);
