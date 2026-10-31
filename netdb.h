@@ -1965,6 +1965,7 @@ static inline int gethostbyname_r(const char* name, struct hostent* ret,
                                   char* buf, size_t buflen,
                                   struct hostent** result, int* h_errnop)
 {
+    int saved_errno = errno;
     struct hostent* found;
     int pack_status;
     if (result == NULL) return EINVAL;
@@ -1973,7 +1974,7 @@ static inline int gethostbyname_r(const char* name, struct hostent* ret,
     found = gethostbyname(name);
     if (found == NULL) {
         *h_errnop = h_errno;
-        return errno != 0 ? errno : ENOENT;
+        return errno == saved_errno ? ENOENT : errno;
     }
     pack_status = _netdb_pack_hostent(buf, buflen, found, ret, result);
     if (pack_status != 0) {
@@ -1989,6 +1990,7 @@ static inline int gethostbyaddr_r(const void* addr, socklen_t len, int type,
                                   size_t buflen, struct hostent** result,
                                   int* h_errnop)
 {
+    int saved_errno = errno;
     struct hostent* found;
     int pack_status;
     if (result == NULL) return EINVAL;
@@ -1997,7 +1999,7 @@ static inline int gethostbyaddr_r(const void* addr, socklen_t len, int type,
     found = gethostbyaddr(addr, len, type);
     if (found == NULL) {
         *h_errnop = h_errno;
-        return errno != 0 ? errno : ENOENT;
+        return errno == saved_errno ? ENOENT : errno;
     }
     pack_status = _netdb_pack_hostent(buf, buflen, found, ret, result);
     if (pack_status != 0) {
