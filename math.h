@@ -1515,16 +1515,22 @@ static inline float atan2f(float y, float x) {
 /* sinh - 双曲線正弦 */
 static inline double sinh(double x) {
     if (__builtin_isnan(x) || __builtin_isinf(x)) return x;
-    if (fabs(x) < 1e-10) return x;
-    if (fabs(x) < 0.5) {
+    double magnitude = fabs(x);
+    if (magnitude < 1e-10) return x;
+    if (magnitude < 0.5) {
         /* e^x-e^-x = expm1(x)-expm1(-x), avoiding cancellation in the
          * direct reciprocal form around zero. */
         return (expm1(x) - expm1(-x)) * 0.5;
     }
+    if (magnitude > 20.0) {
+        /* Compute exp(|x|)/2 without overflowing exp(|x|) first. */
+        double half_ex = exp(magnitude * 0.5);
+        double result = (0.5 * half_ex) * half_ex;
+        return __builtin_copysign(result, x);
+    }
     double ex = exp(x);
     return (ex - 1.0 / ex) / 2.0;
 }
-
 static inline float sinhf(float x) {
     return (float)sinh((double)x);
 }
@@ -1533,14 +1539,19 @@ static inline float sinhf(float x) {
 static inline double cosh(double x) {
     if (__builtin_isnan(x)) return x;
     if (__builtin_isinf(x)) return INFINITY;
-    if (fabs(x) < 0.5) {
+    double magnitude = fabs(x);
+    if (magnitude < 0.5) {
         /* cosh(x) = 1 + (expm1(x)+expm1(-x))/2. */
         return 1.0 + (expm1(x) + expm1(-x)) * 0.5;
     }
-    double ex = exp(x);
+    if (magnitude > 20.0) {
+        /* Compute exp(|x|)/2 without overflowing exp(|x|) first. */
+        double half_ex = exp(magnitude * 0.5);
+        return (0.5 * half_ex) * half_ex;
+    }
+    double ex = exp(magnitude);
     return (ex + 1.0 / ex) / 2.0;
 }
-
 static inline float coshf(float x) {
     return (float)cosh((double)x);
 }
