@@ -30,6 +30,8 @@
  * implement a GNU ABI, while leaving the broader GNU namespace disabled. */
 #if defined(_GNU_SOURCE)
 #define _RIN_USE_GNU_QSORT_R 1
+#define _RIN_USE_GNU_DIRENT 1
+#define _RIN_USE_GNU_STRVERSCMP 1
 #define _RIN_USE_BSD_RANDOM 1
 #endif
 #if defined(_DEFAULT_SOURCE) || defined(_BSD_SOURCE)

@@ -11,6 +11,8 @@
 #include_next <dirent.h>
 #else
 
+#include "features.h"
+
 #ifndef _DIRENT_H
 #define _DIRENT_H
 
@@ -50,7 +52,8 @@ extern "C" {
  * ═══════════════════════════════════════════════════════════════*/
 
 struct dirent {
-#if defined(__RIN_FILE_OFFSET_BITS64)
+#if defined(__RIN_FILE_OFFSET_BITS64) && \
+    !defined(RIN_DIRENT_RUNTIME_LEGACY_LAYOUT)
     ino64_t        d_ino;           /* inode番号 */
     off_t          d_off;           /* 次のエントリへの64-bit cookie */
 #else
@@ -60,7 +63,8 @@ struct dirent {
     unsigned short d_reclen;        /* このエントリのサイズ */
     unsigned char  d_type;          /* ファイルタイプ */
     char           d_name[256];     /* ファイル名 */
-#if defined(__RIN_FILE_OFFSET_BITS64)
+#if defined(__RIN_FILE_OFFSET_BITS64) && \
+    !defined(RIN_DIRENT_RUNTIME_LEGACY_LAYOUT)
     uint8_t        d_reserved[5];
 #endif
 };
@@ -75,7 +79,8 @@ struct dirent64 {
     uint8_t        d_reserved[5];
 };
 
-#if defined(__RIN_FILE_OFFSET_BITS64)
+#if defined(__RIN_FILE_OFFSET_BITS64) && \
+    !defined(RIN_DIRENT_RUNTIME_LEGACY_LAYOUT)
 #if defined(__cplusplus)
 static_assert(sizeof(struct dirent) == sizeof(RinDirent64Abi),
               "LFS dirent libc/kernel ABI size drift");
@@ -714,4 +719,12 @@ static inline int dirfd(DIR* dirp) {
 #endif
 
 #endif /* _DIRENT_H */
+#if defined(_GNU_SOURCE) || defined(_RIN_USE_GNU_DIRENT)
+#include "dirent_gnu_runtime.h"
+#endif
+#if defined(__RIN_FILE_OFFSET_BITS64) && \
+    !defined(RIN_DIRENT_RUNTIME_LEGACY_LAYOUT)
+#define scandirat scandirat64
+#define versionsort versionsort64
+#endif
 #endif /* hosted Linux native filesystem CRT */

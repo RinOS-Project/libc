@@ -536,6 +536,10 @@ RIN_STRING_INLINE int strerror_r(int errnum, char* buf, size_t buflen) {
     return copied == length ? 0 : ERANGE;
 }
 
+#if defined(_GNU_SOURCE) || defined(_RIN_USE_GNU_STRVERSCMP)
+int strverscmp(const char* left, const char* right);
+#endif
+
 #ifdef __cplusplus
 }
 #endif
