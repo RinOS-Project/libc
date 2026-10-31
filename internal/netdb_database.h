@@ -1182,10 +1182,13 @@ static inline struct netent* getnetbyaddr(uint32_t net, int type)
     }
 }
 
-static inline size_t _netdb_align_ptr(size_t offset)
+static inline size_t _netdb_align_ptr(const char* buffer, size_t offset)
 {
     size_t mask = sizeof(void*) - 1u;
-    return (offset + mask) & ~mask;
+    size_t base_misalignment = (size_t)((uintptr_t)buffer & mask);
+    size_t offset_misalignment = offset & mask;
+    size_t misalignment = (base_misalignment + offset_misalignment) & mask;
+    return offset + ((sizeof(void*) - misalignment) & mask);
 }
 
 static inline size_t _netdb_string_length(const char* text)
@@ -1230,7 +1233,7 @@ static inline int _netdb_pack_servent(char* buf, size_t buflen,
         alias_total += _netdb_string_length(src->s_aliases[i]);
     strings = name_len + proto_len + alias_total;
     pointers = (size_t)(alias_count + 1u) * sizeof(char*);
-    if (_netdb_align_ptr(strings) + pointers > buflen) return ERANGE;
+    if (_netdb_align_ptr(buf, strings) + pointers > buflen) return ERANGE;
     off = 0u;
     ret->s_name = buf + off;
     memcpy(ret->s_name, src->s_name, name_len);
@@ -1244,7 +1247,7 @@ static inline int _netdb_pack_servent(char* buf, size_t buflen,
         memcpy(buf + off, src->s_aliases[i], len);
         off += len;
     }
-    off = _netdb_align_ptr(off);
+    off = _netdb_align_ptr(buf, off);
     aliases = (char**)(void*)(buf + off);
     for (i = 0u; i < alias_count; ++i) aliases[i] = buf + offsets[i];
     aliases[alias_count] = NULL;
@@ -1277,7 +1280,7 @@ static inline int _netdb_pack_protoent(char* buf, size_t buflen,
         alias_total += _netdb_string_length(src->p_aliases[i]);
     strings = name_len + alias_total;
     pointers = (size_t)(alias_count + 1u) * sizeof(char*);
-    if (_netdb_align_ptr(strings) + pointers > buflen) return ERANGE;
+    if (_netdb_align_ptr(buf, strings) + pointers > buflen) return ERANGE;
     off = 0u;
     ret->p_name = buf + off;
     memcpy(ret->p_name, src->p_name, name_len);
@@ -1288,7 +1291,7 @@ static inline int _netdb_pack_protoent(char* buf, size_t buflen,
         memcpy(buf + off, src->p_aliases[i], len);
         off += len;
     }
-    off = _netdb_align_ptr(off);
+    off = _netdb_align_ptr(buf, off);
     aliases = (char**)(void*)(buf + off);
     for (i = 0u; i < alias_count; ++i) aliases[i] = buf + offsets[i];
     aliases[alias_count] = NULL;
@@ -1333,7 +1336,7 @@ static inline int _netdb_pack_hostent(char* buf, size_t buflen,
     /* addr_list has exactly one address plus the terminator. */
     pointers = 2u * sizeof(char*) +
                (size_t)(alias_count + 1u) * sizeof(char*);
-    if (_netdb_align_ptr(strings) + pointers +
+    if (_netdb_align_ptr(buf, strings) + pointers +
             (sizeof(void*) - 1u) * 2u > buflen)
         return ERANGE;
     off = 0u;
@@ -1349,12 +1352,12 @@ static inline int _netdb_pack_hostent(char* buf, size_t buflen,
         memcpy(buf + off, src->h_aliases[i], len);
         off += len;
     }
-    off = _netdb_align_ptr(off);
+    off = _netdb_align_ptr(buf, off);
     addr_list = (char**)(void*)(buf + off);
     addr_list[0] = buf + addr_off;
     addr_list[1] = NULL;
     off += 2u * sizeof(char*);
-    off = _netdb_align_ptr(off);
+    off = _netdb_align_ptr(buf, off);
     aliases = (char**)(void*)(buf + off);
     for (i = 0u; i < alias_count; ++i) aliases[i] = buf + offsets[i];
     aliases[alias_count] = NULL;
@@ -1389,7 +1392,7 @@ static inline int _netdb_pack_netent(char* buf, size_t buflen,
         alias_total += _netdb_string_length(src->n_aliases[i]);
     strings = name_len + alias_total;
     pointers = (size_t)(alias_count + 1u) * sizeof(char*);
-    if (_netdb_align_ptr(strings) + pointers > buflen) return ERANGE;
+    if (_netdb_align_ptr(buf, strings) + pointers > buflen) return ERANGE;
     off = 0u;
     ret->n_name = buf + off;
     memcpy(ret->n_name, src->n_name, name_len);
@@ -1400,7 +1403,7 @@ static inline int _netdb_pack_netent(char* buf, size_t buflen,
         memcpy(buf + off, src->n_aliases[i], len);
         off += len;
     }
-    off = _netdb_align_ptr(off);
+    off = _netdb_align_ptr(buf, off);
     aliases = (char**)(void*)(buf + off);
     for (i = 0u; i < alias_count; ++i) aliases[i] = buf + offsets[i];
     aliases[alias_count] = NULL;
