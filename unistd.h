@@ -882,6 +882,7 @@ static inline int rin_process_memory_info_get(
 
 static inline char* _rin_realpath_inline(const char* path, char* resolved_path) {
     enum { RIN_REALPATH_MAX_SYMLINKS = 40, RIN_REALPATH_PENDING_CAPACITY = PATH_MAX * 2 };
+    char path_snapshot[PATH_MAX];
     char* pending = NULL;
     char* next_pending = NULL;
     char resolved[PATH_MAX];
@@ -894,8 +895,16 @@ static inline char* _rin_realpath_inline(const char* path, char* resolved_path) 
     unsigned int symlink_count = 0u;
     int require_directory;
 
-    if (!path || path[0] == '\0') {
-        errno = path ? ENOENT : EFAULT;
+    if (!path) {
+        errno = EFAULT;
+        return NULL;
+    }
+    if (__rin_user_snapshot_string(path, path_snapshot,
+                                   sizeof(path_snapshot)) != 0)
+        return NULL;
+    path = path_snapshot;
+    if (path[0] == '\0') {
+        errno = ENOENT;
         return NULL;
     }
     original_path_length = _rin_realpath_length(path);
@@ -1403,10 +1412,6 @@ static inline int execve(const char* pathname, char* const argv[], char* const e
 #endif
     if (!pathname || !argv) {
         errno = EINVAL;
-        return -1;
-    }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
         return -1;
     }
 #if !defined(MIDL_PASS)
@@ -2992,6 +2997,7 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
     int path_error = 0;
     int saved_error = ENOENT;
     unsigned int environment_epoch = 0u;
+    char file_snapshot[__RIN_EXEC_PATH_MAX];
     char candidate[__RIN_EXEC_PATH_MAX];
     char** environment;
 
@@ -2999,6 +3005,10 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
         errno = EINVAL;
         return -1;
     }
+    if (__rin_user_snapshot_string(file, file_snapshot,
+                                   sizeof(file_snapshot)) != 0)
+        return -1;
+    file = file_snapshot;
     if (file[0] == '\0') {
         errno = ENOENT;
         return -1;

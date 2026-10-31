@@ -90,6 +90,8 @@ typedef struct __rin_account_info_v1 {
 } __rin_account_info_v1;
 
 #ifndef MIDL_PASS
+#include "internal/user_snapshot.h"
+
 #if defined(__cplusplus)
 static_assert(sizeof(__rin_credentials_v1) == 112,
               "credential wire layout changed");
@@ -216,6 +218,7 @@ static inline int __rin_account_query(uint16_t kind, uint32_t uid,
                                       __rin_account_info_v1* info)
 {
     __rin_account_query_v1 query;
+    char name_snapshot[sizeof(query.name)];
     size_t index = 0u;
     intptr_t result;
     int error;
@@ -226,9 +229,16 @@ static inline int __rin_account_query(uint16_t kind, uint32_t uid,
     query.kind = kind;
     query.uid = uid;
     if (kind == __RIN_ACCOUNT_QUERY_BY_NAME) {
-        if (!name || name[0] == '\0') return EINVAL;
-        while (index < sizeof(query.name) && name[index] != '\0') {
-            query.name[index] = (uint8_t)name[index];
+        if (!name) return EINVAL;
+        if (__rin_user_snapshot_string(name, name_snapshot,
+                                       sizeof(name_snapshot)) != 0) {
+            error = errno;
+            return error == ENAMETOOLONG ? EINVAL : error;
+        }
+        if (name_snapshot[0] == '\0') return EINVAL;
+        while (index < sizeof(query.name) &&
+               name_snapshot[index] != '\0') {
+            query.name[index] = (uint8_t)name_snapshot[index];
             ++index;
         }
         if (index == sizeof(query.name)) return EINVAL;

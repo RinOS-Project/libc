@@ -279,13 +279,15 @@ static inline int __rin_stat_time64_pathat(int dirfd, const char* pathname,
         errno = EINVAL;
         return -1;
     }
-    if (pathname[0] == '\0') {
-        if ((flags & AT_EMPTY_PATH) == 0) {
-            errno = ENOENT;
+    if ((flags & AT_EMPTY_PATH) != 0) {
+        unsigned char first_byte;
+        if (__rin_user_snapshot_byte(pathname, &first_byte) != 0)
             return -1;
+        if (first_byte == '\0') {
+            if (dirfd != AT_FDCWD)
+                return __rin_fstat_time64(dirfd, statbuf);
+            pathname = ".";
         }
-        if (dirfd != AT_FDCWD) return __rin_fstat_time64(dirfd, statbuf);
-        pathname = ".";
         flags &= ~AT_EMPTY_PATH;
     }
     __rin_stat_path_at_init(&call, RIN_PATH_AT_STAT);
@@ -388,20 +390,19 @@ static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf,
         errno = EINVAL;
         return -1;
     }
-    if (pathname[0] == '\0') {
-        if ((flags & AT_EMPTY_PATH) == 0) {
-            errno = ENOENT;
+    if ((flags & AT_EMPTY_PATH) != 0) {
+        unsigned char first_byte;
+        if (__rin_user_snapshot_byte(pathname, &first_byte) != 0)
             return -1;
+        if (first_byte == '\0') {
+            if (dirfd != AT_FDCWD) {
+                /* AT_EMPTY_PATH resolves the already-open description.
+                 * NOFOLLOW cannot change the object selected by a normal FD. */
+                return fstat(dirfd, statbuf);
+            }
+            /* Resolve the current working directory as ".". */
+            pathname = ".";
         }
-        if (dirfd != AT_FDCWD) {
-            /* AT_EMPTY_PATH resolves the already-open description.  NOFOLLOW
-             * cannot change the object selected by an ordinary descriptor. */
-            return fstat(dirfd, statbuf);
-        }
-        /* The current working directory has no descriptor number to pass to
-         * fstat. Resolve it as "." through the path-at syscall instead. */
-        pathname = ".";
-        flags &= ~AT_EMPTY_PATH;
     }
     __rin_stat_path_at_init(&call, RIN_PATH_AT_STAT);
     /* AT_EMPTY_PATH only changes lookup when pathname is empty. Keep an
@@ -442,15 +443,14 @@ static inline int fstatat64(int dirfd, const char* pathname,
         errno = EINVAL;
         return -1;
     }
-    if (pathname[0] == '\0') {
-        if ((flags & AT_EMPTY_PATH) == 0) {
-            errno = ENOENT;
+    if ((flags & AT_EMPTY_PATH) != 0) {
+        unsigned char first_byte;
+        if (__rin_user_snapshot_byte(pathname, &first_byte) != 0)
             return -1;
+        if (first_byte == '\0') {
+            if (dirfd != AT_FDCWD) return fstat64(dirfd, statbuf);
+            pathname = ".";
         }
-        if (dirfd != AT_FDCWD) {
-            return fstat64(dirfd, statbuf);
-        }
-        pathname = ".";
         flags &= ~AT_EMPTY_PATH;
     }
     __rin_stat_path_at_init(&call, RIN_PATH_AT_STAT);
@@ -486,10 +486,6 @@ static inline int rin_fstatat_beneath(int dirfd, const char* pathname,
 
     if (!pathname || !statbuf) {
         errno = EFAULT;
-        return -1;
-    }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
         return -1;
     }
     if ((flags & ~AT_SYMLINK_NOFOLLOW) != 0) {
@@ -570,8 +566,11 @@ static inline int fchmodat(int dirfd, const char* pathname, mode_t mode,
         errno = EINVAL;
         return -1;
     }
-    if (pathname[0] == '\0') {
-        if ((flags & AT_EMPTY_PATH) != 0) {
+    if ((flags & AT_EMPTY_PATH) != 0) {
+        unsigned char first_byte;
+        if (__rin_user_snapshot_byte(pathname, &first_byte) != 0)
+            return -1;
+        if (first_byte == '\0') {
             if (dirfd == AT_FDCWD) {
                 pathname = ".";
                 flags &= ~AT_EMPTY_PATH;
@@ -587,9 +586,6 @@ static inline int fchmodat(int dirfd, const char* pathname, mode_t mode,
                 call.path1 = (uint64_t)(uintptr_t)pathname;
                 return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
             }
-        } else {
-            errno = ENOENT;
-            return -1;
         }
     }
     if ((flags & AT_EMPTY_PATH) != 0) {

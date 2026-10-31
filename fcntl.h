@@ -80,6 +80,8 @@
     _syscall1((uintptr_t)SYS_PATH_AT, (uintptr_t)(call))
 #endif
 
+#include "internal/user_snapshot.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -431,10 +433,6 @@ static inline int openat(int dirfd, const char* pathname, int flags, ...) {
         errno = EFAULT;
         return -1;
     }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
-        return -1;
-    }
     if (flags & (O_CREAT | O_TMPFILE)) {
         va_list ap;
         va_start(ap, flags);
@@ -472,11 +470,6 @@ static inline int rin_openat_beneath(int dirfd, const char* pathname, int flags,
         errno = EFAULT;
         return -1;
     }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
-        return -1;
-    }
-
     result = _RIN_FCNTL_SYSCALL4(
         SYS_OPENAT_BENEATH, (uintptr_t)dirfd, (uintptr_t)pathname,
         (uintptr_t)flags, (uintptr_t)mode);
@@ -794,22 +787,25 @@ static inline int fchownat(int dirfd, const char* pathname, uid_t owner, gid_t g
         errno = EINVAL;
         return -1;
     }
-    if (pathname[0] == '\0') {
-        if ((flags & AT_EMPTY_PATH) == 0) {
-            errno = ENOENT;
+    if ((flags & AT_EMPTY_PATH) != 0) {
+        unsigned char first_byte;
+        if (__rin_user_snapshot_byte(pathname, &first_byte) != 0)
             return -1;
+        if (first_byte == '\0') {
+            if (dirfd != AT_FDCWD) {
+                _fcntl_path_at_init(&call, RIN_PATH_AT_CHOWN);
+                call.dirfd = dirfd;
+                call.flags = (uint32_t)flags;
+                call.owner = (uint32_t)owner;
+                call.group = (uint32_t)group;
+                call.path1 = (uint64_t)(uintptr_t)pathname;
+                return _fcntl_path_at_zero(&call);
+            }
+            pathname = ".";
+            flags &= ~AT_EMPTY_PATH;
+        } else {
+            flags &= ~AT_EMPTY_PATH;
         }
-        if (dirfd != AT_FDCWD) {
-            _fcntl_path_at_init(&call, RIN_PATH_AT_CHOWN);
-            call.dirfd = dirfd;
-            call.flags = (uint32_t)flags;
-            call.owner = (uint32_t)owner;
-            call.group = (uint32_t)group;
-            call.path1 = (uint64_t)(uintptr_t)pathname;
-            return _fcntl_path_at_zero(&call);
-        }
-        pathname = ".";
-        flags &= ~AT_EMPTY_PATH;
     }
     _fcntl_path_at_init(&call, RIN_PATH_AT_CHOWN);
     call.dirfd = dirfd;
@@ -832,14 +828,6 @@ static inline int linkat(int olddirfd, const char* oldpath, int newdirfd, const 
         errno = EINVAL;
         return -1;
     }
-    if ((flags & AT_EMPTY_PATH) != 0 && oldpath[0] != '\0') {
-        errno = EINVAL;
-        return -1;
-    }
-    if (newpath[0] == '\0') {
-        errno = ENOENT;
-        return -1;
-    }
     _fcntl_path_at_init(&call, RIN_PATH_AT_LINK);
     call.dirfd = olddirfd;
     call.secondary_dirfd = newdirfd;
@@ -853,10 +841,6 @@ static inline int mkdirat(int dirfd, const char* pathname, mode_t mode) {
     RinPathAtCallV1 call;
     if (!pathname) {
         errno = EFAULT;
-        return -1;
-    }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
         return -1;
     }
     _fcntl_path_at_init(&call, RIN_PATH_AT_MKDIR);
@@ -875,10 +859,6 @@ static inline int rin_mkdirat_open_dir(int dirfd, const char* pathname,
     intptr_t result;
     if (!pathname) {
         errno = EFAULT;
-        return -1;
-    }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
         return -1;
     }
     _fcntl_path_at_init(&call, RIN_PATH_AT_MKDIR_OPEN);
@@ -904,10 +884,6 @@ static inline int rin_rmdirat_if_same(int dirfd, const char* pathname,
         errno = EFAULT;
         return -1;
     }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
-        return -1;
-    }
     _fcntl_path_at_init(&call, RIN_PATH_AT_RMDIR_MATCH);
     call.dirfd = dirfd;
     call.secondary_dirfd = expected_dirfd;
@@ -923,11 +899,6 @@ static inline int rin_mkdirat_beneath(int dirfd, const char* pathname,
         errno = EFAULT;
         return -1;
     }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
-        return -1;
-    }
-
     result = _RIN_FCNTL_SYSCALL3(
         SYS_MKDIRAT_BENEATH, (uintptr_t)dirfd, (uintptr_t)pathname,
         (uintptr_t)mode);
@@ -939,10 +910,6 @@ static inline int rin_renameat_inline(int olddirfd, const char* oldpath,
     RinPathAtCallV1 call;
     if (!oldpath || !newpath) {
         errno = EFAULT;
-        return -1;
-    }
-    if (oldpath[0] == '\0' || newpath[0] == '\0') {
-        errno = ENOENT;
         return -1;
     }
     _fcntl_path_at_init(&call, RIN_PATH_AT_RENAME);
@@ -963,10 +930,6 @@ static inline int rin_renameat_noreplace(int olddirfd, const char* oldpath,
         errno = EFAULT;
         return -1;
     }
-    if (oldpath[0] == '\0' || newpath[0] == '\0') {
-        errno = ENOENT;
-        return -1;
-    }
     _fcntl_path_at_init(&call, RIN_PATH_AT_RENAME);
     call.flags = RIN_PATH_AT_RENAME_NOREPLACE;
     call.dirfd = olddirfd;
@@ -983,10 +946,6 @@ static inline int rin_rename_noreplace(const char* oldpath,
         errno = EFAULT;
         return -1;
     }
-    if (oldpath[0] == '\0' || newpath[0] == '\0') {
-        errno = ENOENT;
-        return -1;
-    }
     return rin_renameat_noreplace(AT_FDCWD, oldpath, AT_FDCWD, newpath);
 }
 
@@ -994,10 +953,6 @@ static inline int symlinkat(const char* target, int newdirfd, const char* linkpa
     RinPathAtCallV1 call;
     if (!target || !linkpath) {
         errno = EFAULT;
-        return -1;
-    }
-    if (linkpath[0] == '\0') {
-        errno = ENOENT;
         return -1;
     }
     _fcntl_path_at_init(&call, RIN_PATH_AT_SYMLINK);
@@ -1015,10 +970,6 @@ static inline int unlinkat(int dirfd, const char* pathname, int flags) {
     }
     if ((flags & ~AT_REMOVEDIR) != 0) {
         errno = EINVAL;
-        return -1;
-    }
-    if (pathname[0] == '\0') {
-        errno = ENOENT;
         return -1;
     }
     _fcntl_path_at_init(&call, RIN_PATH_AT_UNLINK);

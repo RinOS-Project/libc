@@ -22,6 +22,7 @@
 #include "sys/syscall.h"
 #include "sys/types.h"
 #include "errno.h"
+#include "internal/user_snapshot.h"
 #include "internal/pthread_cancel_point.h"
 #include <rin/contract_abi.h>
 
@@ -519,7 +520,9 @@ static inline int sigaction(int signum, const struct sigaction* act,
 
     /* sa_restorerが未設定の場合、自動的に__restore_rtを設定 */
     if (act) {
-        struct sigaction mod_act = *act;
+        struct sigaction mod_act;
+        if (__rin_user_snapshot(act, sizeof(mod_act), 0, &mod_act) != 0)
+            return -1;
         if (mod_act.sa_restorer == 0) {
             mod_act.sa_restorer = __restore_rt;
             mod_act.sa_flags |= 0x04000000; /* SA_RESTORER */
