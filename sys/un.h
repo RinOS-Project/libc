@@ -3,6 +3,14 @@
  * UNIXドメインソケット
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_SOCKET_SYSCALL1) && !defined(_RIN_SOCKET_SYSCALL2) && \
+    !defined(_RIN_SOCKET_SYSCALL3) && !defined(_RIN_SOCKET_SYSCALL4) && \
+    !defined(_RIN_SOCKET_SYSCALL5) && !defined(_RIN_SOCKET_SYSCALL6)
+#include_next <sys/un.h>
+#else
 #ifndef _SYS_UN_H
 #define _SYS_UN_H
 
@@ -50,3 +58,4 @@ static inline size_t _sun_strlen(const char* s) {
 #endif
 
 #endif /* _SYS_UN_H */
+#endif /* hosted Linux delegates to native Unix socket address */
