@@ -23,7 +23,11 @@ struct io_uring_sqe {
     __u64 off;
     __u64 addr;
     __u32 len;
-    __u32 rw_flags;
+    union {
+        __u32 rw_flags;
+        __u32 poll32_events;
+        __u16 poll_events;
+    };
     __u64 user_data;
     union {
         __u16 buf_index;
