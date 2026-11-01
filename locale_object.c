@@ -291,6 +291,13 @@ locale_t uselocale(locale_t locale) {
     return previous;
 }
 
+const char* rin_locale_l_name(locale_t locale, int category) {
+    if (category < LC_CTYPE || category >= LC_ALL) return NULL;
+    if (locale == LC_GLOBAL_LOCALE) return rin_locale_name(category);
+    if (!locale_object_valid(locale)) return NULL;
+    return locale_kind_name(locale->categories[category]);
+}
+
 static int locale_ascii_test(int character, uint32_t operation) {
     unsigned int value;
     int alpha;

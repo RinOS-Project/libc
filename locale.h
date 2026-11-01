@@ -167,6 +167,8 @@ size_t rin_locale_current_wcsxfrm32(uint32_t* destination,
 /* localeconvは呼出スレッドのlocaleを使う。返却領域は呼出スレッドに属し、
  * 次のlocaleconv呼出しまで有効とする。 */
 struct lconv* rin_localeconv_for_locale(locale_t locobj);
+/* 返却されるlocale名は不変で、locale objectの寿命を越えて有効。 */
+const char* rin_locale_l_name(locale_t locobj, int category);
 
 #ifndef _MSVCRT_COMPAT
 static inline struct lconv* localeconv(void) {
