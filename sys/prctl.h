@@ -257,6 +257,12 @@ struct prctl_mm_map {
 #define PR_SPEC_FORCE_DISABLE   (1UL << 3)
 #define PR_SPEC_DISABLE_NOEXEC  (1UL << 4)
 
+/* RinOS source support: SSBD/STIBP on IA-32, x86_64 native and compat32.
+ * L1D flush is conditional on Intel hardware support and known non-SMT CPU
+ * topology for every online processor. */
+#define RIN_PRCTL_SPEC_CTRL_X86_SUPPORTED 1
+#define RIN_PRCTL_SPEC_CTRL_L1D_FLUSH_CONDITIONAL 1
+
 static inline int _rin_prctl_thread_name_call(RinThreadNameCallV1* request,
                                               int require_current_id) {
     intptr_t result;
