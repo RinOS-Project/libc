@@ -11,7 +11,9 @@
 
 #ifdef __cplusplus
 extern "C" {
+#define __RIN_C11_NORETURN [[noreturn]]
 #else
+#define __RIN_C11_NORETURN _Noreturn
 #ifndef thread_local
 #define thread_local _Thread_local
 #endif
@@ -111,10 +113,11 @@ static inline int thrd_detach(thrd_t thread)
     return pthread_detach(thread) == 0 ? thrd_success : thrd_error;
 }
 
-static inline void thrd_exit(int result)
+__RIN_C11_NORETURN static inline void thrd_exit(int result)
 {
     pthread_exit((void*)(intptr_t)result);
 }
+#undef __RIN_C11_NORETURN
 
 static inline int mtx_init(mtx_t* mutex, int type)
 {
