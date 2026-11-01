@@ -813,9 +813,6 @@ static inline int _rin_glob_component_match_bounded(
     return failure != 0 ? failure : matched;
 }
 
-ilure : matched;
-}
-
 static inline int _rin_glob_component_match(const char* pattern,
                                             const char* value, int flags)
 {

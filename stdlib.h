@@ -1035,6 +1035,14 @@ static inline long double strtold_l(const char* s, char** endptr,
     return (long double)rin_float_parse_binary64_value(parsed.bits);
 #endif
 }
+#else
+/* RinOS uses the product binary64 representation for long double.  libc++
+ * nevertheless requires the locale-explicit conversion entry point while
+ * compiling its locale facets, so expose the ABI-equivalent binary64 path. */
+static inline long double strtold_l(const char* s, char** endptr,
+                                    locale_t locale) {
+    return (long double)strtod_l(s, endptr, locale);
+}
 #endif
 #endif /* RIN_USERSPACE && !_MSVCRT_COMPAT */
 
