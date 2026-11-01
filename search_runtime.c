@@ -5,6 +5,7 @@
 
 #include "errno.h"
 #include "limits.h"
+#include "pthread.h"
 #include "stdint.h"
 #include "stdlib.h"
 #include "string.h"
@@ -20,7 +21,10 @@ typedef struct RinHSearchTable {
     size_t capacity;
     size_t filled;
     RinHSearchSlot* slots;
-    volatile uint32_t lock;
+    pthread_mutex_t mutex;
+    size_t active_ops;
+    int closing;
+    int destroy_pending;
 } RinHSearchTable;
 
 typedef struct RinSearchTreeNode {
@@ -32,17 +36,18 @@ typedef struct RinSearchTreeNode {
 } RinSearchTreeNode;
 
 static RinHSearchTable* g_hsearch_table;
-static volatile uint32_t g_hsearch_lock;
+static pthread_mutex_t g_hsearch_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static void rin_hsearch_lock(void)
+static int rin_hsearch_lock(void)
 {
-    while (__atomic_exchange_n(&g_hsearch_lock, 1u, __ATOMIC_ACQUIRE) != 0u) {
-    }
+    int error = pthread_mutex_lock(&g_hsearch_lock);
+    if (error != 0) errno = error;
+    return error;
 }
 
 static void rin_hsearch_unlock(void)
 {
-    __atomic_store_n(&g_hsearch_lock, 0u, __ATOMIC_RELEASE);
+    (void)pthread_mutex_unlock(&g_hsearch_lock);
 }
 
 static uint64_t rin_hsearch_hash(const char* key)
@@ -98,6 +103,15 @@ static RinHSearchTable* rin_hsearch_table_create(size_t nel)
         errno = ENOMEM;
         return NULL;
     }
+    {
+        int error = pthread_mutex_init(&table->mutex, NULL);
+        if (error != 0) {
+            free(table->slots);
+            free(table);
+            errno = error;
+            return NULL;
+        }
+    }
     table->capacity = capacity;
     return table;
 }
@@ -110,25 +124,55 @@ static void rin_hsearch_table_destroy(RinHSearchTable* table)
         if (table->slots[index].occupied)
             free(table->slots[index].owned_key);
     }
+    (void)pthread_mutex_destroy(&table->mutex);
     free(table->slots);
     free(table);
 }
 
-static void rin_hsearch_table_lock(RinHSearchTable* table)
+static int rin_hsearch_table_lock(RinHSearchTable* table)
 {
-    while (__atomic_exchange_n(&table->lock, 1u, __ATOMIC_ACQUIRE) != 0u) {
-    }
+    int error = pthread_mutex_lock(&table->mutex);
+    if (error != 0) errno = error;
+    return error;
 }
 
 static void rin_hsearch_table_unlock(RinHSearchTable* table)
 {
-    __atomic_store_n(&table->lock, 0u, __ATOMIC_RELEASE);
+    (void)pthread_mutex_unlock(&table->mutex);
+}
+
+static RinHSearchTable* rin_hsearch_global_acquire(void)
+{
+    RinHSearchTable* table;
+    if (rin_hsearch_lock() != 0) return NULL;
+    table = g_hsearch_table;
+    if (table != NULL && !table->closing && table->active_ops != SIZE_MAX)
+        ++table->active_ops;
+    else
+        table = NULL;
+    rin_hsearch_unlock();
+    if (table == NULL) errno = EINVAL;
+    return table;
+}
+
+static void rin_hsearch_global_release(RinHSearchTable* table)
+{
+    int destroy = 0;
+    if (table == NULL || rin_hsearch_lock() != 0) return;
+    if (table->active_ops != 0u) --table->active_ops;
+    if (table->closing && table->active_ops == 0u &&
+        table->destroy_pending) {
+        table->destroy_pending = 0;
+        destroy = 1;
+    }
+    rin_hsearch_unlock();
+    if (destroy) rin_hsearch_table_destroy(table);
 }
 
 int hcreate(size_t nel)
 {
     RinHSearchTable* table;
-    rin_hsearch_lock();
+    if (rin_hsearch_lock() != 0) return 0;
     if (g_hsearch_table != NULL) {
         rin_hsearch_unlock();
         errno = ENOMEM;
@@ -137,7 +181,10 @@ int hcreate(size_t nel)
     rin_hsearch_unlock();
     table = rin_hsearch_table_create(nel);
     if (table == NULL) return 0;
-    rin_hsearch_lock();
+    if (rin_hsearch_lock() != 0) {
+        rin_hsearch_table_destroy(table);
+        return 0;
+    }
     if (g_hsearch_table != NULL) {
         rin_hsearch_unlock();
         rin_hsearch_table_destroy(table);
@@ -152,11 +199,17 @@ int hcreate(size_t nel)
 void hdestroy(void)
 {
     RinHSearchTable* table;
-    rin_hsearch_lock();
+    int destroy = 0;
+    if (rin_hsearch_lock() != 0) return;
     table = g_hsearch_table;
     g_hsearch_table = NULL;
+    if (table != NULL) {
+        table->closing = 1;
+        if (table->active_ops == 0u) destroy = 1;
+        else table->destroy_pending = 1;
+    }
     rin_hsearch_unlock();
-    rin_hsearch_table_destroy(table);
+    if (destroy) rin_hsearch_table_destroy(table);
 }
 
 int hcreate_r(size_t nel, struct hsearch_data* public_table)
@@ -186,66 +239,96 @@ void hdestroy_r(struct hsearch_data* public_table)
     rin_hsearch_table_destroy(table);
 }
 
-ENTRY* hsearch(ENTRY item, ACTION action)
+static ENTRY* rin_hsearch_table_search(RinHSearchTable* table, ENTRY item,
+                                       ACTION action,
+                                       struct hsearch_data* public_table)
 {
-    RinHSearchTable* table;
     uint64_t hash;
     size_t slot;
     size_t probe;
+    char* copied_key = NULL;
+    if (table == NULL || item.key == NULL ||
+        (action != FIND && action != ENTER)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    hash = rin_hsearch_hash(item.key);
+    for (;;) {
+        RinHSearchSlot* empty = NULL;
+        if (rin_hsearch_table_lock(table) != 0) {
+            free(copied_key);
+            return NULL;
+        }
+        if (table->filled > table->capacity ||
+            (public_table != NULL &&
+             public_table->filled != table->filled)) {
+            rin_hsearch_table_unlock(table);
+            free(copied_key);
+            errno = EINVAL;
+            return NULL;
+        }
+        slot = (size_t)hash & (table->capacity - 1u);
+        for (probe = 0u; probe < table->capacity; ++probe) {
+            RinHSearchSlot* candidate = &table->slots[slot];
+            if (!candidate->occupied) {
+                empty = candidate;
+                break;
+            }
+            if (candidate->hash == hash &&
+                strcmp(candidate->entry.key, item.key) == 0) {
+                rin_hsearch_table_unlock(table);
+                free(copied_key);
+                return &candidate->entry;
+            }
+            slot = (slot + 1u) & (table->capacity - 1u);
+        }
+        if (empty == NULL || action == FIND) {
+            rin_hsearch_table_unlock(table);
+            free(copied_key);
+            errno = empty == NULL ? ENOMEM : ESRCH;
+            return NULL;
+        }
+        if (copied_key == NULL) {
+            rin_hsearch_table_unlock(table);
+            copied_key = rin_search_key_copy(item.key);
+            if (copied_key == NULL) {
+                errno = ENOMEM;
+                return NULL;
+            }
+            continue;
+        }
+        empty->owned_key = copied_key;
+        empty->entry.key = copied_key;
+        empty->entry.data = item.data;
+        empty->hash = hash;
+        empty->occupied = 1;
+        ++table->filled;
+        if (public_table != NULL) ++public_table->filled;
+        rin_hsearch_table_unlock(table);
+        return &empty->entry;
+    }
+}
+
+ENTRY* hsearch(ENTRY item, ACTION action)
+{
+    RinHSearchTable* table;
+    ENTRY* result;
     if (item.key == NULL || (action != FIND && action != ENTER)) {
         errno = EINVAL;
         return NULL;
     }
-    rin_hsearch_lock();
-    table = g_hsearch_table;
-    if (table == NULL) {
-        errno = EINVAL;
-        rin_hsearch_unlock();
-        return NULL;
-    }
-    hash = rin_hsearch_hash(item.key);
-    slot = (size_t)hash & (table->capacity - 1u);
-    for (probe = 0u; probe < table->capacity; ++probe) {
-        RinHSearchSlot* candidate = &table->slots[slot];
-        if (!candidate->occupied) {
-            if (action == FIND) {
-                rin_hsearch_unlock();
-                return NULL;
-            }
-            candidate->owned_key = rin_search_key_copy(item.key);
-            if (candidate->owned_key == NULL) {
-                errno = ENOMEM;
-                rin_hsearch_unlock();
-                return NULL;
-            }
-            candidate->entry.key = candidate->owned_key;
-            candidate->entry.data = item.data;
-            candidate->hash = hash;
-            candidate->occupied = 1;
-            ++table->filled;
-            rin_hsearch_unlock();
-            return &candidate->entry;
-        }
-        if (candidate->hash == hash &&
-            strcmp(candidate->entry.key, item.key) == 0) {
-            rin_hsearch_unlock();
-            return &candidate->entry;
-        }
-        slot = (slot + 1u) & (table->capacity - 1u);
-    }
-    errno = ENOMEM;
-    rin_hsearch_unlock();
-    return NULL;
+    table = rin_hsearch_global_acquire();
+    if (table == NULL) return NULL;
+    result = rin_hsearch_table_search(table, item, action, NULL);
+    rin_hsearch_global_release(table);
+    return result;
 }
 
 int hsearch_r(ENTRY item, ACTION action, ENTRY** result,
               struct hsearch_data* public_table)
 {
     RinHSearchTable* table;
-    uint64_t hash;
-    size_t slot;
-    size_t probe;
-    char* copied_key = NULL;
+    ENTRY* found;
     if (result != NULL) *result = NULL;
     if (item.key == NULL || result == NULL || public_table == NULL ||
         (action != FIND && action != ENTER) || public_table->table == NULL) {
@@ -259,59 +342,10 @@ int hsearch_r(ENTRY item, ACTION action, ENTRY** result,
         errno = EINVAL;
         return 0;
     }
-    hash = rin_hsearch_hash(item.key);
-    for (;;) {
-        RinHSearchSlot* empty = NULL;
-        rin_hsearch_table_lock(table);
-        if (table->filled > table->capacity ||
-            public_table->filled != table->filled) {
-            rin_hsearch_table_unlock(table);
-            free(copied_key);
-            errno = EINVAL;
-            return 0;
-        }
-        slot = (size_t)hash & (table->capacity - 1u);
-        for (probe = 0u; probe < table->capacity; ++probe) {
-            RinHSearchSlot* candidate = &table->slots[slot];
-            if (!candidate->occupied) {
-                empty = candidate;
-                break;
-            }
-            if (candidate->hash == hash &&
-                strcmp(candidate->entry.key, item.key) == 0) {
-                *result = &candidate->entry;
-                rin_hsearch_table_unlock(table);
-                free(copied_key);
-                return 1;
-            }
-            slot = (slot + 1u) & (table->capacity - 1u);
-        }
-        if (empty == NULL || action == FIND) {
-            rin_hsearch_table_unlock(table);
-            free(copied_key);
-            errno = empty == NULL ? ENOMEM : ESRCH;
-            return 0;
-        }
-        if (copied_key == NULL) {
-            rin_hsearch_table_unlock(table);
-            copied_key = rin_search_key_copy(item.key);
-            if (copied_key == NULL) {
-                errno = ENOMEM;
-                return 0;
-            }
-            continue;
-        }
-        empty->owned_key = copied_key;
-        empty->entry.key = copied_key;
-        empty->entry.data = item.data;
-        empty->hash = hash;
-        empty->occupied = 1;
-        ++table->filled;
-        ++public_table->filled;
-        rin_hsearch_table_unlock(table);
-        *result = &empty->entry;
-        return 1;
-    }
+    found = rin_hsearch_table_search(table, item, action, public_table);
+    if (found == NULL) return 0;
+    *result = found;
+    return 1;
 }
 
 static RinSearchTreeNode* rin_tsearch_find(
