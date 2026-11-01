@@ -52,6 +52,18 @@ struct statvfs {
 #ifndef ST_NOEXEC
 #define ST_NOEXEC 8u
 #endif
+#ifndef ST_RIN_PC_2_SYMLINKS_VALID
+#define ST_RIN_PC_2_SYMLINKS_VALID 0x00010000ul
+#endif
+#ifndef ST_RIN_PC_2_SYMLINKS_SUPPORTED
+#define ST_RIN_PC_2_SYMLINKS_SUPPORTED 0x00020000ul
+#endif
+#ifndef ST_RIN_PC_SYNC_IO_VALID
+#define ST_RIN_PC_SYNC_IO_VALID 0x00040000ul
+#endif
+#ifndef ST_RIN_PC_SYNC_IO_SUPPORTED
+#define ST_RIN_PC_SYNC_IO_SUPPORTED 0x00080000ul
+#endif
 
 #ifndef _RIN_STATVFS_SYSCALL2
 #define _RIN_STATVFS_SYSCALL2(number, path, output) \

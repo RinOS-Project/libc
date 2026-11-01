@@ -2309,9 +2309,44 @@ static inline int _rin_pathconf_fd_is_terminal(int fd) {
     return result;
 }
 
+static inline long _rin_pathconf_capability_value(
+    unsigned long flags, int name, int saved_errno) {
+    unsigned long valid_flag;
+    unsigned long supported_flag;
+    if (name == _PC_2_SYMLINKS) {
+        valid_flag = ST_RIN_PC_2_SYMLINKS_VALID;
+        supported_flag = ST_RIN_PC_2_SYMLINKS_SUPPORTED;
+    } else {
+        valid_flag = ST_RIN_PC_SYNC_IO_VALID;
+        supported_flag = ST_RIN_PC_SYNC_IO_SUPPORTED;
+    }
+    if ((flags & valid_flag) == 0u) {
+        errno = saved_errno;
+        return -1;
+    }
+    errno = saved_errno;
+    return (flags & supported_flag) != 0u ? 1 : 0;
+}
+
+static inline long _rin_pathconf_path_capability(
+    const char* path, int name, int saved_errno) {
+    struct statvfs filesystem;
+    if (statvfs(path, &filesystem) < 0) return -1;
+    return _rin_pathconf_capability_value(
+        filesystem.f_flag, name, saved_errno);
+}
+
+static inline long _rin_pathconf_fd_capability(
+    int fd, int name, int saved_errno) {
+    struct statvfs filesystem;
+    if (fstatvfs(fd, &filesystem) < 0) return -1;
+    return _rin_pathconf_capability_value(
+        filesystem.f_flag, name, saved_errno);
+}
+
 static inline long pathconf(const char* path, int name) {
     struct stat status;
-    int saved_errno;
+    int saved_errno = errno;
     int terminal;
     if (!path) {
         errno = EINVAL;
@@ -2355,7 +2390,14 @@ static inline long pathconf(const char* path, int name) {
              * report it as indeterminate instead of assuming every mount is
              * a writable RinFS volume. */
             return -1;
+        case _PC_2_SYMLINKS:
+            return _rin_pathconf_path_capability(path, name, saved_errno);
         case _PC_SYNC_IO:
+            if (S_ISFIFO(status.st_mode) || S_ISCHR(status.st_mode)) {
+                errno = saved_errno;
+                return 0;
+            }
+            return _rin_pathconf_path_capability(path, name, saved_errno);
         case _PC_ASYNC_IO:
         case _PC_PRIO_IO:
         case _PC_FILESIZEBITS:
@@ -2365,7 +2407,6 @@ static inline long pathconf(const char* path, int name) {
         case _PC_REC_XFER_ALIGN:
         case _PC_ALLOC_SIZE_MIN:
         case _PC_SYMLINK_MAX:
-        case _PC_2_SYMLINKS:
         case _PC_TIMESTAMP_RESOLUTION:
             return -1;
         default:
@@ -2376,7 +2417,7 @@ static inline long pathconf(const char* path, int name) {
 
 static inline long fpathconf(int fd, int name) {
     struct stat status;
-    int saved_errno;
+    int saved_errno = errno;
     int terminal;
     if (!_rin_pathconf_name_is_known(name)) {
         errno = EINVAL;
@@ -2409,7 +2450,14 @@ static inline long fpathconf(int fd, int name) {
             return -1;
         case _PC_LINK_MAX:
             return -1;
+        case _PC_2_SYMLINKS:
+            return _rin_pathconf_fd_capability(fd, name, saved_errno);
         case _PC_SYNC_IO:
+            if (S_ISFIFO(status.st_mode) || S_ISCHR(status.st_mode)) {
+                errno = saved_errno;
+                return 0;
+            }
+            return _rin_pathconf_fd_capability(fd, name, saved_errno);
         case _PC_ASYNC_IO:
         case _PC_PRIO_IO:
         case _PC_FILESIZEBITS:
@@ -2419,7 +2467,6 @@ static inline long fpathconf(int fd, int name) {
         case _PC_REC_XFER_ALIGN:
         case _PC_ALLOC_SIZE_MIN:
         case _PC_SYMLINK_MAX:
-        case _PC_2_SYMLINKS:
         case _PC_TIMESTAMP_RESOLUTION:
             return -1;
         default:
