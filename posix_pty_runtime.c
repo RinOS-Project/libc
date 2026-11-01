@@ -9,6 +9,7 @@
 #include "sys/wait.h"
 #include "signal.h"
 #include "unistd.h"
+#include "internal/rin_child_pidfd.h"
 
 #include <stdint.h>
 
@@ -52,7 +53,8 @@ static int rin_pty_format_slave_path(int32_t number, char* output,
  * Resolve it in the caller's namespace and compare the inode generation so
  * a stale number or a different namespace cannot name another PTY. */
 static int rin_pty_master_snapshot(int fd, char* path_out,
-                                   size_t path_capacity)
+                                   size_t path_capacity,
+                                   struct stat* slave_identity_out)
 {
     struct stat master_status;
     struct stat slave_status;
@@ -82,6 +84,7 @@ static int rin_pty_master_snapshot(int fd, char* path_out,
         slave_status.st_gid != master_status.st_gid ||
         (slave_status.st_mode & 07777u) != 0600u)
         return EIO;
+    if (slave_identity_out != NULL) *slave_identity_out = slave_status;
 
     return 0;
 }
@@ -100,7 +103,7 @@ int posix_openpt(int oflag)
 int grantpt(int fd)
 {
     char path[RIN_PTY_PATH_CAPACITY];
-    int error = rin_pty_master_snapshot(fd, path, sizeof(path));
+    int error = rin_pty_master_snapshot(fd, path, sizeof(path), NULL);
     if (error != 0) {
         errno = error;
         return -1;
@@ -132,7 +135,7 @@ int ptsname_r(int fd, char* buffer, size_t buffer_size)
         error = EINVAL;
         goto done;
     }
-    error = rin_pty_master_snapshot(fd, path, sizeof(path));
+    error = rin_pty_master_snapshot(fd, path, sizeof(path), NULL);
     if (error != 0) goto done;
     while (path[length] != '\0') ++length;
     if (length >= buffer_size) {
@@ -168,15 +171,9 @@ static void rin_pty_close_preserving_errno(int fd, int saved_errno)
     errno = saved_errno;
 }
 
-static void rin_pty_reap_failed_fork(pid_t child)
+static void rin_pty_reap_failed_fork(int* child_pidfd)
 {
-    int status;
-    if (child <= 0) return;
-    (void)kill(child, SIGKILL);
-    for (;;) {
-        pid_t result = waitpid(child, &status, 0);
-        if (result == child || (result < 0 && errno != EINTR)) return;
-    }
+    (void)rin_child_pidfd_terminate_and_wait(child_pidfd);
 }
 
 int openpty(int* master_fd_out, int* slave_fd_out, char* name,
@@ -184,6 +181,8 @@ int openpty(int* master_fd_out, int* slave_fd_out, char* name,
             const struct winsize* window_size)
 {
     char slave_path[RIN_PTY_PATH_CAPACITY];
+    struct stat expected_slave_status;
+    struct stat opened_slave_status;
     int master_fd = -1;
     int slave_fd = -1;
     int error;
@@ -207,7 +206,9 @@ int openpty(int* master_fd_out, int* slave_fd_out, char* name,
         rin_pty_close_preserving_errno(master_fd, error);
         return -1;
     }
-    error = ptsname_r(master_fd, slave_path, sizeof(slave_path));
+    error = rin_pty_master_snapshot(master_fd, slave_path,
+                                    sizeof(slave_path),
+                                    &expected_slave_status);
     if (error != 0) {
         rin_pty_close_preserving_errno(master_fd, error);
         return -1;
@@ -215,6 +216,25 @@ int openpty(int* master_fd_out, int* slave_fd_out, char* name,
     slave_fd = open(slave_path, O_RDWR | O_NOCTTY);
     if (slave_fd < 0) {
         error = errno;
+        rin_pty_close_preserving_errno(master_fd, error);
+        return -1;
+    }
+    if (fstat(slave_fd, &opened_slave_status) != 0) {
+        error = rin_pty_error();
+    } else if (!S_ISCHR(opened_slave_status.st_mode) ||
+               opened_slave_status.st_dev != expected_slave_status.st_dev ||
+               opened_slave_status.st_ino != expected_slave_status.st_ino ||
+               opened_slave_status.st_rdev != expected_slave_status.st_rdev ||
+               opened_slave_status.st_uid != expected_slave_status.st_uid ||
+               opened_slave_status.st_gid != expected_slave_status.st_gid ||
+               (opened_slave_status.st_mode & 07777u) !=
+                   (expected_slave_status.st_mode & 07777u)) {
+        error = EIO;
+    } else {
+        error = 0;
+    }
+    if (error != 0) {
+        rin_pty_close_preserving_errno(slave_fd, error);
         rin_pty_close_preserving_errno(master_fd, error);
         return -1;
     }
@@ -265,6 +285,7 @@ pid_t forkpty(int* master_fd_out, char* name,
 {
     int master_fd = -1;
     int slave_fd = -1;
+    int child_pidfd = -1;
     pid_t child;
     int error;
 
@@ -277,7 +298,7 @@ pid_t forkpty(int* master_fd_out, char* name,
                 window_size) != 0)
         return (pid_t)-1;
 
-    child = fork();
+    child = rin_child_fork_pidfd(&child_pidfd);
     if (child < 0) {
         error = errno;
         (void)close(slave_fd);
@@ -292,10 +313,11 @@ pid_t forkpty(int* master_fd_out, char* name,
 
     if (close(slave_fd) != 0) {
         error = errno;
-        rin_pty_reap_failed_fork(child);
+        rin_pty_reap_failed_fork(&child_pidfd);
         rin_pty_close_preserving_errno(master_fd, error);
         return (pid_t)-1;
     }
+    (void)close(child_pidfd);
     *master_fd_out = master_fd;
     return child;
 }
