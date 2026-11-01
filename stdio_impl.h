@@ -2782,6 +2782,14 @@ _RIN_STDIO_API FILE* fopen(const char* path, const char* mode) {
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)fd);
         errno = saved_errno;
     }
+    /* B51: pure-append ("a") starts at end-of-file (glibc parity;
+     * pipes ignore ESPIPE inside the helper). Update-append ("a+")
+     * starts at 0 like glibc; its writes still append per call. A
+     * genuine seek failure only marks the stream: fopen still
+     * succeeds. */
+    if (stream && (flags & O_APPEND) != 0u &&
+        (flags & O_ACCMODE) != O_RDWR)
+        (void)_rin_stdio_seek_backend_to_end(stream);
     return stream;
 }
 
@@ -2982,6 +2990,10 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     }
     _rin_stdio_install_default_buffer(
         stream, _rin_stdio_default_buffer_mode(stream));
+    /* B51: pure-append ("a") starts at end-of-file (see fopen). */
+    if ((stream->mode & O_APPEND) != 0u &&
+        (stream->mode & O_ACCMODE) != O_RDWR)
+        (void)_rin_stdio_seek_backend_to_end(stream);
     return stream;
 }
 
@@ -3032,7 +3044,12 @@ _RIN_STDIO_API FILE* fdopen(int fd, const char* mode) {
         }
     }
 
-    return _rin_stdio_stream_allocate(fd, flags, 0, 1);
+    /* B51: pure-append ("a") starts at end-of-file (see fopen). */
+    FILE* stream = _rin_stdio_stream_allocate(fd, flags, 0, 1);
+    if (stream && (flags & O_APPEND) != 0u &&
+        (flags & O_ACCMODE) != O_RDWR)
+        (void)_rin_stdio_seek_backend_to_end(stream);
+    return stream;
 }
 
 _RIN_STDIO_API int fseek(FILE* stream, long offset, int whence);
