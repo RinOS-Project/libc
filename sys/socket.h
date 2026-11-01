@@ -160,6 +160,7 @@ typedef unsigned short sa_family_t;
 #define AF_INET      2   /* IPv4 */
 #define AF_INET6     10  /* IPv6 */
 #define AF_PACKET    17  /* 低レベルパケット */
+#define AF_NETLINK   16  /* kernel control sockets */
 
 /* プロトコルファミリ (アドレスファミリと同じ) */
 #define PF_UNSPEC    AF_UNSPEC
@@ -168,6 +169,7 @@ typedef unsigned short sa_family_t;
 #define PF_INET      AF_INET
 #define PF_INET6     AF_INET6
 #define PF_PACKET    AF_PACKET
+#define PF_NETLINK   AF_NETLINK
 
 /* ═══════════════════════════════════════════════════════════════
  * ソケットタイプ
@@ -369,6 +371,8 @@ static inline uint32_t ntohl(uint32_t netlong) {
 /* RinOSでのソケットoption対応範囲:
  * - SO_TYPEは全domain/typeで取得可能。SO_NONBLOCKは全typeで設定・取得可能。
  * - SO_REUSEADDRはTCP/UDPのIPv4・IPv6でbind前に設定可能。既定値は0。
+ * - SO_REUSEPORTはTCP/UDPのIPv4・IPv6でbind前に設定可能。同一namespaceで
+ *   重複するendpointは全socketが有効な場合に共有し、受信flowをgroup内へ分配する。
  * - SO_SNDBUF/SO_RCVBUFはTCPとUDPのIPv4・IPv6で使用可能。値はbyte単位で、
  *   最小1024。TCPの既定値は各65535、最大1048576。UDP送信の既定値・上限は
  *   IPv4が65507、IPv6が65527。UDP受信は既定値がqueue上限で、最大32 datagram分。
@@ -379,9 +383,9 @@ static inline uint32_t ntohl(uint32_t netlong) {
  *   UDP/raw/packetは現状0を返す。SO_ACCEPTCONNはTCP/UNIXで取得可能。
  * - TCP_USER_TIMEOUTはTCP levelでミリ秒単位の未ACK／zero-window停滞上限を設定し、
  *   0で無効化する。設定値はdup/forkで共有するTCP open descriptionに属する。
- * - SO_DEBUG/SO_DONTROUTE/SO_OOBINLINE/SO_REUSEPORT/SO_RCVLOWAT/SO_SNDLOWATと、
- *   TCP_NODELAY/TCP_MAXSEG/TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNTは未対応で、
- *   setsockopt/getsockoptはENOPROTOOPTを返す。
+ * - SO_OOBINLINEはTCPのみ。SO_RCVLOWAT/SO_SNDLOWATはTCPのpoll/readiness閾値。
+ *   TCP_NODELAY/TCP_MAXSEG/TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNTもTCPのみ。
+ * - SO_DEBUG/SO_DONTROUTEは未対応で、setsockopt/getsockoptはENOPROTOOPTを返す。
  * set値はintをちょうど1個、取得bufferは少なくともint 1個を渡す。
  */
 
