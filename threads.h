@@ -69,7 +69,7 @@ static inline int thrd_create(thrd_t* thread, thrd_start_t function,
     error = pthread_create(&created, NULL, __rin_c11_thread_entry, start);
     if (error != 0) {
         free(start);
-        return error == EAGAIN || error == ENOMEM ? thrd_nomem : thrd_error;
+        return error == ENOMEM ? thrd_nomem : thrd_error;
     }
     *thread = created;
     return thrd_success;

@@ -282,6 +282,9 @@ extern void* platform_thread_create_result_with_stack(
 extern void* platform_thread_create_result_with_stack_sched(
     void* (*entry)(void*), void* arg, void* stack, size_t stack_size,
     int detached, int policy, int priority);
+extern void* platform_thread_create_result_with_stack_sched_error(
+    void* (*entry)(void*), void* arg, void* stack, size_t stack_size,
+    int detached, int policy, int priority, int* error_out);
 extern void  platform_thread_join(void* thread);
 extern int   platform_thread_join_result(void* thread, void** result_out);
 extern int   platform_thread_detach(void* thread);
@@ -723,10 +726,11 @@ static inline int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
         return EINVAL;
     if (stack && stack_size > UINTPTR_MAX - (uintptr_t)stack)
         return EINVAL;
-    void* kthread = platform_thread_create_result_with_stack_sched(
+    int create_error = 0;
+    void* kthread = platform_thread_create_result_with_stack_sched_error(
         start_routine, arg, stack, stack_size, detached, policy,
-        schedparam.sched_priority);
-    if (!kthread) return EAGAIN;
+        schedparam.sched_priority, &create_error);
+    if (!kthread) return create_error != 0 ? create_error : EAGAIN;
     *thread = (pthread_t)(uintptr_t)kthread;
     return 0;
 }

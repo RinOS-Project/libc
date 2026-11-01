@@ -710,6 +710,7 @@ static int rin_pthread_create_impl(pthread_t* thread,
     int alloc_kind = RIN_THREAD_ALLOC_NONE;
     int caller_stack = attr && attr->stackaddr != NULL;
     int schedule_policy = SCHED_OTHER;
+    int stack_error = EAGAIN;
     struct sched_param schedule_param = {0};
     uintptr_t requested_stack = THREAD_STACK_DEFAULT;
     uintptr_t requested_guard = THREAD_STACK_GUARD;
@@ -841,6 +842,10 @@ static int rin_pthread_create_impl(pthread_t* thread,
                 }
 #endif
             } else {
+                int protection_error =
+                    rin_pthread_syscall_error(protection_result);
+                if (protection_error != 0)
+                    stack_error = protection_error;
                 static const char digits[] = "0123456789ABCDEF";
                 char message[] =
                     "[PTHREAD] stack mprotect failed result=0x0000000000000000\n";
@@ -854,6 +859,8 @@ static int rin_pthread_create_impl(pthread_t* thread,
                 (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)map_base, total_map);
             }
         } else {
+            stack_error = map_result < 0
+                ? rin_pthread_syscall_error(map_result) : ENOMEM;
             rin_log("[PTHREAD] stack mmap failed\n");
         }
     }
@@ -862,7 +869,7 @@ static int rin_pthread_create_impl(pthread_t* thread,
         if (alloc_kind == RIN_THREAD_ALLOC_MMAP) {
             (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base, alloc_size);
         }
-        return EAGAIN;
+        return stack_error;
     }
 
     /* Private anonymous mmap stacks are zero-filled by the VMM on demand:
@@ -906,7 +913,7 @@ static int rin_pthread_create_impl(pthread_t* thread,
                 (void)_RIN_PTHREAD_RUNTIME_MUNMAP((uintptr_t)alloc_base,
                                                   alloc_size);
             }
-            return EAGAIN;
+            return ENOMEM;
         }
         record_addr = (uintptr_t)record;
         record->start_routine = start_routine;
