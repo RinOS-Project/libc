@@ -15,18 +15,20 @@ RinDlerrorState* __rin_dlerror_state(void) {
 }
 
 int __rin_run_startup_dependency_initializers(void) {
-#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && defined(__x86_64__)
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    (defined(__x86_64__) || defined(__i386__))
     return _rin_dl_lifecycle_run(0u, RIN_DL_LIFECYCLE_INIT_NEXT);
 #else
-    return 0;
+    return -1;
 #endif
 }
 
 int __rin_run_process_dependency_finalizers(void) {
-#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && defined(__x86_64__)
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    (defined(__x86_64__) || defined(__i386__))
     return _rin_dl_lifecycle_run(
         0u, RIN_DL_LIFECYCLE_PROCESS_FINI_NEXT);
 #else
-    return 0;
+    return -1;
 #endif
 }
