@@ -131,7 +131,22 @@ void perror(const char* s);
 int remove(const char* pathname);
 int rename(const char* oldpath, const char* newpath);
 FILE* tmpfile(void);
-char* tmpnam(char* s);
+#if defined(RIN_ENABLE_UNSAFE_LEGACY_STDIO)
+#if defined(__GNUC__) || defined(__clang__)
+#define RIN_STDIO_UNSAFE_LEGACY_API \
+    __attribute__((deprecated("unsafe legacy stdio API; use fgets/tmpfile/mkstemp")))
+#elif defined(_MSC_VER)
+#define RIN_STDIO_UNSAFE_LEGACY_API \
+    __declspec(deprecated("unsafe legacy stdio API; use fgets/tmpfile/mkstemp"))
+#else
+#define RIN_STDIO_UNSAFE_LEGACY_API
+#endif
+/* Explicit source-compatibility escape hatch. gets() can never be made safe
+ * because it has no capacity argument; tmpnam() returns an unreserved path. */
+RIN_STDIO_UNSAFE_LEGACY_API char* gets(char* s);
+RIN_STDIO_UNSAFE_LEGACY_API char* tmpnam(char* s);
+#undef RIN_STDIO_UNSAFE_LEGACY_API
+#endif
 FILE* fmemopen(void* buffer, size_t size, const char* mode);
 FILE* open_memstream(char** buffer, size_t* size);
 
