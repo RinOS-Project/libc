@@ -2,10 +2,11 @@
 #ifndef _LINUX_MEMBARRIER_H
 #define _LINUX_MEMBARRIER_H
 
-/* Linux membarrier command values. RinOS currently implements process-private
- * expedited barriers and reports only those commands from QUERY. */
+/* Linux membarrier command values. Global barriers cover all online CPUs;
+ * private expedited barriers target the caller's process generation. */
 #define MEMBARRIER_CMD_QUERY (0)
 #define MEMBARRIER_CMD_GLOBAL (1 << 0)
+#define MEMBARRIER_CMD_SHARED MEMBARRIER_CMD_GLOBAL
 #define MEMBARRIER_CMD_GLOBAL_EXPEDITED (1 << 1)
 #define MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED (1 << 2)
 #define MEMBARRIER_CMD_PRIVATE_EXPEDITED (1 << 3)
