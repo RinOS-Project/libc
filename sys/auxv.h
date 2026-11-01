@@ -7,6 +7,13 @@
  * auxiliary vector passed by the kernel to the process at startup.
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64)
+#include_next <sys/auxv.h>
+#else
 #ifndef _SYS_AUXV_H
 #define _SYS_AUXV_H
 
@@ -47,3 +54,4 @@ extern "C" {
 #endif
 
 #endif /* _SYS_AUXV_H */
+#endif /* hosted Linux delegates to native provider */
