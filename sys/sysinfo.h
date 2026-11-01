@@ -9,6 +9,7 @@
 #ifndef _SYS_SYSINFO_H
 #define _SYS_SYSINFO_H
 
+#include "../features.h"
 #include "../errno.h"
 #include "../limits.h"
 #include "syscall.h"
@@ -62,6 +63,13 @@ static inline int sysinfo(struct sysinfo* information) {
     return (int)syscall(RIN_SYS_SYSTEM_INFO_SNAPSHOT_V1, information,
                         RIN_SYSTEM_INFO_SNAPSHOT_LAYOUT_LINUX_SYSINFO);
 }
+
+#if defined(_RIN_USE_GNU_SYSINFO)
+int get_nprocs(void);
+int get_nprocs_conf(void);
+long get_phys_pages(void);
+long get_avphys_pages(void);
+#endif
 
 /* Return validity bits for the RinSystemInfoSnapshotV1 fields. This query
  * does not describe every field of Linux struct sysinfo: Linux sysinfo loads
