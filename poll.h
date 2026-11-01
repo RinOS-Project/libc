@@ -315,7 +315,8 @@ static inline int __rin_poll_timeval_to_ms(const struct timeval* timeout,
  * timeout. Measure only the poll wait, using CLOCK_MONOTONIC so wall-clock
  * adjustments cannot extend or shorten it. */
 static inline int __rin_select_update_timeval(
-        struct timeval* timeout, const struct timespec* start) {
+        struct timeval* timeout, const struct timeval* original_timeout,
+        const struct timespec* start) {
     const uint64_t nanoseconds_per_second = UINT64_C(1000000000);
     struct timespec now;
     uint64_t requested_ns;
@@ -324,7 +325,7 @@ static inline int __rin_select_update_timeval(
     uint64_t remaining_ns;
     int saved_errno;
 
-    if (!timeout || !start) return 0;
+    if (!timeout || !original_timeout || !start) return 0;
     saved_errno = errno;
     if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
     if (start->tv_sec < 0 || start->tv_nsec < 0 ||
@@ -334,8 +335,9 @@ static inline int __rin_select_update_timeval(
         return -1;
     }
 
-    requested_ns = (uint64_t)timeout->tv_sec * nanoseconds_per_second +
-                   (uint64_t)timeout->tv_usec * UINT64_C(1000);
+    requested_ns = (uint64_t)original_timeout->tv_sec *
+                       nanoseconds_per_second +
+                   (uint64_t)original_timeout->tv_usec * UINT64_C(1000);
     if (now.tv_sec < start->tv_sec ||
         (now.tv_sec == start->tv_sec && now.tv_nsec < start->tv_nsec)) {
         elapsed_ns = 0u;
@@ -419,13 +421,20 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     struct pollfd* pfds = NULL;
     nfds_t npfds = 0u;
     struct timespec timeout_start;
+    struct timeval timeout_snapshot;
+    const struct timeval* original_timeout = NULL;
 
     if (nfds < 0 || nfds > FD_SETSIZE) {
         errno = EINVAL;
         return -1;
     }
 
-    if (__rin_poll_timeval_to_ms(timeout, &timeout_ms) != 0) return -1;
+    if (timeout) {
+        timeout_snapshot = *timeout;
+        original_timeout = &timeout_snapshot;
+    }
+    if (__rin_poll_timeval_to_ms(original_timeout, &timeout_ms) != 0)
+        return -1;
 
     if (__rin_select_build_pollfds(nfds, readfds, writefds, exceptfds,
                                    local_pollfds,
@@ -443,7 +452,7 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
         ret = poll(NULL, 0, timeout_ms);
         poll_errno = errno;
         if (timeout && __rin_select_update_timeval(
-                timeout, &timeout_start) != 0) {
+                timeout, original_timeout, &timeout_start) != 0) {
             __rin_select_release_pollfds(pfds, local_pollfds);
             return -1;
         }
@@ -464,7 +473,8 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     }
     int ret = poll(pfds, npfds, timeout_ms);
     int poll_errno = errno;
-    if (timeout && __rin_select_update_timeval(timeout, &timeout_start) != 0) {
+    if (timeout && __rin_select_update_timeval(
+            timeout, original_timeout, &timeout_start) != 0) {
         __rin_select_release_pollfds(pfds, local_pollfds);
         return -1;
     }
