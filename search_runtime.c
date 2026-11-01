@@ -11,13 +11,16 @@
 
 typedef struct RinHSearchSlot {
     ENTRY entry;
+    char* owned_key;
     uint64_t hash;
     int occupied;
 } RinHSearchSlot;
 
 typedef struct RinHSearchTable {
     size_t capacity;
+    size_t filled;
     RinHSearchSlot* slots;
+    volatile uint32_t lock;
 } RinHSearchTable;
 
 typedef struct RinSearchTreeNode {
@@ -25,6 +28,7 @@ typedef struct RinSearchTreeNode {
     struct RinSearchTreeNode* left;
     struct RinSearchTreeNode* right;
     struct RinSearchTreeNode* parent;
+    int height;
 } RinSearchTreeNode;
 
 static RinHSearchTable* g_hsearch_table;
@@ -51,12 +55,79 @@ static uint64_t rin_hsearch_hash(const char* key)
     return hash;
 }
 
-int hcreate(size_t nel)
+static char* rin_search_key_copy(const char* key)
+{
+    size_t length = strlen(key);
+    char* copy;
+    if (length == SIZE_MAX) return NULL;
+    copy = (char*)malloc(length + 1u);
+    if (copy != NULL) memcpy(copy, key, length + 1u);
+    return copy;
+}
+
+static RinHSearchTable* rin_hsearch_table_create(size_t nel)
 {
     size_t required;
     size_t capacity = 8u;
     RinHSearchTable* table;
-    RinHSearchSlot* slots;
+    if (nel == 0u || nel > SIZE_MAX / 2u) {
+        errno = nel == 0u ? EINVAL : ENOMEM;
+        return NULL;
+    }
+    required = nel * 2u;
+    if (required < 8u) required = 8u;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2u) {
+            errno = ENOMEM;
+            return NULL;
+        }
+        capacity *= 2u;
+    }
+    if (capacity > UINT_MAX || capacity > SIZE_MAX / sizeof(RinHSearchSlot)) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    table = (RinHSearchTable*)calloc(1u, sizeof(*table));
+    if (table == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    table->slots = (RinHSearchSlot*)calloc(capacity, sizeof(*table->slots));
+    if (table->slots == NULL) {
+        free(table);
+        errno = ENOMEM;
+        return NULL;
+    }
+    table->capacity = capacity;
+    return table;
+}
+
+static void rin_hsearch_table_destroy(RinHSearchTable* table)
+{
+    size_t index;
+    if (table == NULL) return;
+    for (index = 0u; index < table->capacity; ++index) {
+        if (table->slots[index].occupied)
+            free(table->slots[index].owned_key);
+    }
+    free(table->slots);
+    free(table);
+}
+
+static void rin_hsearch_table_lock(RinHSearchTable* table)
+{
+    while (__atomic_exchange_n(&table->lock, 1u, __ATOMIC_ACQUIRE) != 0u) {
+    }
+}
+
+static void rin_hsearch_table_unlock(RinHSearchTable* table)
+{
+    __atomic_store_n(&table->lock, 0u, __ATOMIC_RELEASE);
+}
+
+int hcreate(size_t nel)
+{
+    RinHSearchTable* table;
     rin_hsearch_lock();
     if (g_hsearch_table != NULL) {
         rin_hsearch_unlock();
@@ -64,41 +135,12 @@ int hcreate(size_t nel)
         return 0;
     }
     rin_hsearch_unlock();
-    if (nel > SIZE_MAX / 2u) {
-        errno = ENOMEM;
-        return 0;
-    }
-    required = nel * 2u;
-    if (required < 8u) required = 8u;
-    while (capacity < required) {
-        if (capacity > SIZE_MAX / 2u) {
-            errno = ENOMEM;
-            return 0;
-        }
-        capacity *= 2u;
-    }
-    if (capacity > SIZE_MAX / sizeof(*slots)) {
-        errno = ENOMEM;
-        return 0;
-    }
-    slots = (RinHSearchSlot*)calloc(capacity, sizeof(*slots));
-    if (slots == NULL) {
-        errno = ENOMEM;
-        return 0;
-    }
-    table = (RinHSearchTable*)malloc(sizeof(*table));
-    if (table == NULL) {
-        free(slots);
-        errno = ENOMEM;
-        return 0;
-    }
-    table->capacity = capacity;
-    table->slots = slots;
+    table = rin_hsearch_table_create(nel);
+    if (table == NULL) return 0;
     rin_hsearch_lock();
     if (g_hsearch_table != NULL) {
         rin_hsearch_unlock();
-        free(slots);
-        free(table);
+        rin_hsearch_table_destroy(table);
         errno = ENOMEM;
         return 0;
     }
@@ -114,9 +156,34 @@ void hdestroy(void)
     table = g_hsearch_table;
     g_hsearch_table = NULL;
     rin_hsearch_unlock();
-    if (table == NULL) return;
-    free(table->slots);
-    free(table);
+    rin_hsearch_table_destroy(table);
+}
+
+int hcreate_r(size_t nel, struct hsearch_data* public_table)
+{
+    RinHSearchTable* table;
+    if (public_table == NULL || public_table->table != NULL ||
+        public_table->size != 0u || public_table->filled != 0u) {
+        errno = EINVAL;
+        return 0;
+    }
+    table = rin_hsearch_table_create(nel);
+    if (table == NULL) return 0;
+    public_table->table = (struct _ENTRY*)table;
+    public_table->size = (unsigned int)table->capacity;
+    public_table->filled = 0u;
+    return 1;
+}
+
+void hdestroy_r(struct hsearch_data* public_table)
+{
+    RinHSearchTable* table;
+    if (public_table == NULL || public_table->table == NULL) return;
+    table = (RinHSearchTable*)public_table->table;
+    public_table->table = NULL;
+    public_table->size = 0u;
+    public_table->filled = 0u;
+    rin_hsearch_table_destroy(table);
 }
 
 ENTRY* hsearch(ENTRY item, ACTION action)
@@ -145,9 +212,17 @@ ENTRY* hsearch(ENTRY item, ACTION action)
                 rin_hsearch_unlock();
                 return NULL;
             }
-            candidate->entry = item;
+            candidate->owned_key = rin_search_key_copy(item.key);
+            if (candidate->owned_key == NULL) {
+                errno = ENOMEM;
+                rin_hsearch_unlock();
+                return NULL;
+            }
+            candidate->entry.key = candidate->owned_key;
+            candidate->entry.data = item.data;
             candidate->hash = hash;
             candidate->occupied = 1;
+            ++table->filled;
             rin_hsearch_unlock();
             return &candidate->entry;
         }
@@ -161,6 +236,82 @@ ENTRY* hsearch(ENTRY item, ACTION action)
     errno = ENOMEM;
     rin_hsearch_unlock();
     return NULL;
+}
+
+int hsearch_r(ENTRY item, ACTION action, ENTRY** result,
+              struct hsearch_data* public_table)
+{
+    RinHSearchTable* table;
+    uint64_t hash;
+    size_t slot;
+    size_t probe;
+    char* copied_key = NULL;
+    if (result != NULL) *result = NULL;
+    if (item.key == NULL || result == NULL || public_table == NULL ||
+        (action != FIND && action != ENTER) || public_table->table == NULL) {
+        errno = EINVAL;
+        return 0;
+    }
+    table = (RinHSearchTable*)public_table->table;
+    if (public_table->size != table->capacity ||
+        table->capacity == 0u ||
+        (table->capacity & (table->capacity - 1u)) != 0u) {
+        errno = EINVAL;
+        return 0;
+    }
+    hash = rin_hsearch_hash(item.key);
+    for (;;) {
+        RinHSearchSlot* empty = NULL;
+        rin_hsearch_table_lock(table);
+        if (table->filled > table->capacity ||
+            public_table->filled != table->filled) {
+            rin_hsearch_table_unlock(table);
+            free(copied_key);
+            errno = EINVAL;
+            return 0;
+        }
+        slot = (size_t)hash & (table->capacity - 1u);
+        for (probe = 0u; probe < table->capacity; ++probe) {
+            RinHSearchSlot* candidate = &table->slots[slot];
+            if (!candidate->occupied) {
+                empty = candidate;
+                break;
+            }
+            if (candidate->hash == hash &&
+                strcmp(candidate->entry.key, item.key) == 0) {
+                *result = &candidate->entry;
+                rin_hsearch_table_unlock(table);
+                free(copied_key);
+                return 1;
+            }
+            slot = (slot + 1u) & (table->capacity - 1u);
+        }
+        if (empty == NULL || action == FIND) {
+            rin_hsearch_table_unlock(table);
+            free(copied_key);
+            errno = empty == NULL ? ENOMEM : ESRCH;
+            return 0;
+        }
+        if (copied_key == NULL) {
+            rin_hsearch_table_unlock(table);
+            copied_key = rin_search_key_copy(item.key);
+            if (copied_key == NULL) {
+                errno = ENOMEM;
+                return 0;
+            }
+            continue;
+        }
+        empty->owned_key = copied_key;
+        empty->entry.key = copied_key;
+        empty->entry.data = item.data;
+        empty->hash = hash;
+        empty->occupied = 1;
+        ++table->filled;
+        ++public_table->filled;
+        rin_hsearch_table_unlock(table);
+        *result = &empty->entry;
+        return 1;
+    }
 }
 
 static RinSearchTreeNode* rin_tsearch_find(
@@ -186,6 +337,87 @@ static void rin_tsearch_set_root(void** rootp, RinSearchTreeNode* root)
 {
     void* value = root;
     memcpy(rootp, &value, sizeof(value));
+}
+
+static int rin_tsearch_height(const RinSearchTreeNode* node)
+{
+    return node != NULL ? node->height : 0;
+}
+
+static void rin_tsearch_update_height(RinSearchTreeNode* node)
+{
+    const int left_height = rin_tsearch_height(node->left);
+    const int right_height = rin_tsearch_height(node->right);
+    node->height = (left_height > right_height ? left_height : right_height) + 1;
+}
+
+static RinSearchTreeNode* rin_tsearch_rotate_left(
+    void** rootp, RinSearchTreeNode* pivot)
+{
+    RinSearchTreeNode* replacement = pivot->right;
+    RinSearchTreeNode* parent = pivot->parent;
+    pivot->right = replacement->left;
+    if (pivot->right != NULL) pivot->right->parent = pivot;
+    replacement->left = pivot;
+    replacement->parent = parent;
+    pivot->parent = replacement;
+    if (parent == NULL) {
+        rin_tsearch_set_root(rootp, replacement);
+    } else if (parent->left == pivot) {
+        parent->left = replacement;
+    } else {
+        parent->right = replacement;
+    }
+    rin_tsearch_update_height(pivot);
+    rin_tsearch_update_height(replacement);
+    return replacement;
+}
+
+static RinSearchTreeNode* rin_tsearch_rotate_right(
+    void** rootp, RinSearchTreeNode* pivot)
+{
+    RinSearchTreeNode* replacement = pivot->left;
+    RinSearchTreeNode* parent = pivot->parent;
+    pivot->left = replacement->right;
+    if (pivot->left != NULL) pivot->left->parent = pivot;
+    replacement->right = pivot;
+    replacement->parent = parent;
+    pivot->parent = replacement;
+    if (parent == NULL) {
+        rin_tsearch_set_root(rootp, replacement);
+    } else if (parent->left == pivot) {
+        parent->left = replacement;
+    } else {
+        parent->right = replacement;
+    }
+    rin_tsearch_update_height(pivot);
+    rin_tsearch_update_height(replacement);
+    return replacement;
+}
+
+static void rin_tsearch_rebalance(void** rootp, RinSearchTreeNode* node)
+{
+    while (node != NULL) {
+        int balance;
+        RinSearchTreeNode* subtree_root;
+        rin_tsearch_update_height(node);
+        balance = rin_tsearch_height(node->left) -
+                  rin_tsearch_height(node->right);
+        if (balance > 1) {
+            if (rin_tsearch_height(node->left->left) <
+                rin_tsearch_height(node->left->right))
+                (void)rin_tsearch_rotate_left(rootp, node->left);
+            subtree_root = rin_tsearch_rotate_right(rootp, node);
+        } else if (balance < -1) {
+            if (rin_tsearch_height(node->right->right) <
+                rin_tsearch_height(node->right->left))
+                (void)rin_tsearch_rotate_right(rootp, node->right);
+            subtree_root = rin_tsearch_rotate_left(rootp, node);
+        } else {
+            subtree_root = node;
+        }
+        node = subtree_root->parent;
+    }
 }
 
 void* tsearch(const void* key, void** rootp,
@@ -216,8 +448,10 @@ void* tsearch(const void* key, void** rootp,
     node->left = NULL;
     node->right = NULL;
     node->parent = parent;
+    node->height = 1;
     *link = node;
     if (parent == NULL) rin_tsearch_set_root(rootp, node);
+    else rin_tsearch_rebalance(rootp, parent);
     return node;
 }
 
@@ -257,6 +491,7 @@ void* tdelete(const void* key, void** rootp,
 {
     RinSearchTreeNode* node;
     RinSearchTreeNode* parent;
+    RinSearchTreeNode* rebalance_start;
     if (rootp == NULL || compar == NULL) {
         errno = EINVAL;
         return NULL;
@@ -266,24 +501,34 @@ void* tdelete(const void* key, void** rootp,
     parent = node->parent;
     if (node->left == NULL) {
         rin_tsearch_transplant(rootp, node, node->right);
+        rebalance_start = parent;
     } else if (node->right == NULL) {
         rin_tsearch_transplant(rootp, node, node->left);
+        rebalance_start = parent;
     } else {
         RinSearchTreeNode* successor = rin_tsearch_minimum(node->right);
         if (successor->parent != node) {
+            rebalance_start = successor->parent;
             rin_tsearch_transplant(rootp, successor, successor->right);
             successor->right = node->right;
             successor->right->parent = successor;
+        } else {
+            rebalance_start = successor;
         }
         rin_tsearch_transplant(rootp, node, successor);
         successor->left = node->left;
         successor->left->parent = successor;
+        rin_tsearch_update_height(successor);
     }
     free(node);
+    rin_tsearch_rebalance(rootp, rebalance_start);
     return parent != NULL ? (void*)parent : (void*)rootp;
 }
 
-void twalk(const void* root, void (*action)(const void*, VISIT, int))
+typedef void (*RinTreeWalkCallback)(const void*, VISIT, int, void*);
+
+static void rin_twalk(const void* root, RinTreeWalkCallback action,
+                      void* context)
 {
     RinSearchTreeNode* node = (RinSearchTreeNode*)root;
     RinSearchTreeNode* previous = NULL;
@@ -294,36 +539,100 @@ void twalk(const void* root, void (*action)(const void*, VISIT, int))
         int next_level = level > 0 ? level - 1 : 0;
         if (previous == node->parent) {
             if (node->left == NULL && node->right == NULL) {
-                action(node, leaf, level);
+                action(node, leaf, level, context);
             } else {
-                action(node, preorder, level);
+                action(node, preorder, level, context);
                 if (node->left != NULL) {
                     next = node->left;
                     next_level = level < INT_MAX ? level + 1 : INT_MAX;
                 } else {
-                    action(node, postorder, level);
+                    action(node, postorder, level, context);
                     if (node->right != NULL) {
                         next = node->right;
                         next_level = level < INT_MAX ? level + 1 : INT_MAX;
                     } else {
-                        action(node, endorder, level);
+                        action(node, endorder, level, context);
                     }
                 }
             }
         } else if (previous == node->left) {
-            action(node, postorder, level);
+            action(node, postorder, level, context);
             if (node->right != NULL) {
                 next = node->right;
                 next_level = level < INT_MAX ? level + 1 : INT_MAX;
             } else {
-                action(node, endorder, level);
+                action(node, endorder, level, context);
             }
         } else {
-            action(node, endorder, level);
+            action(node, endorder, level, context);
         }
         previous = node;
         node = next;
         level = next_level;
+    }
+}
+
+typedef struct RinTreeWalkLegacyContext {
+    void (*action)(const void*, VISIT, int);
+} RinTreeWalkLegacyContext;
+
+typedef struct RinTreeWalkReentrantContext {
+    void (*action)(const void*, VISIT, void*);
+    void* context;
+} RinTreeWalkReentrantContext;
+
+static void rin_twalk_legacy_action(const void* node, VISIT visit, int level,
+                                    void* context)
+{
+    RinTreeWalkLegacyContext* legacy = (RinTreeWalkLegacyContext*)context;
+    legacy->action(node, visit, level);
+}
+
+static void rin_twalk_reentrant_bridge(const void* node, VISIT visit,
+                                       int level, void* context)
+{
+    RinTreeWalkReentrantContext* reentrant =
+        (RinTreeWalkReentrantContext*)context;
+    (void)level;
+    reentrant->action(node, visit, reentrant->context);
+}
+
+void twalk(const void* root, void (*action)(const void*, VISIT, int))
+{
+    RinTreeWalkLegacyContext context;
+    if (action == NULL) return;
+    context.action = action;
+    rin_twalk(root, rin_twalk_legacy_action, &context);
+}
+
+void twalk_r(const void* root,
+             void (*action)(const void*, VISIT, void*), void* context)
+{
+    RinTreeWalkReentrantContext callback_context;
+    if (action == NULL) return;
+    callback_context.action = action;
+    callback_context.context = context;
+    rin_twalk(root, rin_twalk_reentrant_bridge, &callback_context);
+}
+
+void tdestroy(void* root, void (*free_node)(void*))
+{
+    RinSearchTreeNode* node = (RinSearchTreeNode*)root;
+    while (node != NULL) {
+        if (node->left != NULL) {
+            node = node->left;
+        } else if (node->right != NULL) {
+            node = node->right;
+        } else {
+            RinSearchTreeNode* parent = node->parent;
+            if (parent != NULL) {
+                if (parent->left == node) parent->left = NULL;
+                else parent->right = NULL;
+            }
+            if (free_node != NULL) free_node(node->key);
+            free(node);
+            node = parent;
+        }
     }
 }
 

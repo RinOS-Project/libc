@@ -4,6 +4,7 @@
 #ifndef _RIN_SEARCH_H
 #define _RIN_SEARCH_H
 
+#include "features.h"
 #include <stddef.h>
 
 #if defined(__RINOS__) || defined(__USE_XOPEN_EXTENDED) || \
@@ -44,6 +45,25 @@ void* tdelete(const void* key, void** rootp,
               int (*compar)(const void*, const void*));
 void twalk(const void* root,
            void (*action)(const void*, VISIT, int));
+
+#if defined(__USE_GNU) || defined(__RINOS__)
+/* GNU-compatible caller-owned hash table.  Initialize with {0}; distinct
+ * instances do not share the process-global hsearch() table. */
+struct _ENTRY;
+struct hsearch_data {
+    struct _ENTRY* table;
+    unsigned int size;
+    unsigned int filled;
+};
+
+int hcreate_r(size_t nel, struct hsearch_data* table);
+void hdestroy_r(struct hsearch_data* table);
+int hsearch_r(ENTRY item, ACTION action, ENTRY** result,
+              struct hsearch_data* table);
+void tdestroy(void* root, void (*free_node)(void*));
+void twalk_r(const void* root,
+             void (*action)(const void*, VISIT, void*), void* context);
+#endif
 
 void insque(void* element, void* pred);
 void remque(void* element);
