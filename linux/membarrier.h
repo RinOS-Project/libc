@@ -1,0 +1,20 @@
+/* SPDX-License-Identifier: MIT */
+#ifndef _LINUX_MEMBARRIER_H
+#define _LINUX_MEMBARRIER_H
+
+/* Linux membarrier command values. RinOS currently implements process-private
+ * expedited barriers and reports only those commands from QUERY. */
+#define MEMBARRIER_CMD_QUERY (0)
+#define MEMBARRIER_CMD_GLOBAL (1 << 0)
+#define MEMBARRIER_CMD_GLOBAL_EXPEDITED (1 << 1)
+#define MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED (1 << 2)
+#define MEMBARRIER_CMD_PRIVATE_EXPEDITED (1 << 3)
+#define MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED (1 << 4)
+#define MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE (1 << 5)
+#define MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE (1 << 6)
+#define MEMBARRIER_CMD_PRIVATE_EXPEDITED_RSEQ (1 << 7)
+#define MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_RSEQ (1 << 8)
+#define MEMBARRIER_CMD_GET_REGISTRATIONS (1 << 9)
+#define MEMBARRIER_CMD_FLAG_CPU (1U << 0)
+
+#endif /* _LINUX_MEMBARRIER_H */
