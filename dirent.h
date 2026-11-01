@@ -36,7 +36,6 @@ extern "C" {
  * 定数
  * ═══════════════════════════════════════════════════════════════*/
 
-#define NAME_MAX 255
 #define DT_UNKNOWN  0
 #define DT_FIFO     1
 #define DT_CHR      2
@@ -62,10 +61,10 @@ struct dirent {
 #endif
     unsigned short d_reclen;        /* このエントリのサイズ */
     unsigned char  d_type;          /* ファイルタイプ */
-    char           d_name[256];     /* ファイル名 */
+    char           d_name[RIN_DIRENT64_NAME_MAX + 1u]; /* ファイル名 */
 #if defined(__RIN_FILE_OFFSET_BITS64) && \
     !defined(RIN_DIRENT_RUNTIME_LEGACY_LAYOUT)
-    uint8_t        d_reserved[5];
+    uint8_t        d_reserved[7];
 #endif
 };
 
@@ -75,21 +74,21 @@ struct dirent64 {
     int64_t        d_off;
     unsigned short d_reclen;
     unsigned char  d_type;
-    char           d_name[256];
-    uint8_t        d_reserved[5];
+    char           d_name[RIN_DIRENT64_NAME_MAX + 1u];
+    uint8_t        d_reserved[7];
 };
 
 #if defined(__RIN_FILE_OFFSET_BITS64) && \
     !defined(RIN_DIRENT_RUNTIME_LEGACY_LAYOUT)
 #if defined(__cplusplus)
-static_assert(sizeof(struct dirent) == sizeof(RinDirent64Abi),
-              "LFS dirent libc/kernel ABI size drift");
+static_assert(sizeof(struct dirent) == sizeof(RinDirent64ExtendedAbi),
+              "LFS dirent libc/kernel extended buffer size drift");
 static_assert(offsetof(struct dirent, d_name) ==
                   offsetof(RinDirent64Abi, name),
               "LFS dirent libc/kernel name offset drift");
 #else
-_Static_assert(sizeof(struct dirent) == sizeof(RinDirent64Abi),
-               "LFS dirent libc/kernel ABI size drift");
+_Static_assert(sizeof(struct dirent) == sizeof(RinDirent64ExtendedAbi),
+               "LFS dirent libc/kernel extended buffer size drift");
 _Static_assert(offsetof(struct dirent, d_name) ==
                    offsetof(RinDirent64Abi, name),
                "LFS dirent libc/kernel name offset drift");
@@ -97,14 +96,14 @@ _Static_assert(offsetof(struct dirent, d_name) ==
 #endif
 
 #if defined(__cplusplus)
-static_assert(sizeof(struct dirent64) == sizeof(RinDirent64Abi),
-              "dirent64 libc/kernel ABI drift");
+static_assert(sizeof(struct dirent64) == sizeof(RinDirent64ExtendedAbi),
+              "extended dirent64 libc/kernel buffer drift");
 static_assert(offsetof(struct dirent64, d_name) ==
                   offsetof(RinDirent64Abi, name),
               "dirent64 libc/kernel name offset drift");
 #else
-_Static_assert(sizeof(struct dirent64) == sizeof(RinDirent64Abi),
-               "dirent64 libc/kernel ABI drift");
+_Static_assert(sizeof(struct dirent64) == sizeof(RinDirent64ExtendedAbi),
+               "extended dirent64 libc/kernel buffer drift");
 _Static_assert(offsetof(struct dirent64, d_name) ==
                    offsetof(RinDirent64Abi, name),
                "dirent64 libc/kernel name offset drift");
@@ -174,80 +173,102 @@ static inline void _rin_dir_unlock(DIR* dirp) {
     __atomic_store_n(&dirp->lock, 0u, __ATOMIC_RELEASE);
 }
 
+static inline int _rin_dirent64_extended_valid(
+    const RinDirent64ExtendedAbi* record, size_t* name_length_out) {
+    const uint8_t* bytes = (const uint8_t*)record;
+    size_t name_length = 0u;
+    size_t name_end;
+    size_t expected_length;
+    if (name_length_out) *name_length_out = 0u;
+    if (!record || record->record_length < sizeof(RinDirent64Abi) ||
+        record->record_length > sizeof(*record))
+        return 0;
+    while (name_length <= RIN_DIRENT64_NAME_MAX &&
+           record->name[name_length] != '\0')
+        ++name_length;
+    if (name_length > RIN_DIRENT64_NAME_MAX) return 0;
+    if (name_length <= 255u) {
+        expected_length = sizeof(RinDirent64Abi);
+    } else {
+        expected_length = offsetof(RinDirent64ExtendedAbi, name) +
+            name_length + 1u;
+        expected_length = (expected_length + 7u) & ~(size_t)7u;
+    }
+    if (record->record_length != expected_length) return 0;
+    name_end = offsetof(RinDirent64ExtendedAbi, name) + name_length + 1u;
+    for (size_t index = name_end; index < record->record_length; ++index) {
+        if (bytes[index] != 0u) return 0;
+    }
+    if (name_length_out) *name_length_out = name_length;
+    return 1;
+}
+
 static inline int _rin_dir_read_entry_locked(DIR* dirp,
                                              struct dirent* output) {
-#if defined(__RIN_FILE_OFFSET_BITS64)
-    struct dirent64 record;
+    RinDirent64ExtendedAbi record;
     intptr_t result;
-    size_t index;
-    int has_terminator = 0;
+    size_t name_length = 0u;
+    if (!dirp || !output) {
+        errno = EINVAL;
+        return -1;
+    }
     if (dirp->eof) return 0;
+    memset(&record, 0, sizeof(record));
     result = _RIN_DIRENT_SYSCALL3(
-        SYS_READDIR64, (uintptr_t)dirp->fd, (uintptr_t)output,
-        (uintptr_t)sizeof(*output));
+        SYS_READDIR64, (uintptr_t)dirp->fd, (uintptr_t)&record,
+        (uintptr_t)sizeof(record));
     if (result == 0) {
         dirp->eof = 1;
+        memset(output, 0, sizeof(*output));
         return 0;
     }
     result = _rin_dir_result(result);
     if (result < 0) return -1;
-    if (result != 1) {
+    if (result != 1 ||
+        !_rin_dirent64_extended_valid(&record, &name_length)) {
         errno = EIO;
         return -1;
     }
-    memcpy(&record, output, sizeof(record));
-    if (record.d_reclen != sizeof(record)) {
-        errno = EIO;
-        return -1;
-    }
-    for (index = 0u; index < sizeof(record.d_reserved); ++index) {
-        if (record.d_reserved[index] != 0u) {
-            errno = EIO;
-            return -1;
-        }
-    }
-    for (index = 0u; index < sizeof(record.d_name); ++index) {
-        if (record.d_name[index] == '\0') {
-            has_terminator = 1;
-            break;
-        }
-    }
-    if (!has_terminator) {
-        errno = EIO;
-        return -1;
-    }
-    return 1;
+    memset(output, 0, sizeof(*output));
+#if defined(__RIN_FILE_OFFSET_BITS64) && \
+    !defined(RIN_DIRENT_RUNTIME_LEGACY_LAYOUT)
+    output->d_ino = record.inode;
+    output->d_off = record.offset;
 #else
-    intptr_t result;
-    if (dirp->eof) return 0;
-
-    result = _RIN_DIRENT_SYSCALL3(
-        SYS_READDIR, (uintptr_t)dirp->fd,
-        (uintptr_t)&dirp->entry, (uintptr_t)sizeof(struct dirent));
-    if (result == 0) {
-        dirp->eof = 1;
-        return 0;
+    output->d_ino = (unsigned long)record.inode;
+    output->d_off = (unsigned long)record.offset;
+    if (sizeof(unsigned long) == 8u) {
+        output->d_reclen = record.record_length;
+    } else if (name_length <= 255u) {
+        output->d_reclen = 268u;
+    } else {
+        size_t native_length = offsetof(struct dirent, d_name) +
+            name_length + 1u;
+        size_t native_alignment = sizeof(unsigned long);
+        output->d_reclen = (unsigned short)(
+            (native_length + native_alignment - 1u) /
+            native_alignment * native_alignment);
     }
-    result = _rin_dir_result(result);
-    if (result < 0) return -1;
-    /* SYS_READDIR has a one-token success contract; other positives are malformed. */
-    if (result != 1) {
-        errno = EIO;
-        return -1;
-    }
-
-    if (output != &dirp->entry)
-        memcpy(output, &dirp->entry, sizeof(*output));
-    return 1;
 #endif
+#if defined(__RIN_FILE_OFFSET_BITS64) && \
+    !defined(RIN_DIRENT_RUNTIME_LEGACY_LAYOUT)
+    output->d_reclen = record.record_length;
+#endif
+    output->d_type = record.type;
+    memcpy(output->d_name, record.name, name_length + 1u);
+    return 1;
 }
 
 static inline int _rin_dir_read_entry64_locked(DIR* dirp,
                                                struct dirent64* output) {
     intptr_t result;
-    size_t index;
-    int has_terminator = 0;
+    size_t name_length = 0u;
+    if (!dirp || !output) {
+        errno = EINVAL;
+        return -1;
+    }
     if (dirp->eof) return 0;
+    memset(output, 0, sizeof(*output));
     result = _RIN_DIRENT_SYSCALL3(
         SYS_READDIR64, (uintptr_t)dirp->fd, (uintptr_t)output,
         (uintptr_t)sizeof(*output));
@@ -257,26 +278,12 @@ static inline int _rin_dir_read_entry64_locked(DIR* dirp,
     }
     result = _rin_dir_result(result);
     if (result < 0) return -1;
-    if (result != 1 || output->d_reclen != sizeof(*output)) {
+    if (result != 1 || !_rin_dirent64_extended_valid(
+            (const RinDirent64ExtendedAbi*)output, &name_length)) {
         errno = EIO;
         return -1;
     }
-    for (index = 0u; index < sizeof(output->d_reserved); ++index) {
-        if (output->d_reserved[index] != 0u) {
-            errno = EIO;
-            return -1;
-        }
-    }
-    for (index = 0u; index < sizeof(output->d_name); ++index) {
-        if (output->d_name[index] == '\0') {
-            has_terminator = 1;
-            break;
-        }
-    }
-    if (!has_terminator) {
-        errno = EIO;
-        return -1;
-    }
+    (void)name_length;
     return 1;
 }
 
