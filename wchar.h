@@ -478,7 +478,7 @@ static inline double wcstod(const wchar_t* nptr, wchar_t** endptr) {
                       : (wchar_t*)original;
     }
     if (parsed.invalid_input) errno = EINVAL;
-    else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
+    else if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact)) errno = ERANGE;
     return rin_float_parse_binary64_value(parsed.bits);
 }
 
@@ -508,7 +508,7 @@ static inline float wcstof(const wchar_t* nptr, wchar_t** endptr) {
                       : (wchar_t*)original;
     }
     if (parsed.invalid_input) errno = EINVAL;
-    else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
+    else if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact)) errno = ERANGE;
     return rin_float_parse_binary32_value(parsed.bits);
 }
 
@@ -541,7 +541,7 @@ static inline long double wcstold(const wchar_t* nptr, wchar_t** endptr) {
                           : (wchar_t*)original;
         }
         if (parsed.invalid_input) errno = EINVAL;
-        else if (parsed.range_direction != 0 || parsed.subnormal)
+        else if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact))
             errno = ERANGE;
         return parsed.value;
     }
@@ -560,7 +560,7 @@ static inline long double wcstold(const wchar_t* nptr, wchar_t** endptr) {
                           : (wchar_t*)original;
         }
         if (parsed.invalid_input) errno = EINVAL;
-        else if (parsed.range_direction != 0 || parsed.subnormal)
+        else if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact))
             errno = ERANGE;
         return (long double)rin_float_parse_binary64_value(parsed.bits);
     }
@@ -640,7 +640,7 @@ static inline double wcstod_l(const wchar_t* nptr, wchar_t** endptr,
                       ? (wchar_t*)(input.start + (parsed.end - input.text))
                       : (wchar_t*)nptr;
     if (parsed.invalid_input) errno = EINVAL;
-    else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
+    else if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact)) errno = ERANGE;
     return rin_float_parse_binary64_value(parsed.bits);
 }
 
@@ -665,7 +665,7 @@ static inline float wcstof_l(const wchar_t* nptr, wchar_t** endptr,
                       ? (wchar_t*)(input.start + (parsed.end - input.text))
                       : (wchar_t*)nptr;
     if (parsed.invalid_input) errno = EINVAL;
-    else if (parsed.range_direction != 0 || parsed.subnormal) errno = ERANGE;
+    else if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact)) errno = ERANGE;
     return rin_float_parse_binary32_value(parsed.bits);
 }
 
@@ -692,7 +692,7 @@ static inline long double wcstold_l(const wchar_t* nptr, wchar_t** endptr,
                           ? (wchar_t*)(input.start + (parsed.end - input.text))
                           : (wchar_t*)nptr;
         if (parsed.invalid_input) errno = EINVAL;
-        else if (parsed.range_direction != 0 || parsed.subnormal)
+        else if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact))
             errno = ERANGE;
         return parsed.value;
     }
@@ -705,7 +705,7 @@ static inline long double wcstold_l(const wchar_t* nptr, wchar_t** endptr,
                           ? (wchar_t*)(input.start + (parsed.end - input.text))
                           : (wchar_t*)nptr;
         if (parsed.invalid_input) errno = EINVAL;
-        else if (parsed.range_direction != 0 || parsed.subnormal)
+        else if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact))
             errno = ERANGE;
         return (long double)rin_float_parse_binary64_value(parsed.bits);
     }

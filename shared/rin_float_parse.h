@@ -40,6 +40,7 @@ typedef struct rin_float_parse_result {
     int invalid_input;
     int range_direction;
     int subnormal;
+    int inexact;
 } rin_float_parse_result;
 
 #if defined(RIN_FP_HAS_BINARY80)
@@ -50,6 +51,7 @@ typedef struct rin_long_double_parse_result {
     int invalid_input;
     int range_direction;
     int subnormal;
+    int inexact;
 } rin_long_double_parse_result;
 #endif
 
@@ -399,9 +401,13 @@ static inline int rin_fp_decimal_to_bits(const rin_fp_big_uint* decimal,
                                          int decimal_exponent, int sticky,
                                          int negative,
                                          const rin_fp_traits* traits,
-                                         rin_fp_u64* output)
+                                         rin_fp_u64* output,
+                                         int* inexact_out)
 {
     rin_fp_u64 low = 0u;
+    /* Fail-closed default; success overwrites with the exactness the
+     * comparator already proved (exact==0 means decimal==binary). */
+    *inexact_out = 1;
     rin_fp_u64 high = traits->maximum_finite;
     int okay = 1;
     rin_fp_u64 lower_significand;
@@ -465,6 +471,7 @@ static inline int rin_fp_decimal_to_bits(const rin_fp_big_uint* decimal,
                 selected = low + 1u;
         }
     }
+    *inexact_out = (exact != 0);
     if (selected == 0u) return 0;
     if (negative) selected |= traits->sign;
     *output = selected;
@@ -474,9 +481,10 @@ static inline int rin_fp_decimal_to_bits(const rin_fp_big_uint* decimal,
 #if defined(RIN_FP_HAS_BINARY80)
 static inline int rin_fp_decimal_to_binary80(
     const rin_fp_big_uint* decimal, int decimal_exponent, int sticky,
-    int negative, long double* output)
+    int negative, long double* output, int* inexact_out)
 {
     int okay = 1;
+    *inexact_out = 1;
     rin_fp_u16 selected_exponent = 0u;
     int minimum_comparison = rin_fp_compare_decimal_binary(
         decimal, decimal_exponent, sticky, ((rin_fp_u64)1u) << 63u,
@@ -557,6 +565,7 @@ static inline int rin_fp_decimal_to_binary80(
             result_significand = upper_significand;
         }
     }
+    *inexact_out = (exact != 0);
     if (result_significand == 0u || result_exponent == 0x7fffu) return 0;
     *output = rin_fp_binary80_value(result_significand, result_exponent,
                                     negative);
@@ -598,13 +607,19 @@ static inline int rin_fp_binary_to_bits(rin_fp_u64 significand, int scale,
                                         int round_bit, int sticky,
                                         int negative,
                                         const rin_fp_traits* traits,
-                                        rin_fp_u64* output)
+                                        rin_fp_u64* output,
+                                        int* inexact_out)
 {
     unsigned highest;
     long long exponent_wide;
     rin_fp_u64 rounded = 0u;
+    /* Exactness: any dropped nonzero bit (here or upstream) marks
+     * the conversion inexact. Callers report ERANGE on inexact
+     * subnormals only (glibc parity). */
+    *inexact_out = 1;
     if (significand == 0u) {
         *output = negative ? traits->sign : 0u;
+        *inexact_out = 0;
         return 1;
     }
     highest = 63u - (unsigned)__builtin_clzll(significand);
@@ -617,9 +632,15 @@ static inline int rin_fp_binary_to_bits(rin_fp_u64 significand, int scale,
         rin_fp_u64 exponent_bits;
         rin_fp_u64 bits;
         if (shift > 0) {
+            rin_fp_u64 drop_mask = (unsigned)shift >= 64u
+                ? ~(rin_fp_u64)0u
+                : ((((rin_fp_u64)1u) << (unsigned)shift) - 1u);
+            *inexact_out = round_bit || sticky ||
+                (significand & drop_mask) != 0u;
             rin_fp_round_right(significand, (unsigned)shift,
                                round_bit || sticky, &rounded);
         } else {
+            *inexact_out = round_bit || sticky;
             rounded = significand << (unsigned)-shift;
         }
         precision_limit = ((rin_fp_u64)1u) <<
@@ -641,10 +662,16 @@ static inline int rin_fp_binary_to_bits(rin_fp_u64 significand, int scale,
         long long shift_wide = (long long)traits->minimum_subnormal - scale;
         rin_fp_u64 normal_threshold;
         if (shift_wide <= 0) {
+            *inexact_out = round_bit || sticky;
             rounded = significand << (unsigned)-shift_wide;
         } else {
-            rin_fp_round_right(significand,
-                               shift_wide > 65 ? 65u : (unsigned)shift_wide,
+            unsigned applied =
+                shift_wide > 65 ? 65u : (unsigned)shift_wide;
+            rin_fp_u64 drop_mask = applied >= 64u ? ~(rin_fp_u64)0u
+                : ((((rin_fp_u64)1u) << applied) - 1u);
+            *inexact_out = round_bit || sticky ||
+                (significand & drop_mask) != 0u;
+            rin_fp_round_right(significand, applied,
                                round_bit || sticky, &rounded);
         }
         if (rounded == 0u) return 0;
@@ -658,13 +685,15 @@ static inline int rin_fp_binary_to_bits(rin_fp_u64 significand, int scale,
 #if defined(RIN_FP_HAS_BINARY80)
 static inline int rin_fp_binary_to_binary80(
     rin_fp_u64 significand, int scale, int round_bit, int sticky,
-    int negative, long double* output)
+    int negative, long double* output, int* inexact_out)
 {
     unsigned highest;
     long long exponent_wide;
     rin_fp_u64 rounded = 0u;
+    *inexact_out = 1;
     if (significand == 0u) {
         *output = rin_fp_binary80_value(0u, 0u, negative);
+        *inexact_out = 0;
         return 1;
     }
     highest = 63u - (unsigned)__builtin_clzll(significand);
@@ -674,9 +703,15 @@ static inline int rin_fp_binary_to_binary80(
         int shift = (int)highest - 63;
         rin_fp_u16 encoded_exponent;
         if (shift > 0) {
+            rin_fp_u64 drop_mask = (unsigned)shift >= 64u
+                ? ~(rin_fp_u64)0u
+                : ((((rin_fp_u64)1u) << (unsigned)shift) - 1u);
+            *inexact_out = round_bit || sticky ||
+                (significand & drop_mask) != 0u;
             rin_fp_round_right(significand, (unsigned)shift,
                                round_bit || sticky, &rounded);
         } else {
+            *inexact_out = round_bit || sticky;
             rounded = significand << (unsigned)-shift;
             if (shift == 0 && round_bit &&
                 (sticky || (rounded & 1u) != 0u)) {
@@ -695,10 +730,16 @@ static inline int rin_fp_binary_to_binary80(
     {
         long long shift_wide = -16445LL - (long long)scale;
         if (shift_wide <= 0) {
+            *inexact_out = round_bit || sticky;
             rounded = significand << (unsigned)-shift_wide;
         } else {
-            rin_fp_round_right(significand,
-                               shift_wide > 65 ? 65u : (unsigned)shift_wide,
+            unsigned applied =
+                shift_wide > 65 ? 65u : (unsigned)shift_wide;
+            rin_fp_u64 drop_mask = applied >= 64u ? ~(rin_fp_u64)0u
+                : ((((rin_fp_u64)1u) << applied) - 1u);
+            *inexact_out = round_bit || sticky ||
+                (significand & drop_mask) != 0u;
+            rin_fp_round_right(significand, applied,
                                round_bit || sticky, &rounded);
         }
         if (rounded == 0u) return 0;
@@ -722,6 +763,7 @@ static inline rin_float_parse_result rin_fp_empty_result(const char* string)
     result.invalid_input = string == (const char*)0;
     result.range_direction = 0;
     result.subnormal = 0;
+    result.inexact = 0;
     return result;
 }
 
@@ -768,6 +810,7 @@ static inline rin_float_parse_result rin_fp_parse_decimal_magnitude(
                 result.range_direction = 1;
                 result.bits = traits->infinity |
                               (negative ? traits->sign : 0u);
+                result.inexact = 1;
                 return result;
             }
             ++kept;
@@ -809,19 +852,23 @@ static inline rin_float_parse_result rin_fp_parse_decimal_magnitude(
     dropped = significant_count - (long long)kept;
     decimal_exponent = explicit_exponent - fractional_digits + dropped;
     order = significant_count + explicit_exponent - fractional_digits - 1;
+    int inexact = 1;
     if (order > 400LL || order < -400LL ||
         decimal_exponent > 2000LL || decimal_exponent < -2000LL ||
         !rin_fp_decimal_to_bits(&decimal, (int)decimal_exponent, sticky,
-                                negative, traits, &result.bits)) {
+                                negative, traits, &result.bits,
+                                &inexact)) {
         result.range_direction = order < 0 ? -1 : 1;
         result.bits = result.range_direction > 0
                           ? traits->infinity |
                                 (negative ? traits->sign : 0u)
                           : (negative ? traits->sign : 0u);
+        result.inexact = 1;
         return result;
     }
     result.subnormal = (result.bits & traits->infinity) == 0u &&
                        (result.bits & (traits->infinity - 1u)) != 0u;
+    result.inexact = inexact;
     return result;
 }
 
@@ -919,23 +966,27 @@ static inline rin_float_parse_result rin_fp_parse_hex_magnitude(
         result.bits = negative ? traits->sign : 0u;
         return result;
     }
+    int inexact = 1;
     {
         long long dropped_bits = total_bits - (long long)kept_bits;
         long long scale_wide = exponent - fractional_nibbles * 4LL +
                                dropped_bits;
         if (scale_wide < -100000LL || scale_wide > 100000LL ||
             !rin_fp_binary_to_bits(significand, (int)scale_wide, round_bit,
-                                   sticky, negative, traits, &result.bits)) {
+                                   sticky, negative, traits, &result.bits,
+                                   &inexact)) {
             result.range_direction = scale_wide < 0 ? -1 : 1;
             result.bits = result.range_direction > 0
                               ? traits->infinity |
                                     (negative ? traits->sign : 0u)
                               : (negative ? traits->sign : 0u);
+            result.inexact = 1;
             return result;
         }
     }
     result.subnormal = (result.bits & traits->infinity) == 0u &&
                        (result.bits & (traits->infinity - 1u)) != 0u;
+    result.inexact = inexact;
     return result;
 }
 
@@ -950,6 +1001,7 @@ static inline rin_long_double_parse_result rin_fp_empty_binary80_result(
     result.invalid_input = string == (const char*)0;
     result.range_direction = 0;
     result.subnormal = 0;
+    result.inexact = 0;
     return result;
 }
 
@@ -997,6 +1049,7 @@ rin_fp_parse_binary80_decimal_magnitude(const char* first, int negative,
                 result.range_direction = 1;
                 result.value = rin_fp_binary80_value(
                     ((rin_fp_u64)1u) << 63u, 0x7fffu, negative);
+                result.inexact = 1;
                 return result;
             }
             ++kept;
@@ -1038,11 +1091,13 @@ rin_fp_parse_binary80_decimal_magnitude(const char* first, int negative,
     dropped = significant_count - (long long)kept;
     decimal_exponent = explicit_exponent - fractional_digits + dropped;
     order = significant_count + explicit_exponent - fractional_digits - 1;
+    int inexact = 1;
     if (order > 5000LL || order < -5000LL ||
         decimal_exponent > 5100LL || decimal_exponent < -6200LL ||
         !rin_fp_decimal_to_binary80(&decimal, (int)decimal_exponent, sticky,
-                                    negative, &result.value)) {
+                                    negative, &result.value, &inexact)) {
         result.range_direction = order < 0 ? -1 : 1;
+        result.inexact = 1;
         result.value = result.range_direction > 0
                            ? rin_fp_binary80_value(
                                  ((rin_fp_u64)1u) << 63u, 0x7fffu,
@@ -1051,6 +1106,7 @@ rin_fp_parse_binary80_decimal_magnitude(const char* first, int negative,
         return result;
     }
     result.subnormal = rin_fp_binary80_is_subnormal(result.value);
+    result.inexact = inexact;
     return result;
 }
 
@@ -1149,6 +1205,7 @@ rin_fp_parse_binary80_hex_magnitude(const char* first, int negative,
         result.value = rin_fp_binary80_value(0u, 0u, negative);
         return result;
     }
+    int inexact = 1;
     {
         long long dropped_bits = total_bits - (long long)kept_bits;
         long long scale_wide = exponent - fractional_nibbles * 4LL +
@@ -1156,8 +1213,9 @@ rin_fp_parse_binary80_hex_magnitude(const char* first, int negative,
         if (scale_wide < -100000LL || scale_wide > 100000LL ||
             !rin_fp_binary_to_binary80(
                 significand, (int)scale_wide, round_bit, sticky, negative,
-                &result.value)) {
+                &result.value, &inexact)) {
             result.range_direction = scale_wide < 0 ? -1 : 1;
+            result.inexact = 1;
             result.value = result.range_direction > 0
                                ? rin_fp_binary80_value(
                                      ((rin_fp_u64)1u) << 63u, 0x7fffu,
@@ -1167,6 +1225,7 @@ rin_fp_parse_binary80_hex_magnitude(const char* first, int negative,
         }
     }
     result.subnormal = rin_fp_binary80_is_subnormal(result.value);
+    result.inexact = inexact;
     return result;
 }
 

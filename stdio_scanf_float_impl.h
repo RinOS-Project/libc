@@ -132,8 +132,10 @@ static inline int rin_sscanf_parse_float(
         if (!parsed.converted) return 0;
         /* BATCH41: range/subnormal results still assign (the engine
          * already holds inf/0/subnormal bits) with ERANGE, matching
-         * strtof and glibc, instead of failing the conversion. */
-        if (parsed.range_direction != 0 || parsed.subnormal)
+         * strtof and glibc, instead of failing the conversion.
+         * B46: exact subnormals convert silently (inexactness from
+         * the engine); ERANGE only on inexact ones, like glibc. */
+        if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact))
             errno = ERANGE;
         value_out->bits = parsed.bits;
         parsed_end = parsed.end;
@@ -143,8 +145,10 @@ static inline int rin_sscanf_parse_float(
         if (!parsed.converted) return 0;
         /* BATCH41: range/subnormal results still assign (the engine
          * already holds inf/0/subnormal bits) with ERANGE, matching
-         * strtof and glibc, instead of failing the conversion. */
-        if (parsed.range_direction != 0 || parsed.subnormal)
+         * strtof and glibc, instead of failing the conversion.
+         * B46: exact subnormals convert silently (inexactness from
+         * the engine); ERANGE only on inexact ones, like glibc. */
+        if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact))
             errno = ERANGE;
         value_out->bits = parsed.bits;
         parsed_end = parsed.end;
@@ -156,8 +160,10 @@ static inline int rin_sscanf_parse_float(
         if (!parsed.converted) return 0;
         /* BATCH41: range/subnormal results still assign (the engine
          * already holds inf/0/subnormal bits) with ERANGE, matching
-         * strtof and glibc, instead of failing the conversion. */
-        if (parsed.range_direction != 0 || parsed.subnormal)
+         * strtof and glibc, instead of failing the conversion.
+         * B46: exact subnormals convert silently (inexactness from
+         * the engine); ERANGE only on inexact ones, like glibc. */
+        if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact))
             errno = ERANGE;
         value_out->long_value = parsed.value;
         parsed_end = parsed.end;
@@ -167,8 +173,10 @@ static inline int rin_sscanf_parse_float(
         if (!parsed.converted) return 0;
         /* BATCH41: range/subnormal results still assign (the engine
          * already holds inf/0/subnormal bits) with ERANGE, matching
-         * strtof and glibc, instead of failing the conversion. */
-        if (parsed.range_direction != 0 || parsed.subnormal)
+         * strtof and glibc, instead of failing the conversion.
+         * B46: exact subnormals convert silently (inexactness from
+         * the engine); ERANGE only on inexact ones, like glibc. */
+        if (parsed.range_direction != 0 || (parsed.subnormal && parsed.inexact))
             errno = ERANGE;
         value_out->long_value = (long double)rin_float_parse_binary64_value(
             parsed.bits);
