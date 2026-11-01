@@ -1475,6 +1475,64 @@ static inline int execve(const char* pathname, char* const argv[], char* const e
     return -1;
 }
 
+static inline int execveat(int dirfd, const char* pathname,
+                           char* const argv[], char* const envp[],
+                           int flags) {
+    intptr_t result;
+    intptr_t normalized_result;
+    int exec_hooks_prepared = 0;
+    int syscall_errno;
+#if !defined(MIDL_PASS)
+    int exec_hook_errno;
+#endif
+    if (!pathname || !argv) {
+        errno = EINVAL;
+        return -1;
+    }
+    if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+#if !defined(MIDL_PASS)
+    if (rinfs_exec_prepare_all || rinfs_exec_abort_all) {
+        if (!rinfs_exec_prepare_all || !rinfs_exec_abort_all) {
+            errno = EBUSY;
+            return -1;
+        }
+        exec_hook_errno = rinfs_exec_prepare_all();
+        if (exec_hook_errno != 0) {
+            int mapped_errno = rinfs_exec_status_to_errno
+                ? rinfs_exec_status_to_errno(exec_hook_errno) : EBUSY;
+            errno = mapped_errno > 0 ? mapped_errno : EIO;
+            return -1;
+        }
+        exec_hooks_prepared = 1;
+    }
+#endif
+    result = _RIN_UNISTD_SYSCALL5(
+        SYS_EXECVEAT, (uintptr_t)(intptr_t)dirfd, (uintptr_t)pathname,
+        (uintptr_t)argv, (uintptr_t)envp, (uintptr_t)(uint32_t)flags);
+    normalized_result = _rin_unistd_result(result);
+    syscall_errno = errno;
+#if !defined(MIDL_PASS)
+    if (exec_hooks_prepared) {
+        exec_hook_errno = rinfs_exec_abort_all();
+        if (exec_hook_errno != 0) {
+            int mapped_errno = rinfs_exec_status_to_errno
+                ? rinfs_exec_status_to_errno(exec_hook_errno) : EIO;
+            errno = mapped_errno > 0 ? mapped_errno : EIO;
+            return -1;
+        }
+        errno = syscall_errno;
+    }
+#else
+    (void)exec_hooks_prepared;
+    (void)syscall_errno;
+#endif
+    if (normalized_result >= 0) errno = EIO;
+    return -1;
+}
+
 static inline ssize_t __rin_unistd_readlink_fd(
     int fd, char* target, size_t target_capacity) {
     static const char prefix[] = "/proc/self/fd/";
@@ -1519,20 +1577,7 @@ static inline ssize_t __rin_unistd_readlink_fd(
 }
 
 static inline int fexecve(int fd, char* const argv[], char* const envp[]) {
-    struct stat file_info;
-    char target[4096u + 1u];
-    /* This path-based fallback is intentionally separate from fstatvfs's
-     * descriptor-pinned usage query. It preserves execve validation and hooks
-     * for linked files, but cannot make execution follow the original FD
-     * across unlink or pathname replacement; kernel fd-exec remains needed. */
-    if (fstat(fd, &file_info) != 0) return -1;
-    if (!S_ISREG(file_info.st_mode)) {
-        errno = EACCES;
-        return -1;
-    }
-    if (__rin_unistd_readlink_fd(fd, target, sizeof(target)) < 0)
-        return -1;
-    return execve(target, argv, envp);
+    return execveat(fd, "", argv, envp, AT_EMPTY_PATH);
 }
 
 #ifndef _RIN_UNISTD_EXECVE
