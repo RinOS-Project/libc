@@ -7,6 +7,7 @@
 #define _GLOB_H
 
 #include "stddef.h"
+#include "stdint.h"
 #include "errno.h"
 #include "stdlib.h"
 #include "string.h"
@@ -468,71 +469,281 @@ static inline int _rin_glob_component_allows_period(const char* pattern,
 /* A glob bracket may consume a collating element containing several active
  * locale characters. Memoize by pattern and byte offsets so those variable
  * length transitions remain bounded and '*' does not rescan suffixes. */
-static inline int _rin_glob_component_match_at(
-    const char* pattern, size_t pattern_length, const char* value,
-    size_t value_length, size_t pattern_offset, size_t value_offset,
-    int flags, unsigned char* memo, size_t memo_stride,
-    size_t* operations, int* failure)
+
+typedef struct _RinGlobMatchFrame {
+    uint16_t pattern_offset;
+    uint16_t value_offset;
+    uint16_t atom_end;
+    uint16_t next_candidate;
+    unsigned char phase;
+} _RinGlobMatchFrame;
+
+static inline int _rin_glob_match_push(
+    unsigned char* memo, size_t memo_stride,
+    _RinGlobMatchFrame* frames, size_t frame_capacity, size_t* depth,
+    size_t pattern_offset, size_t value_offset)
 {
     size_t memo_index = pattern_offset * memo_stride + value_offset;
-    unsigned char* state = &memo[memo_index];
-    int matched = 0;
-    if (*state == 2u) return 0;
-    if (*state == 3u) return 1;
-    if (*operations == 0u) {
-        *failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
-        return 0;
-    }
-    --*operations;
-    if (*state == 1u) return 0;
-    *state = 1u;
+    if (memo[memo_index] != 0u) return 0;
+    if (*depth >= frame_capacity) return -1;
+    frames[*depth].pattern_offset = (uint16_t)pattern_offset;
+    frames[*depth].value_offset = (uint16_t)value_offset;
+    frames[*depth].atom_end = 0u;
+    frames[*depth].next_candidate = 0u;
+    frames[*depth].phase = 0u;
+    ++*depth;
+    return 1;
+}
 
-    if (pattern_offset == pattern_length) {
-        matched = value_offset == value_length;
-    } else if (pattern[pattern_offset] == '*') {
-        const char* next_value;
-        char encoded[5];
-        wchar_t ignored;
-        if (_rin_glob_component_match_at(
-                pattern, pattern_length, value, value_length,
-                pattern_offset + 1u, value_offset, flags, memo,
-                memo_stride, operations, failure)) {
-            matched = 1;
-        } else if (*failure == 0 && value_offset < value_length) {
-            if (_rin_glob_decode_character(value + value_offset, &next_value,
-                                           encoded, &ignored) != 0) {
-                *failure = -1;
-            } else {
-                matched = _rin_glob_component_match_at(
-                    pattern, pattern_length, value, value_length,
-                    pattern_offset, (size_t)(next_value - value), flags,
-                    memo, memo_stride, operations, failure);
+/* Evaluate the memoized state graph with an explicit bounded DFS stack.
+ * Every transition advances the pattern offset, value offset, or both, so a
+ * path needs at most pattern_length + value_length + 1 frames. With NAME_MAX
+ * at 255, the heap workspace stays below 511 small frames. */
+static inline int _rin_glob_component_match_bounded(
+    const char* pattern, const char* value, int flags)
+{
+    size_t pattern_length;
+    size_t value_length;
+    size_t memo_stride;
+    size_t memo_size;
+    size_t frame_capacity;
+    size_t frame_bytes;
+    size_t depth = 0u;
+    size_t operations = _RIN_GLOB_MATCH_OPERATION_BUDGET;
+    unsigned char* memo;
+    _RinGlobMatchFrame* frames;
+    int failure = 0;
+    int matched = 0;
+
+    if (!pattern || !value) return -1;
+    pattern_length = _rin_glob_strlen(pattern);
+    value_length = _rin_glob_strlen(value);
+    if (pattern_length > NAME_MAX || value_length > NAME_MAX ||
+        pattern_length > UINT16_MAX || value_length > UINT16_MAX)
+        return -1;
+    memo_stride = value_length + 1u;
+    if (pattern_length + 1u > (size_t)-1 / memo_stride)
+        return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+    memo_size = (pattern_length + 1u) * memo_stride;
+    memo = (unsigned char*)malloc(memo_size);
+    if (!memo) return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+    memset(memo, 0, memo_size);
+
+    frame_capacity = pattern_length + value_length + 1u;
+    if (frame_capacity > (size_t)-1 / sizeof(*frames)) {
+        free(memo);
+        return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+    }
+    frame_bytes = frame_capacity * sizeof(*frames);
+    frames = (_RinGlobMatchFrame*)malloc(frame_bytes);
+    if (!frames) {
+        free(memo);
+        return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+    }
+
+    if (_rin_glob_match_push(memo, memo_stride, frames, frame_capacity,
+                             &depth, 0u, 0u) < 0)
+        failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+
+    while (depth != 0u && failure == 0) {
+        _RinGlobMatchFrame* frame = &frames[depth - 1u];
+        size_t pattern_offset = frame->pattern_offset;
+        size_t value_offset = frame->value_offset;
+        size_t state_index = pattern_offset * memo_stride + value_offset;
+        unsigned char* state = &memo[state_index];
+
+        if (frame->phase == 0u) {
+            if (operations == 0u) {
+                failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+                break;
+            }
+            --operations;
+            *state = 1u;
+            if (pattern_offset == pattern_length) {
+                *state = value_offset == value_length ? 3u : 2u;
+                --depth;
+                continue;
+            }
+            if (pattern[pattern_offset] == '*') {
+                frame->phase = 1u;
+                if (_rin_glob_match_push(
+                        memo, memo_stride, frames, frame_capacity, &depth,
+                        pattern_offset + 1u, value_offset) < 0)
+                    failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+                continue;
+            }
+            if (pattern[pattern_offset] == '?') {
+                if (value_offset < value_length) {
+                    const char* next_value;
+                    char encoded[5];
+                    wchar_t ignored;
+                    if (_rin_glob_decode_character(
+                            value + value_offset, &next_value, encoded,
+                            &ignored) != 0) {
+                        failure = -1;
+                        break;
+                    }
+                    frame->atom_end = (uint16_t)(pattern_offset + 1u);
+                    frame->next_candidate =
+                        (uint16_t)(size_t)(next_value - value);
+                    frame->phase = 3u;
+                    if (_rin_glob_match_push(
+                            memo, memo_stride, frames, frame_capacity, &depth,
+                            frame->atom_end, frame->next_candidate) < 0)
+                        failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+                } else {
+                    *state = 2u;
+                    --depth;
+                }
+                continue;
+            }
+            if (pattern[pattern_offset] == '[') {
+                const char* class_end = pattern + pattern_offset + 1u;
+                if (_rin_glob_class_match(
+                        &class_end, 0, flags, NULL, 0u, NULL) < 0) {
+                    failure = -1;
+                    break;
+                }
+                frame->atom_end = (uint16_t)(size_t)(class_end - pattern);
+                frame->next_candidate = (uint16_t)value_offset;
+                frame->phase = 4u;
+                continue;
+            }
+            {
+                const char* literal = pattern + pattern_offset;
+                const char* after_literal;
+                const char* after_value;
+                char literal_encoded[5];
+                char value_encoded[5];
+                wchar_t ignored;
+                if (pattern[pattern_offset] == '\\' &&
+                    !(flags & GLOB_NOESCAPE)) {
+                    if (pattern_offset + 1u >= pattern_length) {
+                        failure = -1;
+                        break;
+                    }
+                    literal = pattern + pattern_offset + 1u;
+                }
+                if (_rin_glob_decode_character(
+                        literal, &after_literal, literal_encoded, &ignored) !=
+                    0) {
+                    failure = -1;
+                    break;
+                }
+                if (value_offset >= value_length) {
+                    *state = 2u;
+                    --depth;
+                    continue;
+                }
+                if (_rin_glob_decode_character(
+                        value + value_offset, &after_value, value_encoded,
+                        &ignored) != 0) {
+                    failure = -1;
+                    break;
+                }
+                {
+                    size_t literal_length =
+                        (size_t)(after_literal - literal);
+                    size_t atom_end = (size_t)(after_literal - pattern);
+                    if (literal_length ==
+                            (size_t)(after_value - (value + value_offset)) &&
+                        memcmp(literal, value + value_offset,
+                               literal_length) == 0) {
+                        frame->atom_end = (uint16_t)atom_end;
+                        frame->next_candidate =
+                            (uint16_t)(size_t)(after_value - value);
+                        frame->phase = 3u;
+                        if (_rin_glob_match_push(
+                                memo, memo_stride, frames, frame_capacity,
+                                &depth, frame->atom_end,
+                                frame->next_candidate) < 0)
+                            failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+                    } else {
+                        *state = 2u;
+                        --depth;
+                    }
+                }
+                continue;
             }
         }
-    } else if (pattern[pattern_offset] == '?') {
-        if (value_offset < value_length) {
-            const char* next_value;
-            char encoded[5];
-            wchar_t ignored;
-            if (_rin_glob_decode_character(value + value_offset, &next_value,
-                                           encoded, &ignored) != 0) {
-                *failure = -1;
+
+        if (frame->phase == 1u) {
+            size_t child_index =
+                (pattern_offset + 1u) * memo_stride + value_offset;
+            if (memo[child_index] == 3u) {
+                *state = 3u;
+                --depth;
+            } else if (value_offset < value_length) {
+                const char* next_value;
+                char encoded[5];
+                wchar_t ignored;
+                size_t next_offset;
+                if (_rin_glob_decode_character(
+                        value + value_offset, &next_value, encoded,
+                        &ignored) != 0) {
+                    failure = -1;
+                    break;
+                }
+                next_offset = (size_t)(next_value - value);
+                frame->next_candidate = (uint16_t)next_offset;
+                frame->phase = 2u;
+                if (_rin_glob_match_push(
+                        memo, memo_stride, frames, frame_capacity, &depth,
+                        pattern_offset, next_offset) < 0)
+                    failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
             } else {
-                matched = _rin_glob_component_match_at(
-                    pattern, pattern_length, value, value_length,
-                    pattern_offset + 1u, (size_t)(next_value - value), flags,
-                    memo, memo_stride, operations, failure);
+                *state = 2u;
+                --depth;
             }
+            continue;
         }
-    } else if (pattern[pattern_offset] == '[') {
-        const char* class_end = pattern + pattern_offset + 1u;
-        size_t atom_end;
-        if (_rin_glob_class_match(&class_end, 0, flags, NULL, 0u, NULL) < 0) {
-            *failure = -1;
-        } else {
-            atom_end = (size_t)(class_end - pattern);
-            for (size_t candidate_end = value_offset;
-                 candidate_end < value_length && *failure == 0;) {
+
+        if (frame->phase == 2u) {
+            size_t child_index =
+                pattern_offset * memo_stride + frame->next_candidate;
+            *state = memo[child_index] == 3u ? 3u : 2u;
+            --depth;
+            continue;
+        }
+
+        if (frame->phase == 3u) {
+            size_t child_index =
+                (size_t)frame->atom_end * memo_stride +
+                frame->next_candidate;
+            if (memo[child_index] == 0u) {
+                if (_rin_glob_match_push(
+                        memo, memo_stride, frames, frame_capacity, &depth,
+                        frame->atom_end, frame->next_candidate) < 0)
+                    failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+                continue;
+            }
+            *state = memo[child_index] == 3u ? 3u : 2u;
+            --depth;
+            continue;
+        }
+
+        if (frame->phase == 4u || frame->phase == 5u) {
+            if (frame->phase == 5u) {
+                size_t child_index =
+                    (size_t)frame->atom_end * memo_stride +
+                    frame->next_candidate;
+                if (memo[child_index] == 0u) {
+                    if (_rin_glob_match_push(
+                            memo, memo_stride, frames, frame_capacity,
+                            &depth, frame->atom_end,
+                            frame->next_candidate) < 0)
+                        failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+                    continue;
+                }
+                if (memo[child_index] == 3u) {
+                    *state = 3u;
+                    --depth;
+                    continue;
+                }
+                frame->phase = 4u;
+            }
+            if (frame->next_candidate < value_length) {
+                size_t candidate_end = frame->next_candidate;
                 const char* next_candidate;
                 char encoded[5];
                 char candidate[NAME_MAX + 1u];
@@ -541,19 +752,20 @@ static inline int _rin_glob_component_match_at(
                 size_t pattern_cost = pattern_length - pattern_offset;
                 size_t consumed = 0u;
                 int class_result;
+                const char* class_end;
                 if (_rin_glob_decode_character(
                         value + candidate_end, &next_candidate, encoded,
                         &first_value) != 0) {
-                    *failure = -1;
+                    failure = -1;
                     break;
                 }
                 candidate_end = (size_t)(next_candidate - value);
                 candidate_length = candidate_end - value_offset;
-                if (pattern_cost > *operations) {
-                    *failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
+                if (pattern_cost > operations) {
+                    failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
                     break;
                 }
-                *operations -= pattern_cost;
+                operations -= pattern_cost;
                 memcpy(candidate, value + value_offset, candidate_length);
                 candidate[candidate_length] = '\0';
                 class_end = pattern + pattern_offset + 1u;
@@ -561,86 +773,35 @@ static inline int _rin_glob_component_match_at(
                     &class_end, first_value, flags, candidate,
                     candidate_length, &consumed);
                 if (class_result < 0) {
-                    *failure = -1;
+                    failure = -1;
                     break;
                 }
-                if (class_result > 0 && consumed == candidate_length &&
-                    _rin_glob_component_match_at(
-                        pattern, pattern_length, value, value_length,
-                        atom_end, candidate_end, flags, memo, memo_stride,
-                        operations, failure)) {
-                    matched = 1;
-                    break;
+                frame->next_candidate = (uint16_t)candidate_end;
+                if (class_result > 0 && consumed == candidate_length) {
+                    frame->phase = 5u;
+                    if (_rin_glob_match_push(
+                            memo, memo_stride, frames, frame_capacity, &depth,
+                            frame->atom_end, candidate_end) < 0)
+                        failure = _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
                 }
-            }
-        }
-    } else if (value_offset < value_length) {
-        const char* literal = pattern + pattern_offset;
-        const char* after_literal;
-        const char* after_value;
-        char literal_encoded[5];
-        char value_encoded[5];
-        wchar_t ignored;
-        if (pattern[pattern_offset] == '\\' &&
-            !(flags & GLOB_NOESCAPE)) {
-            if (pattern_offset + 1u >= pattern_length) {
-                *failure = -1;
             } else {
-                literal = pattern + pattern_offset + 1u;
+                *state = 2u;
+                --depth;
             }
+            continue;
         }
-        if (*failure == 0 &&
-            (_rin_glob_decode_character(literal, &after_literal,
-                                        literal_encoded, &ignored) != 0 ||
-             _rin_glob_decode_character(value + value_offset, &after_value,
-                                        value_encoded, &ignored) != 0)) {
-            *failure = -1;
-        } else if (*failure == 0) {
-            size_t literal_length = (size_t)(after_literal - literal);
-            size_t atom_end = (size_t)(after_literal - pattern);
-            if (literal == pattern + pattern_offset &&
-                pattern[pattern_offset] == '\\' &&
-                !(flags & GLOB_NOESCAPE))
-                atom_end = pattern_offset + 1u + literal_length;
-            if (literal_length == (size_t)(after_value - (value + value_offset)) &&
-                memcmp(literal, value + value_offset, literal_length) == 0)
-                matched = _rin_glob_component_match_at(
-                    pattern, pattern_length, value, value_length, atom_end,
-                    (size_t)(after_value - value), flags, memo, memo_stride,
-                    operations, failure);
-        }
+
+        failure = -1;
     }
 
-    *state = matched ? 3u : 2u;
-    return matched;
-}
-
-static inline int _rin_glob_component_match_bounded(
-    const char* pattern, const char* value, int flags)
-{
-    size_t pattern_length;
-    size_t value_length;
-    size_t memo_stride;
-    size_t memo_size;
-    size_t operations = _RIN_GLOB_MATCH_OPERATION_BUDGET;
-    unsigned char* memo;
-    int failure = 0;
-    int matched;
-
-    if (!pattern || !value) return -1;
-    pattern_length = _rin_glob_strlen(pattern);
-    value_length = _rin_glob_strlen(value);
-    if (pattern_length > NAME_MAX || value_length > NAME_MAX) return -1;
-    memo_stride = value_length + 1u;
-    memo_size = (pattern_length + 1u) * memo_stride;
-    memo = (unsigned char*)malloc(memo_size);
-    if (!memo) return _RIN_GLOB_MATCH_BUDGET_EXHAUSTED;
-    memset(memo, 0, memo_size);
-    matched = _rin_glob_component_match_at(
-        pattern, pattern_length, value, value_length, 0u, 0u, flags, memo,
-        memo_stride, &operations, &failure);
+    if (failure == 0)
+        matched = memo[0] == 3u;
+    free(frames);
     free(memo);
     return failure != 0 ? failure : matched;
+}
+
+ilure : matched;
 }
 
 static inline int _rin_glob_component_match(const char* pattern,
