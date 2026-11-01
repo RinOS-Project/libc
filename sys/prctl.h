@@ -102,6 +102,7 @@ extern "C" {
 #define RIN_PRCTL_PAC_CONTROL_SUPPORTED 0
 #define RIN_PRCTL_TAGGED_ADDRESS_CONTROL_SUPPORTED 0
 #define RIN_PRCTL_SME_CONTROL_SUPPORTED 0
+#define RIN_PRCTL_SYSCALL_USER_DISPATCH_SUPPORTED 1
 #define PR_SVE_SET_VL       50  /* Set SVE vector length */
 #define PR_SVE_GET_VL       51  /* Get SVE vector length */
 #define PR_GET_SPECULATION_CTRL 52
@@ -119,6 +120,11 @@ extern "C" {
 #define PR_SME_GET_VL       64
 #define PR_SET_VMA          0x53564d41  /* Set VMA name */
 #define PR_SET_PTRACER      0x59616d61  /* Yama: allow ptrace */
+
+#define PR_SYS_DISPATCH_OFF 0
+#define PR_SYS_DISPATCH_ON  1
+#define SYSCALL_DISPATCH_FILTER_ALLOW 0
+#define SYSCALL_DISPATCH_FILTER_BLOCK 1
 
 /* ═══════════════════════════════════════════════════════════════
  * Option-specific values
@@ -296,6 +302,7 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_VMA ||
         option == PR_SET_PTRACER ||
         option == PR_GET_TID_ADDRESS ||
+        option == PR_SET_SYSCALL_USER_DISPATCH ||
         option == PR_SET_CHILD_SUBREAPER ||
         option == PR_GET_CHILD_SUBREAPER ||
         option == PR_GET_KEEPCAPS || option == PR_SET_KEEPCAPS ||
@@ -339,6 +346,7 @@ static inline int prctl(int option, ...) {
         option == PR_SET_TIMERSLACK ||
         option == PR_SET_TSC || option == PR_SET_PDEATHSIG ||
         option == PR_SET_DUMPABLE || option == PR_SET_NO_NEW_PRIVS ||
+        option == PR_SET_SYSCALL_USER_DISPATCH ||
         option == PR_SET_ENDIAN || option == PR_SET_CHILD_SUBREAPER ||
         option == PR_SET_SECCOMP || option == PR_SET_KEEPCAPS ||
         option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP ||
@@ -365,6 +373,11 @@ static inline int prctl(int option, ...) {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
             arg3 = (uintptr_t)__builtin_va_arg(args, uintptr_t);
             arg4 = (uintptr_t)__builtin_va_arg(args, uintptr_t);
+            arg5 = (uintptr_t)__builtin_va_arg(args, int8_t*);
+        } else if (option == PR_SET_SYSCALL_USER_DISPATCH) {
+            arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+            arg3 = (uintptr_t)__builtin_va_arg(args, unsigned long);
+            arg4 = (uintptr_t)__builtin_va_arg(args, unsigned long);
             arg5 = (uintptr_t)__builtin_va_arg(args, const char*);
         } else if (option == PR_CAP_AMBIENT) {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);

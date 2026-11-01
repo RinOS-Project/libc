@@ -168,6 +168,9 @@ struct timespec;
 #ifndef SYS_SECCOMP
 #define SYS_SECCOMP 1
 #endif
+#ifndef SYS_USER_DISPATCH
+#define SYS_USER_DISPATCH 2
+#endif
 
 #ifndef _SIGVAL_DEFINED
 #define _SIGVAL_DEFINED
