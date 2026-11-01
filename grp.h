@@ -241,7 +241,7 @@ static inline int getgroups(int size, gid_t list[]) {
 
 /* setgroups - 補助グループIDを設定 */
 static inline int setgroups(size_t size, const gid_t* list) {
-#if defined(__RIN_SYS_TYPES_HOST_OWNER)
+#if defined(__RIN_SYS_TYPES_HOST_OWNER) && !defined(RIN_USERSPACE)
     __rin_credentials_v1 credentials;
     __rin_supplementary_groups_v1 request;
     size_t index;
