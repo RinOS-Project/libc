@@ -90,6 +90,18 @@ extern "C" {
 
 #define RIN_LINUX_CAPABILITY_SETS_SUPPORTED 1
 #define RIN_LINUX_PRCTL_CAPABILITY_OPTIONS_SUPPORTED 1
+/* These RinOS targets execute little-endian IA-32/x86_64 code. The endian
+ * query is supported and SET accepts only the already active little mode. */
+#define RIN_PRCTL_ENDIAN_CONTROL_SUPPORTED 1
+/* These controls only apply to architectures not currently provided by
+ * RinOS; their public Linux constants remain available for source builds. */
+#define RIN_PRCTL_UNALIGN_CONTROL_SUPPORTED 0
+#define RIN_PRCTL_FP_EMULATION_CONTROL_SUPPORTED 0
+#define RIN_PRCTL_FP_MODE_CONTROL_SUPPORTED 0
+#define RIN_PRCTL_SVE_CONTROL_SUPPORTED 0
+#define RIN_PRCTL_PAC_CONTROL_SUPPORTED 0
+#define RIN_PRCTL_TAGGED_ADDRESS_CONTROL_SUPPORTED 0
+#define RIN_PRCTL_SME_CONTROL_SUPPORTED 0
 #define PR_SVE_SET_VL       50  /* Set SVE vector length */
 #define PR_SVE_GET_VL       51  /* Get SVE vector length */
 #define PR_GET_SPECULATION_CTRL 52
@@ -271,7 +283,8 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
     intptr_t result;
     if (option == PR_SET_NAME) return _rin_prctl_set_name(arg2);
     if (option == PR_GET_NAME) return _rin_prctl_get_name(arg2);
-    if (option == PR_GET_ENDIAN || option == PR_SET_NO_NEW_PRIVS ||
+    if (option == PR_GET_ENDIAN || option == PR_SET_ENDIAN ||
+        option == PR_SET_NO_NEW_PRIVS ||
         option == PR_GET_NO_NEW_PRIVS ||
         option == PR_SET_SECCOMP || option == PR_GET_SECCOMP ||
         option == PR_GET_SPECULATION_CTRL ||
@@ -283,6 +296,8 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_VMA ||
         option == PR_SET_PTRACER ||
         option == PR_GET_TID_ADDRESS ||
+        option == PR_SET_CHILD_SUBREAPER ||
+        option == PR_GET_CHILD_SUBREAPER ||
         option == PR_GET_KEEPCAPS || option == PR_SET_KEEPCAPS ||
         option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP ||
         option == PR_GET_SECUREBITS || option == PR_SET_SECUREBITS ||
@@ -315,6 +330,7 @@ static inline int prctl(int option, ...) {
     uintptr_t arg4 = 0;
     uintptr_t arg5 = 0;
     if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
+        option == PR_GET_CHILD_SUBREAPER ||
         option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE ||
         option == PR_GET_TID_ADDRESS ||
         option == PR_SET_NAME || option == PR_GET_NAME ||
@@ -323,6 +339,7 @@ static inline int prctl(int option, ...) {
         option == PR_SET_TIMERSLACK ||
         option == PR_SET_TSC || option == PR_SET_PDEATHSIG ||
         option == PR_SET_DUMPABLE || option == PR_SET_NO_NEW_PRIVS ||
+        option == PR_SET_ENDIAN || option == PR_SET_CHILD_SUBREAPER ||
         option == PR_SET_SECCOMP || option == PR_SET_KEEPCAPS ||
         option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP ||
         option == PR_SET_SECUREBITS || option == PR_CAP_AMBIENT ||
