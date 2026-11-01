@@ -893,6 +893,12 @@ static inline long double strtold(const char* s, char** endptr) {
     return (long double)strtod(s, endptr);
 #endif
 }
+#else
+/* Keep the ISO conversion available for ABI variants whose long double is
+ * represented as binary64. */
+static inline long double strtold(const char* s, char** endptr) {
+    return (long double)strtod(s, endptr);
+}
 #endif
 
 #else
@@ -951,6 +957,10 @@ static inline float strtof(const char* s, char** endptr) {
 #if !defined(__RINOS__) || defined(RINOS_ABI_HAS_LONG_DOUBLE)
 static inline long double strtold(const char* s, char** endptr) {
     return std::strtold(s, endptr);
+}
+#else
+static inline long double strtold(const char* s, char** endptr) {
+    return (long double)std::strtod(s, endptr);
 }
 #endif
 #endif /* C++ <cstdlib> freestanding bridge */
