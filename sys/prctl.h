@@ -120,9 +120,12 @@ extern "C" {
 #define RIN_PRCTL_TAGGED_ADDRESS_CONTROL_SUPPORTED 0
 #define RIN_PRCTL_SME_CONTROL_SUPPORTED 0
 #define RIN_PRCTL_SYSCALL_USER_DISPATCH_SUPPORTED 1
-/* The process disable mode is exposed even while the kernel has no automatic
- * transparent-huge-page collapse path. */
+/* PR_SET_THP_DISABLE is available on both ABIs.  x86_64 applies the mode to
+ * opportunistic anonymous first-touch THP allocation; IA-32 has no THP path,
+ * and neither architecture currently performs background page collapse. */
 #define RIN_PRCTL_THP_DISABLE_CONTROL_SUPPORTED 1
+#define RIN_PRCTL_THP_ENFORCEMENT_SUPPORTED_X86_64 1
+#define RIN_PRCTL_THP_ENFORCEMENT_SUPPORTED_IA32   0
 #define RIN_PRCTL_TIMING_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_SET_MM_SCALAR_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_SET_MM_MAP_CONTROL_SUPPORTED 1

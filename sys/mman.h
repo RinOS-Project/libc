@@ -150,6 +150,12 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 #define MADV_REMOVE      9   /* 削除 */
 #define MADV_DONTFORK    10  /* fork時にコピーしない */
 #define MADV_DOFORK      11  /* fork時にコピーする */
+#define MADV_HUGEPAGE    14  /* transparent huge-page preference */
+#define MADV_NOHUGEPAGE  15  /* disable transparent huge pages for range */
+
+/* First-touch anonymous THP policy is implemented by the x86_64 kernel. */
+#define RIN_MMAN_THP_ADVICE_SUPPORTED_X86_64 1
+#define RIN_MMAN_THP_ADVICE_SUPPORTED_IA32   0
 
 /* POSIX spells the advisory values separately from the Linux madvise names.
  * RinOS uses the same ABI values and exposes the POSIX return convention. */
