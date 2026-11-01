@@ -1956,22 +1956,27 @@ extern int pthread_getschedparam(pthread_t thread, int* policy, struct sched_par
 #else
 _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_getschedparam(pthread_t thread, int* policy, struct sched_param* param) {
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
-    RinThreadSchedParametersV1 parameters = {0};
+    RinThreadSchedParametersV3 request;
+    uintptr_t priority_address;
     intptr_t result;
     if (!policy || !param) return EINVAL;
     if (thread == 0) return ESRCH;
+    if ((uintptr_t)param > UINTPTR_MAX -
+                               offsetof(struct sched_param, sched_priority))
+        return EFAULT;
+    priority_address = (uintptr_t)param +
+                       offsetof(struct sched_param, sched_priority);
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_THREAD_SCHED_ABI_VERSION_3;
+    request.request_magic = RIN_THREAD_SCHED_GET_V3_REQUEST_MAGIC;
+    request.user_policy_address = (uint64_t)(uintptr_t)policy;
+    request.user_priority_address = (uint64_t)priority_address;
     result = _RIN_PTHREAD_SCHED_SYSCALL2(
         (uintptr_t)SYS_THREAD_SCHED_GET, (uintptr_t)thread,
-        (uintptr_t)&parameters);
+        (uintptr_t)&request);
     if (result < 0)
         return _rin_pthread_error_from_result(result);
-    if (result != 0 || parameters.struct_size != sizeof(parameters) ||
-        parameters.version != RIN_THREAD_SCHED_ABI_VERSION ||
-        parameters.reserved0 != 0u || parameters.reserved1 != 0u)
-        return EIO;
-    *policy = parameters.policy;
-    param->sched_priority = parameters.priority;
-    return 0;
+    return result == 0 ? 0 : EIO;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
     if (!policy || !param) return EINVAL;
     return platform_thread_sched_get((void*)(uintptr_t)thread,
@@ -1990,16 +1995,22 @@ extern int pthread_setschedparam(pthread_t thread, int policy, const struct sche
 #else
 _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_setschedparam(pthread_t thread, int policy, const struct sched_param* param) {
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
-    RinThreadSchedParametersV1 parameters;
+    RinThreadSchedParametersV2 parameters;
+    uintptr_t priority_address;
     intptr_t result;
     if (!param) return EINVAL;
     if (thread == 0) return ESRCH;
+    if ((uintptr_t)param > UINTPTR_MAX -
+                               offsetof(struct sched_param, sched_priority))
+        return EFAULT;
+    priority_address = (uintptr_t)param +
+                       offsetof(struct sched_param, sched_priority);
     parameters.struct_size = (uint32_t)sizeof(parameters);
-    parameters.version = RIN_THREAD_SCHED_ABI_VERSION;
+    parameters.version = RIN_THREAD_SCHED_ABI_VERSION_2;
     parameters.reserved0 = 0u;
     parameters.policy = policy;
-    parameters.priority = param->sched_priority;
-    parameters.reserved1 = 0u;
+    parameters.priority = 0;
+    parameters.user_priority_address = (uint64_t)priority_address;
     result = _RIN_PTHREAD_SCHED_SYSCALL2(
         (uintptr_t)SYS_THREAD_SCHED_SET, (uintptr_t)thread,
         (uintptr_t)&parameters);
