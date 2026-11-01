@@ -345,7 +345,7 @@ static inline int rin_fgetidentity(
     __rin_stat_path_at_init(&call, RIN_PATH_AT_FGETIDENTITY);
     call.flags = AT_EMPTY_PATH;
     call.dirfd = fd;
-    call.user_buffer = (uint64_t)(uintptr_t)identity_out;
+    call.buffer = (uint64_t)(uintptr_t)identity_out;
     call.buffer_size = (uint64_t)sizeof(*identity_out);
     result = _RIN_STAT_PATH_AT_CALL(&call);
     if (result < 0) {
@@ -613,6 +613,8 @@ static inline int fchmodat(int dirfd, const char* pathname, mode_t mode,
                 call.path1 = (uint64_t)(uintptr_t)pathname;
                 return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
             }
+        } else {
+            flags &= ~AT_EMPTY_PATH;
         }
     }
     if ((flags & AT_EMPTY_PATH) != 0) {
