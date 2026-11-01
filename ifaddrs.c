@@ -47,7 +47,15 @@ static unsigned int rin_ifaddrs_interface_flags(
     if (capabilities_known &&
         (interface->capabilities & RIN_NET_IFADDRS_V2_CAP_MULTICAST) != 0u)
         flags |= IFF_MULTICAST;
-    if ((interface->flags & RIN_NET_IFADDRS_V2_FLAG_LINK_UP) != 0u)
+    if ((interface->flags &
+         (RIN_NET_IFADDRS_V2_FLAG_ADMIN_KNOWN |
+          RIN_NET_IFADDRS_V2_FLAG_ADMIN_UP |
+          RIN_NET_IFADDRS_V2_FLAG_LINK_KNOWN |
+          RIN_NET_IFADDRS_V2_FLAG_LINK_UP)) ==
+        (RIN_NET_IFADDRS_V2_FLAG_ADMIN_KNOWN |
+         RIN_NET_IFADDRS_V2_FLAG_ADMIN_UP |
+         RIN_NET_IFADDRS_V2_FLAG_LINK_KNOWN |
+         RIN_NET_IFADDRS_V2_FLAG_LINK_UP))
         flags |= IFF_RUNNING;
     if (type_known &&
         interface->interface_type == RIN_NET_IFADDRS_V2_INTERFACE_LOOPBACK)
