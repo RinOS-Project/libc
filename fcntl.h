@@ -711,7 +711,9 @@ static inline int _rin_readahead_result(int fd, off64_t offset,
                                         size_t count) {
     int64_t signed_count;
     if (offset < 0) return EINVAL;
-    if ((uint64_t)count > (uint64_t)INT64_MAX) return EOVERFLOW;
+#if SIZE_MAX > INT64_MAX
+    if (count > (size_t)INT64_MAX) return EOVERFLOW;
+#endif
     signed_count = (int64_t)count;
     if ((uint64_t)offset > (uint64_t)INT64_MAX - (uint64_t)signed_count)
         return EOVERFLOW;
