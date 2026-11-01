@@ -842,6 +842,64 @@ static inline int rin_sched_set_thread_numa_policy(
         (uintptr_t)policy));
 }
 
+static inline int rin_sched_get_numa_policy_range(
+    RinNumaMemoryPolicyRangeV1* range)
+{
+    if (!range) {
+        errno = EINVAL;
+        return -1;
+    }
+    return _rin_sched_status(_RIN_SCHED_SYSCALL2(
+        SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_GET_RANGE,
+        (uintptr_t)range));
+}
+
+static inline int rin_sched_set_numa_policy_range(
+    const RinNumaMemoryPolicyRangeV1* range)
+{
+    if (!range) {
+        errno = EINVAL;
+        return -1;
+    }
+    return _rin_sched_status(_RIN_SCHED_SYSCALL2(
+        SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_SET_RANGE,
+        (uintptr_t)range));
+}
+
+static inline int rin_sched_move_numa_pages(RinNumaMovePagesV1* request)
+{
+    if (!request) {
+        errno = EINVAL;
+        return -1;
+    }
+    return _rin_sched_status(_RIN_SCHED_SYSCALL2(
+        SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_MOVE_PAGES,
+        (uintptr_t)request));
+}
+
+static inline int rin_sched_get_numa_allowed_nodes(RinNumaNodeMaskV1* mask)
+{
+    if (!mask) {
+        errno = EINVAL;
+        return -1;
+    }
+    return _rin_sched_status(_RIN_SCHED_SYSCALL2(
+        SYS_PROCESS_NUMA_POLICY,
+        RIN_NUMA_POLICY_OPERATION_GET_ALLOWED_NODES, (uintptr_t)mask));
+}
+
+static inline int rin_sched_set_numa_allowed_nodes(
+    const RinNumaNodeMaskV1* mask)
+{
+    if (!mask) {
+        errno = EINVAL;
+        return -1;
+    }
+    return _rin_sched_status(_RIN_SCHED_SYSCALL2(
+        SYS_PROCESS_NUMA_POLICY,
+        RIN_NUMA_POLICY_OPERATION_SET_ALLOWED_NODES, (uintptr_t)mask));
+}
+
 /* 現在実行中のCPU番号を取得 */
 static inline int sched_getcpu(void) {
     intptr_t cpu = _rin_sched_result(_RIN_SCHED_SYSCALL0(SYS_GETCPU));
