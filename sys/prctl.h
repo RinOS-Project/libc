@@ -124,7 +124,9 @@ extern "C" {
  * transparent-huge-page collapse path. */
 #define RIN_PRCTL_THP_DISABLE_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_SET_MM_SCALAR_CONTROL_SUPPORTED 1
-#define RIN_PRCTL_SET_MM_MAP_CONTROL_SUPPORTED 0
+#define RIN_PRCTL_SET_MM_MAP_CONTROL_SUPPORTED 1
+#define RIN_PRCTL_SET_MM_AUXV_CONTROL_SUPPORTED 1
+#define RIN_PRCTL_SET_MM_EXE_FILE_CONTROL_SUPPORTED 0
 #define PR_SVE_SET_VL       50  /* Set SVE vector length */
 #define PR_SVE_GET_VL       51  /* Get SVE vector length */
 #define PR_GET_SPECULATION_CTRL 52
