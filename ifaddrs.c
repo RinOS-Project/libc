@@ -30,23 +30,33 @@ static unsigned int rin_ifaddrs_interface_flags(
     const RinNetIfaddrsInterfaceV2* interface)
 {
     unsigned int flags = 0u;
+    const int type_known =
+        (interface->flags & RIN_NET_IFADDRS_V2_FLAG_TYPE_KNOWN) != 0u;
+    const int capabilities_known =
+        (interface->flags &
+         RIN_NET_IFADDRS_V2_FLAG_CAPABILITIES_KNOWN) != 0u;
     if ((interface->flags & RIN_NET_IFADDRS_V2_FLAG_ADMIN_KNOWN) != 0u &&
         (interface->flags & RIN_NET_IFADDRS_V2_FLAG_ADMIN_UP) != 0u)
         flags |= IFF_UP;
-    if (interface->interface_type ==
-            RIN_NET_IFADDRS_V2_INTERFACE_BROADCAST ||
-        (interface->capabilities & RIN_NET_IFADDRS_V2_CAP_BROADCAST) != 0u)
+    if ((type_known && interface->interface_type ==
+                          RIN_NET_IFADDRS_V2_INTERFACE_BROADCAST) ||
+        (capabilities_known &&
+         (interface->capabilities &
+          RIN_NET_IFADDRS_V2_CAP_BROADCAST) != 0u))
         flags |= IFF_BROADCAST;
-    if ((interface->capabilities & RIN_NET_IFADDRS_V2_CAP_MULTICAST) != 0u)
+    if (capabilities_known &&
+        (interface->capabilities & RIN_NET_IFADDRS_V2_CAP_MULTICAST) != 0u)
         flags |= IFF_MULTICAST;
     if ((interface->flags & RIN_NET_IFADDRS_V2_FLAG_LINK_UP) != 0u)
         flags |= IFF_RUNNING;
-    if (interface->interface_type == RIN_NET_IFADDRS_V2_INTERFACE_LOOPBACK)
+    if (type_known &&
+        interface->interface_type == RIN_NET_IFADDRS_V2_INTERFACE_LOOPBACK)
         flags |= IFF_LOOPBACK;
-    if (interface->interface_type ==
-            RIN_NET_IFADDRS_V2_INTERFACE_POINT_TO_POINT ||
-        (interface->capabilities &
-         RIN_NET_IFADDRS_V2_CAP_POINT_TO_POINT) != 0u ||
+    if ((type_known && interface->interface_type ==
+                          RIN_NET_IFADDRS_V2_INTERFACE_POINT_TO_POINT) ||
+        (capabilities_known &&
+         (interface->capabilities &
+          RIN_NET_IFADDRS_V2_CAP_POINT_TO_POINT) != 0u) ||
         (interface->ipv4_peer[0] | interface->ipv4_peer[1] |
          interface->ipv4_peer[2] | interface->ipv4_peer[3]) != 0u)
         flags |= IFF_POINTOPOINT;
