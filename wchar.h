@@ -711,6 +711,13 @@ static inline long double wcstold_l(const wchar_t* nptr, wchar_t** endptr,
     }
 #endif
 }
+#else
+/* Keep the locale-explicit API visible when long double shares the target's
+ * binary64 representation, matching strtold_l's compatibility path. */
+static inline long double wcstold_l(const wchar_t* nptr, wchar_t** endptr,
+                                    locale_t locale) {
+    return (long double)wcstod_l(nptr, endptr, locale);
+}
 #endif
 
 static inline int wcsncasecmp_l(const wchar_t* left, const wchar_t* right,
