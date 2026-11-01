@@ -75,6 +75,21 @@ extern "C" {
 #define PR_MCE_KILL         33  /* Set machine check exception mode */
 #define PR_MCE_KILL_GET     34  /* Get machine check exception mode */
 #define PR_SET_MM           35  /* Modify memory management settings */
+#define PR_SET_MM_START_CODE 1
+#define PR_SET_MM_END_CODE 2
+#define PR_SET_MM_START_DATA 3
+#define PR_SET_MM_END_DATA 4
+#define PR_SET_MM_START_STACK 5
+#define PR_SET_MM_START_BRK 6
+#define PR_SET_MM_BRK 7
+#define PR_SET_MM_ARG_START 8
+#define PR_SET_MM_ARG_END 9
+#define PR_SET_MM_ENV_START 10
+#define PR_SET_MM_ENV_END 11
+#define PR_SET_MM_AUXV 12
+#define PR_SET_MM_EXE_FILE 13
+#define PR_SET_MM_MAP 14
+#define PR_SET_MM_MAP_SIZE 15
 #define PR_SET_CHILD_SUBREAPER 36
 #define PR_GET_CHILD_SUBREAPER 37
 #define PR_SET_NO_NEW_PRIVS 38  /* Set no_new_privs flag */
@@ -108,6 +123,8 @@ extern "C" {
 /* The process disable mode is exposed even while the kernel has no automatic
  * transparent-huge-page collapse path. */
 #define RIN_PRCTL_THP_DISABLE_CONTROL_SUPPORTED 1
+#define RIN_PRCTL_SET_MM_SCALAR_CONTROL_SUPPORTED 1
+#define RIN_PRCTL_SET_MM_MAP_CONTROL_SUPPORTED 0
 #define PR_SVE_SET_VL       50  /* Set SVE vector length */
 #define PR_SVE_GET_VL       51  /* Get SVE vector length */
 #define PR_GET_SPECULATION_CTRL 52
@@ -179,6 +196,23 @@ extern "C" {
 #define PR_CAP_AMBIENT_RAISE     2
 #define PR_CAP_AMBIENT_LOWER     3
 #define PR_CAP_AMBIENT_CLEAR_ALL 4
+
+struct prctl_mm_map {
+    uint64_t start_code;
+    uint64_t end_code;
+    uint64_t start_data;
+    uint64_t end_data;
+    uint64_t start_brk;
+    uint64_t brk;
+    uint64_t start_stack;
+    uint64_t arg_start;
+    uint64_t arg_end;
+    uint64_t env_start;
+    uint64_t env_end;
+    uintptr_t auxv;
+    uint32_t auxv_size;
+    uint32_t exe_fd;
+};
 
 /* Speculation control */
 #define PR_SPEC_STORE_BYPASS    0
@@ -310,6 +344,7 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_SYSCALL_USER_DISPATCH ||
         option == PR_SET_THP_DISABLE ||
         option == PR_GET_THP_DISABLE ||
+        option == PR_SET_MM ||
         option == PR_SET_CHILD_SUBREAPER ||
         option == PR_GET_CHILD_SUBREAPER ||
         option == PR_GET_KEEPCAPS || option == PR_SET_KEEPCAPS ||
@@ -355,6 +390,7 @@ static inline int prctl(int option, ...) {
         option == PR_SET_DUMPABLE || option == PR_SET_NO_NEW_PRIVS ||
         option == PR_SET_SYSCALL_USER_DISPATCH ||
         option == PR_SET_THP_DISABLE ||
+        option == PR_SET_MM ||
         option == PR_SET_ENDIAN || option == PR_SET_CHILD_SUBREAPER ||
         option == PR_SET_SECCOMP || option == PR_SET_KEEPCAPS ||
         option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP ||
@@ -387,6 +423,12 @@ static inline int prctl(int option, ...) {
             arg3 = (uintptr_t)__builtin_va_arg(args, unsigned long);
             arg4 = (uintptr_t)__builtin_va_arg(args, unsigned long);
             arg5 = (uintptr_t)__builtin_va_arg(args, const char*);
+        } else if (option == PR_SET_MM) {
+            arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+            arg3 = (uintptr_t)__builtin_va_arg(args, uintptr_t);
+            if ((uint32_t)arg2 == PR_SET_MM_AUXV ||
+                (uint32_t)arg2 == PR_SET_MM_MAP)
+                arg4 = (uintptr_t)__builtin_va_arg(args, uintptr_t);
         } else if (option == PR_SET_THP_DISABLE) {
             arg2 = (uintptr_t)__builtin_va_arg(args, long);
             arg3 = (uintptr_t)__builtin_va_arg(args, unsigned long);
