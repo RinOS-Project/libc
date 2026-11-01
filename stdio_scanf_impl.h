@@ -52,8 +52,12 @@ static int rin_sscanf_scanset_contains(const struct RinSscanfSpec* spec,
     return spec->scanset_invert ? !contained : contained;
 }
 
+/* bound_width keeps the legacy 4096 field-width cap for stream entries,
+ * whose collectors read into fixed stack buffers; string entries pass
+ * zero and accept any representable width (B47: no fixed input bound). */
 static int rin_sscanf_parse_spec(const char* format, size_t* offset,
-                                 struct RinSscanfSpec* spec) {
+                                 struct RinSscanfSpec* spec,
+                                 int bound_width) {
     size_t current = *offset;
     size_t width = 0u;
     size_t scanset_start = 0u;
@@ -83,16 +87,19 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
         size_t probe = current;
         size_t argument_index = 0u;
         int have_argument_digits = 0;
+        int argument_overflow = 0;
         while (probe <= RIN_SSCANF_MAX_INPUT &&
                format[probe] >= '0' && format[probe] <= '9') {
             size_t digit = (size_t)(format[probe] - '0');
             have_argument_digits = 1;
-            if (argument_index >
-                (RIN_SSCANF_MAX_INPUT - digit) / 10u) {
-                errno = EOVERFLOW;
-                return -1;
+            /* B47: a huge digit run only fails when it is actually
+             * positional; a plain width falls through to the width
+             * parser below (string entries accept any width). */
+            if (argument_index > (SIZE_MAX - digit) / 10u) {
+                argument_overflow = 1;
+            } else if (!argument_overflow) {
+                argument_index = argument_index * 10u + digit;
             }
-            argument_index = argument_index * 10u + digit;
             ++probe;
         }
         if (probe > RIN_SSCANF_MAX_INPUT) {
@@ -100,6 +107,11 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
             return -1;
         }
         if (have_argument_digits && format[probe] == '$') {
+            if (argument_overflow ||
+                argument_index > RIN_SSCANF_MAX_INPUT) {
+                errno = EOVERFLOW;
+                return -1;
+            }
             if (argument_index == 0u ||
                 argument_index > RIN_SSCANF_MAX_CONVERSIONS) {
                 errno = EINVAL;
@@ -115,8 +127,12 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
     }
     while (format[current] >= '0' && format[current] <= '9') {
         size_t digit = (size_t)(format[current] - '0');
+        size_t width_limit;
         have_width = 1;
-        if (width > (RIN_SSCANF_MAX_INPUT - digit) / 10u) {
+        /* B47: only stream entries cap widths at 4096 (their fixed
+         * collectors); string entries check against SIZE_MAX. */
+        width_limit = bound_width ? RIN_SSCANF_MAX_INPUT : SIZE_MAX;
+        if (width > (width_limit - digit) / 10u) {
             errno = EOVERFLOW;
             return -1;
         }
@@ -509,7 +525,8 @@ static void* rin_sscanf_argument_pointer(
 }
 
 static int rin_sscanf_validate_format(
-        const char* format, struct RinSscanfArgumentPlan* plan) {
+        const char* format, struct RinSscanfArgumentPlan* plan,
+        int bound_width) {
     size_t index = 0u;
     size_t conversions = 0u;
     int saw_positional = 0;
@@ -546,7 +563,8 @@ static int rin_sscanf_validate_format(
                 errno = EOVERFLOW;
                 return -1;
             }
-            if (rin_sscanf_parse_spec(format, &index, &spec) != 0) return -1;
+            if (rin_sscanf_parse_spec(format, &index, &spec,
+                                      bound_width) != 0) return -1;
             kind = rin_sscanf_argument_kind(&spec);
             if (kind == RIN_SSCANF_ARG_NONE) continue;
             argument_index = spec.argument_index;
@@ -593,8 +611,9 @@ static int rin_sscanf_validate_format(
 
 static int rin_sscanf_prepare_arguments(
         const char* format, va_list ap,
-        struct RinSscanfArgumentPlan* plan) {
-    if (rin_sscanf_validate_format(format, plan) != 0) return -1;
+        struct RinSscanfArgumentPlan* plan, int bound_width) {
+    if (rin_sscanf_validate_format(format, plan, bound_width) != 0)
+        return -1;
     if (!plan->positional) return 0;
     {
         va_list cursor;
@@ -1153,23 +1172,20 @@ static int rin_sscanf_wide_scanset_contains(
     return spec->scanset_invert ? !contained : contained;
 }
 
-/* Collect complete UTF-8 scalars from a string-backed scanf input.  Width is
- * a scalar count for `%lc`/`%ls`, while the private byte candidate remains
- * bounded by the existing input limit. */
-static int rin_sscanf_wide_field(
+/* Locate a wide string-field extent in place (B47: no 4097-byte stack
+ * candidate).  Width is a scalar count for `%lc`/`%ls`; without a
+ * width the field runs to the first boundary in the whole string. */
+static int rin_sscanf_wide_field_extent(
         const char* input, size_t input_size, size_t* input_offset,
-        const struct RinSscanfSpec* spec, char* candidate,
-        size_t candidate_capacity, size_t* byte_count_out,
-        size_t* scalar_count_out, int* input_failure_out) {
+        const struct RinSscanfSpec* spec, size_t* begin_out,
+        size_t* end_out, size_t* scalar_count_out, int* input_failure_out) {
     size_t current = *input_offset;
-    size_t byte_count = 0u;
+    size_t begin;
     size_t scalar_count = 0u;
-    size_t scalar_limit = spec->has_width ? spec->width :
-        (spec->conversion == 'c' ? 1u : RIN_SSCANF_MAX_INPUT);
+    size_t scalar_limit = spec->has_width ? spec->width : SIZE_MAX;
     int first_result;
-    if (!input || !input_offset || !spec || !candidate ||
-        !byte_count_out || !scalar_count_out || !input_failure_out ||
-        scalar_limit == 0u) {
+    if (!input || !input_offset || !spec || !begin_out || !end_out ||
+        !scalar_count_out || !input_failure_out || scalar_limit == 0u) {
         errno = EINVAL;
         return -1;
     }
@@ -1178,6 +1194,7 @@ static int rin_sscanf_wide_field(
         while (current < input_size &&
                rin_sscanf_space((unsigned char)input[current])) ++current;
     }
+    begin = current;
     while (current < input_size && scalar_count < scalar_limit) {
         size_t consumed;
         uint32_t value;
@@ -1190,13 +1207,6 @@ static int rin_sscanf_wide_field(
             if (matched < 0) return -1;
             if (matched == 0) break;
         }
-        if (byte_count > candidate_capacity - consumed) {
-            errno = EOVERFLOW;
-            return -1;
-        }
-        for (size_t index = 0u; index < consumed; ++index)
-            candidate[byte_count + index] = input[current + index];
-        byte_count += consumed;
         current += consumed;
         ++scalar_count;
     }
@@ -1205,7 +1215,8 @@ static int rin_sscanf_wide_field(
         return 0;
     }
     *input_offset = current;
-    *byte_count_out = byte_count;
+    *begin_out = begin;
+    *end_out = current;
     *scalar_count_out = scalar_count;
     return 1;
 }
@@ -1213,38 +1224,55 @@ static int rin_sscanf_wide_field(
 static int rin_sscanf_store_wide_field(
         va_list* arguments, const struct RinSscanfSpec* spec,
         const char* candidate, size_t byte_count, int suppress) {
-    wchar_t wide_candidate[RIN_SSCANF_MAX_INPUT + 1u];
+    /* B47: two passes over the caller bytes instead of a 4097-wide
+     * stack scratch.  The counting pass validates every scalar up
+     * front, so EILSEQ still fails before any destination (or %m
+     * allocation) is touched. */
+    size_t offset = 0u;
     size_t wide_count = 0u;
+    size_t wide_capacity = 0u;
+    size_t decoded = 0u;
     int terminate = spec->conversion == 's' || spec->conversion == '[';
-    if (rin_sscanf_decode_wide_candidate(
-            candidate, byte_count, wide_candidate,
-            sizeof(wide_candidate) / sizeof(wide_candidate[0]),
-            &wide_count) != 0) return -1;
+    while (offset < byte_count) {
+        size_t consumed = 0u;
+        uint32_t value = 0u;
+        if (rin_sscanf_first_multibyte(candidate + offset,
+                                       byte_count - offset, &consumed,
+                                       &value) <= 0) return -1;
+        offset += consumed;
+        ++wide_count;
+    }
     if (suppress) return 0;
+    wide_capacity = wide_count + (terminate ? 1u : 0u);
     if (spec->allocate) {
-        size_t allocation_count = wide_count + (terminate ? 1u : 0u);
         wchar_t* storage;
         wchar_t** output = (wchar_t**)rin_sscanf_argument_pointer(
             arguments, spec, RIN_SSCANF_ARG_WCHAR_POINTER_POINTER);
         if (!output) { errno = EFAULT; return -1; }
-        if (allocation_count > SIZE_MAX / sizeof(wchar_t)) {
+        if (wide_capacity > SIZE_MAX / sizeof(wchar_t)) {
             errno = EOVERFLOW;
             return -1;
         }
-        storage = (wchar_t*)malloc(allocation_count * sizeof(wchar_t));
+        if (wide_capacity == 0u) wide_capacity = 1u;
+        storage = (wchar_t*)malloc(wide_capacity * sizeof(wchar_t));
         if (!storage) { errno = ENOMEM; return -1; }
-        for (size_t index = 0u; index < wide_count; ++index)
-            storage[index] = wide_candidate[index];
+        if (rin_sscanf_decode_wide_candidate(candidate, byte_count, storage,
+                                             wide_count, &decoded) != 0) {
+            free(storage);
+            return -1;
+        }
         if (terminate) storage[wide_count] = L'\0';
         *output = storage;
     } else {
         wchar_t* output = (wchar_t*)rin_sscanf_argument_pointer(
             arguments, spec, RIN_SSCANF_ARG_WCHAR_POINTER);
         if (!output) { errno = EFAULT; return -1; }
-        for (size_t index = 0u; index < wide_count; ++index)
-            output[index] = wide_candidate[index];
+        if (rin_sscanf_decode_wide_candidate(candidate, byte_count, output,
+                                             wide_count, &decoded) != 0)
+            return -1;
         if (terminate) output[wide_count] = L'\0';
     }
+    (void)decoded;
     return 0;
 }
 
@@ -1280,10 +1308,12 @@ static int rin_sscanf_input_error_result(int assignments) {
     return assignments == 0 ? EOF : assignments;
 }
 
-/* vsscanf - bounded string input.  Format validation happens before any
- * variadic argument is read or caller output is written. */
+/* vsscanf - unbounded string input (B47: the caller string is parsed in
+ * place; no stack copy, no 4096 fixed rejection).  Format validation
+ * happens before any variadic argument is read or caller output is
+ * written. */
 _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
-    char input[RIN_SSCANF_MAX_INPUT + 1u];
+    const char* input = NULL;
     size_t input_size = 0u;
     size_t input_offset = 0u;
     size_t format_offset = 0u;
@@ -1303,16 +1333,11 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
-    if (rin_sscanf_prepare_arguments(format, ap, &argument_plan) != 0)
+    if (rin_sscanf_prepare_arguments(format, ap, &argument_plan, 0) != 0)
         return EOF;
-    while (input_size <= RIN_SSCANF_MAX_INPUT && string[input_size] != '\0')
+    while (string[input_size] != '\0')
         ++input_size;
-    if (input_size > RIN_SSCANF_MAX_INPUT) {
-        errno = EOVERFLOW;
-        return EOF;
-    }
-    for (size_t index = 0u; index <= input_size; ++index)
-        input[index] = string[index];
+    input = string;
     va_copy(arguments, ap);
     while (format[format_offset] != '\0') {
         unsigned char format_value = (unsigned char)format[format_offset];
@@ -1340,7 +1365,8 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
         {
             struct RinSscanfSpec spec;
             ++format_offset;
-            if (rin_sscanf_parse_spec(format, &format_offset, &spec) != 0) {
+            if (rin_sscanf_parse_spec(format, &format_offset, &spec,
+                                      0) != 0) {
                 va_end(arguments);
                 return rin_sscanf_input_error_result(assignments);
             }
@@ -1368,14 +1394,13 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
             if (spec.length == RIN_SSCANF_LENGTH_LONG &&
                 (spec.conversion == 'c' || spec.conversion == 's' ||
                  spec.conversion == '[')) {
-                char candidate[RIN_SSCANF_MAX_INPUT + 1u];
-                size_t byte_count = 0u;
+                size_t begin = 0u;
+                size_t end = 0u;
                 size_t scalar_count = 0u;
                 int input_failure = 0;
-                int parsed = rin_sscanf_wide_field(
-                    input, input_size, &input_offset, &spec, candidate,
-                    sizeof(candidate), &byte_count, &scalar_count,
-                    &input_failure);
+                int parsed = rin_sscanf_wide_field_extent(
+                    input, input_size, &input_offset, &spec, &begin,
+                    &end, &scalar_count, &input_failure);
                 (void)scalar_count;
                 if (parsed < 0) {
                     va_end(arguments);
@@ -1387,7 +1412,7 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
                         rin_sscanf_input_error_result(assignments) : assignments;
                 }
                 if (rin_sscanf_store_wide_field(
-                        &arguments, &spec, candidate, byte_count,
+                        &arguments, &spec, input + begin, end - begin,
                         spec.suppress) != 0) {
                     va_end(arguments);
                     return rin_sscanf_input_error_result(assignments);
@@ -1460,7 +1485,7 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
             if (spec.conversion == '[') {
                 size_t begin = input_offset;
                 size_t count = 0u;
-                size_t limit = spec.has_width ? spec.width : RIN_SSCANF_MAX_INPUT;
+                size_t limit = spec.has_width ? spec.width : SIZE_MAX; /* B47: unbounded string field */
                 while (input_offset < input_size && count < limit &&
                        rin_sscanf_scanset_contains(
                            &spec, (unsigned char)input[input_offset])) {
@@ -1515,7 +1540,7 @@ _RIN_STDIO_API int vsscanf(const char* string, const char* format, va_list ap) {
                     return rin_sscanf_input_error_result(assignments);
                 }
                 begin = input_offset;
-                size_t limit = spec.has_width ? spec.width : RIN_SSCANF_MAX_INPUT;
+                size_t limit = spec.has_width ? spec.width : SIZE_MAX; /* B47: unbounded string field */
                 while (input_offset < input_size && count < limit &&
                        !rin_sscanf_space((unsigned char)input[input_offset])) {
                     ++input_offset;
@@ -2278,11 +2303,12 @@ parse_candidate:
 static int rin_fscanf_validate_format(
         const char* format, struct RinSscanfArgumentPlan* plan) {
     size_t offset = 0u;
-    if (rin_sscanf_validate_format(format, plan) != 0) return -1;
+    if (rin_sscanf_validate_format(format, plan, 1) != 0) return -1;
     while (format[offset] != '\0') {
         struct RinSscanfSpec spec;
         if (format[offset++] != '%') continue;
-        if (rin_sscanf_parse_spec(format, &offset, &spec) != 0) return -1;
+        if (rin_sscanf_parse_spec(format, &offset, &spec, 1) != 0)
+            return -1;
         if (spec.conversion == 'e' || spec.conversion == 'E' ||
             spec.conversion == 'f' || spec.conversion == 'F' ||
             spec.conversion == 'g' || spec.conversion == 'G' ||
@@ -2368,7 +2394,8 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
             char candidate[RIN_SSCANF_MAX_INPUT + 1u];
             size_t count;
             ++format_offset;
-            if (rin_sscanf_parse_spec(format, &format_offset, &spec) != 0) {
+            if (rin_sscanf_parse_spec(format, &format_offset, &spec,
+                                      1) != 0) {
                 va_end(arguments);
                 return rin_sscanf_input_error_result(assignments);
             }

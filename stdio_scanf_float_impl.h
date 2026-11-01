@@ -75,7 +75,7 @@ static inline int rin_sscanf_parse_float(
         const char* input, size_t input_size, size_t* offset,
         const struct RinSscanfSpec* spec, struct RinSscanfFloat* value_out,
         int* input_failure_out) {
-    char candidate[RIN_SSCANF_MAX_INPUT + 1u];
+    char* candidate;
     const char* parsed_end;
     size_t current = *offset;
     size_t end = input_size;
@@ -95,6 +95,11 @@ static inline int rin_sscanf_parse_float(
     if (spec->has_width && spec->width < end - current)
         end = current + spec->width;
     count = end - current;
+    /* B47: the engine needs a NUL-terminated window; heap it so
+     * unbounded string inputs need no 4097-byte stack copy. */
+    if (count == SIZE_MAX) { errno = ENOMEM; return -1; }
+    candidate = (char*)malloc(count + 1u);
+    if (!candidate) { errno = ENOMEM; return -1; }
     for (size_t index = 0u; index < count; ++index)
         candidate[index] = input[current + index];
     candidate[count] = '\0';
@@ -131,16 +136,20 @@ static inline int rin_sscanf_parse_float(
                 value_out->bits = 0u;
                 value_out->long_value = 0.0;
                 *offset = current + (size_t)(prefix - candidate) + 3u;
+                free(candidate);
                 return 1;
             }
-            if (after_x < count) return 0;
-            if (!spec->has_width || spec->width > after_x) return 0;
+            if (after_x < count) { free(candidate); return 0; }
+            if (!spec->has_width || spec->width > after_x) {
+                free(candidate);
+                return 0;
+            }
         }
     }
     if (spec->length == RIN_SSCANF_LENGTH_NONE) {
         rin_float_parse_result parsed = rin_float_parse_binary32_radix(
             candidate, decimal_point);
-        if (!parsed.converted) return 0;
+        if (!parsed.converted) { free(candidate); return 0; }
         /* BATCH41: range/subnormal results still assign (the engine
          * already holds inf/0/subnormal bits) with ERANGE, matching
          * strtof and glibc, instead of failing the conversion.
@@ -153,7 +162,7 @@ static inline int rin_sscanf_parse_float(
     } else if (spec->length == RIN_SSCANF_LENGTH_LONG) {
         rin_float_parse_result parsed = rin_float_parse_binary64_radix(
             candidate, decimal_point);
-        if (!parsed.converted) return 0;
+        if (!parsed.converted) { free(candidate); return 0; }
         /* BATCH41: range/subnormal results still assign (the engine
          * already holds inf/0/subnormal bits) with ERANGE, matching
          * strtof and glibc, instead of failing the conversion.
@@ -168,7 +177,7 @@ static inline int rin_sscanf_parse_float(
 #if defined(RIN_FP_HAS_BINARY80)
         rin_long_double_parse_result parsed = rin_float_parse_binary80_radix(
             candidate, decimal_point);
-        if (!parsed.converted) return 0;
+        if (!parsed.converted) { free(candidate); return 0; }
         /* BATCH41: range/subnormal results still assign (the engine
          * already holds inf/0/subnormal bits) with ERANGE, matching
          * strtof and glibc, instead of failing the conversion.
@@ -181,7 +190,7 @@ static inline int rin_sscanf_parse_float(
 #else
         rin_float_parse_result parsed = rin_float_parse_binary64_radix(
             candidate, decimal_point);
-        if (!parsed.converted) return 0;
+        if (!parsed.converted) { free(candidate); return 0; }
         /* BATCH41: range/subnormal results still assign (the engine
          * already holds inf/0/subnormal bits) with ERANGE, matching
          * strtof and glibc, instead of failing the conversion.
@@ -195,6 +204,7 @@ static inline int rin_sscanf_parse_float(
 #endif
 #else
         errno = EINVAL;
+        free(candidate);
         return -1;
 #endif
     }
@@ -227,8 +237,10 @@ static inline int rin_sscanf_parse_float(
             is_word = is_inf || is_nan;
         }
         if (is_inf && consumed == word + 3u && consumed < count &&
-            (candidate[consumed] == 'i' || candidate[consumed] == 'I'))
+            (candidate[consumed] == 'i' || candidate[consumed] == 'I')) {
+            free(candidate);
             return 0;
+        }
         if (is_nan && consumed > word + 3u)
             consumed = word + 3u;
         if (!is_word) {
@@ -258,6 +270,7 @@ static inline int rin_sscanf_parse_float(
         }
         *offset = current + consumed;
     }
+    free(candidate);
     return 1;
 }
 

@@ -2505,6 +2505,21 @@ static size_t rin_wscanf_float_failed_length(const char* candidate,
     return i;
 }
 
+/* Visible extent of a wide float field on a string input (B47): scan to
+ * whitespace/NUL so the heap candidate fits without a fixed bound.
+ * Non-ASCII stays included; the fill loop below still reports EILSEQ. */
+static unsigned int rin_wscanf_string_float_extent(RinWscanfInput* input,
+                                                   unsigned int width) {
+    RinWscanfString* string_input = (RinWscanfString*)input->context;
+    const wchar_t* text = string_input->text + string_input->offset;
+    size_t extent = 0u;
+    while (extent < (size_t)width && text[extent] != 0 &&
+           !rin_wscanf_space((uint32_t)text[extent]))
+        ++extent;
+    if (extent > (size_t)UINT_MAX) extent = (size_t)UINT_MAX;
+    return (unsigned int)extent;
+}
+
 static int rin_wscanf_string_float(unsigned int width, int width_present,
                                    int length, uint32_t conversion,
                                    int suppress, RinWscanfInput* input,
@@ -2524,7 +2539,9 @@ static int rin_wscanf_string_float(unsigned int width, int width_present,
         errno = ENOSYS;
         return RIN_WSCANF_ERROR;
     }
-    if (width == 0u || width > RIN_WSCANF_FIELD_LIMIT)
+    if (input->string_backed)
+        width = rin_wscanf_string_float_extent(input, width);
+    else if (width == 0u || width > RIN_WSCANF_FIELD_LIMIT)
         width = RIN_WSCANF_FIELD_LIMIT;
     candidate = (char*)malloc((size_t)width + 1u);
     if (!candidate) {
@@ -2793,43 +2810,110 @@ static int rin_wscanf_store_characters(const uint32_t* candidate,
     return RIN_WSCANF_MATCH;
 }
 
+/* Exact string extent for %s/%c (B47): spaces skipped for %s in the
+ * peek so the heap candidate fits without a fixed bound. */
+static size_t rin_wscanf_string_characters_extent(RinWscanfInput* input,
+                                                  unsigned int width,
+                                                  int string) {
+    RinWscanfString* string_input = (RinWscanfString*)input->context;
+    const wchar_t* text = string_input->text + string_input->offset;
+    size_t skip = 0u;
+    size_t extent = 0u;
+    if (string) {
+        while (text[skip] != 0 &&
+               rin_wscanf_space((uint32_t)text[skip]))
+            ++skip;
+    }
+    while (extent < (size_t)width && text[skip + extent] != 0 &&
+           (!string ||
+            !rin_wscanf_space((uint32_t)text[skip + extent])))
+        ++extent;
+    if (extent > (size_t)UINT_MAX) extent = (size_t)UINT_MAX;
+    return extent;
+}
+
 static int rin_wscanf_characters(RinWscanfInput* input, unsigned int width,
                                  int string, int wide, int suppress,
                                  va_list* arguments,
                                  const RinWscanfSpec* spec) {
-    uint32_t candidate[RIN_WSCANF_FIELD_LIMIT];
+    /* B47: heap the field candidate (exact string extent, 4096 on
+     * streams) instead of a 16 KiB stack scratch. Malloc precedes
+     * every read so ENOMEM consumes nothing. */
+    uint32_t* candidate;
     unsigned int index = 0u;
     int status;
+    if (input->string_backed) {
+        size_t extent = rin_wscanf_string_characters_extent(input, width,
+                                                             string);
+        if (extent > (SIZE_MAX - sizeof(uint32_t)) / sizeof(uint32_t)) {
+            errno = ENOMEM;
+            return RIN_WSCANF_ERROR;
+        }
+        candidate = (uint32_t*)malloc((extent + 1u) * sizeof(uint32_t));
+    } else {
+        size_t cap = width > RIN_WSCANF_FIELD_LIMIT ?
+            RIN_WSCANF_FIELD_LIMIT : width;
+        if (cap == 0u) cap = 1u;
+        candidate = (uint32_t*)malloc((cap + 1u) * sizeof(uint32_t));
+    }
+    if (!candidate) {
+        errno = ENOMEM;
+        return RIN_WSCANF_ERROR;
+    }
     if (string) {
         status = rin_wscanf_skip_space(input);
-        if (status != RIN_WSCANF_MATCH) return status;
+        if (status != RIN_WSCANF_MATCH) {
+            free(candidate);
+            return status;
+        }
         while (index < width) {
             uint32_t value;
             status = rin_wscanf_read(input, &value);
             if (status == RIN_WSCANF_EOF) break;
-            if (status != RIN_WSCANF_MATCH) return status;
+            if (status != RIN_WSCANF_MATCH) {
+                free(candidate);
+                return status;
+            }
             if (rin_wscanf_space(value)) {
-                if (rin_wscanf_unread(input, value) != RIN_WSCANF_MATCH)
+                if (rin_wscanf_unread(input, value) != RIN_WSCANF_MATCH) {
+                    free(candidate);
                     return RIN_WSCANF_ERROR;
+                }
                 break;
             }
             candidate[index++] = value;
         }
-        if (index == 0u) return RIN_WSCANF_NOMATCH;
-        return suppress ? RIN_WSCANF_MATCH :
-            rin_wscanf_store_characters(candidate, index, 1, wide, arguments,
-                                         spec);
+        if (index == 0u) {
+            free(candidate);
+            return RIN_WSCANF_NOMATCH;
+        }
+        if (suppress) {
+            free(candidate);
+            return RIN_WSCANF_MATCH;
+        }
+        status = rin_wscanf_store_characters(candidate, index, 1, wide,
+                                              arguments, spec);
+        free(candidate);
+        return status;
     }
 
     while (index < width) {
         uint32_t value;
         status = rin_wscanf_read(input, &value);
-        if (status != RIN_WSCANF_MATCH) return status;
+        if (status != RIN_WSCANF_MATCH) {
+            free(candidate);
+            return status;
+        }
         candidate[index++] = value;
     }
-    return suppress ? RIN_WSCANF_MATCH :
-        rin_wscanf_store_characters(candidate, index, 0, wide, arguments,
-                                     spec);
+    if (suppress) {
+        free(candidate);
+        return RIN_WSCANF_MATCH;
+    }
+    status = rin_wscanf_store_characters(candidate, index, 0, wide,
+                                          arguments, spec);
+    free(candidate);
+    return status;
 }
 
 /* A scanset stays a view over the already validated format text.  This keeps
@@ -2899,13 +2983,18 @@ static int rin_wscanf_scanset_parse(const wchar_t* format, size_t* offset,
     return RIN_WSCANF_ERROR;
 }
 
+/* bound_width keeps the legacy 4096 field-width cap for stream entries
+ * (bounded kernel reads); string entries pass zero and accept any
+ * representable width (B47: no fixed input bound). */
 static int rin_wscanf_parse_spec(const wchar_t* format, size_t* offset,
-                                  RinWscanfSpec* output) {
+                                  RinWscanfSpec* output,
+                                  int bound_width) {
     RinWscanfSpec spec = {};
     size_t cursor = *offset;
     size_t probe;
     size_t argument_index = 0u;
     int have_argument_digits = 0;
+    int argument_overflow = 0;
     int have_width = 0;
     if (!format || !offset || !output || cursor >= RIN_WSCANF_FORMAT_LIMIT) {
         errno = EINVAL;
@@ -2917,11 +3006,14 @@ static int rin_wscanf_parse_spec(const wchar_t* format, size_t* offset,
            (uint32_t)format[probe] <= (uint32_t)'9') {
         size_t digit = (size_t)((uint32_t)format[probe] - (uint32_t)'0');
         have_argument_digits = 1;
-        if (argument_index > (64u - digit) / 10u) {
-            errno = EOVERFLOW;
-            return RIN_WSCANF_ERROR;
+        /* B47: a huge digit run only fails when it is actually
+         * positional; a plain width falls through to the width
+         * parser below (string entries accept any width). */
+        if (argument_index > (SIZE_MAX - digit) / 10u) {
+            argument_overflow = 1;
+        } else if (!argument_overflow) {
+            argument_index = argument_index * 10u + digit;
         }
-        argument_index = argument_index * 10u + digit;
         ++probe;
     }
     if (probe == RIN_WSCANF_FORMAT_LIMIT) {
@@ -2929,7 +3021,11 @@ static int rin_wscanf_parse_spec(const wchar_t* format, size_t* offset,
         return RIN_WSCANF_ERROR;
     }
     if (have_argument_digits && (uint32_t)format[probe] == (uint32_t)'$') {
-        if (argument_index == 0u || argument_index > 64u) {
+        if (argument_overflow || argument_index > 64u) {
+            errno = EOVERFLOW;
+            return RIN_WSCANF_ERROR;
+        }
+        if (argument_index == 0u) {
             errno = EINVAL;
             return RIN_WSCANF_ERROR;
         }
@@ -2946,7 +3042,11 @@ static int rin_wscanf_parse_spec(const wchar_t* format, size_t* offset,
            (uint32_t)format[cursor] <= (uint32_t)'9') {
         unsigned int digit = (unsigned int)((uint32_t)format[cursor] -
                                              (uint32_t)'0');
-        if (spec.width > (RIN_WSCANF_FIELD_LIMIT - digit) / 10u) {
+        unsigned int width_limit;
+        /* B47: only stream entries cap widths at 4096; string
+         * entries check against UINT_MAX. */
+        width_limit = bound_width ? RIN_WSCANF_FIELD_LIMIT : UINT_MAX;
+        if (spec.width > (width_limit - digit) / 10u) {
             errno = EOVERFLOW;
             return RIN_WSCANF_ERROR;
         }
@@ -3296,7 +3396,8 @@ static void* rin_wscanf_capture_argument(
 
 static int rin_wscanf_prepare_arguments(const wchar_t* format,
                                          va_list* arguments,
-                                         RinWscanfArgumentPlan* plan) {
+                                         RinWscanfArgumentPlan* plan,
+                                         int bound_width) {
     size_t offset = 0u;
     int saw_positional = 0;
     int saw_sequential = 0;
@@ -3319,7 +3420,8 @@ static int rin_wscanf_prepare_arguments(const wchar_t* format,
             RinWscanfSpec spec;
             enum RinWscanfArgumentKind kind;
             size_t argument_index;
-            if (rin_wscanf_parse_spec(format, &offset, &spec) != RIN_WSCANF_MATCH)
+            if (rin_wscanf_parse_spec(format, &offset, &spec,
+                                      bound_width) != RIN_WSCANF_MATCH)
                 return RIN_WSCANF_ERROR;
             if (spec.conversion == (uint32_t)'[') {
                 RinWscanfScanSet set;
@@ -3412,14 +3514,50 @@ static int rin_wscanf_scanset_contains(const RinWscanfScanSet* set,
     return set->inverted ? !contains : contains;
 }
 
+/* Exact string extent for %[ (B47): peek member scalars so the heap
+ * candidate fits without a fixed bound. */
+static size_t rin_wscanf_string_scanset_extent(RinWscanfInput* input,
+                                               const RinWscanfScanSet* set,
+                                               unsigned int width) {
+    RinWscanfString* string_input = (RinWscanfString*)input->context;
+    const wchar_t* text = string_input->text + string_input->offset;
+    size_t extent = 0u;
+    while (extent < (size_t)width && text[extent] != 0 &&
+           rin_wscanf_scanset_contains(set, (uint32_t)text[extent]))
+        ++extent;
+    if (extent > (size_t)UINT_MAX) extent = (size_t)UINT_MAX;
+    return extent;
+}
+
 static int rin_wscanf_scanset(RinWscanfInput* input,
                                const RinWscanfScanSet* set,
                                unsigned int width, int wide, int suppress,
                                va_list* arguments,
                                const RinWscanfSpec* spec) {
-    uint32_t candidate[RIN_WSCANF_FIELD_LIMIT];
+    /* B47: heap the field candidate (exact string extent, 4096 on
+     * streams) instead of a 16 KiB stack scratch. Malloc precedes
+     * every read so ENOMEM consumes nothing. */
+    uint32_t* candidate;
     unsigned int index = 0u;
     int saw_eof = 0;
+    if (input->string_backed) {
+        size_t extent = rin_wscanf_string_scanset_extent(input, set,
+                                                          width);
+        if (extent > (SIZE_MAX - sizeof(uint32_t)) / sizeof(uint32_t)) {
+            errno = ENOMEM;
+            return RIN_WSCANF_ERROR;
+        }
+        candidate = (uint32_t*)malloc((extent + 1u) * sizeof(uint32_t));
+    } else {
+        size_t cap = width > RIN_WSCANF_FIELD_LIMIT ?
+            RIN_WSCANF_FIELD_LIMIT : width;
+        if (cap == 0u) cap = 1u;
+        candidate = (uint32_t*)malloc((cap + 1u) * sizeof(uint32_t));
+    }
+    if (!candidate) {
+        errno = ENOMEM;
+        return RIN_WSCANF_ERROR;
+    }
     for (;;) {
         uint32_t value;
         int status;
@@ -3429,19 +3567,34 @@ static int rin_wscanf_scanset(RinWscanfInput* input,
             saw_eof = 1;
             break;
         }
-        if (status != RIN_WSCANF_MATCH) return status;
+        if (status != RIN_WSCANF_MATCH) {
+            free(candidate);
+            return status;
+        }
         if (!rin_wscanf_scanset_contains(set, value)) {
-            if (rin_wscanf_unread(input, value) != RIN_WSCANF_MATCH)
+            if (rin_wscanf_unread(input, value) != RIN_WSCANF_MATCH) {
+                free(candidate);
                 return RIN_WSCANF_ERROR;
+            }
             break;
         }
         candidate[index++] = value;
     }
-    if (index == 0u)
+    if (index == 0u) {
+        free(candidate);
         return saw_eof ? RIN_WSCANF_EOF : RIN_WSCANF_NOMATCH;
-    return suppress ? RIN_WSCANF_MATCH :
-        rin_wscanf_store_characters(candidate, index, 1, wide, arguments,
-                                     spec);
+    }
+    if (suppress) {
+        free(candidate);
+        return RIN_WSCANF_MATCH;
+    }
+    {
+        int store_status = rin_wscanf_store_characters(candidate, index, 1,
+                                                        wide, arguments,
+                                                        spec);
+        free(candidate);
+        return store_status;
+    }
 }
 
 static int rin_wscanf_literal(RinWscanfInput* input, uint32_t expected) {
@@ -3454,6 +3607,13 @@ static int rin_wscanf_literal(RinWscanfInput* input, uint32_t expected) {
     return RIN_WSCANF_NOMATCH;
 }
 
+/* Width-less fields default to 4096 scalars on streams (bounded kernel
+ * reads) and run unbounded on strings (B47: strings are finite and
+ * scanned in place; collectors size their heap candidate by extent). */
+static unsigned int rin_wscanf_default_width(RinWscanfInput* input) {
+    return input->string_backed ? UINT_MAX : RIN_WSCANF_FIELD_LIMIT;
+}
+
 static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                              va_list* arguments) {
     RinWscanfArgumentPlan argument_plan;
@@ -3463,7 +3623,8 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
         errno = EINVAL;
         return EOF;
     }
-    if (rin_wscanf_prepare_arguments(format, arguments, &argument_plan) !=
+    if (rin_wscanf_prepare_arguments(format, arguments, &argument_plan,
+                                      !input->string_backed) !=
         RIN_WSCANF_MATCH)
         return EOF;
     while (offset < RIN_WSCANF_FORMAT_LIMIT) {
@@ -3501,7 +3662,8 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
             int width_fast;
             unsigned int width;
             uint32_t conversion;
-            if (rin_wscanf_parse_spec(format, &offset, &spec) !=
+            if (rin_wscanf_parse_spec(format, &offset, &spec,
+                                      !input->string_backed) !=
                 RIN_WSCANF_MATCH)
                 return EOF;
             rin_wscanf_bind_argument(&spec, &argument_plan);
@@ -3532,13 +3694,10 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                     return EOF;
                 }
                 if (!width_present) {
-                    /* A width-less `%s` still needs a bounded destination
-                     * contract: use the same field limit as numeric scans.
-                     * The candidate is private until the complete token has
-                     * been collected, so the terminator is always within the
-                     * caller's advertised maximum field size. */
+                    /* B47: width-less strings run to the terminator on
+                     * string inputs; streams keep the 4096 bound. */
                     width = is_string ?
-                        RIN_WSCANF_FIELD_LIMIT : 1u;
+                        rin_wscanf_default_width(input) : 1u;
                 }
                 status = rin_wscanf_characters(input, width,
                     is_string,
@@ -3552,11 +3711,10 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                     return EOF;
                 }
                 if (!width_present) {
-                    /* `%[` has no implicit terminator in the input.  Bound
-                     * the private candidate to the same 4,096-scalar field
-                     * limit used by width-less `%s`; the first non-member is
-                     * unread and remains available to the next conversion. */
-                    width = RIN_WSCANF_FIELD_LIMIT;
+                    /* B47: the first non-member is unread and remains
+                     * available; strings run unbounded, streams keep
+                     * the 4096 bound. */
+                    width = rin_wscanf_default_width(input);
                 }
                 status = rin_wscanf_scanset_parse(format, &offset, &set);
                 if (status == RIN_WSCANF_MATCH)
@@ -3570,7 +3728,7 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                        conversion == (uint32_t)'x' || conversion == (uint32_t)'X') {
                 int negative;
                 unsigned long long magnitude;
-                if (!width_present) width = RIN_WSCANF_FIELD_LIMIT;
+                if (!width_present) width = rin_wscanf_default_width(input);
                 status = rin_wscanf_skip_space(input);
                 if (status == RIN_WSCANF_MATCH)
                     status = rin_wscanf_number(input, width, conversion,
@@ -3625,7 +3783,7 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                     errno = EINVAL;
                     return EOF;
                 }
-                if (!width_present) width = RIN_WSCANF_FIELD_LIMIT;
+                if (!width_present) width = rin_wscanf_default_width(input);
                 status = rin_wscanf_skip_space(input);
                 if (status == RIN_WSCANF_MATCH)
                     status = rin_wscanf_number(input, width, (uint32_t)'x',
@@ -3637,7 +3795,7 @@ static int rin_wscanf_format(RinWscanfInput* input, const wchar_t* format,
                        conversion == (uint32_t)'e' || conversion == (uint32_t)'E' ||
                        conversion == (uint32_t)'f' || conversion == (uint32_t)'F' ||
                        conversion == (uint32_t)'g' || conversion == (uint32_t)'G') {
-                if (!width_present) width = RIN_WSCANF_FIELD_LIMIT;
+                if (!width_present) width = rin_wscanf_default_width(input);
                 status = rin_wscanf_string_float(width, width_present,
                                                  length, conversion,
                                                  suppress,
@@ -3668,17 +3826,14 @@ int vswscanf(const wchar_t* text, const wchar_t* format, va_list arguments) {
         errno = EINVAL;
         return EOF;
     }
-    /* A string-backed scan must not walk an unbounded caller buffer.  Check
-     * the terminating scalar before consuming or modifying any destination. */
-    for (index = 0u; index <= RIN_WSCANF_MAX_INPUT; ++index) {
+    /* B47: strings are scanned in place without a fixed bound; keep
+     * the up-front scalar validation (fail-fast EILSEQ before any
+     * destination is touched). */
+    for (index = 0u; ; ++index) {
         uint32_t value = (uint32_t)text[index];
         if (value == 0u) break;
         if (!rin_wchar_scalar_valid(value)) {
             errno = EILSEQ;
-            return EOF;
-        }
-        if (index == RIN_WSCANF_MAX_INPUT) {
-            errno = EOVERFLOW;
             return EOF;
         }
     }
