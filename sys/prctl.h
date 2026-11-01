@@ -145,6 +145,19 @@ extern "C" {
 #define PR_PAC_SET_ENABLED_KEYS     60
 #define PR_PAC_GET_ENABLED_KEYS     61
 #define PR_SCHED_CORE       62
+#define PR_SCHED_CORE_GET            0
+#define PR_SCHED_CORE_CREATE         1
+#define PR_SCHED_CORE_SHARE_TO       2
+#define PR_SCHED_CORE_SHARE_FROM     3
+#define PR_SCHED_CORE_MAX            4
+#define PR_SCHED_CORE_SCOPE_THREAD       0
+#define PR_SCHED_CORE_SCOPE_THREAD_GROUP 1
+#define PR_SCHED_CORE_SCOPE_PROCESS_GROUP 2
+#define RIN_PRCTL_SCHED_CORE_CONTROL_SUPPORTED 1
+#define RIN_PRCTL_SCHED_CORE_SUPPORTED_X86_64_NATIVE 1
+#define RIN_PRCTL_SCHED_CORE_SUPPORTED_X86_64_COMPAT32 1
+#define RIN_PRCTL_SCHED_CORE_SUPPORTED_IA32_KERNEL 0
+#define RIN_PRCTL_SCHED_CORE_REQUIRES_SMT 1
 #define PR_SME_SET_VL       63
 #define PR_SME_GET_VL       64
 #define PR_SET_VMA          0x53564d41  /* Set VMA name */
@@ -342,6 +355,7 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_SECCOMP || option == PR_GET_SECCOMP ||
         option == PR_GET_SPECULATION_CTRL ||
         option == PR_SET_SPECULATION_CTRL ||
+        option == PR_SCHED_CORE ||
         option == PR_SET_TIMERSLACK || option == PR_GET_TIMERSLACK ||
         option == PR_SET_TSC || option == PR_GET_TSC ||
         option == PR_SET_PDEATHSIG || option == PR_GET_PDEATHSIG ||
@@ -404,7 +418,8 @@ static inline int prctl(int option, ...) {
         option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP ||
         option == PR_SET_SECUREBITS || option == PR_CAP_AMBIENT ||
         option == PR_GET_SPECULATION_CTRL ||
-        option == PR_SET_SPECULATION_CTRL) {
+        option == PR_SET_SPECULATION_CTRL ||
+        option == PR_SCHED_CORE) {
         __builtin_va_list args;
         __builtin_va_start(args, option);
         if (option == PR_GET_TID_ADDRESS) {
@@ -452,6 +467,12 @@ static inline int prctl(int option, ...) {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
             if (option == PR_SET_SPECULATION_CTRL)
                 arg3 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+        } else if (option == PR_SCHED_CORE) {
+            arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+            arg3 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+            arg4 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+            arg5 = (uintptr_t)__builtin_va_arg(
+                args, unsigned long long*);
         } else {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
         }
