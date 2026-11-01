@@ -268,7 +268,8 @@ static inline int _rin_ioctl_result_status_zero(intptr_t raw_result) {
  *   TIOCGWINSZ / TIOCSWINSZ : IA-32 と x86_64 native/compat32 の TTY owner
  *              経由で 8-byte winsize を取得・更新する。対象TTYでない
  *              descriptor や未admit fd は ENOTTY。
- *   未対応 req : EINVAL。
+ *   TIOCLINUX / TIOCCONS : TTY ABIで既知の未対応要求として ENOTTY。
+ *   その他の未知 req : EINVAL。
  */
 typedef enum _rin_ioctl_argument_kind {
     _RIN_IOCTL_ARGUMENT_NONE,
@@ -283,6 +284,7 @@ _rin_ioctl_get_argument_kind(unsigned long request) {
         case TIOCEXCL:
         case TIOCNXCL:
         case TIOCNOTTY:
+        case TIOCCONS:
         case TIOCSBRK:
         case TIOCCBRK:
         case FIOCLEX:
