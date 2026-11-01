@@ -8,7 +8,8 @@
 #define __STDC_VERSION_STRING_H__ 202311L
 
 #include "stddef.h"
-#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+#if (defined(RIN_USERSPACE) || defined(RIN_STRING_IMPLEMENTATION)) && \
+    !defined(_MSVCRT_COMPAT)
 #include "locale.h"
 #endif
 #if defined(__cplusplus) && !defined(RIN_FREESTANDING) && \
@@ -319,7 +320,8 @@ char* strndup(const char* string, size_t size);
 /* RinUnicode-backed collation functions are owned by libc's shared runtime. */
 int strcoll(const char* s1, const char* s2);
 size_t strxfrm(char* dest, const char* src, size_t n);
-#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+#if (defined(RIN_USERSPACE) || defined(RIN_STRING_IMPLEMENTATION)) && \
+    !defined(_MSVCRT_COMPAT)
 int strcoll_l(const char* s1, const char* s2, locale_t locale);
 size_t strxfrm_l(char* dest, const char* src, size_t n, locale_t locale);
 #endif
@@ -494,7 +496,20 @@ static inline size_t _rin_strerror_unknown_message(int errnum, char* buffer) {
     return output;
 }
 
-RIN_STRING_INLINE const char* strerror(int errnum) {
+/* strerror()/strerror_l()の動的な返却領域は呼出スレッドに属し、次の
+ * strerror系呼出しまで有効。strerror_r()は呼出側bufferへ書き込む。 */
+#if defined(RIN_STRING_IMPLEMENTATION)
+char* strerror(int errnum);
+#if defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+char* strerror_l(int errnum, locale_t locale);
+#endif
+int strerror_r(int errnum, char* buf, size_t buflen);
+#elif defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)
+char* strerror(int errnum);
+char* strerror_l(int errnum, locale_t locale);
+int strerror_r(int errnum, char* buf, size_t buflen);
+#else
+RIN_STRING_INLINE char* strerror(int errnum) {
     const char* known = _rin_strerror_known_message(errnum);
     /* The returned pointer remains valid until this thread's next strerror
      * call.  A process-global buffer would let a concurrent lookup rewrite a
@@ -508,7 +523,7 @@ RIN_STRING_INLINE const char* strerror(int errnum) {
         unknown[_RIN_STRERROR_UNKNOWN_MESSAGE_CAPACITY];
 #undef RIN_STRING_THREAD_LOCAL
 
-    if (known) return known;
+    if (known) return (char*)known;
     (void)_rin_strerror_unknown_message(errnum, unknown);
     return unknown;
 }
@@ -535,6 +550,7 @@ RIN_STRING_INLINE int strerror_r(int errnum, char* buf, size_t buflen) {
     buf[copied] = '\0';
     return copied == length ? 0 : ERANGE;
 }
+#endif
 
 #if defined(_GNU_SOURCE) || defined(_RIN_USE_GNU_STRVERSCMP)
 int strverscmp(const char* left, const char* right);
