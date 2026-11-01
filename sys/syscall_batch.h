@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 /* Bounded native syscall batch frontend. */
 
+#if !defined(__STDC_HOSTED__) || !__STDC_HOSTED__ || \
+    (defined(RIN_FREESTANDING) && RIN_FREESTANDING) || \
+    defined(RIN_USERSPACE) || defined(RIN_KERNEL) || \
+    defined(RIN_ARCH_32) || defined(RIN_ARCH_64)
 #ifndef _SYS_RIN_SYSCALL_BATCH_H
 #define _SYS_RIN_SYSCALL_BATCH_H
 
@@ -44,3 +48,4 @@ static inline int rin_syscall_batch(RinSyscallBatchV1* request)
 }
 
 #endif /* _SYS_RIN_SYSCALL_BATCH_H */
+#endif /* target-only RinOS syscall batch API */

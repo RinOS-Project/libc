@@ -1,5 +1,17 @@
 /* SPDX-License-Identifier: MIT */
 /* POSIX access-control list API for RinOS libc. */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64)
+#if defined(__has_include_next)
+#if __has_include_next(<sys/acl.h>)
+#include_next <sys/acl.h>
+#endif
+#endif
+/* If libacl headers are absent, do not expose RinOS syscall wrappers. */
+#else
 #ifndef _SYS_ACL_H
 #define _SYS_ACL_H
 
@@ -63,3 +75,4 @@ int acl_delete_def_file(const char* path);
 }
 #endif
 #endif
+#endif /* hosted Linux delegates when available; otherwise exposes no RinOS ABI */
