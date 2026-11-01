@@ -816,6 +816,32 @@ static inline int rin_sched_set_numa_policy(
         (uintptr_t)policy));
 }
 
+/* Linux set_mempolicy() is thread scoped.  Keep the older Rin process-wide
+ * policy helpers above for runtimes which configure a child-process default. */
+static inline int rin_sched_get_thread_numa_policy(
+    RinNumaMemoryPolicyV1* policy)
+{
+    if (!policy) {
+        errno = EINVAL;
+        return -1;
+    }
+    return _rin_sched_status(_RIN_SCHED_SYSCALL2(
+        SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_GET_THREAD,
+        (uintptr_t)policy));
+}
+
+static inline int rin_sched_set_thread_numa_policy(
+    const RinNumaMemoryPolicyV1* policy)
+{
+    if (!policy) {
+        errno = EINVAL;
+        return -1;
+    }
+    return _rin_sched_status(_RIN_SCHED_SYSCALL2(
+        SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_SET_THREAD,
+        (uintptr_t)policy));
+}
+
 /* 現在実行中のCPU番号を取得 */
 static inline int sched_getcpu(void) {
     intptr_t cpu = _rin_sched_result(_RIN_SCHED_SYSCALL0(SYS_GETCPU));
