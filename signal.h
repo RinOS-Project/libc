@@ -125,11 +125,15 @@ struct timespec;
 #define __RIN_SIGCANCEL 63
 
 static inline int __rin_signal_is_private_timer_wake(int signum) {
+    return signum == (int)RIN_TIMER_THREAD_SIGNAL;
+}
+
+static inline int __rin_signal_private_action_is_allowed(int signum) {
 #if defined(RIN_TIMER_THREAD_RUNTIME)
+    return __rin_signal_is_private_timer_wake(signum);
+#else
     (void)signum;
     return 0;
-#else
-    return signum == (int)RIN_TIMER_THREAD_SIGNAL;
 #endif
 }
 
@@ -545,7 +549,8 @@ static inline sighandler_t signal(int signum, sighandler_t handler) {
 static inline int sigaction(int signum, const struct sigaction* act,
                             struct sigaction* oldact) {
     if (signum < 1 || signum >= NSIG || signum == __RIN_SIGCANCEL ||
-        __rin_signal_is_private_timer_wake(signum) ||
+        (__rin_signal_is_private_timer_wake(signum) &&
+         !__rin_signal_private_action_is_allowed(signum)) ||
         signum == SIGKILL || signum == SIGSTOP) {
         errno = EINVAL;
         return -1;
