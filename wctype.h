@@ -111,10 +111,53 @@ static inline wint_t towlower(wint_t wc) { return (wint_t)rin_unicode_tolower((u
 static inline wint_t towupper(wint_t wc) { return (wint_t)rin_unicode_toupper((uint32_t)wc); }
 #endif
 
-static inline wctype_t wctype(const char* property) { return (wctype_t)rin_unicode_wctype(property); }
+static inline int rin_wctype_name_equal(const char* name,
+                                        const char* expected) {
+    size_t index = 0u;
+    if (!name || !expected) return 0;
+    while (name[index] != '\0' && expected[index] != '\0' &&
+           name[index] == expected[index])
+        ++index;
+    return name[index] == '\0' && expected[index] == '\0';
+}
+
+/* POSIX descriptor names are case-sensitive. The Unicode backend's helper
+ * accepts ASCII case variants for its internal callers, so validate the
+ * public spelling before asking it for the canonical descriptor. */
+static inline wctype_t rin_wctype_resolve(const char* property) {
+    static const char* const names[] = {
+        "alnum", "alpha", "blank", "cntrl", "digit", "graph",
+        "lower", "print", "punct", "space", "upper", "xdigit"
+    };
+    size_t index;
+    if (!property) return (wctype_t)0;
+    for (index = 0u; index < sizeof(names) / sizeof(names[0]); ++index)
+        if (rin_wctype_name_equal(property, names[index]))
+            return (wctype_t)rin_unicode_wctype(names[index]);
+    return (wctype_t)0;
+}
+
+static inline wctrans_t rin_wctrans_resolve(const char* property) {
+    if (rin_wctype_name_equal(property, "tolower"))
+        return (wctrans_t)rin_unicode_wctrans("tolower");
+    if (rin_wctype_name_equal(property, "toupper"))
+        return (wctrans_t)rin_unicode_wctrans("toupper");
+    return (wctrans_t)0;
+}
+
+static inline wctype_t wctype(const char* property) {
+    return rin_wctype_resolve(property);
+}
 #if defined(RIN_USERSPACE)
 static inline int iswctype(wint_t wc, wctype_t desc) { return rin_wctype_current_desc_test(wc, desc); }
-static inline wctype_t wctype_l(const char* property, locale_t locale) { (void)locale; return (wctype_t)rin_unicode_wctype(property); }
+static inline wctype_t wctype_l(const char* property, locale_t locale) {
+#if !defined(_MSVCRT_COMPAT)
+    if (rin_locale_l_name(locale, LC_CTYPE) == NULL) return (wctype_t)0;
+#else
+    (void)locale;
+#endif
+    return rin_wctype_resolve(property);
+}
 static inline int iswalnum_l(wint_t wc, locale_t locale) { return rin_wctype_locale_test(wc, RIN_LOCALE_CTYPE_ALNUM, locale); }
 static inline int iswalpha_l(wint_t wc, locale_t locale) { return rin_wctype_locale_test(wc, RIN_LOCALE_CTYPE_ALPHA, locale); }
 static inline int iswblank_l(wint_t wc, locale_t locale) { return rin_wctype_locale_test(wc, RIN_LOCALE_CTYPE_BLANK, locale); }
@@ -133,9 +176,18 @@ static inline int iswctype_l(wint_t wc, wctype_t desc, locale_t locale) { return
 #else
 static inline int iswctype(wint_t wc, wctype_t desc) { return rin_unicode_iswctype((uint32_t)wc, (unsigned long)desc); }
 #endif
-static inline wctrans_t wctrans(const char* property) { return (wctrans_t)rin_unicode_wctrans(property); }
+static inline wctrans_t wctrans(const char* property) {
+    return rin_wctrans_resolve(property);
+}
 #if defined(RIN_USERSPACE)
-static inline wctrans_t wctrans_l(const char* property, locale_t locale) { (void)locale; return (wctrans_t)rin_unicode_wctrans(property); }
+static inline wctrans_t wctrans_l(const char* property, locale_t locale) {
+#if !defined(_MSVCRT_COMPAT)
+    if (rin_locale_l_name(locale, LC_CTYPE) == NULL) return (wctrans_t)0;
+#else
+    (void)locale;
+#endif
+    return rin_wctrans_resolve(property);
+}
 static inline wint_t towctrans(wint_t wc, wctrans_t desc) { return rin_wctype_current_transform(wc, desc); }
 static inline wint_t towctrans_l(wint_t wc, wctrans_t desc, locale_t locale) { return rin_wctype_locale_transform(wc, desc, locale); }
 #else
