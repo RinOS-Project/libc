@@ -31,12 +31,16 @@ int eventfd(unsigned int initial_value, int flags)
 int eventfd_read(int fd, eventfd_t* value)
 {
     ssize_t transferred = read(fd, value, sizeof(*value));
-    return transferred == (ssize_t)sizeof(*value) ? 0 : -1;
+    if (transferred == (ssize_t)sizeof(*value)) return 0;
+    if (transferred >= 0) errno = EIO;
+    return -1;
 }
 
 int eventfd_write(int fd, eventfd_t value)
 {
     ssize_t transferred = write(fd, &value, sizeof(value));
-    return transferred == (ssize_t)sizeof(value) ? 0 : -1;
+    if (transferred == (ssize_t)sizeof(value)) return 0;
+    if (transferred >= 0) errno = EIO;
+    return -1;
 }
 #endif
