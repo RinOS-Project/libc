@@ -162,6 +162,7 @@ struct in_pktinfo {
 #define IPV6_LEAVE_GROUP    21
 #define IPV6_V6ONLY         26
 #define IPV6_RECVPKTINFO    49
+#define IPV6_RECVERR        25
 #define IPV6_PKTINFO        50
 #define IPV6_RECVHOPLIMIT   51
 #define IPV6_HOPLIMIT       52

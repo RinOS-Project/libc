@@ -28,6 +28,7 @@
 #include "../poll.h"
 #include "../internal/pthread_cancel_point.h"
 #include "../limits.h"
+#include <linux/errqueue.h>
 #define RIN_SOCKET_ABI_TYPES_PROVIDED 1
 #include <rin/net/socket_abi.h>
 #undef RIN_SOCKET_ABI_TYPES_PROVIDED
@@ -335,6 +336,8 @@ static inline uint32_t ntohl(uint32_t netlong) {
 
 /* ソケットレベル */
 #define SOL_SOCKET  1
+#define SOL_IP      0
+#define SOL_IPV6    41
 #define SOL_PACKET  263
 
 #define PACKET_ADD_MEMBERSHIP 1
@@ -364,6 +367,7 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define SO_SNDTIMEO     21  /* 送信タイムアウト */
 #define SO_ACCEPTCONN   30  /* accept可能か */
 #define SO_REUSEPORT    15  /* ポート再利用 */
+#define SO_ZEROCOPY     60  /* 完了通知はMSG_ERRQUEUEから取得 */
 #define SO_PASSCRED     16  /* UNIX socketで送信者資格情報を受信 */
 #define SO_PEERCRED     17  /* UNIX socketの接続時peer資格情報 */
 #define SO_NONBLOCK               0x5003 /* kernel socket nonblocking */
@@ -384,6 +388,8 @@ static inline uint32_t ntohl(uint32_t netlong) {
  * - TCP_USER_TIMEOUTはTCP levelでミリ秒単位の未ACK／zero-window停滞上限を設定し、
  *   0で無効化する。設定値はdup/forkで共有するTCP open descriptionに属する。
  * - SO_OOBINLINEはTCPのみ。SO_RCVLOWAT/SO_SNDLOWATはTCPのpoll/readiness閾値。
+ * - SO_ZEROCOPYはIPv4/IPv6 TCPのみ。MSG_ZEROCOPY送信はuser pageをcopy完了までpinし、
+ *   copied completionをMSG_ERRQUEUEで返す。error queueはnonblockingで、保留中はPOLLERR。
  *   TCP_NODELAY/TCP_MAXSEG/TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNTもTCPのみ。
  * - SO_DEBUG/SO_DONTROUTEは未対応で、setsockopt/getsockoptはENOPROTOOPTを返す。
  * set値はintをちょうど1個、取得bufferは少なくともint 1個を渡す。
@@ -412,6 +418,8 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define MSG_DONTWAIT    0x40    /* ノンブロッキング操作 */
 #define MSG_WAITALL     0x100   /* 全データを待つ */
 #define MSG_NOSIGNAL    0x4000  /* SIGPIPEを送らない */
+#define MSG_ERRQUEUE    0x2000  /* socket error queueから補助情報を読む */
+#define MSG_ZEROCOPY    0x04000000 /* user bufferの解放完了を通知する */
 #define MSG_CTRUNC      0x08    /* 補助データが制御バッファで切り詰められた */
 #define MSG_CMSG_CLOEXEC 0x40000000 /* SCM_RIGHTS descriptors use FD_CLOEXEC */
 #define MSG_WAITFORONE  0x10000 /* 最初のmessage受信後は待たない */
