@@ -1,4 +1,11 @@
 /* SPDX-License-Identifier: MIT */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64)
+#include_next <sys/mount.h>
+#else
 #ifndef RINOS_SYS_MOUNT_H
 #define RINOS_SYS_MOUNT_H
 
@@ -141,3 +148,4 @@ static inline int rin_unmount(const char* mount_point) {
 #endif
 
 #endif /* RINOS_SYS_MOUNT_H */
+#endif /* hosted Linux delegates to native provider */
