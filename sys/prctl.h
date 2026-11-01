@@ -82,6 +82,8 @@ extern "C" {
 #define PR_GET_TID_ADDRESS  40  /* Get clear_child_tid address via uint32_t ** */
 #define PR_SET_THP_DISABLE  41  /* Disable transparent huge pages */
 #define PR_GET_THP_DISABLE  42  /* Get THP disable status */
+#define PR_THP_DISABLE      1
+#define PR_THP_DISABLE_EXCEPT_ADVISED (1 << 1)
 #define PR_MPX_ENABLE_MANAGEMENT    43
 #define PR_MPX_DISABLE_MANAGEMENT   44
 #define PR_SET_FP_MODE      45  /* Set FP mode */
@@ -103,6 +105,9 @@ extern "C" {
 #define RIN_PRCTL_TAGGED_ADDRESS_CONTROL_SUPPORTED 0
 #define RIN_PRCTL_SME_CONTROL_SUPPORTED 0
 #define RIN_PRCTL_SYSCALL_USER_DISPATCH_SUPPORTED 1
+/* The process disable mode is exposed even while the kernel has no automatic
+ * transparent-huge-page collapse path. */
+#define RIN_PRCTL_THP_DISABLE_CONTROL_SUPPORTED 1
 #define PR_SVE_SET_VL       50  /* Set SVE vector length */
 #define PR_SVE_GET_VL       51  /* Get SVE vector length */
 #define PR_GET_SPECULATION_CTRL 52
@@ -303,6 +308,8 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_PTRACER ||
         option == PR_GET_TID_ADDRESS ||
         option == PR_SET_SYSCALL_USER_DISPATCH ||
+        option == PR_SET_THP_DISABLE ||
+        option == PR_GET_THP_DISABLE ||
         option == PR_SET_CHILD_SUBREAPER ||
         option == PR_GET_CHILD_SUBREAPER ||
         option == PR_GET_KEEPCAPS || option == PR_SET_KEEPCAPS ||
@@ -347,6 +354,7 @@ static inline int prctl(int option, ...) {
         option == PR_SET_TSC || option == PR_SET_PDEATHSIG ||
         option == PR_SET_DUMPABLE || option == PR_SET_NO_NEW_PRIVS ||
         option == PR_SET_SYSCALL_USER_DISPATCH ||
+        option == PR_SET_THP_DISABLE ||
         option == PR_SET_ENDIAN || option == PR_SET_CHILD_SUBREAPER ||
         option == PR_SET_SECCOMP || option == PR_SET_KEEPCAPS ||
         option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP ||
@@ -379,6 +387,9 @@ static inline int prctl(int option, ...) {
             arg3 = (uintptr_t)__builtin_va_arg(args, unsigned long);
             arg4 = (uintptr_t)__builtin_va_arg(args, unsigned long);
             arg5 = (uintptr_t)__builtin_va_arg(args, const char*);
+        } else if (option == PR_SET_THP_DISABLE) {
+            arg2 = (uintptr_t)__builtin_va_arg(args, long);
+            arg3 = (uintptr_t)__builtin_va_arg(args, unsigned long);
         } else if (option == PR_CAP_AMBIENT) {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
             arg3 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
