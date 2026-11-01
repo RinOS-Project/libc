@@ -1979,7 +1979,10 @@ static int rin_pthread_rwlock_timedlock_impl(
 
     if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
         return EINVAL;
-    result = pthread_mutex_clocklock(&rwlock->mutex, clock_id, abstime);
+    /* This mutex protects only the rwlock's bookkeeping. Its short internal
+     * contention must not consume the caller's deadline: if the rwlock is
+     * immediately available, the timed operation must still acquire it. */
+    result = pthread_mutex_lock(&rwlock->mutex);
     if (result != 0) return result;
     cleanup.rwlock = rwlock;
     cleanup.writer = writer;
