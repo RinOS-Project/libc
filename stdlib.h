@@ -542,50 +542,89 @@ static inline int putenv(char* string) {
 
 static inline int clearenv(void) {
     char*** environment_address = __p__environ();
-    size_t removed;
+    char** names = NULL;
+    size_t name_count = 0u;
+    size_t name_capacity = 0u;
+    char** environment;
+    size_t entry_index = 0u;
     if (!environment_address) {
         errno = EFAULT;
         return -1;
     }
+    environment = *environment_address;
+    if (!environment) return 0;
 
-    /* _putenv_s may replace the environment block. Re-read it after every
-     * removal, and leave Windows drive-current-directory entries intact. */
-    for (removed = 0u; removed < 32768u; ++removed) {
-        char** environment = *environment_address;
-        size_t entry_index;
-        int found = 0;
-        if (!environment) return 0;
-
-        for (entry_index = 0u; entry_index < 32768u &&
-                                environment[entry_index]; ++entry_index) {
-            const char* entry = environment[entry_index];
-            size_t name_length = 0u;
-            char name[32768];
-            int result;
-            while (entry[name_length] != '\0' && entry[name_length] != '=') {
-                ++name_length;
-            }
-            /* Entries beginning with '=' encode per-drive working directories. */
-            if (entry[name_length] != '=' || name_length == 0u) continue;
-            if (name_length >= sizeof(name)) {
-                errno = E2BIG;
-                return -1;
-            }
-            for (size_t index = 0u; index < name_length; ++index) {
-                name[index] = entry[index];
-            }
-            name[name_length] = '\0';
-            result = _putenv_s(name, "");
-            if (result != 0) {
-                errno = result;
-                return -1;
-            }
-            found = 1;
-            break;
+    /* Snapshot names before the first mutation: _putenv_s can replace both
+     * the environment table and its strings.  Empty-name entries are the
+     * Windows drive-current-directory values and must remain untouched. */
+    for (entry_index = 0u; entry_index < 32768u; ++entry_index) {
+        const char* entry = environment[entry_index];
+        size_t name_length = 0u;
+        char* name;
+        if (!entry) break;
+        while (name_length < 32768u && entry[name_length] != '\0' &&
+               entry[name_length] != '=')
+            ++name_length;
+        if (name_length == 32768u) {
+            errno = E2BIG;
+            goto snapshot_failure;
         }
-        if (!found) return 0;
+        if (entry[name_length] != '=' || name_length == 0u) continue;
+        if (name_count == name_capacity) {
+            size_t new_capacity = name_capacity ? name_capacity * 2u : 16u;
+            char** new_names;
+            if (new_capacity > 32768u) new_capacity = 32768u;
+            new_names = (char**)realloc(names,
+                                        new_capacity * sizeof(*new_names));
+            if (!new_names) {
+                errno = ENOMEM;
+                goto snapshot_failure;
+            }
+            names = new_names;
+            name_capacity = new_capacity;
+        }
+        name = (char*)malloc(name_length + 1u);
+        if (!name) {
+            errno = ENOMEM;
+            goto snapshot_failure;
+        }
+        for (size_t index = 0u; index < name_length; ++index)
+            name[index] = entry[index];
+        name[name_length] = '\0';
+        names[name_count++] = name;
     }
-    errno = E2BIG;
+    if (entry_index == 32768u && environment[entry_index] != NULL) {
+        errno = E2BIG;
+        goto snapshot_failure;
+    }
+
+    for (size_t index = 0u; index < name_count; ++index) {
+        const int result = _putenv_s(names[index], "");
+        if (result != 0) {
+            errno = result;
+            goto mutation_failure;
+        }
+    }
+    for (size_t index = 0u; index < name_count; ++index) free(names[index]);
+    free(names);
+    return 0;
+
+snapshot_failure:
+    {
+        const int saved_errno = errno;
+        for (size_t index = 0u; index < name_count; ++index) free(names[index]);
+        free(names);
+        errno = saved_errno;
+    }
+    return -1;
+
+mutation_failure:
+    {
+        const int saved_errno = errno;
+        for (size_t index = 0u; index < name_count; ++index) free(names[index]);
+        free(names);
+        errno = saved_errno;
+    }
     return -1;
 }
 
