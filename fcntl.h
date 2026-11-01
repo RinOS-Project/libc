@@ -53,6 +53,7 @@
 #include "internal/pthread_cancel_point.h"
 #include <rin/fs/path_at_abi.h>
 #include <rin/fs/fcntl_lock_abi.h>
+#include "linux/openat2.h"
 
 #ifndef MIDL_PASS
 #ifndef _RIN_FCNTL_SYSCALL3
@@ -444,6 +445,38 @@ static inline int openat(int dirfd, const char* pathname, int flags, ...) {
     call.open_flags = (uint32_t)flags;
     call.mode = mode;
     call.path1 = (uint64_t)(uintptr_t)pathname;
+    result = _fcntl_path_at_value(&call);
+    if (result < 0 || (uintptr_t)result > (uintptr_t)INT32_MAX) {
+        if (result >= 0) errno = EOVERFLOW;
+        __rin_pthread_cancel_point_if_linked();
+        return -1;
+    }
+    {
+        int fd = (int)result;
+        __rin_pthread_cancel_point_cleanup_if_linked(_fcntl_cancel_close_fd,
+                                                      &fd);
+    }
+    return (int)result;
+}
+
+/* Linux openat2 keeps pathname policy in the kernel.  In particular the
+ * resolve mask is consumed by the same descriptor-relative VFS walk as the
+ * final open, so a symlink or mount change cannot race a userspace check. */
+static inline int openat2(int dirfd, const char* pathname,
+                          const struct open_how* how, size_t size) {
+    RinPathAtCallV1 call;
+    intptr_t result;
+
+    __rin_pthread_cancel_point_if_linked();
+    if (!pathname || !how) {
+        errno = EFAULT;
+        return -1;
+    }
+    _fcntl_path_at_init(&call, RIN_PATH_AT_OPENAT2);
+    call.dirfd = dirfd;
+    call.path1 = (uint64_t)(uintptr_t)pathname;
+    call.buffer = (uint64_t)(uintptr_t)how;
+    call.buffer_size = size;
     result = _fcntl_path_at_value(&call);
     if (result < 0 || (uintptr_t)result > (uintptr_t)INT32_MAX) {
         if (result >= 0) errno = EOVERFLOW;
