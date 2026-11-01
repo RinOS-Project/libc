@@ -1576,6 +1576,61 @@ _RIN_STDIO_INTERNAL int _rin_stdio_wide_pushback_push(FILE* stream,
     return 1;
 }
 
+/* Encoded width of a pushed-back scalar (B48: ungetwc only stores valid
+ * scalars, so the UTF-8 width is total and matches the bytes the scalar
+ * was read from when fwscanf restores a rejected token). */
+static inline size_t _rin_stdio_wide_scalar_width(uint32_t value) {
+    if (value < 0x80u) return 1u;
+    if (value < 0x800u) return 2u;
+    if (value < 0x10000u) return 3u;
+    return 4u;
+}
+
+static inline size_t _rin_stdio_wide_pushback_count(FILE* stream) {
+    struct _RinStdioWideUngetwcOwner* owner;
+    size_t count;
+    if (!stream) return 0u;
+    owner = _rin_stdio_wide_ungetwc_owners;
+    while (owner && owner->stream != stream) owner = owner->next;
+    if (owner && owner->spill) return owner->count;
+    count = 0u;
+    if (stream->wide_pushback_valid) ++count;
+    if (stream->wide_pushback_second_valid) ++count;
+    return count;
+}
+
+static inline size_t _rin_stdio_wide_pushback_bytes(FILE* stream) {
+    struct _RinStdioWideUngetwcOwner* owner;
+    size_t bytes;
+    size_t index;
+    if (!stream) return 0u;
+    owner = _rin_stdio_wide_ungetwc_owners;
+    while (owner && owner->stream != stream) owner = owner->next;
+    if (owner && owner->spill) {
+        bytes = 0u;
+        for (index = 0u; index < owner->count; ++index)
+            bytes += _rin_stdio_wide_scalar_width(owner->spill[index]);
+        return bytes;
+    }
+    bytes = 0u;
+    if (stream->wide_pushback_valid)
+        bytes += _rin_stdio_wide_scalar_width(stream->wide_pushback);
+    if (stream->wide_pushback_second_valid)
+        bytes += _rin_stdio_wide_scalar_width(stream->wide_pushback_second);
+    return bytes;
+}
+
+/* Position correction for pushed-back wide scalars (B48: mirrors the
+ * narrow ungetc correction; wide memstreams count wide units, byte
+ * streams count encoded bytes). */
+static inline size_t _rin_stdio_wide_pushback_correction(FILE* stream) {
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) == RIN_STDIO_MEMSTREAM_WIDE)
+        return _rin_stdio_wide_pushback_count(stream);
+#endif
+    return _rin_stdio_wide_pushback_bytes(stream);
+}
+
 /* The syscall ABI returns a signed target word, whereas FILE retains an int
  * descriptor and ftell has a long public result.  Never narrow either result
  * before its representability has been established. */
@@ -2001,6 +2056,8 @@ static inline int _rin_stdio_stream_snapshot_capture(
 
 static inline int _rin_stdio_default_buffer_mode(FILE* stream) {
     if (stream == &_stderr_file) return _IONBF;
+    if (stream == &_stdin_file && _rin_stdio_stream_is_terminal(stream))
+        return _IOLBF;
     if (stream == &_stdout_file && _rin_stdio_stream_is_terminal(stream))
         return _IOLBF;
     return _IOFBF;
@@ -2088,57 +2145,30 @@ static inline int _rin_stdio_flush_output_buffer(FILE* stream) {
     return 0;
 }
 
-/* 入力を始める前にline-buffered outputを排出する。input lockを保持した
- * 呼出元からはtrylockだけを使い、stream lockの逆順取得によるdeadlockを防ぐ。 */
-static inline int _rin_stdio_flush_line_buffered_outputs_before_input(
-    FILE* input) {
-    _RinStdioStreamSnapshot* streams = NULL;
-    size_t count = 0u;
-    int input_lock_held;
-    int failed = 0;
-    int first_errno = 0;
-    int saved_errno = errno;
-    if (!input) return 0;
-
-    _rin_stdio_initialize_standard_buffer(input);
-    if (input->buf_mode != _IONBF && !_rin_stdio_stream_is_terminal(input))
-        return 0;
-    input_lock_held = _rin_stdio_stream_owned_by_current(input);
-
-    if (_rin_stdio_stream_snapshot_capture(&streams, &count) != 0)
-        return -1;
-
-    for (size_t slot = 0u; slot < count; ++slot) {
-        FILE* stream = streams[slot].stream;
-        int current;
-        if (stream == input) continue;
-        if (input_lock_held) {
-            if (ftrylockfile(stream) != 0) continue;
-        } else {
-            flockfile(stream);
-        }
-        if (!_rin_stdio_stream_owned_by_current(stream)) continue;
-        _rin_stdio_lock_table_enter();
-        current = _rin_stdio_stream_snapshot_matches_locked(
-            stream, streams[slot].generation);
-        _rin_stdio_lock_table_leave();
-        if (current && _rin_stdio_output_buffer_enabled(stream) &&
-            stream->buf_mode == _IOLBF &&
-            _rin_stdio_get_io_direction(stream) !=
-                _RIN_STDIO_IO_DIRECTION_READ &&
-            _rin_stdio_flush_output_buffer(stream) != 0) {
-            if (!failed) first_errno = errno != 0 ? errno : EIO;
-            failed = 1;
-        }
-        funlockfile(stream);
-    }
-    free(streams);
-    if (failed) {
-        errno = first_errno;
-        return -1;
-    }
-    errno = saved_errno;
-    return 0;
+/* Flush stdout before a fill on a line-buffered/unbuffered input stream.
+ * glibc parity (_IO_new_file_underflow): only stdout is flushed, and only
+ * when it is line-buffered, writable, and not in read direction. Memstream
+ * inputs never trigger (separate jumps upstream). Failures are ignored on
+ * the read path (stdout keeps its error indicator; errno leaks like
+ * glibc's ignored _IO_OVERFLOW result). Takes stdout's lock
+ * (recursive) under the input lock; no library path locks in the reverse
+ * order, so the edge cannot cycle. */
+static inline void _rin_stdio_flush_stdout_before_input(FILE* input) {
+    FILE* output = &_stdout_file;
+    int owned;
+    if (!input || input->eof) return;
+    if (input->buf_mode != _IOLBF && input->buf_mode != _IONBF) return;
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(input) != RIN_STDIO_MEMSTREAM_NONE) return;
+#endif
+    owned = _rin_stdio_stream_owned_by_current(output);
+    if (!owned) flockfile(output);
+    if (output->buf_mode == _IOLBF &&
+        _rin_stdio_output_buffer_enabled(output) &&
+        _rin_stdio_get_io_direction(output) != _RIN_STDIO_IO_DIRECTION_READ &&
+        (output->mode & O_ACCMODE) != O_RDONLY)
+        (void)_rin_stdio_flush_output_buffer(output);
+    if (!owned) funlockfile(output);
 }
 
 /* Returns the number of source bytes copied into the stream or handed to the
@@ -2382,6 +2412,7 @@ _RIN_STDIO_INTERNAL intptr_t _rin_stdio_read_block(FILE* stream,
     if (!_rin_stdio_stream_is_readable(stream)) return -1;
     _rin_stdio_initialize_standard_buffer(stream);
     if (!_rin_stdio_input_buffer_enabled(stream)) {
+        _rin_stdio_flush_stdout_before_input(stream);
         _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_READ);
         return _rin_stdio_read_backend(stream, output, length);
     }
@@ -2392,6 +2423,7 @@ _RIN_STDIO_INTERNAL intptr_t _rin_stdio_read_block(FILE* stream,
         /* Refill in blocks for line-buffered input as well.  Bytes beyond a
          * newline remain in FILE for later calls, avoiding one syscall per
          * byte while preserving the caller-visible line boundary. */
+        _rin_stdio_flush_stdout_before_input(stream);
         result = _rin_stdio_read_backend(stream, stream->buf,
                                          stream->buf_size);
         if (result < 0) return result;
@@ -2427,7 +2459,6 @@ static inline int _rin_fgetc_unlocked(FILE* stream) {
     unsigned char c = 0u;
     intptr_t n;
     int stream_index;
-    size_t unread_input;
     if (!stream) {
         errno = EINVAL;
         return EOF;
@@ -2436,12 +2467,6 @@ static inline int _rin_fgetc_unlocked(FILE* stream) {
     if (!_rin_stdio_claim_byte_orientation(stream)) return EOF;
     _rin_stdio_initialize_standard_buffer(stream);
     stream_index = _rin_stdio_stream_index(stream);
-    unread_input = _rin_stdio_input_buffer_unread(stream);
-    if (unread_input == (size_t)-1) return EOF;
-    if (unread_input == 0u &&
-        (stream_index < 0 || _rin_stdio_ungetc_count(stream) == 0u) &&
-        _rin_stdio_flush_line_buffered_outputs_before_input(stream) != 0)
-        return EOF;
     if (_rin_stdio_flush_output_buffer(stream) != 0) return EOF;
     _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_READ);
     if (stream_index >= 0 &&
@@ -3087,7 +3112,6 @@ static inline size_t _rin_fread_unlocked(void* ptr, size_t size, size_t nmemb, F
     intptr_t n;
     int buffered_input;
     int stream_index;
-    size_t unread_input;
     unsigned char* output = (unsigned char*)ptr;
     if (!stream || (!ptr && size != 0 && nmemb != 0)) {
         errno = EINVAL;
@@ -3105,12 +3129,6 @@ static inline size_t _rin_fread_unlocked(void* ptr, size_t size, size_t nmemb, F
     total = size * nmemb;
     _rin_stdio_initialize_standard_buffer(stream);
     stream_index = _rin_stdio_stream_index(stream);
-    unread_input = _rin_stdio_input_buffer_unread(stream);
-    if (unread_input == (size_t)-1) return 0;
-    if (unread_input == 0u &&
-        (stream_index < 0 || _rin_stdio_ungetc_count(stream) == 0u) &&
-        _rin_stdio_flush_line_buffered_outputs_before_input(stream) != 0)
-        return 0;
     if (_rin_stdio_flush_output_buffer(stream) != 0) return 0;
     _rin_stdio_set_io_direction(stream, _RIN_STDIO_IO_DIRECTION_READ);
     buffered_input = _rin_stdio_input_buffer_enabled(stream);
@@ -3237,6 +3255,17 @@ static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
             }
             offset -= (long)pushback;
         }
+        if (stream_index >= 0) {
+            /* B48: wide pushback shifts SEEK_CUR like narrow bytes. */
+            size_t wide_pushback =
+                _rin_stdio_wide_pushback_correction(stream);
+            if (wide_pushback > (size_t)__LONG_MAX__ ||
+                offset < (-__LONG_MAX__ - 1L) + (long)wide_pushback) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            offset -= (long)wide_pushback;
+        }
     }
 #if defined(RIN_USERSPACE)
     if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
@@ -3350,6 +3379,20 @@ static inline long _rin_ftell_unlocked(FILE* stream) {
         }
         if ((long)pushback <= position) position -= (long)pushback;
     }
+    if (stream_index >= 0) {
+        /* B48: pushed-back wide scalars shift ftell by their encoded
+         * width (scalar count on wide memstreams), clamped like the
+         * narrow correction when pushback exceeds the position. */
+        size_t wide_pushback =
+            _rin_stdio_wide_pushback_correction(stream);
+        if (wide_pushback > (size_t)__LONG_MAX__) {
+            errno = EIO;
+            stream->error = 1;
+            return -1;
+        }
+        if ((long)wide_pushback <= position)
+            position -= (long)wide_pushback;
+    }
     return position;
 }
 
@@ -3414,6 +3457,17 @@ static inline int _rin_fseeko64_unlocked(FILE* stream, off64_t offset,
                 return -1;
             }
             adjusted -= (int64_t)pushback;
+        }
+        if (stream_index >= 0) {
+            /* B48: wide pushback shifts SEEK_CUR like narrow bytes. */
+            size_t wide_pushback =
+                _rin_stdio_wide_pushback_correction(stream);
+            if (wide_pushback > (size_t)INT64_MAX ||
+                adjusted < INT64_MIN + (int64_t)wide_pushback) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            adjusted -= (int64_t)wide_pushback;
         }
     }
 #if defined(RIN_USERSPACE)
@@ -3515,6 +3569,20 @@ static inline off64_t _rin_ftello64_unlocked(FILE* stream) {
             return (off64_t)-1;
         }
         if ((int64_t)pushback <= position) position -= (int64_t)pushback;
+    }
+    if (stream_index >= 0) {
+        /* B48: pushed-back wide scalars shift ftell by their encoded
+         * width (scalar count on wide memstreams), clamped like the
+         * narrow correction when pushback exceeds the position. */
+        size_t wide_pushback =
+            _rin_stdio_wide_pushback_correction(stream);
+        if (wide_pushback > (size_t)INT64_MAX) {
+            errno = EIO;
+            stream->error = 1;
+            return (off64_t)-1;
+        }
+        if ((int64_t)wide_pushback <= position)
+            position -= (int64_t)wide_pushback;
     }
     return (off64_t)position;
 }
