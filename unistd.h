@@ -2195,7 +2195,6 @@ static inline long sysconf(int name) {
         case _SC_SS_REPL_MAX:
         case _SC_THREAD_ATTR_STACKADDR:
         case _SC_THREAD_CPUTIME:
-        case _SC_THREAD_PRIO_INHERIT:
         case _SC_THREAD_PRIO_PROTECT:
         case _SC_THREAD_PRIORITY_SCHEDULING:
         case _SC_THREAD_ROBUST_PRIO_PROTECT:
@@ -2218,6 +2217,8 @@ static inline long sysconf(int name) {
             /* POSIX reserves errno changes for invalid names.  A known but
              * unsupported option returns -1 without changing errno. */
             return -1;
+        case _SC_THREAD_PRIO_INHERIT:
+            return RIN_POSIX_CAP_THREAD_PRIO_INHERIT;
         case _SC_THREAD_ROBUST_PRIO_INHERIT:
             return RIN_POSIX_CAP_THREAD_ROBUST_PRIO_INHERIT;
         case _SC_TIMEOUTS:
