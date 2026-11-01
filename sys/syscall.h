@@ -3,6 +3,13 @@
  * システムコール番号定義 (rin.h / platform_bare64.cと同期)
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64)
+#include_next <sys/syscall.h>
+#else
 #ifndef _SYS_SYSCALL_H
 #define _SYS_SYSCALL_H
 
@@ -511,3 +518,4 @@ static inline intptr_t __rin_syscall_posixize(intptr_t ret) {
 #endif /* MIDL_PASS */
 
 #endif /* _SYS_SYSCALL_H */
+#endif /* hosted Linux delegates to native provider */
