@@ -1236,15 +1236,18 @@ static inline void _rin_stdio_stream_lock_reset_closed(FILE* stream) {
 static inline int _rin_stdio_stream_lock_close_begin(FILE* stream) {
     _RinStdioStreamOwner* closing_entry;
     uintptr_t owner = _rin_stdio_lock_owner_token();
+    int saved_errno;
 
     if (!stream) return 0;
     closing_entry = _rin_stdio_stream_owner(stream);
     if (!closing_entry) return 0;
+    saved_errno = errno;
     _rin_stdio_lock_table_enter();
     if (closing_entry->stream != stream || closing_entry->active == 0u ||
         closing_entry->lock_owner != owner ||
         closing_entry->lock_closing != 0u) {
         _rin_stdio_lock_table_leave();
+        errno = saved_errno;
         return 0;
     }
     closing_entry->lock_closing = 1u;
@@ -1252,6 +1255,10 @@ static inline int _rin_stdio_stream_lock_close_begin(FILE* stream) {
     __atomic_add_fetch(&_rin_stdio_lock_table_seq, 1u, __ATOMIC_RELEASE);
     _rin_stdio_lock_table_leave();
 
+    /* Best-effort wake/wait: the close result is decided by the I/O
+     * outcome, so the lock dance must not clobber errno (same idiom
+     * as funlockfile). Otherwise every successful fclose reports the
+     * wake failure (ENOSYS where futex is unimplemented). */
     _rin_stdio_wake_word(&closing_entry->lock_wait_seq, 0x7fffffff);
     _rin_stdio_wake_word(&_rin_stdio_lock_table_seq, 0x7fffffff);
     for (;;) {
@@ -1259,6 +1266,7 @@ static inline int _rin_stdio_stream_lock_close_begin(FILE* stream) {
         _rin_stdio_lock_table_enter();
         if (closing_entry->lock_waiters == 0u) {
             _rin_stdio_lock_table_leave();
+            errno = saved_errno;
             return 1;
         }
         expected = __atomic_load_n(&_rin_stdio_lock_table_seq,
@@ -2136,6 +2144,47 @@ static inline int _rin_stdio_flush_line_buffered_outputs_before_input(
 /* Returns the number of source bytes copied into the stream or handed to the
  * raw backend.  A flush error can occur after bytes have entered the caller's
  * buffer, so callers receive both that count and the failure state. */
+/* O_APPEND coherence for buffered writes: glibc repositions to the
+ * end at the start of every write call, so ftell() between the write
+ * and the flush already reports end+pending. Backend-only: pending
+ * buffer bytes stay queued (flushing here would defeat buffering and
+ * observably differs from glibc, which keeps the bytes buffered).
+ * Unseekable append streams (pipes) ignore ESPIPE: their writes are
+ * inherently ordered and ftell fails on them regardless. */
+static inline int _rin_stdio_seek_backend_to_end(FILE* stream) {
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
+        if (rin_stdio_memstream_seek(stream, 0, SEEK_END) != 0) {
+            stream->error = 1;
+            return -1;
+        }
+        return 0;
+    }
+#endif
+    {
+        int64_t position = 0;
+        int entry_errno = errno;
+        int seek_errno;
+        intptr_t ret = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
+            SYS_LSEEK64, (uintptr_t)stream->fd, 0u, 0u,
+            (uintptr_t)SEEK_END, (uintptr_t)&position));
+        if (ret == 0 && position < 0) {
+            errno = EIO;
+            ret = -1;
+        }
+        if (ret == 0) return 0;
+        seek_errno = errno;
+        if (seek_errno == ESPIPE) {
+            errno = entry_errno;
+            return 0;
+        }
+        if (ret > 0) errno = EIO;
+        else errno = seek_errno;
+        stream->error = 1;
+        return -1;
+    }
+}
+
 _RIN_STDIO_INTERNAL size_t _rin_stdio_write_buffered(FILE* stream,
                                                const char* data,
                                                size_t length,
@@ -2166,6 +2215,12 @@ _RIN_STDIO_INTERNAL size_t _rin_stdio_write_buffered(FILE* stream,
             return 0u;
         }
         return length;
+    }
+
+    if ((stream->mode & O_APPEND) != 0u &&
+        _rin_stdio_seek_backend_to_end(stream) != 0) {
+        if (failed) *failed = 1;
+        return 0u;
     }
 
     if (stream->buf_pos > stream->buf_size) {

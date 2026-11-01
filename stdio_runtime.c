@@ -95,7 +95,13 @@ static FILE* _rin_stdio_memstream_open(int kind, unsigned int mode,
         return NULL;
     }
     memset(owner, 0, sizeof(*owner));
-    stream = _rin_stdio_stream_allocate(-1, mode, orientation, 0);
+    /* Fixed fmemopen streams are fully buffered like glibc: writes land
+     * in the caller buffer at flush/close, so a size-0 stream accepts
+     * fwrite into the buffer and reports ENOSPC at flush/close instead
+     * of failing the write itself. Dynamic memstreams keep the existing
+     * immediate-update contract (separate item). */
+    stream = _rin_stdio_stream_allocate(-1, mode, orientation,
+        kind == RIN_STDIO_MEMSTREAM_FIXED);
     if (!stream) {
         RIN_STDIO_MEMSTREAM_FREE(owner);
         return NULL;
