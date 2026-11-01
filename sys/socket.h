@@ -4,6 +4,15 @@
  * ソケットAPI
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_SOCKET_SYSCALL1) && !defined(_RIN_SOCKET_SYSCALL2) && \
+    !defined(_RIN_SOCKET_SYSCALL3) && !defined(_RIN_SOCKET_SYSCALL4) && \
+    !defined(_RIN_SOCKET_SYSCALL5) && !defined(_RIN_SOCKET_SYSCALL6)
+#include_next <sys/socket.h>
+#else
+
 #ifndef _SYS_SOCKET_H
 #define _SYS_SOCKET_H
 
@@ -368,6 +377,8 @@ static inline uint32_t ntohl(uint32_t netlong) {
  * - SO_BROADCASTはIPv4 UDPのみ。SO_LINGERはTCPのみ。
  * - SO_ERRORは取得のみ。TCP/UNIXは保留errorを返し、TCPは取得時にclearする。
  *   UDP/raw/packetは現状0を返す。SO_ACCEPTCONNはTCP/UNIXで取得可能。
+ * - TCP_USER_TIMEOUTはTCP levelでミリ秒単位の未ACK／zero-window停滞上限を設定し、
+ *   0で無効化する。設定値はdup/forkで共有するTCP open descriptionに属する。
  * - SO_DEBUG/SO_DONTROUTE/SO_OOBINLINE/SO_REUSEPORT/SO_RCVLOWAT/SO_SNDLOWATと、
  *   TCP_NODELAY/TCP_MAXSEG/TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNTは未対応で、
  *   setsockopt/getsockoptはENOPROTOOPTを返す。
@@ -383,6 +394,7 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define TCP_KEEPIDLE    4   /* キープアライブ開始時間 */
 #define TCP_KEEPINTVL   5   /* キープアライブ間隔 */
 #define TCP_KEEPCNT     6   /* キープアライブ回数 */
+#define TCP_USER_TIMEOUT 18 /* 未ACK／zero-window停滞の上限 (ms) */
 
 /* ═══════════════════════════════════════════════════════════════
  * send/recvフラグ
@@ -504,8 +516,12 @@ static inline struct cmsghdr* __rin_cmsg_nxthdr(
     size_t step;
     size_t current_length;
 
-    if (!message || !current || !message->msg_control || base > UINTPTR_MAX - total ||
-        cursor < base || cursor - base > total)
+    if (!message || !message->msg_control) return (struct cmsghdr*)0;
+    if (!current) {
+        if (total < sizeof(struct cmsghdr)) return (struct cmsghdr*)0;
+        return (struct cmsghdr*)message->msg_control;
+    }
+    if (base > UINTPTR_MAX - total || cursor < base || cursor - base > total)
         return (struct cmsghdr*)0;
     offset = (size_t)(cursor - base);
     remaining = total - offset;
@@ -520,11 +536,25 @@ static inline struct cmsghdr* __rin_cmsg_nxthdr(
     return (struct cmsghdr*)((unsigned char*)message->msg_control + offset);
 }
 
-#define _RIN_CMSG_ALIGN(len) __rin_cmsg_align_size((size_t)(len))
+#define _RIN_CMSG_ALIGN(len) \
+    ((size_t)(len) > SIZE_MAX - (sizeof(size_t) - 1u) \
+         ? SIZE_MAX \
+         : (((size_t)(len) + (sizeof(size_t) - 1u)) & \
+            ~(sizeof(size_t) - 1u)))
 #define CMSG_ALIGN(len) _RIN_CMSG_ALIGN(len)
-#define CMSG_SPACE(len) __rin_cmsg_space_size((size_t)(len))
-#define CMSG_LEN(len) __rin_cmsg_len_size((size_t)(len))
-#define CMSG_DATA(cmsg) ((unsigned char*)(cmsg) + _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)))
+#define CMSG_SPACE(len) \
+    (_RIN_CMSG_ALIGN(len) > \
+             SIZE_MAX - _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) \
+         ? SIZE_MAX \
+         : _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) + \
+               _RIN_CMSG_ALIGN(len))
+#define CMSG_LEN(len) \
+    ((size_t)(len) > \
+             SIZE_MAX - _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) \
+         ? SIZE_MAX \
+         : _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)) + (size_t)(len))
+#define CMSG_DATA(cmsg) \
+    ((unsigned char*)(cmsg) + _RIN_CMSG_ALIGN(sizeof(struct cmsghdr)))
 #define CMSG_FIRSTHDR(msg) \
     (((msg) && (msg)->msg_control && \
       (msg)->msg_controllen >= sizeof(struct cmsghdr)) \
@@ -824,6 +854,21 @@ static inline ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags,
     return result;
 }
 
+/* sockatmark is implemented with the native ioctl ABI.  Include its
+ * declaration and inline syscall wrapper before defining sockatmark; the
+ * reciprocal include is guarded by _SYS_IOCTL_H. */
+static inline int ioctl(int fd, unsigned long request, ...);
+#include "ioctl.h"
+#ifndef SIOCATMARK
+#define SIOCATMARK 0x8905
+#endif
+
+static inline int sockatmark(int fd) {
+    int mark = 0;
+    if (ioctl(fd, SIOCATMARK, &mark) < 0) return -1;
+    return mark != 0 ? 1 : 0;
+}
+
 static inline int shutdown(int sockfd, int how) {
     return __rin_socket_status_result(
         _RIN_SOCKET_SYSCALL2(SYS_SOCK_SHUTDOWN, sockfd, how));
@@ -977,3 +1022,5 @@ static inline int accept4(int sockfd, struct sockaddr* addr,
 #endif /* !MIDL_PASS */
 
 #endif /* _SYS_SOCKET_H */
+
+#endif /* hosted Linux delegates to its native socket provider */
