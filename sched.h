@@ -7,6 +7,8 @@
 #ifndef RIN_LIBC_SCHED_H
 #define RIN_LIBC_SCHED_H
 
+#include "features.h"
+
 /* hosted POSIX環境では、型と宣言をhost CRTのscheduler実装に揃える。
  * RinOS syscall APIはfreestandingまたは明示的なhook指定時に使う。 */
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
@@ -160,6 +162,139 @@ static inline int __rin_sched_cpu_count(const cpu_set_t* cpuset) {
     __rin_sched_cpu_is_set((uint64_t)(cpu), (cpusetp))
 #define CPU_ZERO(cpusetp) __rin_sched_cpu_zero((cpusetp))
 #define CPU_COUNT(cpusetp) __rin_sched_cpu_count((cpusetp))
+
+#if defined(_RIN_USE_GNU_CPU_SET)
+void* calloc(size_t nmemb, size_t size);
+void free(void* pointer);
+
+static inline size_t __rin_sched_cpu_alloc_size(size_t cpu_count) {
+    const size_t word_bits = 8u * sizeof(unsigned long);
+    size_t words;
+    if (cpu_count > SIZE_MAX - (word_bits - 1u)) return 0u;
+    words = (cpu_count + word_bits - 1u) / word_bits;
+    if (words > SIZE_MAX / sizeof(unsigned long)) return 0u;
+    return words * sizeof(unsigned long);
+}
+
+static inline cpu_set_t* __rin_sched_cpu_alloc(size_t cpu_count) {
+    size_t size = __rin_sched_cpu_alloc_size(cpu_count);
+    if (size == 0u) {
+        if (cpu_count != 0u) return (cpu_set_t*)0;
+        size = sizeof(unsigned long);
+    }
+    return (cpu_set_t*)calloc(1u, size);
+}
+
+static inline void __rin_sched_cpu_set_s(size_t set_size, uint64_t cpu,
+                                         cpu_set_t* cpuset) {
+    unsigned char* bytes = (unsigned char*)cpuset;
+    if (!cpuset || cpu / 8u >= (uint64_t)set_size) return;
+    bytes[cpu / 8u] |= (unsigned char)(1u << (unsigned int)(cpu % 8u));
+}
+
+static inline void __rin_sched_cpu_clear_s(size_t set_size, uint64_t cpu,
+                                           cpu_set_t* cpuset) {
+    unsigned char* bytes = (unsigned char*)cpuset;
+    if (!cpuset || cpu / 8u >= (uint64_t)set_size) return;
+    bytes[cpu / 8u] &= (unsigned char)~(1u << (unsigned int)(cpu % 8u));
+}
+
+static inline int __rin_sched_cpu_is_set_s(size_t set_size, uint64_t cpu,
+                                           const cpu_set_t* cpuset) {
+    const unsigned char* bytes = (const unsigned char*)cpuset;
+    if (!cpuset || cpu / 8u >= (uint64_t)set_size) return 0;
+    return (bytes[cpu / 8u] &
+            (unsigned char)(1u << (unsigned int)(cpu % 8u))) != 0u;
+}
+
+static inline void __rin_sched_cpu_zero_s(size_t set_size,
+                                          cpu_set_t* cpuset) {
+    unsigned char* bytes = (unsigned char*)cpuset;
+    if (!cpuset) return;
+    for (size_t index = 0u; index < set_size; ++index) bytes[index] = 0u;
+}
+
+static inline int __rin_sched_cpu_count_s(size_t set_size,
+                                          const cpu_set_t* cpuset) {
+    const unsigned char* bytes = (const unsigned char*)cpuset;
+    int count = 0;
+    if (!cpuset) return 0;
+    for (size_t index = 0u; index < set_size; ++index) {
+        unsigned char bits = bytes[index];
+        while (bits != 0u) {
+            if (count == INT_MAX) return count;
+            ++count;
+            bits = (unsigned char)(bits & (unsigned char)(bits - 1u));
+        }
+    }
+    return count;
+}
+
+static inline void __rin_sched_cpu_logic_s(size_t set_size,
+                                           cpu_set_t* destination,
+                                           const cpu_set_t* left,
+                                           const cpu_set_t* right,
+                                           unsigned int operation) {
+    unsigned char* output = (unsigned char*)destination;
+    const unsigned char* a = (const unsigned char*)left;
+    const unsigned char* b = (const unsigned char*)right;
+    if (!destination || !left || !right) return;
+    for (size_t index = 0u; index < set_size; ++index) {
+        const unsigned char left_byte = a[index];
+        const unsigned char right_byte = b[index];
+        if (operation == 0u)
+            output[index] = (unsigned char)(left_byte & right_byte);
+        else if (operation == 1u)
+            output[index] = (unsigned char)(left_byte | right_byte);
+        else
+            output[index] = (unsigned char)(left_byte ^ right_byte);
+    }
+}
+
+static inline int __rin_sched_cpu_equal_s(size_t set_size,
+                                          const cpu_set_t* left,
+                                          const cpu_set_t* right) {
+    const unsigned char* a = (const unsigned char*)left;
+    const unsigned char* b = (const unsigned char*)right;
+    if (!left || !right) return left == right;
+    for (size_t index = 0u; index < set_size; ++index)
+        if (a[index] != b[index]) return 0;
+    return 1;
+}
+
+#define CPU_ALLOC_SIZE(count) __rin_sched_cpu_alloc_size((size_t)(count))
+#define CPU_ALLOC(count) __rin_sched_cpu_alloc((size_t)(count))
+#define CPU_FREE(cpusetp) free((cpusetp))
+#define CPU_SET_S(cpu, setsize, cpusetp) \
+    __rin_sched_cpu_set_s((size_t)(setsize), (uint64_t)(cpu), (cpusetp))
+#define CPU_CLR_S(cpu, setsize, cpusetp) \
+    __rin_sched_cpu_clear_s((size_t)(setsize), (uint64_t)(cpu), (cpusetp))
+#define CPU_ISSET_S(cpu, setsize, cpusetp) \
+    __rin_sched_cpu_is_set_s((size_t)(setsize), (uint64_t)(cpu), (cpusetp))
+#define CPU_ZERO_S(setsize, cpusetp) \
+    __rin_sched_cpu_zero_s((size_t)(setsize), (cpusetp))
+#define CPU_COUNT_S(setsize, cpusetp) \
+    __rin_sched_cpu_count_s((size_t)(setsize), (cpusetp))
+#define CPU_AND_S(setsize, destination, left, right) \
+    __rin_sched_cpu_logic_s((size_t)(setsize), (destination), (left), \
+                            (right), 0u)
+#define CPU_OR_S(setsize, destination, left, right) \
+    __rin_sched_cpu_logic_s((size_t)(setsize), (destination), (left), \
+                            (right), 1u)
+#define CPU_XOR_S(setsize, destination, left, right) \
+    __rin_sched_cpu_logic_s((size_t)(setsize), (destination), (left), \
+                            (right), 2u)
+#define CPU_EQUAL_S(setsize, left, right) \
+    __rin_sched_cpu_equal_s((size_t)(setsize), (left), (right))
+#define CPU_AND(destination, left, right) \
+    CPU_AND_S(sizeof(cpu_set_t), (destination), (left), (right))
+#define CPU_OR(destination, left, right) \
+    CPU_OR_S(sizeof(cpu_set_t), (destination), (left), (right))
+#define CPU_XOR(destination, left, right) \
+    CPU_XOR_S(sizeof(cpu_set_t), (destination), (left), (right))
+#define CPU_EQUAL(left, right) \
+    CPU_EQUAL_S(sizeof(cpu_set_t), (left), (right))
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * カーネルスケジューラAPI (syscall経由)

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* RinOSのeventfd公開API。 */
+#include "../features.h"
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
     defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
@@ -9,6 +10,7 @@
 #define _SYS_EVENTFD_H
 
 #include "../fcntl.h"
+#include "../stdint.h"
 
 #define SYS_eventfd2 SYS_EVENTFD2
 #define __NR_eventfd2 SYS_EVENTFD2
@@ -22,6 +24,11 @@ extern "C" {
 
 int eventfd(unsigned int initial_value, int flags);
 int eventfd2(unsigned int initial_value, int flags);
+#if defined(_RIN_USE_GNU_EVENTFD)
+typedef uint64_t eventfd_t;
+int eventfd_read(int fd, eventfd_t* value);
+int eventfd_write(int fd, eventfd_t value);
+#endif
 
 #ifdef __cplusplus
 }
