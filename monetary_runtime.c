@@ -26,6 +26,7 @@ typedef struct RinMonetarySpec {
     int suppress_symbol;
     int left_justify;
     int parentheses;
+    int show_positive_sign;
     int conversion;
 } RinMonetarySpec;
 
@@ -145,6 +146,7 @@ static int rin_monetary_parse_spec(const char** cursor,
         }
         break;
     }
+    spec->show_positive_sign = sign_style == 1;
     parsed = rin_monetary_parse_number(&text, &spec->width);
     if (parsed < 0) return 0;
     if (*text == '#') {
@@ -464,6 +466,7 @@ static int rin_monetary_make_conversion(
     }
     if (!sign) sign = "";
     if (!other_sign) other_sign = "";
+    if (!negative && !spec->show_positive_sign) sign = "";
     if (symbol_precedes > 1u) symbol_precedes = 1u;
     if (separator_by_space > 1u) separator_by_space = 0u;
     if (symbol[0] == '\0') separator_by_space = 0u;
