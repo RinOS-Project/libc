@@ -5,11 +5,16 @@
 #include <rin/syslog_transport_v1.h>
 
 #include <errno.h>
+#include <limits.h>
+#include <stdint.h>
 #include <poll.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
+
+#define RIN_SYSLOG_IO_TIMEOUT_NS UINT64_C(1000000000)
 
 static pthread_mutex_t g_syslog_lock = PTHREAD_MUTEX_INITIALIZER;
 static char g_syslog_ident[RIN_SYSLOG_IDENT_MAX + 1u];
@@ -46,69 +51,105 @@ void _rin_syslog_set_ident_locked(const char* ident) {
     _syslog_ident = g_syslog_ident;
 }
 
-static int syslog_wait_socket(int fd, short events)
+static int syslog_now_ns(uint64_t* now_ns_out)
 {
-    struct pollfd descriptor;
-    int result;
-    int interrupted = 0;
-    memset(&descriptor, 0, sizeof(descriptor));
-    descriptor.fd = fd;
-    descriptor.events = events;
-    do {
-        result = poll(&descriptor, 1u, 50);
-        if (result < 0 && errno == EINTR && ++interrupted < 4) continue;
-        break;
-    } while (1);
-    return result == 1 && (descriptor.revents & events) != 0 &&
-           (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) == 0;
+    struct timespec now;
+    uint64_t seconds;
+    if (!now_ns_out || clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    if (now.tv_sec < 0 || now.tv_nsec < 0 || now.tv_nsec >= 1000000000L) {
+        errno = EIO;
+        return 0;
+    }
+    seconds = (uint64_t)now.tv_sec;
+    if (seconds > (UINT64_MAX - (uint64_t)now.tv_nsec) /
+                      UINT64_C(1000000000)) {
+        errno = EOVERFLOW;
+        return 0;
+    }
+    *now_ns_out = seconds * UINT64_C(1000000000) +
+                  (uint64_t)now.tv_nsec;
+    return 1;
 }
 
-static int syslog_send_exact(int fd, const void* data, size_t size)
+static int syslog_deadline_remaining(uint64_t deadline_ns,
+                                     uint64_t* remaining_ns_out)
+{
+    uint64_t now_ns;
+    if (!syslog_now_ns(&now_ns)) return -1;
+    if (now_ns >= deadline_ns) {
+        errno = ETIMEDOUT;
+        return 0;
+    }
+    if (remaining_ns_out) *remaining_ns_out = deadline_ns - now_ns;
+    return 1;
+}
+
+static int syslog_wait_socket(int fd, short events, uint64_t deadline_ns)
+{
+    for (;;) {
+        struct pollfd descriptor;
+        uint64_t remaining_ns;
+        uint64_t timeout_ms;
+        int poll_timeout;
+        int result;
+        int deadline_status =
+            syslog_deadline_remaining(deadline_ns, &remaining_ns);
+        if (deadline_status != 1) return 0;
+        timeout_ms = remaining_ns / UINT64_C(1000000);
+        if (remaining_ns % UINT64_C(1000000) != 0u) ++timeout_ms;
+        poll_timeout = timeout_ms > (uint64_t)INT_MAX
+            ? INT_MAX : (int)timeout_ms;
+        descriptor.fd = fd;
+        descriptor.events = events;
+        descriptor.revents = 0;
+        result = poll(&descriptor, 1u, poll_timeout);
+        if (result < 0 && errno == EINTR) continue;
+        if (result < 0) return 0;
+        if (result == 0) continue;
+        if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+            return 0;
+        if ((descriptor.revents & events) != 0) return 1;
+    }
+}
+
+static int syslog_send_exact(int fd, const void* data, size_t size,
+                             uint64_t deadline_ns)
 {
     const uint8_t* bytes = (const uint8_t*)data;
     size_t offset = 0u;
-    unsigned int retries = 0u;
-    while (offset < size && retries < 8u) {
+    while (offset < size) {
+        if (syslog_deadline_remaining(deadline_ns, NULL) != 1) return 0;
         const ssize_t count = send(fd, bytes + offset, size - offset,
                                    MSG_DONTWAIT | MSG_NOSIGNAL);
-        if (count < 0 && errno == EINTR) {
-            ++retries;
-            continue;
-        }
+        if (count < 0 && errno == EINTR) continue;
         if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            ++retries;
-            if (!syslog_wait_socket(fd, POLLOUT)) return 0;
+            if (!syslog_wait_socket(fd, POLLOUT, deadline_ns)) return 0;
             continue;
         }
         if (count <= 0 || (size_t)count > size - offset) return 0;
         offset += (size_t)count;
-        retries = 0u;
     }
-    return offset == size;
+    return syslog_deadline_remaining(deadline_ns, NULL) == 1;
 }
 
-static int syslog_receive_exact(int fd, void* data, size_t size)
+static int syslog_receive_exact(int fd, void* data, size_t size,
+                                uint64_t deadline_ns)
 {
     uint8_t* bytes = (uint8_t*)data;
     size_t offset = 0u;
-    unsigned int retries = 0u;
-    while (offset < size && retries < 8u) {
+    while (offset < size) {
+        if (syslog_deadline_remaining(deadline_ns, NULL) != 1) return 0;
         const ssize_t count = recv(fd, bytes + offset, size - offset,
                                    MSG_DONTWAIT);
-        if (count < 0 && errno == EINTR) {
-            ++retries;
-            continue;
-        }
+        if (count < 0 && errno == EINTR) continue;
         if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            ++retries;
-            if (!syslog_wait_socket(fd, POLLIN)) return 0;
+            if (!syslog_wait_socket(fd, POLLIN, deadline_ns)) return 0;
             continue;
         }
         if (count <= 0 || (size_t)count > size - offset) return 0;
         offset += (size_t)count;
-        retries = 0u;
     }
-    return offset == size;
+    return syslog_deadline_remaining(deadline_ns, NULL) == 1;
 }
 
 static int syslog_transport_reply_ok(const RinSyslogTransportReplyV1* reply,
@@ -132,6 +173,8 @@ int _rin_syslog_transport_send(unsigned int facility,
     RinSyslogTransportReplyV1 reply;
     struct sockaddr_un address;
     uint64_t request_id;
+    uint64_t deadline_ns;
+    uint64_t now_ns;
     size_t ident_length = 0u;
     int fd = -1;
     int socket_error = 0;
@@ -141,6 +184,9 @@ int _rin_syslog_transport_send(unsigned int facility,
     if (facility >= 24u || severity >= 8u || ident == NULL || message == NULL ||
         length == 0u || length >= RIN_SYSLOG_TRANSPORT_MESSAGE_MAX)
         goto done;
+    if (!syslog_now_ns(&now_ns) ||
+        now_ns > UINT64_MAX - RIN_SYSLOG_IO_TIMEOUT_NS) goto done;
+    deadline_ns = now_ns + RIN_SYSLOG_IO_TIMEOUT_NS;
 
     _rin_syslog_lock();
     if (g_syslog_request_id >= UINT64_MAX - 1u) g_syslog_request_id = 0u;
@@ -182,15 +228,16 @@ int _rin_syslog_transport_send(unsigned int facility,
     fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) goto done;
     if (connect(fd, (const struct sockaddr*)&address, sizeof(address)) != 0) {
-        if ((errno != EINPROGRESS && errno != EAGAIN && errno != EWOULDBLOCK) ||
-            !syslog_wait_socket(fd, POLLOUT) ||
+        if ((errno != EINPROGRESS && errno != EAGAIN && errno != EWOULDBLOCK &&
+             errno != EINTR) ||
+            !syslog_wait_socket(fd, POLLOUT, deadline_ns) ||
             getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error,
                        &socket_error_size) != 0 || socket_error != 0)
             goto done;
     }
-    if (!syslog_send_exact(fd, &envelope, sizeof(envelope)) ||
-        !syslog_send_exact(fd, &request, sizeof(request)) ||
-        !syslog_receive_exact(fd, &reply, sizeof(reply)) ||
+    if (!syslog_send_exact(fd, &envelope, sizeof(envelope), deadline_ns) ||
+        !syslog_send_exact(fd, &request, sizeof(request), deadline_ns) ||
+        !syslog_receive_exact(fd, &reply, sizeof(reply), deadline_ns) ||
         !syslog_transport_reply_ok(&reply, request_id)) goto done;
     success = 1;
 
