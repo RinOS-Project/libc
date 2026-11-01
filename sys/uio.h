@@ -1,6 +1,15 @@
 /* SPDX-License-Identifier: MIT */
 /* RinOS libc - sys/uio.h */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64) && \
+    !defined(_RIN_UIO_SYSCALL3) && !defined(_RIN_UIO_SYSCALL5) && \
+    !defined(_RIN_UIO_SYSCALL6)
+#include_next <sys/uio.h>
+#else
 #ifndef _SYS_UIO_H
 #define _SYS_UIO_H
 
@@ -248,3 +257,4 @@ static inline ssize_t pwritev64v2(int fd, const struct iovec* iov, int iovcnt,
 }
 
 #endif /* _SYS_UIO_H */
+#endif /* hosted Linux delegates to native provider */

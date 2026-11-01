@@ -4,6 +4,14 @@
  * Bounded kernel-owned file-to-socket transfer.
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64) && \
+    !defined(RIN_UNISTD_CUSTOM_SYSCALL_HOOK)
+#include_next <sys/sendfile.h>
+#else
 #ifndef _SYS_SENDFILE_H
 #define _SYS_SENDFILE_H
 
@@ -94,3 +102,4 @@ static inline ssize_t rin_file_to_socket(int source_fd, int socket_fd,
 #endif
 
 #endif
+#endif /* hosted Linux delegates to native provider */
