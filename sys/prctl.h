@@ -75,9 +75,9 @@ extern "C" {
 #define PR_MCE_KILL         33  /* Set machine check exception mode */
 #define PR_MCE_KILL_GET     34  /* Get machine check exception mode */
 #define RIN_PRCTL_TASK_PERF_EVENTS_CONTROL_SUPPORTED 1
-/* No per-task perf event attachment API exists yet; with an empty task event
- * list the Linux disable/enable controls are successful no-ops. */
-#define RIN_PRCTL_TASK_PERF_EVENT_ATTACHMENT_SUPPORTED 0
+/* Task-clock events attach to the calling task through sys/rin_perf_event.h;
+ * PR_TASK_PERF_EVENTS_DISABLE/ENABLE pause and resume all of its events. */
+#define RIN_PRCTL_TASK_PERF_EVENT_ATTACHMENT_SUPPORTED 1
 #define RIN_PRCTL_MCE_KILL_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_MCE_KILL_SUPPORTED_IA32 1
 #define RIN_PRCTL_MCE_KILL_SUPPORTED_X86_64 1
