@@ -5,6 +5,25 @@
  * primary private group per account.
  */
 
+#if !defined(RIN_ACCOUNT_CUSTOM_SYSCALL_HOOK) && \
+    ((defined(_RIN_CREDENTIAL_SYSCALL1) && \
+      !defined(RIN_LIBC_DEFAULT_CREDENTIAL_SYSCALL1)) || \
+     (defined(_RIN_ACCOUNT_SYSCALL2) && \
+      !defined(RIN_LIBC_DEFAULT_ACCOUNT_SYSCALL2)))
+#define RIN_ACCOUNT_CUSTOM_SYSCALL_HOOK 1
+#endif
+
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__linux__) || defined(__APPLE__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64) && \
+    !defined(RINSDK_SPLIT_BUILD) && !defined(RIN_TIME_ABI64) && \
+    !defined(RIN_ACCOUNT_CUSTOM_SYSCALL_HOOK)
+#include_next <grp.h>
+#else
+
 #ifndef _GRP_H
 #define _GRP_H
 
@@ -358,3 +377,5 @@ static inline int initgroups(const char* user, gid_t group) {
 #endif
 
 #endif /* _GRP_H */
+
+#endif /* hosted POSIX uses the native group database owner */

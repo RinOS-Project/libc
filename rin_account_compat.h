@@ -3,6 +3,16 @@
 #ifndef RIN_LIBC_ACCOUNT_COMPAT_H
 #define RIN_LIBC_ACCOUNT_COMPAT_H
 
+/* Preserve an explicit provider selection across header include orders.
+ * pwd.h/grp.h use this marker before choosing the hosted account provider. */
+#if !defined(RIN_ACCOUNT_CUSTOM_SYSCALL_HOOK) && \
+    ((defined(_RIN_CREDENTIAL_SYSCALL1) && \
+      !defined(RIN_LIBC_DEFAULT_CREDENTIAL_SYSCALL1)) || \
+     (defined(_RIN_ACCOUNT_SYSCALL2) && \
+      !defined(RIN_LIBC_DEFAULT_ACCOUNT_SYSCALL2)))
+#define RIN_ACCOUNT_CUSTOM_SYSCALL_HOOK 1
+#endif
+
 #include "errno.h"
 #include "stddef.h"
 #include "stdint.h"
@@ -117,11 +127,13 @@ _Static_assert(sizeof(__rin_account_info_v1) == 440,
 #endif
 
 #ifndef _RIN_CREDENTIAL_SYSCALL1
+#define RIN_LIBC_DEFAULT_CREDENTIAL_SYSCALL1 1
 #define _RIN_CREDENTIAL_SYSCALL1(number, argument) \
     _syscall1((uintptr_t)(number), (uintptr_t)(argument))
 #endif
 
 #ifndef _RIN_ACCOUNT_SYSCALL2
+#define RIN_LIBC_DEFAULT_ACCOUNT_SYSCALL2 1
 #define _RIN_ACCOUNT_SYSCALL2(number, argument1, argument2) \
     _syscall2((uintptr_t)(number), (uintptr_t)(argument1), \
               (uintptr_t)(argument2))

@@ -10,7 +10,10 @@
 #if !defined(RIN_UNISTD_CUSTOM_SYSCALL_HOOK) && \
     (defined(_RIN_UNISTD_SYSCALL0) || defined(_RIN_UNISTD_SYSCALL1) || \
      defined(_RIN_UNISTD_SYSCALL2) || defined(_RIN_UNISTD_SYSCALL3) || \
-     defined(_RIN_UNISTD_SYSCALL5) || defined(_RIN_CREDENTIAL_SYSCALL1) || \
+     defined(_RIN_UNISTD_SYSCALL5) || \
+     defined(RIN_ACCOUNT_CUSTOM_SYSCALL_HOOK) || \
+     (defined(_RIN_CREDENTIAL_SYSCALL1) && \
+      !defined(RIN_LIBC_DEFAULT_CREDENTIAL_SYSCALL1)) || \
      defined(_RIN_UNISTD_SLEEP) || defined(_RIN_UNISTD_EXEC_SYSCALL3) || \
      defined(_RIN_UNISTD_EXECVE) || defined(_RIN_UNISTD_POSITIONAL_IO_MAX) || \
      defined(_RIN_WAIT_SYSCALL3))

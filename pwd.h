@@ -4,6 +4,25 @@
  * Backed by the versioned Rin account-query ABI.
  */
 
+#if !defined(RIN_ACCOUNT_CUSTOM_SYSCALL_HOOK) && \
+    ((defined(_RIN_CREDENTIAL_SYSCALL1) && \
+      !defined(RIN_LIBC_DEFAULT_CREDENTIAL_SYSCALL1)) || \
+     (defined(_RIN_ACCOUNT_SYSCALL2) && \
+      !defined(RIN_LIBC_DEFAULT_ACCOUNT_SYSCALL2)))
+#define RIN_ACCOUNT_CUSTOM_SYSCALL_HOOK 1
+#endif
+
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__linux__) || defined(__APPLE__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64) && \
+    !defined(RINSDK_SPLIT_BUILD) && !defined(RIN_TIME_ABI64) && \
+    !defined(RIN_ACCOUNT_CUSTOM_SYSCALL_HOOK)
+#include_next <pwd.h>
+#else
+
 #ifndef _PWD_H
 #define _PWD_H
 
@@ -218,3 +237,5 @@ static inline struct passwd* getpwent(void) {
 #endif
 
 #endif /* _PWD_H */
+
+#endif /* hosted POSIX uses the native passwd database owner */
