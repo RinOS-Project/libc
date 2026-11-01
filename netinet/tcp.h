@@ -24,5 +24,8 @@
 #ifndef TCP_KEEPCNT
 #define TCP_KEEPCNT 6
 #endif
+#ifndef TCP_CONGESTION
+#define TCP_CONGESTION 13
+#endif
 
 #endif /* _NETINET_TCP_H */
