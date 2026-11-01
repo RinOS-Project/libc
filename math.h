@@ -14,6 +14,7 @@
 #include "stddef.h"
 #include "float.h"
 #include "limits.h"
+#include "stdint.h"
 #include "fenv.h"
 #include "errno.h"
 
@@ -586,6 +587,7 @@ static inline long double expl(long double x);
 static inline long double ldexpl(long double x, int exp);
 static inline double atan(double x);
 static inline double atan2(double y, double x);
+static inline double exp2(double x);
 
 /* Narrow a widened-double result to float, reporting float-range
  * overflow/underflow-to-zero via errno (the inner double call already
@@ -2060,6 +2062,72 @@ static inline float log1pf(float x) {
     return __rin_math_narrow_errno(log1p((double)x));
 }
 
+/* C23 logp1 - log(1+x), base e. Same function as log1p. */
+static inline double logp1(double x) {
+    return log1p(x);
+}
+
+static inline float logp1f(float x) {
+    return __rin_math_narrow_errno(log1p((double)x));
+}
+
+static inline long double logp1l(long double x) {
+    return (long double)log1p((double)x);
+}
+
+/* C23 log10p1/log2p1 - log(1+x) in base 10/2. Domain prefix mirrors
+ * log1p exactly (pole at -1, EDOM below, signed-zero passthrough);
+ * the base division adds at most 1 ULP over the log1p core. */
+static inline double log10p1(double x) {
+    if (__builtin_isnan(x)) return x;
+    if (x == -1.0) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return -HUGE_VAL;
+    }
+    if (x < -1.0) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (__builtin_isinf(x)) return x;
+    if (x == 0.0) return x;
+    return log1p(x) / 2.302585092994046;
+}
+
+static inline float log10p1f(float x) {
+    return __rin_math_narrow_errno(log10p1((double)x));
+}
+
+static inline long double log10p1l(long double x) {
+    return (long double)log10p1((double)x);
+}
+
+static inline double log2p1(double x) {
+    if (__builtin_isnan(x)) return x;
+    if (x == -1.0) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return -HUGE_VAL;
+    }
+    if (x < -1.0) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (__builtin_isinf(x)) return x;
+    if (x == 0.0) return x;
+    return log1p(x) / 0.6931471805599453;
+}
+
+static inline float log2p1f(float x) {
+    return __rin_math_narrow_errno(log2p1((double)x));
+}
+
+static inline long double log2p1l(long double x) {
+    return (long double)log2p1((double)x);
+}
+
 /* expm1 - exp(x) - 1 より精度の高い実装 */
 static inline double expm1(double x) {
     if (__builtin_isnan(x)) return x;
@@ -2082,6 +2150,43 @@ static inline double expm1(double x) {
 
 static inline float expm1f(float x) {
     return __rin_math_narrow_errno(expm1((double)x));
+}
+
+/* C23 exp2m1 - 2^x - 1. Small interval sums Taylor in t=x*ln2
+ * (avoids the exp2-rounds-to-one cancellation, like expm1);
+ * large arguments reuse exp2 and inherit its reporting. */
+static inline double exp2m1(double x) {
+    if (__builtin_isnan(x)) return x;
+    if (x == 0.0) return x;
+    if (x == HUGE_VAL) return x;
+    if (x == -HUGE_VAL) return -1.0;
+    /* Inclusive bound: x=0.5 takes Taylor (t=0.35ln2 converges in
+     * ~15 terms); the pow route costs 6 ULP there on x87. */
+    if (fabs(x) <= 0.5) {
+        double t = x * 0.6931471805599453;
+        double sum = t;
+        double term = t;
+        for (int i = 2; i <= 40; i++) {
+            term *= t / i;
+            sum += term;
+            if (fabs(term) < 1e-18) break;
+        }
+        return sum;
+    }
+    /* Integral powers are exact via ldexp (avoids pow's log/exp
+     * rounding, which costs up to 6 ULP on x87 for e.g. x=100);
+     * exp2's own subnormal carve stays silent here too. */
+    if (trunc(x) == x && x >= -1074.0 && x <= 1023.0)
+        return ldexp(1.0, (int)x) - 1.0;
+    return exp2(x) - 1.0;
+}
+
+static inline float exp2m1f(float x) {
+    return __rin_math_narrow_errno(exp2m1((double)x));
+}
+
+static inline long double exp2m1l(long double x) {
+    return (long double)exp2m1((double)x);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2749,6 +2854,189 @@ static inline long long llrintl(long double x) {
     return __rin_math_lround_to_ll(__rin_math_round_mode((double)x));
 }
 
+/* C23 fromfp/ufromfp/fromfpx/ufromfpx - round x per the FP_INT_*
+ * code to a width-bit (un)signed integer (glibc parity, both
+ * legs). Out-of-range/NaN/inf saturate + INVALID; fromfp never
+ * raises INEXACT (the rounding step's flag is scrubbed), fromfpx
+ * raises it when rounding changes the value. INVALID rows also
+ * set errno=EDOM (glibc parity, both legs). Widths above 64 use
+ * the full intmax range; width 0 is degenerate (INVALID + 0). */
+static inline double __rin_math_fromfp_round(double x, int rnd) {
+    switch (rnd) {
+    case FP_INT_UPWARD: return ceil(x);
+    case FP_INT_DOWNWARD: return floor(x);
+    case FP_INT_TOWARDZERO: return trunc(x);
+    case FP_INT_TONEAREST: return __rin_math_round_even(x);
+    case FP_INT_TONEARESTFROMZERO:
+    default: return round(x);
+    }
+}
+
+static inline intmax_t fromfp(double x, int rnd, unsigned int width) {
+    double r;
+    double lim;
+    int hadx;
+    if (width == 0) {
+        (void)feraiseexcept(FE_INVALID);
+        errno = EDOM;
+        return 0;
+    }
+    if (width > 64) width = 64;
+    if (__builtin_isnan(x)) {
+        (void)feraiseexcept(FE_INVALID);
+        errno = EDOM;
+        return width == 64 ? INT64_MAX : (intmax_t)((1ULL << (width - 1)) - 1);
+    }
+    hadx = fetestexcept(FE_INEXACT);
+    feclearexcept(FE_INEXACT);
+    r = __rin_math_fromfp_round(x, rnd);
+    if (!hadx) feclearexcept(FE_INEXACT);
+    lim = width == 64 ? 0x1p63 : (double)(1ULL << (width - 1));
+    if (r >= lim) {
+        (void)feraiseexcept(FE_INVALID);
+        errno = EDOM;
+        return width == 64 ? INT64_MAX : (intmax_t)((1ULL << (width - 1)) - 1);
+    }
+    if (r < -lim) {
+        (void)feraiseexcept(FE_INVALID);
+        errno = EDOM;
+        return width == 64 ? INT64_MIN : -(intmax_t)(1ULL << (width - 1));
+    }
+    return (intmax_t)r;
+}
+
+static inline intmax_t fromfpf(float x, int rnd, unsigned int width) {
+    return fromfp((double)x, rnd, width);
+}
+
+/* The l-suffixed spellings narrow to double internally; the
+ * narrowing is invisible, so its flags (INEXACT on rounding,
+ * OVERFLOW/UNDERFLOW past double range) are scrubbed, and the
+ * x-variants compare against the ORIGINAL x so sub-double tinies
+ * still report INEXACT (host parity, both legs). */
+static inline intmax_t fromfpl(long double x, int rnd, unsigned int width) {
+    int hadx = fetestexcept(FE_INEXACT | FE_OVERFLOW | FE_UNDERFLOW);
+    double dx = (double)x;
+    int clr = (FE_INEXACT | FE_OVERFLOW | FE_UNDERFLOW) & ~hadx;
+    if (clr) feclearexcept(clr);
+    return fromfp(dx, rnd, width);
+}
+
+static inline uintmax_t ufromfp(double x, int rnd, unsigned int width) {
+    double r;
+    double lim;
+    uintmax_t umax;
+    int hadx;
+    if (width == 0) {
+        (void)feraiseexcept(FE_INVALID);
+        errno = EDOM;
+        return 0;
+    }
+    if (width > 64) width = 64;
+    umax = width == 64 ? UINT64_MAX : (uintmax_t)((1ULL << width) - 1);
+    if (__builtin_isnan(x)) {
+        (void)feraiseexcept(FE_INVALID);
+        errno = EDOM;
+        return umax;
+    }
+    hadx = fetestexcept(FE_INEXACT);
+    feclearexcept(FE_INEXACT);
+    r = __rin_math_fromfp_round(x, rnd);
+    if (!hadx) feclearexcept(FE_INEXACT);
+    lim = width == 64 ? 0x1p64 : (double)(1ULL << width);
+    if (r < 0.0) {
+        (void)feraiseexcept(FE_INVALID);
+        errno = EDOM;
+        return 0;
+    }
+    if (r >= lim) {
+        (void)feraiseexcept(FE_INVALID);
+        errno = EDOM;
+        return umax;
+    }
+    return (uintmax_t)r;
+}
+
+static inline uintmax_t ufromfpf(float x, int rnd, unsigned int width) {
+    return ufromfp((double)x, rnd, width);
+}
+
+static inline uintmax_t ufromfpl(long double x, int rnd, unsigned int width) {
+    int hadx = fetestexcept(FE_INEXACT | FE_OVERFLOW | FE_UNDERFLOW);
+    double dx = (double)x;
+    int clr = (FE_INEXACT | FE_OVERFLOW | FE_UNDERFLOW) & ~hadx;
+    if (clr) feclearexcept(clr);
+    return ufromfp(dx, rnd, width);
+}
+
+static inline intmax_t fromfpx(double x, int rnd, unsigned int width) {
+    int pre = fetestexcept(FE_INVALID);
+    intmax_t v;
+    int had;
+    feclearexcept(FE_INVALID);
+    v = fromfp(x, rnd, width);
+    had = fetestexcept(FE_INVALID);
+    if (pre) (void)feraiseexcept(FE_INVALID);
+    if (!had && __builtin_isfinite(x) && (double)v != x)
+        (void)feraiseexcept(FE_INEXACT);
+    return v;
+}
+
+static inline intmax_t fromfpxf(float x, int rnd, unsigned int width) {
+    return fromfpx((double)x, rnd, width);
+}
+
+static inline intmax_t fromfpxl(long double x, int rnd, unsigned int width) {
+    int pre = fetestexcept(FE_INVALID);
+    int hadx = fetestexcept(FE_INEXACT | FE_OVERFLOW | FE_UNDERFLOW);
+    double dx = (double)x;
+    intmax_t v;
+    int clr = (FE_INEXACT | FE_OVERFLOW | FE_UNDERFLOW) & ~hadx;
+    int had;
+    if (clr) feclearexcept(clr);
+    feclearexcept(FE_INVALID);
+    v = fromfp(dx, rnd, width);
+    had = fetestexcept(FE_INVALID);
+    if (pre) (void)feraiseexcept(FE_INVALID);
+    if (!had && __builtin_isfinite(x) && (long double)v != x)
+        (void)feraiseexcept(FE_INEXACT);
+    return v;
+}
+
+static inline uintmax_t ufromfpx(double x, int rnd, unsigned int width) {
+    int pre = fetestexcept(FE_INVALID);
+    uintmax_t v;
+    int had;
+    feclearexcept(FE_INVALID);
+    v = ufromfp(x, rnd, width);
+    had = fetestexcept(FE_INVALID);
+    if (pre) (void)feraiseexcept(FE_INVALID);
+    if (!had && __builtin_isfinite(x) && (double)v != x)
+        (void)feraiseexcept(FE_INEXACT);
+    return v;
+}
+
+static inline uintmax_t ufromfpxf(float x, int rnd, unsigned int width) {
+    return ufromfpx((double)x, rnd, width);
+}
+
+static inline uintmax_t ufromfpxl(long double x, int rnd, unsigned int width) {
+    int pre = fetestexcept(FE_INVALID);
+    int hadx = fetestexcept(FE_INEXACT | FE_OVERFLOW | FE_UNDERFLOW);
+    double dx = (double)x;
+    uintmax_t v;
+    int clr = (FE_INEXACT | FE_OVERFLOW | FE_UNDERFLOW) & ~hadx;
+    int had;
+    if (clr) feclearexcept(clr);
+    feclearexcept(FE_INVALID);
+    v = ufromfp(dx, rnd, width);
+    had = fetestexcept(FE_INVALID);
+    if (pre) (void)feraiseexcept(FE_INVALID);
+    if (!had && __builtin_isfinite(x) && (long double)v != x)
+        (void)feraiseexcept(FE_INEXACT);
+    return v;
+}
+
 /* nearbyint - 現在の丸めモードで整数へ（FE例外なし） */
 static inline double nearbyint(double x) {
     int had = fetestexcept(FE_INEXACT);
@@ -2804,6 +3092,18 @@ static inline int __rin_math_isnan_d(double x) {
     encoded.value = x;
     return ((encoded.bits >> 52) & 0x7FFu) == 0x7FFu &&
            (encoded.bits & 0xFFFFFFFFFFFFFULL) != 0;
+}
+
+/* Quiet sNaN probe (B45): the fadd family must signal INVALID on
+ * signaling inputs (m64 host parity; m32 host stays silent and is
+ * carved in the test, as B44 canonicalize). Integer view so gcc
+ * cannot fuse it into a signaling ucomisd (b45qn). */
+static inline int __rin_math_is_snan_d(double x) {
+    union { double value; unsigned long long bits; } encoded;
+    encoded.value = x;
+    return ((encoded.bits >> 52) & 0x7FFu) == 0x7FFu &&
+           (encoded.bits & 0xFFFFFFFFFFFFFULL) != 0 &&
+           ((encoded.bits >> 51) & 1u) == 0;
 }
 
 static inline int __rin_math_isnan_f(float x) {
@@ -3475,6 +3775,174 @@ static inline float fmaf(float x, float y, float z) {
     result.bits = (unsigned int)__rin_fma_finite_bits(
         a, b, c, 24, 23, 8, 127);
     return result.value;
+}
+
+/* C23 narrower-type arithmetic (B45): the operation runs in
+ * double, then rounds once to the narrower return type (float;
+ * double for the l-suffixed spellings). Narrow-after is
+ * probe-discriminated on both legs: fadd(16777217,-16777216)=1,
+ * fsub(1e20,1e20-16384)=16384, fmul(1+2^-24,1+2^-24)=1+2^-23,
+ * ffma(0.1,0.2,0.3)=(float)fma(...); narrow-first fails all four).
+ * Errno contract (glibc parity, both legs): invalid-op NaN
+ * (inf-inf, 0*inf, 0/0, inf/inf) sets EDOM; overflow AND
+ * division-by-zero set ERANGE; quiet NaN inputs (incl. sNaN,
+ * which glibc quiets without any flag) propagate silently;
+ * underflow sets nothing. ffma never touches errno (quirk holds
+ * for overflow AND invalid). */
+static inline float fadd(double x, double y) {
+    double d;
+    float r;
+    if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) {
+        if (__rin_math_is_snan_d(x) || __rin_math_is_snan_d(y))
+            (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    d = x + y;
+    r = (float)d;
+    if (__builtin_isnan(r)) errno = EDOM;
+    else if (__builtin_isinf(r) && !__builtin_isinf(x) &&
+             !__builtin_isinf(y))
+        errno = ERANGE;
+    return r;
+}
+
+static inline float fsub(double x, double y) {
+    double d;
+    float r;
+    if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) {
+        if (__rin_math_is_snan_d(x) || __rin_math_is_snan_d(y))
+            (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    d = x - y;
+    r = (float)d;
+    if (__builtin_isnan(r)) errno = EDOM;
+    else if (__builtin_isinf(r) && !__builtin_isinf(x) &&
+             !__builtin_isinf(y))
+        errno = ERANGE;
+    return r;
+}
+
+static inline float fmul(double x, double y) {
+    double d;
+    float r;
+    if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) {
+        if (__rin_math_is_snan_d(x) || __rin_math_is_snan_d(y))
+            (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    d = x * y;
+    r = (float)d;
+    if (__builtin_isnan(r)) errno = EDOM;
+    else if (__builtin_isinf(r) && !__builtin_isinf(x) &&
+             !__builtin_isinf(y))
+        errno = ERANGE;
+    return r;
+}
+
+static inline float fdiv(double x, double y) {
+    double d;
+    float r;
+    if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) {
+        if (__rin_math_is_snan_d(x) || __rin_math_is_snan_d(y))
+            (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    d = x / y;
+    r = (float)d;
+    if (__builtin_isnan(r)) errno = EDOM;
+    else if (__builtin_isinf(r) && !__builtin_isinf(x) &&
+             !__builtin_isinf(y))
+        errno = ERANGE;
+    return r;
+}
+
+static inline float ffma(double x, double y, double z) {
+    if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y) ||
+        __rin_math_isnan_d(z)) {
+        if (__rin_math_is_snan_d(x) || __rin_math_is_snan_d(y) ||
+            __rin_math_is_snan_d(z))
+            (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    /* Quirk parity: glibc leaves errno 0 even on overflow/invalid;
+     * fma never writes errno, so a plain delegation suffices. */
+    return (float)fma(x, y, z);
+}
+
+static inline float fsqrt(double x) {
+    if (__rin_math_isnan_d(x)) {
+        if (__rin_math_is_snan_d(x))
+            (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    return (float)sqrt(x);
+}
+
+/* The l-wideners narrow to double (RinOS long double IS binary64,
+ * so the narrowing is the argument conversion), run the double op,
+ * and return it; errno mirrors the double family. Beyond-double-
+ * range inputs are outside the widener contract (they arrive as
+ * inf already). */
+static inline double faddl(long double x, long double y) {
+    double dx, dy, r;
+    if (__builtin_isnan(x) || __builtin_isnan(y)) return NAN;
+    dx = (double)x; dy = (double)y;
+    r = dx + dy;
+    if (__builtin_isnan(r)) errno = EDOM;
+    else if (__builtin_isinf(r) && !__builtin_isinf(dx) &&
+             !__builtin_isinf(dy))
+        errno = ERANGE;
+    return r;
+}
+
+static inline double fsubl(long double x, long double y) {
+    double dx, dy, r;
+    if (__builtin_isnan(x) || __builtin_isnan(y)) return NAN;
+    dx = (double)x; dy = (double)y;
+    r = dx - dy;
+    if (__builtin_isnan(r)) errno = EDOM;
+    else if (__builtin_isinf(r) && !__builtin_isinf(dx) &&
+             !__builtin_isinf(dy))
+        errno = ERANGE;
+    return r;
+}
+
+static inline double fmull(long double x, long double y) {
+    double dx, dy, r;
+    if (__builtin_isnan(x) || __builtin_isnan(y)) return NAN;
+    dx = (double)x; dy = (double)y;
+    r = dx * dy;
+    if (__builtin_isnan(r)) errno = EDOM;
+    else if (__builtin_isinf(r) && !__builtin_isinf(dx) &&
+             !__builtin_isinf(dy))
+        errno = ERANGE;
+    return r;
+}
+
+static inline double fdivl(long double x, long double y) {
+    double dx, dy, r;
+    if (__builtin_isnan(x) || __builtin_isnan(y)) return NAN;
+    dx = (double)x; dy = (double)y;
+    r = dx / dy;
+    if (__builtin_isnan(r)) errno = EDOM;
+    else if (__builtin_isinf(r) && !__builtin_isinf(dx) &&
+             !__builtin_isinf(dy))
+        errno = ERANGE;
+    return r;
+}
+
+static inline double ffmal(long double x, long double y,
+                           long double z) {
+    if (__builtin_isnan(x) || __builtin_isnan(y) ||
+        __builtin_isnan(z))
+        return NAN;
+    return fma((double)x, (double)y, (double)z);
+}
+
+static inline double fsqrtl(long double x) {
+    if (__builtin_isnan(x)) return NAN;
+    return sqrt((double)x);
 }
 
 /* exp2 - 2^x */

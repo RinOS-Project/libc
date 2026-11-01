@@ -82,6 +82,35 @@
         long double: name##l, \
         default: name)(x, y, z)
 
+/* C23 narrower arithmetic (B45): no f-suffixed spellings exist --
+ * float pairs use the double spelling (which computes narrow and
+ * returns float); only long-double involvement selects the l
+ * spelling (which computes in double and returns double). */
+#define __RIN_TGMATH_NARROW1(name, x) \
+    _Generic((x), \
+        long double: name##l, \
+        default: name)(x)
+
+#define __RIN_TGMATH_NARROW2(name, x, y) \
+    _Generic((__RIN_TGMATH_GENERIC_ARGUMENT(x) + \
+              __RIN_TGMATH_GENERIC_ARGUMENT(y)), \
+        long double: name##l, \
+        default: name)(x, y)
+
+#define __RIN_TGMATH_NARROW3(name, x, y, z) \
+    _Generic(((__RIN_TGMATH_GENERIC_ARGUMENT(x) + \
+               __RIN_TGMATH_GENERIC_ARGUMENT(y)) + \
+              __RIN_TGMATH_GENERIC_ARGUMENT(z)), \
+        long double: name##l, \
+        default: name)(x, y, z)
+
+/* C23 conversions (B45): dispatch on x; rnd/width pass through. */
+#define __RIN_TGMATH_FROMFP(name, x, rnd, width) \
+    _Generic((x), \
+        float: name##f, \
+        long double: name##l, \
+        default: name)((x), (rnd), (width))
+
 /* Real/complex function pairs. */
 #define acos(x)  __RIN_TGMATH_UNARY_COMPLEX(acos, (x))
 #define acosh(x) __RIN_TGMATH_UNARY_COMPLEX(acosh, (x))
@@ -169,6 +198,26 @@
              long double *: canonicalizel, \
              const long double *: canonicalizel, \
              default: canonicalize)((cx), (x))
+
+/* C23 logp1/exp2m1 (B45): ordinary real dispatch. */
+#define logp1(x)   __RIN_TGMATH_UNARY_REAL(logp1, (x))
+#define log10p1(x) __RIN_TGMATH_UNARY_REAL(log10p1, (x))
+#define log2p1(x)  __RIN_TGMATH_UNARY_REAL(log2p1, (x))
+#define exp2m1(x)  __RIN_TGMATH_UNARY_REAL(exp2m1, (x))
+
+/* C23 narrower arithmetic (B45). */
+#define fadd(x, y)    __RIN_TGMATH_NARROW2(fadd, (x), (y))
+#define fsub(x, y)    __RIN_TGMATH_NARROW2(fsub, (x), (y))
+#define fmul(x, y)    __RIN_TGMATH_NARROW2(fmul, (x), (y))
+#define fdiv(x, y)    __RIN_TGMATH_NARROW2(fdiv, (x), (y))
+#define ffma(x, y, z) __RIN_TGMATH_NARROW3(ffma, (x), (y), (z))
+#define fsqrt(x)      __RIN_TGMATH_NARROW1(fsqrt, (x))
+
+/* C23 conversions (B45). */
+#define fromfp(x, rnd, width)     __RIN_TGMATH_FROMFP(fromfp, (x), (rnd), (width))
+#define ufromfp(x, rnd, width)    __RIN_TGMATH_FROMFP(ufromfp, (x), (rnd), (width))
+#define fromfpx(x, rnd, width)    __RIN_TGMATH_FROMFP(fromfpx, (x), (rnd), (width))
+#define ufromfpx(x, rnd, width)   __RIN_TGMATH_FROMFP(ufromfpx, (x), (rnd), (width))
 
 /* These functions choose a variant from their floating argument; their
  * other parameters keep the types specified by math.h. */
