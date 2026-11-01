@@ -414,7 +414,7 @@ void* lsearch(const void* key, void* base, size_t* nelp,
     }
     found = rin_lsearch_find(key, base, *nelp, width, compar);
     if (found != NULL) return found;
-    memcpy((unsigned char*)base + *nelp * width, key, width);
+    memmove((unsigned char*)base + *nelp * width, key, width);
     ++*nelp;
     return (unsigned char*)base + (*nelp - 1u) * width;
 }
