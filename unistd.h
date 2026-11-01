@@ -1485,10 +1485,6 @@ static inline int execveat(int dirfd, const char* pathname,
 #if !defined(MIDL_PASS)
     int exec_hook_errno;
 #endif
-    if (!pathname || !argv) {
-        errno = EINVAL;
-        return -1;
-    }
     if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) != 0) {
         errno = EINVAL;
         return -1;
