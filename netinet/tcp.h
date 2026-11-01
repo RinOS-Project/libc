@@ -31,6 +31,9 @@
 #ifndef TCP_INFO
 #define TCP_INFO 11
 #endif
+#ifndef TCP_NOTSENT_LOWAT
+#define TCP_NOTSENT_LOWAT 25
+#endif
 
 #ifndef TCPI_OPT_SACK
 #define TCPI_OPT_SACK 2
