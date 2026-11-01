@@ -24,6 +24,8 @@
 
 #ifndef RIN_LIBC_HOSTED_ERRNO_OWNER
 
+#include <rin/errno_abi.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -42,152 +44,201 @@ extern int* __errno_location(void);
  * エラーコード定義 (POSIX準拠)
  * ═══════════════════════════════════════════════════════════════*/
 
+/* In a freestanding RinOS build these values define the target ABI even when
+ * a host compiler's standard headers were force-included for a hosted test. */
+#undef EADDRINUSE
+#undef EADDRNOTAVAIL
+#undef EAFNOSUPPORT
+#undef EALREADY
+#undef EBADMSG
+#undef ECANCELED
+#undef ECONNABORTED
+#undef ECONNREFUSED
+#undef ECONNRESET
+#undef EDEADLK
+#undef EDESTADDRREQ
+#undef EHOSTUNREACH
+#undef EIDRM
+#undef EILSEQ
+#undef EINPROGRESS
+#undef EISCONN
+#undef ELOOP
+#undef EMSGSIZE
+#undef ENAMETOOLONG
+#undef ENETDOWN
+#undef ENETRESET
+#undef ENETUNREACH
+#undef ENOBUFS
+#undef ENODATA
+#undef ENOLCK
+#undef ENOLINK
+#undef ENOMSG
+#undef ENOPROTOOPT
+#undef ENOSR
+#undef ENOSTR
+#undef ENOSYS
+#undef ENOTCONN
+#undef ENOTEMPTY
+#undef ENOTRECOVERABLE
+#undef ENOTSOCK
+#undef ENOTSUP
+#undef EOPNOTSUPP
+#undef EOVERFLOW
+#undef EOWNERDEAD
+#undef EPROTO
+#undef EPROTONOSUPPORT
+#undef EPROTOTYPE
+#undef ETIME
+#undef ETIMEDOUT
+#undef ETXTBSY
+#undef EWOULDBLOCK
+
 /* 操作/権限エラー */
-#define EPERM           1   /* Operation not permitted */
-#define ENOENT          2   /* No such file or directory */
-#define ESRCH           3   /* No such process */
-#define EINTR           4   /* Interrupted system call */
-#define EIO             5   /* I/O error */
-#define ENXIO           6   /* No such device or address */
-#define E2BIG           7   /* Argument list too long */
-#define ENOEXEC         8   /* Exec format error */
-#define EBADF           9   /* Bad file descriptor */
-#define ECHILD          10  /* No child processes */
-#define EAGAIN          11  /* Try again / Resource temporarily unavailable */
-#define ENOMEM          12  /* Out of memory */
-#define EACCES          13  /* Permission denied */
-#define EFAULT          14  /* Bad address */
-#define ENOTBLK         15  /* Block device required */
-#define EBUSY           16  /* Device or resource busy */
-#define EEXIST          17  /* File exists */
-#define EXDEV           18  /* Cross-device link */
-#define ENODEV          19  /* No such device */
-#define ENOTDIR         20  /* Not a directory */
-#define EISDIR          21  /* Is a directory */
-#define EINVAL          22  /* Invalid argument */
-#define ENFILE          23  /* File table overflow */
-#define EMFILE          24  /* Too many open files */
-#define ENOTTY          25  /* Not a typewriter */
-#define ETXTBSY         26  /* Text file busy */
-#define EFBIG           27  /* File too large */
-#define ENOSPC          28  /* No space left on device */
-#define ESPIPE          29  /* Illegal seek */
-#define EROFS           30  /* Read-only file system */
-#define EMLINK          31  /* Too many links */
-#define EPIPE           32  /* Broken pipe */
+#define EPERM           RIN_EPERM   /* Operation not permitted */
+#define ENOENT          RIN_ENOENT   /* No such file or directory */
+#define ESRCH           RIN_ESRCH   /* No such process */
+#define EINTR           RIN_EINTR   /* Interrupted system call */
+#define EIO             RIN_EIO   /* I/O error */
+#define ENXIO           RIN_ENXIO   /* No such device or address */
+#define E2BIG           RIN_E2BIG   /* Argument list too long */
+#define ENOEXEC         RIN_ENOEXEC   /* Exec format error */
+#define EBADF           RIN_EBADF   /* Bad file descriptor */
+#define ECHILD          RIN_ECHILD  /* No child processes */
+#define EAGAIN          RIN_EAGAIN  /* Try again / Resource temporarily unavailable */
+#define ENOMEM          RIN_ENOMEM  /* Out of memory */
+#define EACCES          RIN_EACCES  /* Permission denied */
+#define EFAULT          RIN_EFAULT  /* Bad address */
+#define ENOTBLK         RIN_ENOTBLK  /* Block device required */
+#define EBUSY           RIN_EBUSY  /* Device or resource busy */
+#define EEXIST          RIN_EEXIST  /* File exists */
+#define EXDEV           RIN_EXDEV  /* Cross-device link */
+#define ENODEV          RIN_ENODEV  /* No such device */
+#define ENOTDIR         RIN_ENOTDIR  /* Not a directory */
+#define EISDIR          RIN_EISDIR  /* Is a directory */
+#define EINVAL          RIN_EINVAL  /* Invalid argument */
+#define ENFILE          RIN_ENFILE  /* File table overflow */
+#define EMFILE          RIN_EMFILE  /* Too many open files */
+#define ENOTTY          RIN_ENOTTY  /* Not a typewriter */
+#define ETXTBSY         RIN_ETXTBSY  /* Text file busy */
+#define EFBIG           RIN_EFBIG  /* File too large */
+#define ENOSPC          RIN_ENOSPC  /* No space left on device */
+#define ESPIPE          RIN_ESPIPE  /* Illegal seek */
+#define EROFS           RIN_EROFS  /* Read-only file system */
+#define EMLINK          RIN_EMLINK  /* Too many links */
+#define EPIPE           RIN_EPIPE  /* Broken pipe */
 
 /* 数学エラー */
-#define EDOM            33  /* Math argument out of domain */
-#define ERANGE          34  /* Math result not representable */
+#define EDOM            RIN_EDOM  /* Math argument out of domain */
+#define ERANGE          RIN_ERANGE  /* Math result not representable */
 
 /* リソースエラー */
-#define EDEADLK         35  /* Resource deadlock would occur */
-#define ENAMETOOLONG    36  /* File name too long */
-#define ENOLCK          37  /* No record locks available */
-#define ENOSYS          38  /* Function not implemented */
-#define ENOTEMPTY       39  /* Directory not empty */
-#define ELOOP           40  /* Too many symbolic links */
-#define EWOULDBLOCK     EAGAIN  /* Operation would block */
-#define ENOMSG          42  /* No message of desired type */
-#define EIDRM           43  /* Identifier removed */
-#define ECHRNG          44  /* Channel number out of range */
-#define EL2NSYNC        45  /* Level 2 not synchronized */
-#define EL3HLT          46  /* Level 3 halted */
-#define EL3RST          47  /* Level 3 reset */
-#define ELNRNG          48  /* Link number out of range */
-#define EUNATCH         49  /* Protocol driver not attached */
-#define ENOCSI          50  /* No CSI structure available */
-#define EL2HLT          51  /* Level 2 halted */
-#define EBADE           52  /* Invalid exchange */
-#define EBADR           53  /* Invalid request descriptor */
-#define EXFULL          54  /* Exchange full */
-#define ENOANO          55  /* No anode */
-#define EBADRQC         56  /* Invalid request code */
-#define EBADSLT         57  /* Invalid slot */
+#define EDEADLK         RIN_EDEADLK  /* Resource deadlock would occur */
+#define ENAMETOOLONG    RIN_ENAMETOOLONG  /* File name too long */
+#define ENOLCK          RIN_ENOLCK  /* No record locks available */
+#define ENOSYS          RIN_ENOSYS  /* Function not implemented */
+#define ENOTEMPTY       RIN_ENOTEMPTY  /* Directory not empty */
+#define ELOOP           RIN_ELOOP  /* Too many symbolic links */
+#define EWOULDBLOCK     RIN_EWOULDBLOCK  /* Operation would block */
+#define ENOMSG          RIN_ENOMSG  /* No message of desired type */
+#define EIDRM           RIN_EIDRM  /* Identifier removed */
+#define ECHRNG          RIN_ECHRNG  /* Channel number out of range */
+#define EL2NSYNC        RIN_EL2NSYNC  /* Level 2 not synchronized */
+#define EL3HLT          RIN_EL3HLT  /* Level 3 halted */
+#define EL3RST          RIN_EL3RST  /* Level 3 reset */
+#define ELNRNG          RIN_ELNRNG  /* Link number out of range */
+#define EUNATCH         RIN_EUNATCH  /* Protocol driver not attached */
+#define ENOCSI          RIN_ENOCSI  /* No CSI structure available */
+#define EL2HLT          RIN_EL2HLT  /* Level 2 halted */
+#define EBADE           RIN_EBADE  /* Invalid exchange */
+#define EBADR           RIN_EBADR  /* Invalid request descriptor */
+#define EXFULL          RIN_EXFULL  /* Exchange full */
+#define ENOANO          RIN_ENOANO  /* No anode */
+#define EBADRQC         RIN_EBADRQC  /* Invalid request code */
+#define EBADSLT         RIN_EBADSLT  /* Invalid slot */
 
-#define EDEADLOCK       EDEADLK
+#define EDEADLOCK       RIN_EDEADLOCK
 
 /* ストリーム/メッセージエラー */
-#define EBFONT          59  /* Bad font file format */
-#define ENOSTR          60  /* Device not a stream */
-#define ENODATA         61  /* No data available */
-#define ETIME           62  /* Timer expired */
-#define ENOSR           63  /* Out of streams resources */
-#define ENONET          64  /* Machine is not on the network */
-#define ENOPKG          65  /* Package not installed */
-#define EREMOTE         66  /* Object is remote */
-#define ENOLINK         67  /* Link has been severed */
-#define EADV            68  /* Advertise error */
-#define ESRMNT          69  /* Srmount error */
-#define ECOMM           70  /* Communication error on send */
-#define EPROTO          71  /* Protocol error */
-#define EMULTIHOP       74  /* Multihop attempted */
-#define EDOTDOT         76  /* RFS specific error */
-#define EBADMSG         77  /* Bad message */
-#define EOVERFLOW       78  /* Value too large for defined data type */
-#define ENOTUNIQ        80  /* Name not unique on network */
-#define EBADFD          81  /* File descriptor in bad state */
-#define EREMCHG         82  /* Remote address changed */
-#define ELIBACC         83  /* Can not access a needed shared library */
-#define ELIBBAD         84  /* Accessing a corrupted shared library */
-#define ELIBSCN         85  /* .lib section in a.out corrupted */
-#define ELIBMAX         86  /* Attempting to link in too many shared libraries */
-#define ELIBEXEC        87  /* Cannot exec a shared library directly */
-#define EILSEQ          88  /* Illegal byte sequence */
-#define ERESTART        89  /* Interrupted system call should be restarted */
-#define ESTRPIPE        90  /* Streams pipe error */
-#define EUSERS          91  /* Too many users */
+#define EBFONT          RIN_EBFONT  /* Bad font file format */
+#define ENOSTR          RIN_ENOSTR  /* Device not a stream */
+#define ENODATA         RIN_ENODATA  /* No data available */
+#define ETIME           RIN_ETIME  /* Timer expired */
+#define ENOSR           RIN_ENOSR  /* Out of streams resources */
+#define ENONET          RIN_ENONET  /* Machine is not on the network */
+#define ENOPKG          RIN_ENOPKG  /* Package not installed */
+#define EREMOTE         RIN_EREMOTE  /* Object is remote */
+#define ENOLINK         RIN_ENOLINK  /* Link has been severed */
+#define EADV            RIN_EADV  /* Advertise error */
+#define ESRMNT          RIN_ESRMNT  /* Srmount error */
+#define ECOMM           RIN_ECOMM  /* Communication error on send */
+#define EPROTO          RIN_EPROTO  /* Protocol error */
+#define EMULTIHOP       RIN_EMULTIHOP  /* Multihop attempted */
+#define EDOTDOT         RIN_EDOTDOT  /* RFS specific error */
+#define EBADMSG         RIN_EBADMSG  /* Bad message */
+#define EOVERFLOW       RIN_EOVERFLOW  /* Value too large for defined data type */
+#define ENOTUNIQ        RIN_ENOTUNIQ  /* Name not unique on network */
+#define EBADFD          RIN_EBADFD  /* File descriptor in bad state */
+#define EREMCHG         RIN_EREMCHG  /* Remote address changed */
+#define ELIBACC         RIN_ELIBACC  /* Can not access a needed shared library */
+#define ELIBBAD         RIN_ELIBBAD  /* Accessing a corrupted shared library */
+#define ELIBSCN         RIN_ELIBSCN  /* .lib section in a.out corrupted */
+#define ELIBMAX         RIN_ELIBMAX  /* Attempting to link in too many shared libraries */
+#define ELIBEXEC        RIN_ELIBEXEC  /* Cannot exec a shared library directly */
+#define EILSEQ          RIN_EILSEQ  /* Illegal byte sequence */
+#define ERESTART        RIN_ERESTART  /* Interrupted system call should be restarted */
+#define ESTRPIPE        RIN_ESTRPIPE  /* Streams pipe error */
+#define EUSERS          RIN_EUSERS  /* Too many users */
 
 /* ソケットエラー (200番台で衝突回避) */
-#define ENOTSOCK        200 /* Socket operation on non-socket */
-#define EDESTADDRREQ    201 /* Destination address required */
-#define EMSGSIZE        202 /* Message too long */
-#define EPROTOTYPE      203 /* Protocol wrong type for socket */
-#define ENOPROTOOPT     204 /* Protocol not available */
-#define EPROTONOSUPPORT 205 /* Protocol not supported */
-#define ESOCKTNOSUPPORT 206 /* Socket type not supported */
-#define EOPNOTSUPP      207 /* Operation not supported */
-#define EPFNOSUPPORT    208 /* Protocol family not supported */
-#define EAFNOSUPPORT    209 /* Address family not supported by protocol */
-#define EADDRINUSE      210 /* Address already in use */
-#define EADDRNOTAVAIL   211 /* Cannot assign requested address */
-#define ENETDOWN        212 /* Network is down */
-#define ENETUNREACH     213 /* Network is unreachable */
-#define ENETRESET       214 /* Network dropped connection on reset */
-#define ECONNABORTED    215 /* Software caused connection abort */
-#define ECONNRESET      216 /* Connection reset by peer */
-#define ENOBUFS         217 /* No buffer space available */
-#define EISCONN         218 /* Transport endpoint is already connected */
-#define ENOTCONN        219 /* Transport endpoint is not connected */
-#define ESHUTDOWN       220 /* Cannot send after transport endpoint shutdown */
-#define ETOOMANYREFS    221 /* Too many references: cannot splice */
-#define ETIMEDOUT       222 /* Connection timed out */
-#define ECONNREFUSED    223 /* Connection refused */
-#define EHOSTDOWN       224 /* Host is down */
-#define EHOSTUNREACH    225 /* No route to host */
-#define EALREADY        226 /* Operation already in progress */
-#define EINPROGRESS     227 /* Operation now in progress */
-#define ESTALE          116 /* Stale file handle */
-#define EUCLEAN         117 /* Structure needs cleaning */
-#define ENOTNAM         118 /* Not a XENIX named type file */
-#define ENAVAIL         119 /* No XENIX semaphores available */
-#define EISNAM          120 /* Is a named type file */
-#define EREMOTEIO       121 /* Remote I/O error */
-#define EDQUOT          122 /* Quota exceeded */
-#define ENOMEDIUM       123 /* No medium found */
-#define EMEDIUMTYPE     124 /* Wrong medium type */
-#define ECANCELED       125 /* Operation canceled */
-#define ENOKEY          126 /* Required key not available */
-#define EKEYEXPIRED     127 /* Key has expired */
-#define EKEYREVOKED     128 /* Key has been revoked */
-#define EKEYREJECTED    129 /* Key was rejected by service */
-#define EOWNERDEAD      130 /* Owner died */
-#define ENOTRECOVERABLE 131 /* State not recoverable */
+#define ENOTSOCK        RIN_ENOTSOCK /* Socket operation on non-socket */
+#define EDESTADDRREQ    RIN_EDESTADDRREQ /* Destination address required */
+#define EMSGSIZE        RIN_EMSGSIZE /* Message too long */
+#define EPROTOTYPE      RIN_EPROTOTYPE /* Protocol wrong type for socket */
+#define ENOPROTOOPT     RIN_ENOPROTOOPT /* Protocol not available */
+#define EPROTONOSUPPORT RIN_EPROTONOSUPPORT /* Protocol not supported */
+#define ESOCKTNOSUPPORT RIN_ESOCKTNOSUPPORT /* Socket type not supported */
+#define EOPNOTSUPP      RIN_EOPNOTSUPP /* Operation not supported */
+#define EPFNOSUPPORT    RIN_EPFNOSUPPORT /* Protocol family not supported */
+#define EAFNOSUPPORT    RIN_EAFNOSUPPORT /* Address family not supported by protocol */
+#define EADDRINUSE      RIN_EADDRINUSE /* Address already in use */
+#define EADDRNOTAVAIL   RIN_EADDRNOTAVAIL /* Cannot assign requested address */
+#define ENETDOWN        RIN_ENETDOWN /* Network is down */
+#define ENETUNREACH     RIN_ENETUNREACH /* Network is unreachable */
+#define ENETRESET       RIN_ENETRESET /* Network dropped connection on reset */
+#define ECONNABORTED    RIN_ECONNABORTED /* Software caused connection abort */
+#define ECONNRESET      RIN_ECONNRESET /* Connection reset by peer */
+#define ENOBUFS         RIN_ENOBUFS /* No buffer space available */
+#define EISCONN         RIN_EISCONN /* Transport endpoint is already connected */
+#define ENOTCONN        RIN_ENOTCONN /* Transport endpoint is not connected */
+#define ESHUTDOWN       RIN_ESHUTDOWN /* Cannot send after transport endpoint shutdown */
+#define ETOOMANYREFS    RIN_ETOOMANYREFS /* Too many references: cannot splice */
+#define ETIMEDOUT       RIN_ETIMEDOUT /* Connection timed out */
+#define ECONNREFUSED    RIN_ECONNREFUSED /* Connection refused */
+#define EHOSTDOWN       RIN_EHOSTDOWN /* Host is down */
+#define EHOSTUNREACH    RIN_EHOSTUNREACH /* No route to host */
+#define EALREADY        RIN_EALREADY /* Operation already in progress */
+#define EINPROGRESS     RIN_EINPROGRESS /* Operation now in progress */
+#define ESTALE          RIN_ESTALE /* Stale file handle */
+#define EUCLEAN         RIN_EUCLEAN /* Structure needs cleaning */
+#define ENOTNAM         RIN_ENOTNAM /* Not a XENIX named type file */
+#define ENAVAIL         RIN_ENAVAIL /* No XENIX semaphores available */
+#define EISNAM          RIN_EISNAM /* Is a named type file */
+#define EREMOTEIO       RIN_EREMOTEIO /* Remote I/O error */
+#define EDQUOT          RIN_EDQUOT /* Quota exceeded */
+#define ENOMEDIUM       RIN_ENOMEDIUM /* No medium found */
+#define EMEDIUMTYPE     RIN_EMEDIUMTYPE /* Wrong medium type */
+#define ECANCELED       RIN_ECANCELED /* Operation canceled */
+#define ENOKEY          RIN_ENOKEY /* Required key not available */
+#define EKEYEXPIRED     RIN_EKEYEXPIRED /* Key has expired */
+#define EKEYREVOKED     RIN_EKEYREVOKED /* Key has been revoked */
+#define EKEYREJECTED    RIN_EKEYREJECTED /* Key was rejected by service */
+#define EOWNERDEAD      RIN_EOWNERDEAD /* Owner died */
+#define ENOTRECOVERABLE RIN_ENOTRECOVERABLE /* State not recoverable */
 
 /* POSIX.1-2001互換。Hosted C runtime が既に独自の値を所有する場合は
  * それを再定義せず、RinOS native build だけで POSIX alias を公開する。 */
 #ifndef ENOTSUP
-#define ENOTSUP         EOPNOTSUPP
+#define ENOTSUP         RIN_ENOTSUP
 #endif
 
 /* strerror is defined in string.h */
