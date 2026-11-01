@@ -79,7 +79,7 @@ extern "C" {
 #define PR_GET_CHILD_SUBREAPER 37
 #define PR_SET_NO_NEW_PRIVS 38  /* Set no_new_privs flag */
 #define PR_GET_NO_NEW_PRIVS 39  /* Get no_new_privs flag */
-#define PR_GET_TID_ADDRESS  40  /* Get clear_child_tid address */
+#define PR_GET_TID_ADDRESS  40  /* Get clear_child_tid address via uint32_t ** */
 #define PR_SET_THP_DISABLE  41  /* Disable transparent huge pages */
 #define PR_GET_THP_DISABLE  42  /* Get THP disable status */
 #define PR_MPX_ENABLE_MANAGEMENT    43
@@ -282,6 +282,7 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_DUMPABLE || option == PR_GET_DUMPABLE ||
         option == PR_SET_VMA ||
         option == PR_SET_PTRACER ||
+        option == PR_GET_TID_ADDRESS ||
         option == PR_GET_KEEPCAPS || option == PR_SET_KEEPCAPS ||
         option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP ||
         option == PR_GET_SECUREBITS || option == PR_SET_SECUREBITS ||
@@ -315,6 +316,7 @@ static inline int prctl(int option, ...) {
     uintptr_t arg5 = 0;
     if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
         option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE ||
+        option == PR_GET_TID_ADDRESS ||
         option == PR_SET_NAME || option == PR_GET_NAME ||
         option == PR_SET_VMA ||
         option == PR_SET_PTRACER ||
@@ -328,7 +330,9 @@ static inline int prctl(int option, ...) {
         option == PR_SET_SPECULATION_CTRL) {
         __builtin_va_list args;
         __builtin_va_start(args, option);
-        if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
+        if (option == PR_GET_TID_ADDRESS) {
+            arg2 = (uintptr_t)__builtin_va_arg(args, uint32_t **);
+        } else if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
             option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE) {
             arg2 = (uintptr_t)__builtin_va_arg(args, int*);
         } else if (option == PR_SET_NAME) {
