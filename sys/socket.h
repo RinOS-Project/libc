@@ -369,6 +369,11 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define SO_REUSEPORT    15  /* ポート再利用 */
 #define SO_RXQ_OVFL     40  /* UDP receive queue drop count in SCM_RXQ_OVFL */
 #define SO_ZEROCOPY     60  /* 完了通知はMSG_ERRQUEUEから取得 */
+#define SO_TXTIME       61  /* UDP sendmsgのSCM_TXTIME送信期限 */
+#define SOF_TXTIME_DEADLINE_MODE 0x1u
+#define SOF_TXTIME_REPORT_ERRORS 0x2u
+#define SOF_TXTIME_FLAGS_MASK \
+    (SOF_TXTIME_DEADLINE_MODE | SOF_TXTIME_REPORT_ERRORS)
 #define SO_PASSCRED     16  /* UNIX socketで送信者資格情報を受信 */
 #define SO_PEERCRED     17  /* UNIX socketの接続時peer資格情報 */
 #define SO_NONBLOCK               0x5003 /* kernel socket nonblocking */
@@ -394,6 +399,10 @@ static inline uint32_t ntohl(uint32_t netlong) {
  * - SO_ZEROCOPYはIPv4/IPv6 TCPのみ。MSG_ZEROCOPY送信はuser pageをcopy完了までpinし、
  *   copied completionをMSG_ERRQUEUEで返す。error queueはnonblockingで、保留中はPOLLERR。
  *   TCP_NODELAY/TCP_MAXSEG/TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNTもTCPのみ。
+ * - SO_TXTIMEはIPv4/IPv6 UDPのみ。sock_txtimeはCLOCK_MONOTONICを使い、
+ *   SCM_TXTIMEのuint64_t nanosecond値をbounded egress queueで処理する。
+ *   REPORT_ERRORS時のmissed/invalid通知はMSG_ERRQUEUEのIP_RECVERR/
+ *   IPV6_RECVERRとPOLLERRで取得する。
  * - SO_DEBUG/SO_DONTROUTEは未対応で、setsockopt/getsockoptはENOPROTOOPTを返す。
  * set値はintをちょうど1個、取得bufferは少なくともint 1個を渡す。
  */
@@ -486,6 +495,15 @@ struct cmsghdr {
 #define SCM_RIGHTS 0x01
 #define SCM_CREDENTIALS 0x02
 #define SCM_RXQ_OVFL SO_RXQ_OVFL
+#define SCM_TXTIME SO_TXTIME
+
+struct sock_txtime {
+    int clockid;
+    uint32_t flags;
+};
+
+#define IP_RECVERR 11
+#define IPV6_RECVERR 25
 
 struct ucred {
     pid_t pid;
