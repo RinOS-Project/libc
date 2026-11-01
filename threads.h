@@ -26,6 +26,13 @@ extern "C" {
 #define thrd_error 2
 #define thrd_nomem 3
 #define thrd_timedout 4
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+/* C23's mtx_timedlock wording uses thrd_timeout while its identifier list
+ * retains the C11 name thrd_timedout. Keep both spellings equivalent. */
+#ifndef thrd_timeout
+#define thrd_timeout thrd_timedout
+#endif
+#endif
 
 #define mtx_plain 1
 #define mtx_timed 2
