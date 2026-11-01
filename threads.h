@@ -211,7 +211,7 @@ static inline int tss_create(tss_t* key, tss_dtor_t destructor)
     if (!key) return thrd_error;
     error = pthread_key_create(key, destructor);
     if (error == 0) return thrd_success;
-    return error == ENOMEM ? thrd_nomem : thrd_error;
+    return thrd_error;
 }
 
 static inline void tss_delete(tss_t key)
