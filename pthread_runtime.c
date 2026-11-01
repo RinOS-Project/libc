@@ -2363,11 +2363,23 @@ int pthread_spin_unlock(pthread_spinlock_t* lock)
 int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset)
 {
     intptr_t result;
+    sigset_t set_snapshot = 0u;
+    const sigset_t* effective_set = set;
     int saved_errno = errno;
-    if (set && how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK)
+    if (set && how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK) {
+        errno = saved_errno;
         return EINVAL;
+    }
+    if (set) {
+        if (__rin_signal_mask_snapshot(set, &set_snapshot) != 0) {
+            const int error = errno != 0 ? errno : EFAULT;
+            errno = saved_errno;
+            return error;
+        }
+        effective_set = &set_snapshot;
+    }
     result = _RIN_PTHREAD_SIGMASK_SYSCALL4(
-        SYS_rt_sigprocmask, how, set, oldset, sizeof(sigset_t));
+        SYS_rt_sigprocmask, how, effective_set, oldset, sizeof(sigset_t));
     int error = _rin_pthread_error_from_result(result);
     errno = saved_errno;
     return error;
@@ -2378,7 +2390,8 @@ int pthread_kill(pthread_t thread, int sig)
     intptr_t result;
     intptr_t process_id;
     int saved_errno = errno;
-    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL) return EINVAL;
+    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL ||
+        __rin_signal_is_private_timer_wake(sig)) return EINVAL;
     process_id = _RIN_PTHREAD_SYSCALL0(SYS_GETPID);
     if (process_id <= 0) {
         int error = _rin_pthread_error_from_result(process_id);

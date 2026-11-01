@@ -118,11 +118,35 @@ struct timespec;
 #define SIGSYS      31  /* 不正システムコール */
 
 #define SIGRTMIN    32
-#define SIGRTMAX    62
+#define SIGRTMAX    61
 #ifndef NSIG
-#define NSIG        64  /* 63 is reserved by RinOS for pthread cancellation */
+#define NSIG        64  /* 62 is internal; 63 is reserved for cancellation. */
 #endif
 #define __RIN_SIGCANCEL 63
+
+static inline int __rin_signal_is_private_timer_wake(int signum) {
+#if defined(RIN_TIMER_THREAD_RUNTIME)
+    (void)signum;
+    return 0;
+#else
+    return signum == (int)RIN_TIMER_THREAD_SIGNAL;
+#endif
+}
+
+static inline int __rin_signal_mask_snapshot(const sigset_t* source,
+                                              sigset_t* snapshot) {
+    if (source == NULL || snapshot == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (__rin_user_snapshot(source, sizeof(*snapshot), 0, snapshot) != 0)
+        return -1;
+    if ((*snapshot & (UINT64_C(1) << RIN_TIMER_THREAD_SIGNAL)) != 0u) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
 
 /* ═══════════════════════════════════════════════════════════════
  * シグナルハンドラ定数
@@ -416,13 +440,15 @@ static inline int sigfillset(sigset_t* set) {
         return -1;
     }
     *set = UINT64_MAX &
-           ~((UINT64_C(1) << 0u) | (UINT64_C(1) << __RIN_SIGCANCEL));
+           ~((UINT64_C(1) << 0u) | (UINT64_C(1) << __RIN_SIGCANCEL) |
+             (UINT64_C(1) << RIN_TIMER_THREAD_SIGNAL));
     return 0;
 }
 
 static inline int sigaddset(sigset_t* set, int signum) {
     if (!set || signum < 1 || signum >= NSIG ||
-        signum == __RIN_SIGCANCEL) {
+        signum == __RIN_SIGCANCEL ||
+        __rin_signal_is_private_timer_wake(signum)) {
         errno = EINVAL;
         return -1;
     }
@@ -432,7 +458,8 @@ static inline int sigaddset(sigset_t* set, int signum) {
 
 static inline int sigdelset(sigset_t* set, int signum) {
     if (!set || signum < 1 || signum >= NSIG ||
-        signum == __RIN_SIGCANCEL) {
+        signum == __RIN_SIGCANCEL ||
+        __rin_signal_is_private_timer_wake(signum)) {
         errno = EINVAL;
         return -1;
     }
@@ -442,7 +469,8 @@ static inline int sigdelset(sigset_t* set, int signum) {
 
 static inline int sigismember(const sigset_t* set, int signum) {
     if (!set || signum < 1 || signum >= NSIG ||
-        signum == __RIN_SIGCANCEL) {
+        signum == __RIN_SIGCANCEL ||
+        __rin_signal_is_private_timer_wake(signum)) {
         errno = EINVAL;
         return -1;
     }
@@ -487,6 +515,7 @@ static inline sighandler_t signal(int signum, sighandler_t handler) {
     intptr_t result;
     struct sigaction oldact;
     if (signum < 1 || signum >= NSIG || signum == __RIN_SIGCANCEL ||
+        __rin_signal_is_private_timer_wake(signum) ||
         signum == SIGKILL || signum == SIGSTOP) {
         errno = EINVAL;
         return SIG_ERR;
@@ -516,6 +545,7 @@ static inline sighandler_t signal(int signum, sighandler_t handler) {
 static inline int sigaction(int signum, const struct sigaction* act,
                             struct sigaction* oldact) {
     if (signum < 1 || signum >= NSIG || signum == __RIN_SIGCANCEL ||
+        __rin_signal_is_private_timer_wake(signum) ||
         signum == SIGKILL || signum == SIGSTOP) {
         errno = EINVAL;
         return -1;
@@ -541,7 +571,8 @@ static inline int sigaction(int signum, const struct sigaction* act,
 }
 
 static inline int kill(int pid, int sig) {
-    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL) {
+    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL ||
+        __rin_signal_is_private_timer_wake(sig)) {
         errno = EINVAL;
         return -1;
     }
@@ -567,6 +598,7 @@ static inline int sigqueue(int pid, int signum, union sigval value) {
     unsigned char* bytes = (unsigned char*)&information;
     if (pid <= 0 || signum < 0 || signum >= NSIG ||
         signum == __RIN_SIGCANCEL ||
+        __rin_signal_is_private_timer_wake(signum) ||
         signum == SIGKILL || signum == SIGSTOP) {
         errno = EINVAL;
         return -1;
@@ -585,7 +617,8 @@ static inline int sigqueue(int pid, int signum, union sigval value) {
 static inline int raise(int sig) {
     intptr_t tid;
     intptr_t result;
-    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL) {
+    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL ||
+        __rin_signal_is_private_timer_wake(sig)) {
         errno = EINVAL;
         return -1;
     }
@@ -597,12 +630,18 @@ static inline int raise(int sig) {
 #endif /* !_INC_SIGNAL */
 
 static inline int sigprocmask(int how, const sigset_t* set, sigset_t* oldset) {
+    sigset_t set_snapshot = 0u;
+    const sigset_t* effective_set = set;
     if (set && how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK) {
         errno = EINVAL;
         return -1;
     }
+    if (set) {
+        if (__rin_signal_mask_snapshot(set, &set_snapshot) != 0) return -1;
+        effective_set = &set_snapshot;
+    }
     return __rin_signal_status_result(_RIN_SIGNAL_SYSCALL4(
-        SYS_rt_sigprocmask, how, set, oldset, sizeof(sigset_t)));
+        SYS_rt_sigprocmask, how, effective_set, oldset, sizeof(sigset_t)));
 }
 
 static inline int sigpending(sigset_t* set) {
@@ -615,13 +654,15 @@ static inline int sigpending(sigset_t* set) {
 }
 
 static inline int sigsuspend(const sigset_t* mask) {
+    sigset_t mask_snapshot;
     intptr_t result;
     if (!mask) {
         errno = EFAULT;
         return -1;
     }
+    if (__rin_signal_mask_snapshot(mask, &mask_snapshot) != 0) return -1;
     __rin_pthread_cancel_point_if_linked();
-    result = _RIN_SIGNAL_SYSCALL2(SYS_rt_sigsuspend, mask,
+    result = _RIN_SIGNAL_SYSCALL2(SYS_rt_sigsuspend, &mask_snapshot,
                                    sizeof(sigset_t));
     __rin_pthread_cancel_point_if_linked();
     if (result == 0) {
@@ -635,8 +676,11 @@ static inline int sigsuspend(const sigset_t* mask) {
 static inline int sigwait(const sigset_t* set, int* signal_number_out) {
     intptr_t result;
     RinSignalWaitRequestV1 request;
+    sigset_t set_snapshot;
     if (!set) return EINVAL;
     if (!signal_number_out) return EFAULT;
+    if (__rin_signal_mask_snapshot(set, &set_snapshot) != 0)
+        return errno != 0 ? errno : EFAULT;
     request.struct_size = (uint32_t)sizeof(request);
     request.version = RIN_CONTRACT_STRUCT_VERSION_1;
     request.reserved = 0u;
@@ -644,7 +688,7 @@ static inline int sigwait(const sigset_t* set, int* signal_number_out) {
     __rin_pthread_cancel_point_if_linked();
     do {
         result = _RIN_SIGNAL_SYSCALL4(
-            SYS_RT_SIGTIMEDWAIT_RESULT_V1, set, &request, 0,
+            SYS_RT_SIGTIMEDWAIT_RESULT_V1, &set_snapshot, &request, 0,
             sizeof(sigset_t));
         __rin_pthread_cancel_point_if_linked();
     } while (result == -(intptr_t)EINTR);
@@ -660,13 +704,16 @@ static inline int sigwait(const sigset_t* set, int* signal_number_out) {
 static inline int sigwaitinfo(const sigset_t* set,
                               siginfo_t* information_out) {
     intptr_t result;
+    sigset_t set_snapshot;
     if (!set) {
         errno = EFAULT;
         return -1;
     }
+    if (__rin_signal_mask_snapshot(set, &set_snapshot) != 0) return -1;
     __rin_pthread_cancel_point_if_linked();
     result = _RIN_SIGNAL_SYSCALL4(
-        SYS_rt_sigtimedwait, set, information_out, 0, sizeof(sigset_t));
+        SYS_rt_sigtimedwait, &set_snapshot, information_out, 0,
+        sizeof(sigset_t));
     __rin_pthread_cancel_point_if_linked();
     if (result < 0) {
         (void)__rin_signal_status_result(result);
@@ -683,13 +730,15 @@ static inline int sigtimedwait(const sigset_t* set,
                                siginfo_t* information_out,
                                const struct timespec* timeout) {
     intptr_t result;
+    sigset_t set_snapshot;
     if (!set || !timeout) {
         errno = EFAULT;
         return -1;
     }
+    if (__rin_signal_mask_snapshot(set, &set_snapshot) != 0) return -1;
     __rin_pthread_cancel_point_if_linked();
     result = _RIN_SIGNAL_SYSCALL4(
-        SYS_rt_sigtimedwait, set, information_out, timeout,
+        SYS_rt_sigtimedwait, &set_snapshot, information_out, timeout,
         sizeof(sigset_t));
     __rin_pthread_cancel_point_if_linked();
     if (result < 0) {
@@ -706,7 +755,8 @@ static inline int sigtimedwait(const sigset_t* set,
 /* pthread_kill: スレッドにシグナル送信 */
 static inline int pthread_kill_sig(uintptr_t tid, int sig) {
     intptr_t result;
-    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL) return EINVAL;
+    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL ||
+        __rin_signal_is_private_timer_wake(sig)) return EINVAL;
     result = _RIN_SIGNAL_SYSCALL2(SYS_TKILL, tid, sig);
     if (result < 0 && result >= -4095) return (int)-result;
     return result == 0 ? 0 : EIO;

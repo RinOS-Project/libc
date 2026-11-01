@@ -285,7 +285,7 @@ struct itimerspec {
 #define SIGEV_THREAD 2
 #endif
 #ifndef RIN_TIMER_THREAD_SIGNAL
-#define RIN_TIMER_THREAD_SIGNAL 31
+#define RIN_TIMER_THREAD_SIGNAL 62
 #endif
 #ifndef _SIGVAL_DEFINED
 #define _SIGVAL_DEFINED
@@ -1303,7 +1303,8 @@ static inline int timer_create(clockid_t clock_id,
                 errno = EINVAL;
                 return -1;
             }
-            signo = RIN_TIMER_THREAD_SIGNAL;
+            /* The kernel chooses its private wake signal for SIGEV_THREAD. */
+            signo = 0;
         } else {
             signo = 0;
         }

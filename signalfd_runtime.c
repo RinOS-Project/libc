@@ -8,6 +8,7 @@
 int signalfd4(int fd, const sigset_t* mask, int sizemask, int flags)
 {
     intptr_t result;
+    sigset_t mask_snapshot;
     if (mask == NULL) {
         errno = EFAULT;
         return -1;
@@ -16,8 +17,10 @@ int signalfd4(int fd, const sigset_t* mask, int sizemask, int flags)
         errno = EINVAL;
         return -1;
     }
+    if (__rin_signal_mask_snapshot(mask, &mask_snapshot) != 0) return -1;
     result = __rin_syscall_posixize(_syscall4(
-        SYS_SIGNALFD4, (uintptr_t)(unsigned int)fd, (uintptr_t)mask,
+        SYS_SIGNALFD4, (uintptr_t)(unsigned int)fd,
+        (uintptr_t)&mask_snapshot,
         (uintptr_t)(unsigned int)sizemask,
         (uintptr_t)(unsigned int)flags));
     if (result < 0) return -1;
