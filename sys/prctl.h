@@ -123,6 +123,7 @@ extern "C" {
 /* The process disable mode is exposed even while the kernel has no automatic
  * transparent-huge-page collapse path. */
 #define RIN_PRCTL_THP_DISABLE_CONTROL_SUPPORTED 1
+#define RIN_PRCTL_TIMING_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_SET_MM_SCALAR_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_SET_MM_MAP_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_SET_MM_AUXV_CONTROL_SUPPORTED 1
@@ -331,6 +332,7 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
     if (option == PR_SET_NAME) return _rin_prctl_set_name(arg2);
     if (option == PR_GET_NAME) return _rin_prctl_get_name(arg2);
     if (option == PR_GET_ENDIAN || option == PR_SET_ENDIAN ||
+        option == PR_GET_TIMING || option == PR_SET_TIMING ||
         option == PR_SET_NO_NEW_PRIVS ||
         option == PR_GET_NO_NEW_PRIVS ||
         option == PR_SET_SECCOMP || option == PR_GET_SECCOMP ||
@@ -387,7 +389,7 @@ static inline int prctl(int option, ...) {
         option == PR_SET_NAME || option == PR_GET_NAME ||
         option == PR_SET_VMA ||
         option == PR_SET_PTRACER ||
-        option == PR_SET_TIMERSLACK ||
+        option == PR_SET_TIMERSLACK || option == PR_SET_TIMING ||
         option == PR_SET_TSC || option == PR_SET_PDEATHSIG ||
         option == PR_SET_DUMPABLE || option == PR_SET_NO_NEW_PRIVS ||
         option == PR_SET_SYSCALL_USER_DISPATCH ||
@@ -437,6 +439,8 @@ static inline int prctl(int option, ...) {
         } else if (option == PR_CAP_AMBIENT) {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
             arg3 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+        } else if (option == PR_SET_TIMING) {
+            arg2 = (uintptr_t)__builtin_va_arg(args, long);
         } else if (option == PR_SET_TIMERSLACK) {
             arg2 = (uintptr_t)__builtin_va_arg(args, unsigned long);
         } else if (option == PR_GET_SPECULATION_CTRL ||
