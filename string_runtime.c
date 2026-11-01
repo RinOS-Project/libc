@@ -10,6 +10,20 @@
 #include "stdlib.h"
 #include "../libunicode/rin_unicode.h"
 
+void* memccpy(void* destination, const void* source, int stop_byte,
+              size_t size) {
+    unsigned char* output = (unsigned char*)destination;
+    const unsigned char* input = (const unsigned char*)source;
+    const unsigned char stop = (unsigned char)stop_byte;
+    while (size != 0u) {
+        unsigned char value = *input++;
+        *output++ = value;
+        --size;
+        if (value == stop) return output;
+    }
+    return NULL;
+}
+
 void* memset_explicit(void* memory, int value, size_t size) {
     volatile unsigned char* output = (volatile unsigned char*)memory;
     const unsigned char byte = (unsigned char)value;
