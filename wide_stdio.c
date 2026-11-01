@@ -7,6 +7,7 @@
 #include "stdlib.h"
 #endif
 #include "stdio_scanf_float_impl.h"
+#include "float.h"
 #include "limits.h"
 
 #define RIN_WPRINTF_FORMAT_LIMIT 4096u
@@ -687,18 +688,16 @@ static unsigned int rin_wprintf_binary80_nibble(uint64_t fraction,
     return (unsigned int)((fraction >> (59u - index * 4u)) & 0xfu);
 }
 
-/* The product x86 targets expose long double as little-endian x87 binary80
- * in a padded object.  Keep the byte-level ABI check here: unsupported
- * binary128/double-double or malformed unnormal values must remain explicit
- * failures rather than being silently narrowed to binary64. */
+/* Binary80 ABIs use little-endian x87 in a padded object.  Keep the byte-level
+ * ABI check here: unsupported binary128/double-double or malformed unnormal
+ * values must remain explicit failures rather than being silently narrowed. */
 static int rin_wprintf_hex_long_double_formatted(
     RinWprintfEmit emit, void* context, long double value, int uppercase,
     unsigned int width, int left, int zero, int plus, int space,
     int alternate, unsigned int precision, int precision_set) {
-#if defined(__LDBL_MANT_DIG__) && defined(__DBL_MANT_DIG__) && \
-    defined(__LDBL_MAX_EXP__) && defined(__DBL_MAX_EXP__) && \
-    __LDBL_MANT_DIG__ == __DBL_MANT_DIG__ && \
-    __LDBL_MAX_EXP__ == __DBL_MAX_EXP__
+#if defined(LDBL_MANT_DIG) && defined(DBL_MANT_DIG) && \
+    defined(LDBL_MAX_EXP) && defined(DBL_MAX_EXP) && \
+    LDBL_MANT_DIG == DBL_MANT_DIG && LDBL_MAX_EXP == DBL_MAX_EXP
     /* RinOS long double uses the same binary64 representation and calling
      * convention as double.  Reuse the binary64 formatter instead of
      * interpreting its 8-byte value as an x87 binary80 object. */
