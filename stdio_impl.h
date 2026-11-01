@@ -3823,13 +3823,7 @@ static inline int _rin_stdio_format_wide_string(
         const wchar_t* cursor;
         for (cursor = wide; *cursor != L'\0'; ++cursor) {
             char encoded[MB_LEN_MAX];
-            size_t encoded_length;
-            /* Exhausted precision stops the scan: the next wide
-             * character must not even be attempted (glibc %.1S of
-             * "A<bad>" yields "[A]", not EILSEQ). */
-            if (precision >= 0 && length >= (size_t)precision)
-                break;
-            encoded_length = wcrtomb(
+            size_t encoded_length = wcrtomb(
                 encoded, *cursor, &measure_state);
             if (encoded_length == (size_t)-1) return -1;
             if (precision >= 0 &&
@@ -5168,19 +5162,8 @@ _RIN_STDIO_API char* ctermid(char* s) {
     return s;
 }
 
-#if defined(RIN_ENABLE_UNSAFE_LEGACY_STDIO)
-/* Unsafe legacy APIs are available only when explicitly enabled in both the
- * consumer and runtime build. The public declarations carry deprecation. */
-#if defined(__GNUC__) || defined(__clang__)
-#define _RIN_STDIO_UNSAFE_LEGACY_API \
-    __attribute__((deprecated("unsafe legacy stdio API; use fgets/tmpfile/mkstemp")))
-#elif defined(_MSC_VER)
-#define _RIN_STDIO_UNSAFE_LEGACY_API \
-    __declspec(deprecated("unsafe legacy stdio API; use fgets/tmpfile/mkstemp"))
-#else
-#define _RIN_STDIO_UNSAFE_LEGACY_API
-#endif
-_RIN_STDIO_API _RIN_STDIO_UNSAFE_LEGACY_API char* gets(char* s) {
+/* gets - 標準入力から1行読む (POSIX.1-2008ではobsolescentだが必須) */
+_RIN_STDIO_API char* gets(char* s) {
     char* p = s;
     int c;
     if (!s) {
@@ -5199,7 +5182,6 @@ _RIN_STDIO_API _RIN_STDIO_UNSAFE_LEGACY_API char* gets(char* s) {
     *p = '\0';
     return s;
 }
-#endif
 
 static inline int _rin_stdio_vdprintf_write(int fd, const char* data,
                                             size_t length) {
@@ -5300,9 +5282,8 @@ _RIN_STDIO_API FILE* tmpfile(void) {
     return stream;
 }
 
-#if defined(RIN_ENABLE_UNSAFE_LEGACY_STDIO)
-/* tmpnam returns an unreserved path and is unsafe for file creation. */
-_RIN_STDIO_API _RIN_STDIO_UNSAFE_LEGACY_API char* tmpnam(char* s) {
+/* tmpnam - 一時ファイル名を生成 */
+_RIN_STDIO_API char* tmpnam(char* s) {
 #if defined(__cplusplus)
     static thread_local char fallback[L_tmpnam];
 #else
@@ -5385,8 +5366,6 @@ _RIN_STDIO_API _RIN_STDIO_UNSAFE_LEGACY_API char* tmpnam(char* s) {
         destination[index] = generated[index];
     return destination;
 }
-#undef _RIN_STDIO_UNSAFE_LEGACY_API
-#endif
 
 #endif /* !MIDL_PASS */
 

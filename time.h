@@ -1268,6 +1268,7 @@ static inline int timer_create(clockid_t clock_id,
         (void (*)(union sigval))0;
     union sigval thread_value;
     void* thread_attributes = (void*)0;
+    timer_t created_id = 0;
     intptr_t result;
     int notify = SIGEV_SIGNAL;
     int signo = SIGALRM;
@@ -1338,21 +1339,22 @@ static inline int timer_create(clockid_t clock_id,
         errno = EOVERFLOW;
         return -1;
     }
-    *timer_id = (timer_t)result;
+    created_id = (timer_t)result;
 #if defined(RIN_USERSPACE)
     if (notify == SIGEV_THREAD) {
         int registration_error = rin_timer_thread_register
-            ? rin_timer_thread_register(*timer_id, thread_function,
+            ? rin_timer_thread_register(created_id, thread_function,
                                         thread_value, thread_attributes)
             : EAGAIN;
         if (registration_error != 0) {
-            (void)_RIN_TIME_TIMER_DELETE(*timer_id);
+            (void)_RIN_TIME_TIMER_DELETE(created_id);
             errno = registration_error > 0 && registration_error <= INT_MAX
                 ? registration_error : EAGAIN;
             return -1;
         }
     }
 #endif
+    *timer_id = created_id;
     return 0;
 #else
     (void)result;
