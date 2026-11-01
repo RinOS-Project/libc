@@ -607,7 +607,8 @@ static inline int __rin_dl_inventory_fetch(unsigned long index,
         record->launch_generation != 0u &&
         record->name_length == 0u && record->load_address == 0u &&
         record->mapped_size == 0u && record->record_index == 0u &&
-        record->add_count == 0u && record->sub_count == 0u &&
+        record->add_count >= record->sub_count &&
+        record->add_count - record->sub_count == 0u &&
         record->program_headers == 0u &&
         record->program_header_count == 0u && record->tls_data == 0u &&
         record->tls_module_id == 0u) {
@@ -622,7 +623,8 @@ static inline int __rin_dl_inventory_fetch(unsigned long index,
              ? record->record_count > RIN_DLINVENTORY_V1_MAX_LAUNCH_RECORDS
              : record->record_count > RIN_DLINVENTORY_V1_MAX_RECORDS) ||
         record->record_index != index || record->launch_generation == 0u ||
-        record->add_count != record->record_count || record->sub_count != 0u ||
+        record->add_count < record->sub_count ||
+        record->add_count - record->sub_count != record->record_count ||
         record->name_length == 0u ||
         record->name_length >= RIN_DLINVENTORY_V1_NAME_CAPACITY ||
         record->name[record->name_length] != '\0' ||
