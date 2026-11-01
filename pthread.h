@@ -408,7 +408,8 @@ extern int pthread_attr_setscope(pthread_attr_t* attr, int scope);
 #else
 _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_setscope(pthread_attr_t* attr, int scope) {
     if (!attr) return EINVAL;
-    if (scope != PTHREAD_SCOPE_SYSTEM) return ENOTSUP;
+    if (scope == PTHREAD_SCOPE_PROCESS) return ENOTSUP;
+    if (scope != PTHREAD_SCOPE_SYSTEM) return EINVAL;
     attr->scope = scope;
     return 0;
 }
