@@ -3,11 +3,19 @@
  * System parameters and configuration
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64)
+#include_next <sys/param.h>
+#else
 #ifndef _SYS_PARAM_H
 #define _SYS_PARAM_H
 
 #include "types.h"
 #include "../limits.h"
+#include "../internal/posix_clock.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -266,7 +274,7 @@ extern "C" {
 #endif
 
 #ifndef CLK_TCK
-#define CLK_TCK         HZ
+#define CLK_TCK         RIN_POSIX_CLK_TCK
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -302,3 +310,4 @@ extern "C" {
 #endif
 
 #endif /* _SYS_PARAM_H */
+#endif /* hosted Linux delegates to native provider */

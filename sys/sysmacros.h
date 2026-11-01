@@ -6,6 +6,13 @@
  * (dev_t) which combine major and minor device numbers.
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64)
+#include_next <sys/sysmacros.h>
+#else
 #ifndef _SYS_SYSMACROS_H
 #define _SYS_SYSMACROS_H
 
@@ -92,3 +99,4 @@ static inline dev_t gnu_dev_makedev(unsigned int maj, unsigned int min) {
 #endif
 
 #endif /* _SYS_SYSMACROS_H */
+#endif /* hosted Linux delegates to native provider */
