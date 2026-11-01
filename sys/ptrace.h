@@ -1,5 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 /* RinOS ptrace interface used by seccomp TRACE filters. */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64)
+#include_next <sys/ptrace.h>
+#else
 #ifndef _SYS_PTRACE_H
 #define _SYS_PTRACE_H
 
@@ -63,3 +70,4 @@ static inline long ptrace(int request, pid_t pid, void* address, void* data) {
 #endif
 
 #endif /* _SYS_PTRACE_H */
+#endif /* hosted Linux delegates to native provider */

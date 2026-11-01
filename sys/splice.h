@@ -1,5 +1,14 @@
 /* SPDX-License-Identifier: MIT */
 /* RinOS libc splice-family wrappers. */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64) && \
+    !defined(RIN_UNISTD_CUSTOM_SYSCALL_HOOK) && \
+    !defined(_RIN_UNISTD_SYSCALL1)
+#include <fcntl.h>
+#else
 #ifndef _SYS_SPLICE_H
 #define _SYS_SPLICE_H
 
@@ -103,3 +112,4 @@ static inline ssize_t copy_file_range(int fd_in, off_t* off_in,
 #endif /* !MIDL_PASS */
 
 #endif /* _SYS_SPLICE_H */
+#endif /* hosted Linux uses splice declarations from native fcntl.h */
