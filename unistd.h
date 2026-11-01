@@ -4,8 +4,32 @@
  * POSIX標準定義
  */
 
-#ifndef _UNISTD_H
-#define _UNISTD_H
+/* A caller-provided syscall adapter explicitly selects Rin's unistd
+ * frontend, including in a hosted fixture.  Detect all unistd-local hooks
+ * before deciding whether a hosted POSIX build should use the host header. */
+#if !defined(RIN_UNISTD_CUSTOM_SYSCALL_HOOK) && \
+    (defined(_RIN_UNISTD_SYSCALL0) || defined(_RIN_UNISTD_SYSCALL1) || \
+     defined(_RIN_UNISTD_SYSCALL2) || defined(_RIN_UNISTD_SYSCALL3) || \
+     defined(_RIN_UNISTD_SYSCALL5) || defined(_RIN_CREDENTIAL_SYSCALL1) || \
+     defined(_RIN_UNISTD_SLEEP) || defined(_RIN_UNISTD_EXEC_SYSCALL3) || \
+     defined(_RIN_UNISTD_EXECVE) || defined(_RIN_UNISTD_POSITIONAL_IO_MAX) || \
+     defined(_RIN_WAIT_SYSCALL3))
+#define RIN_UNISTD_CUSTOM_SYSCALL_HOOK 1
+#endif
+
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__linux__) || defined(__APPLE__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64) && \
+    !defined(RINSDK_SPLIT_BUILD) && !defined(RIN_TIME_ABI64) && \
+    !defined(RIN_UNISTD_CUSTOM_SYSCALL_HOOK)
+#include_next <unistd.h>
+#else
+
+#ifndef _RINOS_LIBC_UNISTD_H
+#define _RINOS_LIBC_UNISTD_H
 
 #include "stddef.h"
 #include "stdint.h"
@@ -47,15 +71,6 @@
 #error "ARG_MAX must match the public exec argument/environment byte limit"
 #endif
 #include <rin/process/memory_abi.h>
-
-/* Preserve caller-provided syscall hooks before installing defaults.  A
- * hosted unit that supplies a hook is intentionally asking for the Rin
- * frontend even when the compiler reports a hosted environment. */
-#if defined(_RIN_UNISTD_SYSCALL0) || defined(_RIN_UNISTD_SYSCALL1) || \
-    defined(_RIN_UNISTD_SYSCALL2) || defined(_RIN_UNISTD_SYSCALL3) || \
-    defined(_RIN_UNISTD_SYSCALL5)
-#define RIN_UNISTD_CUSTOM_SYSCALL_HOOK 1
-#endif
 
 #ifndef _RIN_UNISTD_SYSCALL0
 #define _RIN_UNISTD_SYSCALL0(number) \
@@ -3196,4 +3211,5 @@ __attribute__((unused, noinline)) static void* sbrk(long increment) {
 
 #undef RIN_UNISTD_TARGET_PROCESS_FRONTEND
 
-#endif /* _UNISTD_H */
+#endif /* _RINOS_LIBC_UNISTD_H */
+#endif /* hosted POSIX uses the native unistd owner */
