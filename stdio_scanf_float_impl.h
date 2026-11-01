@@ -119,11 +119,22 @@ static inline int rin_sscanf_parse_float(
         if (is_hex_prefix && !head_digit && !point_digit) {
             /* A width cut right after the x cannot see past it: fall
              * back to decimal (glibc consumes through the 0 and pushes
-             * x back; the engine below does exactly that). A true end
-             * or a visible non-digit past x is matching failure. */
+             * x back; the engine below does exactly that). B46: this holds
+             * even at exact input end; only a visible non-digit past x, a
+             * width reaching past x, or no width at all, is matching failure. */
             size_t after_x = (size_t)(prefix - candidate) + 2u;
+            /* B46: glibc converts "0x." (point, no hex digits)
+             * as 0.0, consuming through the point ("0x.p1"
+             * stops at 3); unlike strtof, which stops after
+             * the 0, this scanf-only quirk bypasses the engine. */
+            if (prefix[2] == decimal_point) {
+                value_out->bits = 0u;
+                value_out->long_value = 0.0;
+                *offset = current + (size_t)(prefix - candidate) + 3u;
+                return 1;
+            }
             if (after_x < count) return 0;
-            if (end == input_size) return 0;
+            if (!spec->has_width || spec->width > after_x) return 0;
         }
     }
     if (spec->length == RIN_SSCANF_LENGTH_NONE) {
@@ -187,7 +198,66 @@ static inline int rin_sscanf_parse_float(
         return -1;
 #endif
     }
-    *offset = current + (size_t)(parsed_end - candidate);
+    {
+        /* B46: longest-item consumption (glibc longest match). A partial
+         * exponent introducer plus its sign still belongs to the input
+         * item ("1e" consumes 2, "1e+" consumes 3) even though the value
+         * converts from the shorter prefix; a second introducer never
+         * extends ("1e2e3" consumes 3). Inf/nan words are exempt: "inf"
+         * followed by i/I without completing "infinity" is matching
+         * failure, and scanf never consumes nan(...) payloads (unlike
+         * strtod, whose engine end is capped here, not in the engine). */
+        size_t consumed = (size_t)(parsed_end - candidate);
+        size_t word = 0u;
+        size_t scan;
+        int is_hex = 0;
+        int is_word = 0;
+        int is_inf = 0;
+        int is_nan = 0;
+        if (consumed > 0u && (candidate[0] == '+' || candidate[0] == '-'))
+            word = 1u;
+        if (consumed >= word + 3u) {
+            char a = candidate[word];
+            char b = candidate[word + 1u];
+            char c = candidate[word + 2u];
+            is_inf = (a == 'i' || a == 'I') && (b == 'n' || b == 'N') &&
+                (c == 'f' || c == 'F');
+            is_nan = (a == 'n' || a == 'N') && (b == 'a' || b == 'A') &&
+                (c == 'n' || c == 'N');
+            is_word = is_inf || is_nan;
+        }
+        if (is_inf && consumed == word + 3u && consumed < count &&
+            (candidate[consumed] == 'i' || candidate[consumed] == 'I'))
+            return 0;
+        if (is_nan && consumed > word + 3u)
+            consumed = word + 3u;
+        if (!is_word) {
+            int have_exponent = 0;
+            if (consumed >= word + 2u && candidate[word] == '0' &&
+                (candidate[word + 1u] == 'x' || candidate[word + 1u] == 'X'))
+                is_hex = 1;
+            for (scan = word; scan < consumed; ++scan) {
+                if (is_hex) {
+                    if (candidate[scan] == 'p' || candidate[scan] == 'P')
+                        have_exponent = 1;
+                } else if (candidate[scan] == 'e' ||
+                           candidate[scan] == 'E') {
+                    have_exponent = 1;
+                }
+            }
+            if (!have_exponent && consumed < count &&
+                ((is_hex && (candidate[consumed] == 'p' ||
+                             candidate[consumed] == 'P')) ||
+                 (!is_hex && (candidate[consumed] == 'e' ||
+                              candidate[consumed] == 'E')))) {
+                ++consumed;
+                if (consumed < count && (candidate[consumed] == '+' ||
+                                        candidate[consumed] == '-'))
+                    ++consumed;
+            }
+        }
+        *offset = current + consumed;
+    }
     return 1;
 }
 

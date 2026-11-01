@@ -127,6 +127,12 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
         errno = EINVAL;
         return -1;
     }
+    /* B46: the m assignment-allocation character precedes length
+     * modifiers (glibc: %mls works, %lms does not). */
+    if (format[current] == 'm') {
+        spec->allocate = 1;
+        ++current;
+    }
     if (format[current] == 'h') {
         spec->length = RIN_SSCANF_LENGTH_SHORT;
         if (format[++current] == 'h') {
@@ -159,10 +165,6 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
         current = (size_t)(width_format - format);
         spec->length = spec->width_fast
             ? RIN_SSCANF_LENGTH_FAST_WIDTH : RIN_SSCANF_LENGTH_WIDTH;
-    }
-    if (format[current] == 'm') {
-        spec->allocate = 1;
-        ++current;
     }
     if (format[current] == '\0') {
         errno = EINVAL;
@@ -638,6 +640,7 @@ static int rin_sscanf_parse_integer(
     uint64_t magnitude = 0u;
     int negative = 0;
     int have_digit = 0;
+    int prefixed = 0;
     if (range_error_out) *range_error_out = 0;
     while (current < input_size &&
            rin_sscanf_space((unsigned char)input[current]))
@@ -649,7 +652,9 @@ static int rin_sscanf_parse_integer(
     end = input_size;
     if (spec->has_width && spec->width < end - current)
         end = current + spec->width;
-    if (spec->conversion != 'p' && current < end &&
+    /* B46: %p takes an optional sign like %x (glibc wraps
+     * negatives into the pointer); the clamp below folds it. */
+    if (current < end &&
         (input[current] == '+' || input[current] == '-')) {
         negative = input[current] == '-';
         ++current;
@@ -667,6 +672,7 @@ static int rin_sscanf_parse_integer(
                              &prefix_digit) && prefix_digit < 16u) {
             base = 16u;
             current += 2u;
+            prefixed = 1;
         }
     }
     if ((base == 0u || base == 2u) && current + 2u < end &&
@@ -677,7 +683,25 @@ static int rin_sscanf_parse_integer(
                              &prefix_digit) && prefix_digit < 2u) {
             base = 2u;
             current += 2u;
+            prefixed = 1;
         }
+    }
+    /* B46: a bare 0x/0X/0b/0B prefix without following digits
+     * still consumes through the marker with value 0 (glibc:
+     * %i/%x/%b/%p on "0x" give r=1, v=0, n=2); the input item
+     * ends there. */
+    if (!prefixed && current + 1u < end &&
+        input[current] == '0' &&
+        (((base == 0u || base == 16u) &&
+          (input[current + 1u] == 'x' ||
+           input[current + 1u] == 'X')) ||
+         ((base == 0u || base == 2u) &&
+          (input[current + 1u] == 'b' ||
+           input[current + 1u] == 'B')))) {
+        *offset = current + 2u;
+        *magnitude_out = 0u;
+        *negative_out = negative;
+        return 1;
     }
     if (base == 0u)
         base = current < end && input[current] == '0' ? 8u : 10u;
@@ -720,7 +744,14 @@ static int rin_sscanf_clamp_integer_magnitude(
     uint64_t magnitude = *magnitude_io;
     if (clamped_out) *clamped_out = 0;
     if (spec->conversion == 'p') {
-        if (negative || magnitude > (uint64_t)UINTPTR_MAX) {
+        /* B46: %p wraps like an unsigned conversion (glibc:
+         * "-1" reads (void *)-1); only a positive magnitude
+         * past uintptr_t still fails strictly. */
+        if (negative) {
+            *magnitude_io = 0u - magnitude;
+            return 1;
+        }
+        if (magnitude > (uint64_t)UINTPTR_MAX) {
             errno = ERANGE;
             return 0;
         }
@@ -1777,10 +1808,7 @@ static int rin_fscanf_stream_parse_integer(
         return status < 0 ? -1 : 0;
     }
     if (value == '+' || value == '-') {
-        if (spec->conversion == 'p') {
-            if (rin_fscanf_stream_unread(input, value) != 0) return -1;
-            return 0;
-        }
+        /* B46: %p takes an optional sign like %x. */
         negative = value == '-';
         ++used;
         if (used == limit) return 0;
@@ -1796,7 +1824,14 @@ static int rin_fscanf_stream_parse_integer(
                 input, used, limit, &value, &prefixed,
                 &matching_failure) != 0)
             return -1;
-        if (matching_failure) return 0;
+        if (matching_failure) {
+            /* B46: a bare 0x prefix converts 0 with the marker
+             * consumed (glibc); the flag now means "prefix seen
+             * without digits", not failure. */
+            *magnitude_out = 0u;
+            *negative_out = negative;
+            return 1;
+        }
     }
     if (prefixed) {
         base = 16u;
@@ -1806,7 +1841,13 @@ static int rin_fscanf_stream_parse_integer(
                 input, used, limit, &value, &prefixed,
                 &matching_failure) != 0)
             return -1;
-        if (matching_failure) return 0;
+        if (matching_failure) {
+            /* B46: a bare 0b prefix converts 0 with the marker
+             * consumed (glibc); see the hex site above. */
+            *magnitude_out = 0u;
+            *negative_out = negative;
+            return 1;
+        }
         if (prefixed) {
             base = 2u;
             used += 2u;
@@ -1864,12 +1905,6 @@ static int rin_fscanf_stream_case_equal(unsigned char value, char lower) {
            value == (unsigned char)(lower - ('a' - 'A'));
 }
 
-static int rin_fscanf_stream_nan_payload_char(unsigned char value) {
-    return (value >= '0' && value <= '9') ||
-           (value >= 'a' && value <= 'z') ||
-           (value >= 'A' && value <= 'Z') || value == '_';
-}
-
 static int rin_fscanf_stream_parse_float_candidate(
         char* candidate, size_t count, const struct RinSscanfSpec* spec,
         struct RinSscanfFloat* value_out, int* input_failure_out) {
@@ -1889,9 +1924,10 @@ static int rin_fscanf_stream_parse_float_candidate(
     return parsed;
 }
 
-/* Preserve the longest special-float input item. Partial `inf`/`nan` words,
- * `infinity` suffixes, and `nan(...)` payloads fail as a whole instead of
- * rolling back to the shorter `inf` or `nan` conversion. */
+/* Preserve the longest special-float input item. Partial `inf` words and
+ * `infinity` suffixes fail as a whole instead of rolling back to the
+ * shorter `inf` conversion; `nan(...)` payloads are never part of the
+ * scanf item at all (B46: glibc stops after "nan"). */
 static int rin_fscanf_stream_parse_special_float(
         struct RinFscanfStreamInput* input,
         const struct RinSscanfSpec* spec, char* candidate, size_t count,
@@ -1916,34 +1952,19 @@ static int rin_fscanf_stream_parse_special_float(
             return 0;
         }
         if (!rin_fscanf_stream_case_equal(value, base_suffix[suffix_index])) {
-            if (rin_fscanf_stream_unread(input, value) != 0) return -1;
+            /* B46: a failed inf/nan word keeps every consumed
+             * byte (glibc); nothing goes back. */
             return 0;
         }
         candidate[count++] = (char)value;
     }
 
     if (rin_fscanf_stream_case_equal(first, 'n') && count < limit) {
+        /* B46: scanf never consumes nan(...) payloads (glibc
+         * stops after "nan"); only peek so the terminator goes
+         * back. */
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
-        if (status > 0 && value == '(') {
-            candidate[count++] = (char)value;
-            for (;;) {
-                if (count == limit) return 0;
-                status = rin_fscanf_stream_read(input, &value);
-                if (status < 0) return -1;
-                if (status == 0) return 0;
-                if (value == ')') {
-                    candidate[count++] = (char)value;
-                    goto parse_candidate;
-                }
-                if (!rin_fscanf_stream_nan_payload_char(value)) {
-                    if (rin_fscanf_stream_unread(input, value) != 0)
-                        return -1;
-                    return 0;
-                }
-                candidate[count++] = (char)value;
-            }
-        }
         if (status > 0 && rin_fscanf_stream_unread(input, value) != 0)
             return -1;
     }
@@ -1962,8 +1983,8 @@ static int rin_fscanf_stream_parse_special_float(
                 if (status == 0) return 0;
                 if (!rin_fscanf_stream_case_equal(
                         value, infinity_suffix[suffix_index])) {
-                    if (rin_fscanf_stream_unread(input, value) != 0)
-                        return -1;
+                    /* B46: a failed infinity tail keeps every
+                     * consumed byte (glibc); nothing goes back. */
                     return 0;
                 }
                 candidate[count++] = (char)value;
@@ -1973,13 +1994,14 @@ static int rin_fscanf_stream_parse_special_float(
         }
     }
 
-parse_candidate:
     return rin_fscanf_stream_parse_float_candidate(
         candidate, count, spec, value_out, input_failure_out);
 }
 
-/* Direct hexadecimal float lexer.  A rejected `0x` prefix falls back to the
- * decimal zero conversion while restoring every non-hexadecimal byte. */
+/* Direct hexadecimal float lexer.  A rejected `0x` prefix is matching
+ * failure with the prefix consumed (B46: glibc); only a width cut right
+ * after the x falls back to the decimal zero conversion.  A partial
+ * binary exponent still converts the mantissa it hangs off. */
 static int rin_fscanf_stream_parse_hex_float(
         struct RinFscanfStreamInput* input,
         const struct RinSscanfSpec* spec, char* candidate, size_t count,
@@ -2001,7 +2023,9 @@ static int rin_fscanf_stream_parse_hex_float(
     if (count == limit) goto decimal_zero;
     status = rin_fscanf_stream_read(input, &value);
     if (status < 0) return -1;
-    if (status == 0) goto decimal_zero;
+    /* B46: end of input after 0x is matching failure with the
+     * prefix consumed; only a width cut falls back below. */
+    if (status == 0) return 0;
     for (;;) {
         int digit = rin_fp_hex_digit((char)value);
         if (digit >= 0) {
@@ -2023,42 +2047,60 @@ static int rin_fscanf_stream_parse_hex_float(
     }
     if (status < 0) return -1;
     if (!any_digit) {
-        if (status > 0) tail[tail_count++] = value;
-        if (seen_point) --count;
-        --count;
-        if (rin_fscanf_stream_unread_float_tail(input, tail, tail_count) != 0)
+        if (seen_point) {
+            /* B46: glibc converts "0x." (point, no hex digits)
+             * as 0.0; the point stays consumed, only bytes past
+             * it go back. At a width cut (status 2) or EOF the
+             * value slot is stale, so only a fresh terminator
+             * (status 1) joins the tail. */
+            if (status == 1) tail[tail_count++] = value;
+            if (rin_fscanf_stream_unread_float_tail(input, tail + 2u,
+                                                    tail_count - 2u) != 0)
+                return -1;
+            value_out->bits = 0u;
+            value_out->long_value = 0.0;
+            return 1;
+        }
+        /* B46: matching failure; the 0x stays consumed and only
+         * a fresh terminator (status 1, never a stale width-cut
+         * or EOF slot) past it goes back. */
+        if (status == 1) tail[tail_count++] = value;
+        if (rin_fscanf_stream_unread_float_tail(input, tail + 1u,
+                                                tail_count - 1u) != 0)
             return -1;
-        return rin_fscanf_stream_parse_float_candidate(
-            candidate, count, spec, value_out, input_failure_out);
+        return 0;
     }
     if (status == 0 || status == 2) goto parse_candidate;
     if (value == 'p' || value == 'P') {
         unsigned char marker = value;
+        /* B46: a partial binary exponent still converts the
+         * mantissa (glibc); the p stays consumed in the stream
+         * while the candidate holds the valid prefix. */
         if (count + 1u >= limit) {
-            return 0;
+            goto parse_candidate;
         }
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
-        if (status == 0) return 0;
+        if (status == 0) goto parse_candidate;
         if (value >= '0' && value <= '9') {
             candidate[count++] = (char)marker;
             candidate[count++] = (char)value;
         } else if (value == '+' || value == '-') {
             unsigned char sign = value;
-            if (count + 2u >= limit) return 0;
+            if (count + 2u >= limit) goto parse_candidate;
             status = rin_fscanf_stream_read(input, &value);
             if (status < 0) return -1;
-            if (status == 0) return 0;
+            if (status == 0) goto parse_candidate;
             if (value < '0' || value > '9') {
                 if (rin_fscanf_stream_unread(input, value) != 0) return -1;
-                return 0;
+                goto parse_candidate;
             }
             candidate[count++] = (char)marker;
             candidate[count++] = (char)sign;
             candidate[count++] = (char)value;
         } else {
             if (rin_fscanf_stream_unread(input, value) != 0) return -1;
-            return 0;
+            goto parse_candidate;
         }
         while (count < limit) {
             status = rin_fscanf_stream_read(input, &value);
@@ -2085,8 +2127,9 @@ decimal_zero:
         candidate, count, spec, value_out, input_failure_out);
 }
 
-/* Direct float lexer.  It commits an exponent only after a digit; malformed
- * e/E plus sign suffixes fit the bounded narrow pushback owner. */
+/* Direct float lexer.  A partial exponent still converts the mantissa it
+ * hangs off (B46: glibc longest match); the e/E and its sign stay
+ * consumed in the stream while the candidate holds the valid prefix. */
 static int rin_fscanf_stream_parse_decimal_float(
         struct RinFscanfStreamInput* input,
         const struct RinSscanfSpec* spec, struct RinSscanfFloat* value_out,
@@ -2118,7 +2161,9 @@ static int rin_fscanf_stream_parse_decimal_float(
         if (count == limit) goto parse_candidate;
         status = rin_fscanf_stream_read(input, &value);
         if (status <= 0) {
-            if (status == 0) *input_failure_out = 1;
+            /* B46: a consumed sign is a nonempty, non-convertible
+             * input item at EOF, so this is matching failure
+             * rather than input failure. */
             return status < 0 ? -1 : 0;
         }
     }
@@ -2156,14 +2201,13 @@ static int rin_fscanf_stream_parse_decimal_float(
     }
     if (status < 0) return -1;
     if (!any_digit) {
-        if (status == 0) {
-            *input_failure_out = 1;
-            return 0;
-        }
-        if (count != 0u) tail[0] = (unsigned char)candidate[0];
-        if (count == 2u) tail[1] = (unsigned char)candidate[1];
-        tail[count] = value;
-        if (rin_fscanf_stream_unread_float_tail(input, tail, count + 1u) != 0)
+        /* B46: a nonempty item that converts nothing is matching
+         * failure, never input failure; the item's bytes stay
+         * consumed and only the terminator (freshly read, status
+         * == 1) goes back.  At EOF or a width cut (status 0/2)
+         * there is no terminator to return. */
+        if (status == 1 &&
+            rin_fscanf_stream_unread(input, value) != 0)
             return -1;
         return 0;
     }
@@ -2181,36 +2225,34 @@ static int rin_fscanf_stream_parse_decimal_float(
     }
     if (value == 'e' || value == 'E') {
         unsigned char marker = value;
+        /* B46: a partial exponent still converts the mantissa
+         * (glibc); the e stays consumed in the stream while the
+         * candidate holds the valid prefix. */
         if (count + 1u >= limit) {
-            /* The marker already belongs to the bounded input item.  If it
-             * cannot start a complete conversion within the field width,
-             * fail the match instead of accepting the shorter mantissa. */
-            return 0;
+            goto parse_candidate;
         }
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
-        if (status == 0) return 0;
+        if (status == 0) goto parse_candidate;
         if (value >= '0' && value <= '9') {
             candidate[count++] = (char)marker;
             candidate[count++] = (char)value;
         } else if (value == '+' || value == '-') {
             unsigned char sign = value;
-            if (count + 2u >= limit) return 0;
+            if (count + 2u >= limit) goto parse_candidate;
             status = rin_fscanf_stream_read(input, &value);
             if (status < 0) return -1;
-            if (status == 0) return 0;
+            if (status == 0) goto parse_candidate;
             if (value < '0' || value > '9') {
-                /* e/E and its optional sign form a non-convertible input
-                 * item. Keep the first byte outside that item unread. */
                 if (rin_fscanf_stream_unread(input, value) != 0) return -1;
-                return 0;
+                goto parse_candidate;
             }
             candidate[count++] = (char)marker;
             candidate[count++] = (char)sign;
             candidate[count++] = (char)value;
         } else {
             if (rin_fscanf_stream_unread(input, value) != 0) return -1;
-            return 0;
+            goto parse_candidate;
         }
         while (count < limit) {
             status = rin_fscanf_stream_read(input, &value);

@@ -3823,7 +3823,13 @@ static inline int _rin_stdio_format_wide_string(
         const wchar_t* cursor;
         for (cursor = wide; *cursor != L'\0'; ++cursor) {
             char encoded[MB_LEN_MAX];
-            size_t encoded_length = wcrtomb(
+            size_t encoded_length;
+            /* Exhausted precision stops the scan: the next wide
+             * character must not even be attempted (glibc %.1S of
+             * "A<bad>" yields "[A]", not EILSEQ). */
+            if (precision >= 0 && length >= (size_t)precision)
+                break;
+            encoded_length = wcrtomb(
                 encoded, *cursor, &measure_state);
             if (encoded_length == (size_t)-1) return -1;
             if (precision >= 0 &&
