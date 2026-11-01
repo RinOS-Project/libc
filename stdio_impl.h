@@ -1631,6 +1631,18 @@ static inline size_t _rin_stdio_wide_pushback_correction(FILE* stream) {
     return _rin_stdio_wide_pushback_bytes(stream);
 }
 
+/* Bytes consumed for a still-incomplete wide character (EAGAIN mid-sequence).
+ * The UTF-8 machine packs the consumed count in the low byte of the packed
+ * state; single-byte codesets never leave a pending state. */
+static inline size_t _rin_stdio_wide_decode_pending_bytes(FILE* stream) {
+    uint32_t state;
+    uint32_t codepoint;
+    if (!stream) return 0u;
+    _rin_stdio_wide_decode_state_get(stream, &state, &codepoint);
+    (void)codepoint;
+    return (size_t)(state & 0xFFu);
+}
+
 /* The syscall ABI returns a signed target word, whereas FILE retains an int
  * descriptor and ftell has a long public result.  Never narrow either result
  * before its representability has been established. */
@@ -3266,6 +3278,19 @@ static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
             }
             offset -= (long)wide_pushback;
         }
+        if (stream_index >= 0) {
+            /* B49: bytes of a still-incomplete wide character rewind
+             * like buffered input so a resumed read restarts the
+             * sequence from the descriptor. */
+            size_t partial =
+                _rin_stdio_wide_decode_pending_bytes(stream);
+            if (partial > (size_t)__LONG_MAX__ ||
+                offset < (-__LONG_MAX__ - 1L) + (long)partial) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            offset -= (long)partial;
+        }
     }
 #if defined(RIN_USERSPACE)
     if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
@@ -3393,6 +3418,17 @@ static inline long _rin_ftell_unlocked(FILE* stream) {
         if ((long)wide_pushback <= position)
             position -= (long)wide_pushback;
     }
+    if (stream_index >= 0) {
+        /* B49: same correction for a still-incomplete wide character. */
+        size_t partial =
+            _rin_stdio_wide_decode_pending_bytes(stream);
+        if (partial > (size_t)__LONG_MAX__) {
+            errno = EIO;
+            stream->error = 1;
+            return -1;
+        }
+        if ((long)partial <= position) position -= (long)partial;
+    }
     return position;
 }
 
@@ -3468,6 +3504,19 @@ static inline int _rin_fseeko64_unlocked(FILE* stream, off64_t offset,
                 return -1;
             }
             adjusted -= (int64_t)wide_pushback;
+        }
+        if (stream_index >= 0) {
+            /* B49: bytes of a still-incomplete wide character rewind
+             * like buffered input so a resumed read restarts the
+             * sequence from the descriptor. */
+            size_t partial =
+                _rin_stdio_wide_decode_pending_bytes(stream);
+            if (partial > (size_t)INT64_MAX ||
+                adjusted < INT64_MIN + (int64_t)partial) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            adjusted -= (int64_t)partial;
         }
     }
 #if defined(RIN_USERSPACE)
@@ -3583,6 +3632,17 @@ static inline off64_t _rin_ftello64_unlocked(FILE* stream) {
         }
         if ((int64_t)wide_pushback <= position)
             position -= (int64_t)wide_pushback;
+    }
+    if (stream_index >= 0) {
+        /* B49: same correction for a still-incomplete wide character. */
+        size_t partial =
+            _rin_stdio_wide_decode_pending_bytes(stream);
+        if (partial > (size_t)INT64_MAX) {
+            errno = EIO;
+            stream->error = 1;
+            return (off64_t)-1;
+        }
+        if ((int64_t)partial <= position) position -= (int64_t)partial;
     }
     return (off64_t)position;
 }
