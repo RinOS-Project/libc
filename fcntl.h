@@ -681,7 +681,7 @@ static inline int fcntl(int fd, int cmd, ...) {
  * ═══════════════════════════════════════════════════════════════*/
 
 static inline int _rin_posix_fadvise_result(
-    int fd, off_t offset, off_t len, int advice) {
+    int fd, int64_t offset, int64_t len, int advice) {
     uint64_t unsigned_offset;
     uint64_t unsigned_length;
     intptr_t result;
@@ -705,6 +705,18 @@ static inline int _rin_posix_fadvise_result(
     if (result < 0 && result >= (intptr_t)-4095)
         return (int)-result;
     return EIO;
+}
+
+static inline int _rin_readahead_result(int fd, off64_t offset,
+                                        size_t count) {
+    int64_t signed_count;
+    if (offset < 0) return EINVAL;
+    if ((uint64_t)count > (uint64_t)INT64_MAX) return EOVERFLOW;
+    signed_count = (int64_t)count;
+    if ((uint64_t)offset > (uint64_t)INT64_MAX - (uint64_t)signed_count)
+        return EOVERFLOW;
+    return _rin_posix_fadvise_result(fd, (int64_t)offset, signed_count,
+                                     POSIX_FADV_WILLNEED);
 }
 
 static inline int _rin_fallocate_result(
@@ -747,6 +759,15 @@ static inline int posix_fadvise(int fd, off_t offset, off_t len, int advice) {
 
 static inline int posix_fallocate(int fd, off_t offset, off_t len) {
     return _rin_fallocate_result(fd, 0, offset, len);
+}
+#endif
+
+#if defined(__RINOS__) || defined(__USE_GNU)
+static inline ssize_t readahead(int fd, off64_t offset, size_t count) {
+    int error = _rin_readahead_result(fd, offset, count);
+    if (error == 0) return 0;
+    errno = error;
+    return -1;
 }
 #endif
 
