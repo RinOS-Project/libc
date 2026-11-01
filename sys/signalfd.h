@@ -8,6 +8,7 @@
 #ifndef _SYS_SIGNALFD_H
 #define _SYS_SIGNALFD_H
 
+#include "../stddef.h"
 #include "../fcntl.h"
 #include "../signal.h"
 #include "../stdint.h"
@@ -41,6 +42,22 @@ struct signalfd_siginfo {
     uint64_t ssi_addr;     /* +72 */
     uint8_t __pad[48];     /* +80 = 128 */
 };
+
+#if defined(__cplusplus)
+static_assert(sizeof(struct signalfd_siginfo) == 128u,
+              "signalfd_siginfo ABI size drift");
+static_assert(offsetof(struct signalfd_siginfo, ssi_ptr) == 48u &&
+                  offsetof(struct signalfd_siginfo, ssi_addr) == 72u &&
+                  offsetof(struct signalfd_siginfo, __pad) == 80u,
+              "signalfd_siginfo ABI offset drift");
+#else
+_Static_assert(sizeof(struct signalfd_siginfo) == 128u,
+               "signalfd_siginfo ABI size drift");
+_Static_assert(offsetof(struct signalfd_siginfo, ssi_ptr) == 48u &&
+                   offsetof(struct signalfd_siginfo, ssi_addr) == 72u &&
+                   offsetof(struct signalfd_siginfo, __pad) == 80u,
+               "signalfd_siginfo ABI offset drift");
+#endif
 
 #ifdef __cplusplus
 extern "C" {
