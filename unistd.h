@@ -2691,7 +2691,7 @@ static inline int getlogin_r(char* name, size_t namesize) {
     int saved_errno = errno;
     intptr_t result;
     int error;
-    if (!name) return EINVAL;
+    if (!name) return EFAULT;
     if (namesize == 0u) return ERANGE;
     result = __rin_syscall_posixize(_RIN_UNISTD_SYSCALL2(
         RIN_SYS_GETLOGIN_R, (uintptr_t)name, (uintptr_t)namesize));
