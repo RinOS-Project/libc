@@ -20,13 +20,14 @@
 #define RIN_UNISTD_CUSTOM_SYSCALL_HOOK 1
 #endif
 
+/* SDK split-build and time-width selection describe ABI/library choices; by
+ * themselves they do not make a hosted POSIX process an RinOS target. */
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
     (defined(__linux__) || defined(__APPLE__)) && \
     (defined(__GNUC__) || defined(__clang__)) && \
     !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
     !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64) && \
-    !defined(RINSDK_SPLIT_BUILD) && !defined(RIN_TIME_ABI64) && \
     !defined(RIN_UNISTD_CUSTOM_SYSCALL_HOOK)
 #include_next <unistd.h>
 #else
