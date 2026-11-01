@@ -274,6 +274,15 @@ int login_tty(int fd)
     if (ioctl(fd, TIOCSCTTY, 0) != 0) return -1;
     for (target_fd = STDIN_FILENO; target_fd <= STDERR_FILENO; ++target_fd) {
         if (dup2(fd, target_fd) < 0) return -1;
+        /* dup2(fd, fd) is a no-op and preserves FD_CLOEXEC.  login_tty must
+         * leave every standard descriptor open across the child's exec. */
+        if (fd == target_fd) {
+            int descriptor_flags = fcntl(target_fd, F_GETFD);
+            if (descriptor_flags < 0 ||
+                fcntl(target_fd, F_SETFD,
+                      descriptor_flags & ~FD_CLOEXEC) < 0)
+                return -1;
+        }
     }
     if (fd > STDERR_FILENO && close(fd) != 0) return -1;
     return 0;
