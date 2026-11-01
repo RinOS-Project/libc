@@ -5,6 +5,18 @@
  * カーネルdynlink.c連携 (RLL形式対応)
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__unix__) || defined(__APPLE__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_DYNLINK_SYSCALL0) && \
+    !defined(_RIN_DYNLINK_SYSCALL1) && \
+    (!defined(_RIN_DYNLINK_SYSCALL2) || \
+     defined(RIN_DYNLINK_SYSCALL2_DEFAULT_HOOK)) && \
+    !defined(_RIN_DYNLINK_SYSCALL3)
+#include_next <dlfcn.h>
+#else
+
 #ifndef _DLFCN_H
 #define _DLFCN_H
 
@@ -14,6 +26,8 @@
 #include "link.h"
 #include <rin/dynlink/addr_abi.h>
 #include <rin/dynlink/flags.h>
+#include <rin/dynlink/inventory_abi.h>
+#include <rin/dynlink/lifecycle_abi.h>
 #include <rin/dynlink/memory_abi.h>
 
 #ifdef __cplusplus
@@ -30,7 +44,7 @@ extern "C" {
 #define RTLD_LOCAL    0x0000  /* シンボルをローカルに保持 (デフォルト) */
 #define RTLD_NOLOAD   RIN_DYNLINK_FLAG_NOLOAD    /* ロードせずに既存ハンドルを返す */
 #define RTLD_NODELETE RIN_DYNLINK_FLAG_NODELETE  /* dlcloseでアンロードしない */
-#define RTLD_DEEPBIND RIN_DYNLINK_FLAG_DEEPBIND  /* ライブラリ内シンボルを優先 */
+#define RTLD_DEEPBIND RIN_DYNLINK_FLAG_DEEPBIND  /* Unsupported: dlopen returns ENOTSUP */
 
 /* 特殊ハンドル */
 #define RTLD_DEFAULT  ((void*)0)   /* デフォルト検索 */
@@ -155,6 +169,57 @@ static inline void* dynlink_load_memory_v1(const char* library_name,
 static inline int dynlink_unload(void* handle) {
     return _dynlink_status_result(_RIN_DYNLINK_SYSCALL1(
         SYS_DLCLOSE, (uintptr_t)handle));
+}
+
+static inline int _rin_dl_lifecycle_exchange(
+    uint64_t handle, uint16_t operation, uint64_t* token,
+    uint64_t* callback_address) {
+    RinDlLifecycleRequestV1 request = {0};
+    intptr_t result;
+    if (!token || !callback_address) {
+        errno = EINVAL;
+        return -1;
+    }
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_DLINVENTORY_LIFECYCLE_ABI_VERSION;
+    request.operation = operation;
+    request.handle = handle;
+    request.token = *token;
+    result = _RIN_DYNLINK_SYSCALL2(
+        SYS_DLINVENTORY, (uintptr_t)RIN_DLINVENTORY_INDEX_LIFECYCLE,
+        (uintptr_t)&request);
+    if (result < 0) {
+        errno = result >= -4095 ? (int)-result : EIO;
+        return -1;
+    }
+    if (result > 1 || (result == 1 && request.callback_address == 0u)) {
+        errno = EIO;
+        return -1;
+    }
+    *token = request.token;
+    *callback_address = request.callback_address;
+    return (int)result;
+}
+
+static inline int _rin_dl_lifecycle_run(uint64_t handle,
+                                        uint16_t operation) {
+    uint64_t token = 0u;
+    for (;;) {
+        uint64_t callback_address = 0u;
+        int result = _rin_dl_lifecycle_exchange(
+            handle, operation, &token, &callback_address);
+        if (result < 0) return -1;
+        if (result == 0) break;
+        ((void (*)(void))(uintptr_t)callback_address)();
+    }
+    if (operation == RIN_DL_LIFECYCLE_FINI_NEXT && token != 0u) {
+        uint64_t ignored_callback = 0u;
+        if (_rin_dl_lifecycle_exchange(
+                handle, RIN_DL_LIFECYCLE_FINI_FINISH, &token,
+                &ignored_callback) != 0)
+            return -1;
+    }
+    return 0;
 }
 
 static inline void* dynlink_resolve_global(const char* name) {
@@ -286,64 +351,6 @@ static inline unsigned int _rin_dl_retained_add(void* handle,
         return RIN_RTLD_NEXT_HANDLE_CAPACITY;
     }
     return RIN_RTLD_NEXT_HANDLE_CAPACITY;
-}
-
-/* Check the authenticated process catalog without asking the loader to load
- * anything.  RTLD_NOLOAD depends on this distinction: a successful lookup
- * must acquire an existing object handle, while a missing name must not grow
- * the dynamic graph as a side effect. */
-static inline int _rin_dl_inventory_contains(const char* name) {
-    RinDlInventoryRecordV1 record;
-    unsigned long index;
-    unsigned long expected_count = 0UL;
-    unsigned long long expected_generation = 0ULL;
-    unsigned long long expected_adds = 0ULL;
-    unsigned long long expected_subs = 0ULL;
-    int fetch_result;
-
-    if (!name || name[0] == '\0') {
-        errno = EINVAL;
-        return -1;
-    }
-    for (index = 0UL; index < RIN_DLINVENTORY_V1_NAME_CAPACITY; ++index) {
-        if (name[index] == '\0') break;
-    }
-    if (index == 0UL || index == RIN_DLINVENTORY_V1_NAME_CAPACITY) {
-        errno = EINVAL;
-        return -1;
-    }
-
-#if !(defined(RIN_FREESTANDING) && RIN_FREESTANDING) && \
-    !defined(RIN_DYNLINK_CUSTOM_SYSCALL2)
-    errno = ENOSYS;
-    return -1;
-#endif
-
-    for (index = 0UL; ; ++index) {
-        fetch_result = __rin_dl_inventory_fetch(index, &record);
-        if (fetch_result == 1) break;
-        if (fetch_result != 0) return -1;
-        if (index == 0UL) {
-            expected_count = record.record_count;
-            expected_generation = record.launch_generation;
-            expected_adds = record.add_count;
-            expected_subs = record.sub_count;
-        } else if (record.record_count != expected_count ||
-                   record.launch_generation != expected_generation ||
-                   record.add_count != expected_adds ||
-                   record.sub_count != expected_subs) {
-            errno = EIO;
-            return -1;
-        }
-        if (index >= expected_count) {
-            errno = EIO;
-            return -1;
-        }
-        if (_rin_dl_name_equal(record.name, name)) return 1;
-        if (index + 1UL == expected_count) break;
-    }
-    errno = ENOENT;
-    return 0;
 }
 
 /* Resolve RTLD_NEXT from the call site rather than guessing a global symbol.
@@ -511,14 +518,12 @@ static inline void* dlopen(const char* filename, int flags) {
      * RTLD_LAZY is therefore a valid request with eager binding semantics,
      * which is permitted when the implementation elects to resolve symbols
      * before returning.  Scope-bearing requests use the native two-word
-     * loader ABI so RTLD_GLOBAL is published to the process namespace and
-     * RTLD_DEEPBIND is retained as an explicit policy bit. */
-
-    /* 初期化 (初回のみ) */
-    static int initialized = 0;
-    if (!initialized) {
-        dynlink_init();
-        initialized = 1;
+     * loader ABI so RTLD_GLOBAL is published to the process namespace.
+     * RTLD_DEEPBIND has no supported symbol-precedence contract in RinOS. */
+    if ((flags & RTLD_DEEPBIND) != 0) {
+        errno = ENOTSUP;
+        _dl_set_error("dlopen: RTLD_DEEPBIND is unsupported");
+        return NULL;
     }
 
     if (!filename) {
@@ -526,28 +531,24 @@ static inline void* dlopen(const char* filename, int flags) {
         return RIN_RTLD_MAIN;
     }
 
-    if ((flags & RTLD_NOLOAD) != 0) {
-        const int loaded = _rin_dl_inventory_contains(filename);
-        if (loaded <= 0) {
-            if (loaded == 0)
-                _dl_set_error("dlopen: library is not loaded");
-            else if (errno == ENOSYS)
-                _dl_set_error("dlopen: loaded-library inventory unavailable");
-            else
-                _dl_set_error("dlopen: cannot inspect loaded libraries");
-            return NULL;
-        }
-    }
-
-    void* handle = (flags & (RTLD_GLOBAL | RTLD_DEEPBIND)) != 0
-        ? dynlink_load_flags(filename,
-                             (unsigned int)(flags &
-                                             (RTLD_GLOBAL | RTLD_DEEPBIND)))
+    const unsigned int loader_flags = (unsigned int)(flags &
+        (RTLD_GLOBAL | RTLD_DEEPBIND | RTLD_NOLOAD));
+    void* handle = loader_flags != 0u
+        ? dynlink_load_flags(filename, loader_flags)
         : dynlink_load(filename);
     if (!handle) {
         _dl_set_error("dlopen: failed to load library");
         return NULL;
     }
+
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && defined(__x86_64__)
+    if (_rin_dl_lifecycle_run((uint64_t)(uintptr_t)handle,
+                              RIN_DL_LIFECYCLE_INIT_NEXT) != 0) {
+        (void)dynlink_unload(handle);
+        _dl_set_error("dlopen: library initialization failed");
+        return NULL;
+    }
+#endif
 
     if ((flags & RTLD_NODELETE) != 0 &&
         _rin_dl_retained_find(filename) == RIN_RTLD_NEXT_HANDLE_CAPACITY) {
@@ -589,6 +590,14 @@ static inline int dlclose(void* handle) {
         _dl_set_error("dlclose: invalid handle");
         return -1;
     }
+
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && defined(__x86_64__)
+    if (_rin_dl_lifecycle_run((uint64_t)(uintptr_t)handle,
+                              RIN_DL_LIFECYCLE_FINI_NEXT) != 0) {
+        _dl_set_error("dlclose: library finalization failed");
+        return -1;
+    }
+#endif
 
     int ret = dynlink_unload(handle);
     if (ret != 0) {
@@ -902,3 +911,5 @@ static inline int dl_add_search_path(const char* path) {
 #undef RIN_DYNLINK_CUSTOM_SYSCALL2
 
 #endif /* _DLFCN_H */
+
+#endif /* hosted POSIX dynamic-loader delegation */

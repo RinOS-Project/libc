@@ -14,6 +14,9 @@ typedef struct RinDlerrorState {
 extern "C" {
 #endif
 RinDlerrorState* __rin_dlerror_state(void);
+
+int __rin_run_startup_dependency_initializers(void);
+int __rin_run_process_dependency_finalizers(void);
 #ifdef __cplusplus
 }
 #endif
