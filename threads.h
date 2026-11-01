@@ -47,13 +47,18 @@ typedef void (*tss_dtor_t)(void*);
 typedef struct __rin_c11_thread_start {
     thrd_start_t function;
     void* argument;
+    int start_release;
 } __rin_c11_thread_start;
 
 static inline void* __rin_c11_thread_entry(void* opaque)
 {
     __rin_c11_thread_start* start = (__rin_c11_thread_start*)opaque;
-    thrd_start_t function = start->function;
-    void* argument = start->argument;
+    thrd_start_t function;
+    void* argument;
+    while (__atomic_load_n(&start->start_release, __ATOMIC_ACQUIRE) == 0)
+        (void)sched_yield();
+    function = start->function;
+    argument = start->argument;
     free(start);
     return (void*)(intptr_t)function(argument);
 }
@@ -70,12 +75,14 @@ static inline int thrd_create(thrd_t* thread, thrd_start_t function,
     if (!start) return thrd_nomem;
     start->function = function;
     start->argument = argument;
+    __atomic_store_n(&start->start_release, 0, __ATOMIC_RELAXED);
     error = pthread_create(&created, NULL, __rin_c11_thread_entry, start);
     if (error != 0) {
         free(start);
         return error == ENOMEM ? thrd_nomem : thrd_error;
     }
     *thread = created;
+    __atomic_store_n(&start->start_release, 1, __ATOMIC_RELEASE);
     return thrd_success;
 }
 
