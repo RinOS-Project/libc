@@ -270,7 +270,7 @@ static inline int __rin_fstat_time64(int fd, struct stat* statbuf) {
 static inline int __rin_stat_time64_pathat(int dirfd, const char* pathname,
                                            struct stat* statbuf, int flags) {
     RinPathAtCallV1 call;
-    if (!pathname || !statbuf) {
+    if (!statbuf) {
         errno = EFAULT;
         return -1;
     }
@@ -278,6 +278,13 @@ static inline int __rin_stat_time64_pathat(int dirfd, const char* pathname,
                    AT_NO_AUTOMOUNT)) != 0) {
         errno = EINVAL;
         return -1;
+    }
+    if (!pathname) {
+        if ((flags & AT_EMPTY_PATH) == 0) {
+            errno = EFAULT;
+            return -1;
+        }
+        pathname = "";
     }
     if ((flags & AT_EMPTY_PATH) != 0) {
         unsigned char first_byte;
@@ -407,7 +414,7 @@ static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf,
     return __rin_stat_time64_pathat(dirfd, pathname, statbuf, flags);
 #else
     RinPathAtCallV1 call;
-    if (!pathname || !statbuf) {
+    if (!statbuf) {
         errno = EFAULT;
         return -1;
     }
@@ -416,6 +423,13 @@ static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf,
                    AT_NO_AUTOMOUNT)) != 0) {
         errno = EINVAL;
         return -1;
+    }
+    if (!pathname) {
+        if ((flags & AT_EMPTY_PATH) == 0) {
+            errno = EFAULT;
+            return -1;
+        }
+        pathname = "";
     }
     if ((flags & AT_EMPTY_PATH) != 0) {
         unsigned char first_byte;
@@ -461,7 +475,7 @@ static inline int fstatat64(int dirfd, const char* pathname,
                             struct stat64* statbuf, int flags) {
     RinPathAtCallV1 call;
 
-    if (!pathname || !statbuf) {
+    if (!statbuf) {
         errno = EFAULT;
         return -1;
     }
@@ -469,6 +483,13 @@ static inline int fstatat64(int dirfd, const char* pathname,
                    AT_NO_AUTOMOUNT)) != 0) {
         errno = EINVAL;
         return -1;
+    }
+    if (!pathname) {
+        if ((flags & AT_EMPTY_PATH) == 0) {
+            errno = EFAULT;
+            return -1;
+        }
+        pathname = "";
     }
     if ((flags & AT_EMPTY_PATH) != 0) {
         unsigned char first_byte;
