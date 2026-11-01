@@ -113,6 +113,17 @@ struct io_uring_probe {
     struct io_uring_probe_op ops[];
 };
 
+struct io_uring_restriction {
+    __u16 opcode;
+    union {
+        __u8 register_op;
+        __u8 sqe_op;
+        __u8 sqe_flags;
+    };
+    __u8 resv;
+    __u32 resv2[3];
+};
+
 #define IORING_SETUP_IOPOLL              (1U << 0)
 #define IORING_SETUP_SQPOLL              (1U << 1)
 #define IORING_SETUP_SQ_AFF              (1U << 2)
@@ -208,6 +219,13 @@ struct io_uring_probe {
 #define IORING_REGISTER_PROBE             8
 #define IORING_REGISTER_RESTRICTIONS      11
 #define IORING_REGISTER_ENABLE_RINGS      12
+#define IORING_REGISTER_LAST              13
+
+#define IORING_RESTRICTION_REGISTER_OP       0
+#define IORING_RESTRICTION_SQE_OP            1
+#define IORING_RESTRICTION_SQE_FLAGS_ALLOWED 2
+#define IORING_RESTRICTION_SQE_FLAGS_REQUIRED 3
+#define IORING_RESTRICTION_LAST              4
 
 #define IO_URING_OP_SUPPORTED             (1U << 0)
 #define IORING_ASYNC_CANCEL_ALL           (1U << 0)
