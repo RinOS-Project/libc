@@ -74,6 +74,13 @@ extern "C" {
 #define PR_TASK_PERF_EVENTS_ENABLE  32
 #define PR_MCE_KILL         33  /* Set machine check exception mode */
 #define PR_MCE_KILL_GET     34  /* Get machine check exception mode */
+#define RIN_PRCTL_TASK_PERF_EVENTS_CONTROL_SUPPORTED 1
+/* No per-task perf event attachment API exists yet; with an empty task event
+ * list the Linux disable/enable controls are successful no-ops. */
+#define RIN_PRCTL_TASK_PERF_EVENT_ATTACHMENT_SUPPORTED 0
+#define RIN_PRCTL_MCE_KILL_CONTROL_SUPPORTED 1
+#define RIN_PRCTL_MCE_KILL_SUPPORTED_IA32 1
+#define RIN_PRCTL_MCE_KILL_SUPPORTED_X86_64 1
 #define PR_SET_MM           35  /* Modify memory management settings */
 #define PR_SET_MM_START_CODE 1
 #define PR_SET_MM_END_CODE 2
@@ -366,6 +373,10 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_DUMPABLE || option == PR_GET_DUMPABLE ||
         option == PR_SET_VMA ||
         option == PR_SET_PTRACER ||
+        option == PR_TASK_PERF_EVENTS_DISABLE ||
+        option == PR_TASK_PERF_EVENTS_ENABLE ||
+        option == PR_MCE_KILL || option == PR_MCE_KILL_GET ||
+        option == PR_SET_IO_FLUSHER || option == PR_GET_IO_FLUSHER ||
         option == PR_GET_TID_ADDRESS ||
         option == PR_SET_SYSCALL_USER_DISPATCH ||
         option == PR_SET_THP_DISABLE ||
@@ -413,6 +424,7 @@ static inline int prctl(int option, ...) {
         option == PR_SET_PTRACER ||
         option == PR_SET_TIMERSLACK || option == PR_SET_TIMING ||
         option == PR_SET_TSC || option == PR_SET_PDEATHSIG ||
+        option == PR_MCE_KILL || option == PR_SET_IO_FLUSHER ||
         option == PR_SET_DUMPABLE || option == PR_SET_NO_NEW_PRIVS ||
         option == PR_SET_SYSCALL_USER_DISPATCH ||
         option == PR_SET_THP_DISABLE ||
@@ -466,6 +478,9 @@ static inline int prctl(int option, ...) {
             arg2 = (uintptr_t)__builtin_va_arg(args, long);
         } else if (option == PR_SET_TIMERSLACK) {
             arg2 = (uintptr_t)__builtin_va_arg(args, unsigned long);
+        } else if (option == PR_MCE_KILL) {
+            arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+            arg3 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
         } else if (option == PR_GET_SPECULATION_CTRL ||
                    option == PR_SET_SPECULATION_CTRL) {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);

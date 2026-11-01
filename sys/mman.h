@@ -152,6 +152,9 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 #define MADV_DOFORK      11  /* fork時にコピーする */
 #define MADV_HUGEPAGE    14  /* transparent huge-page preference */
 #define MADV_NOHUGEPAGE  15  /* disable transparent huge pages for range */
+#define MADV_HWPOISON   100  /* isolate an owned anonymous page as poisoned */
+#define RIN_MADV_HWPOISON_SUPPORTED_IA32 1
+#define RIN_MADV_HWPOISON_SUPPORTED_X86_64 1
 
 /* First-touch anonymous THP policy is implemented by the x86_64 kernel. */
 #define RIN_MMAN_THP_ADVICE_SUPPORTED_X86_64 1
