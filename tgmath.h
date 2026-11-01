@@ -132,6 +132,11 @@
 #define nextup(x)     __RIN_TGMATH_UNARY_REAL(nextup, (x))
 #define rint(x)       __RIN_TGMATH_UNARY_REAL(rint, (x))
 #define round(x)      __RIN_TGMATH_UNARY_REAL(round, (x))
+#define lrint(x)      __RIN_TGMATH_UNARY_REAL(lrint, (x))
+#define llrint(x)     __RIN_TGMATH_UNARY_REAL(llrint, (x))
+#define lround(x)     __RIN_TGMATH_UNARY_REAL(lround, (x))
+#define llround(x)    __RIN_TGMATH_UNARY_REAL(llround, (x))
+#define roundeven(x)  __RIN_TGMATH_UNARY_REAL(roundeven, (x))
 #define tgamma(x)     __RIN_TGMATH_UNARY_REAL(tgamma, (x))
 #define trunc(x)      __RIN_TGMATH_UNARY_REAL(trunc, (x))
 
@@ -150,6 +155,20 @@
     __RIN_TGMATH_BINARY_REAL_WITH_ARG(remquo, (x), (y), (quo))
 #define scalbn(x, n)     __RIN_TGMATH_UNARY_REAL_WITH_ARG(scalbn, (x), (n))
 #define scalbln(x, n)    __RIN_TGMATH_UNARY_REAL_WITH_ARG(scalbln, (x), (n))
+
+/* C23 extrema (B44): usual-arithmetic-conversion dispatch. */
+#define fmaximum(x, y)     __RIN_TGMATH_BINARY_REAL(fmaximum, (x), (y))
+#define fminimum(x, y)     __RIN_TGMATH_BINARY_REAL(fminimum, (x), (y))
+#define fmaximum_num(x, y) __RIN_TGMATH_BINARY_REAL(fmaximum_num, (x), (y))
+#define fminimum_num(x, y) __RIN_TGMATH_BINARY_REAL(fminimum_num, (x), (y))
+#define fmaximum_mag(x, y) __RIN_TGMATH_BINARY_REAL(fmaximum_mag, (x), (y))
+#define fminimum_mag(x, y) __RIN_TGMATH_BINARY_REAL(fminimum_mag, (x), (y))
+/* C23 canonicalize: dispatch on the source pointer's pointee. */
+#define canonicalize(cx, x) \
+    _Generic((x), float *: canonicalizef, const float *: canonicalizef, \
+             long double *: canonicalizel, \
+             const long double *: canonicalizel, \
+             default: canonicalize)((cx), (x))
 
 /* These functions choose a variant from their floating argument; their
  * other parameters keep the types specified by math.h. */

@@ -72,6 +72,13 @@ typedef long double double_t;
 #endif
 #ifndef math_errhandling
 #define math_errhandling (MATH_ERRNO | MATH_ERREXCEPT)
+
+/* C23 fromfp rounding-mode codes (values match glibc). */
+#define FP_INT_UPWARD 0
+#define FP_INT_DOWNWARD 1
+#define FP_INT_TOWARDZERO 2
+#define FP_INT_TONEARESTFROMZERO 3
+#define FP_INT_TONEAREST 4
 #endif
 
 /* lgamma writes the sign of the gamma result here.  Unlike errno this is
@@ -309,6 +316,13 @@ static inline int _libc_fpclassify_d(double x) {
     default: _libc_fpclassify_d)(x)
 #define issubnormal(x) (fpclassify(x) == FP_SUBNORMAL)
 #define iszero(x) (fpclassify(x) == FP_ZERO)
+/* C23: x86 has one encoding per binary value (sNaN included), so
+ * every floating value is canonical. Unevaluated, like issignaling. */
+#define iscanonical(x) _Generic((x), \
+    float: 1, \
+    double: 1, \
+    long double: 1, \
+    default: 1)
 static inline int _libc_issignaling_f(float x) {
     union { float value; unsigned int bits; } u;
     u.value = x;
@@ -2857,6 +2871,198 @@ static inline float fmaxf(float x, float y) {
         return x;
     }
     return x > y ? x : y;
+}
+
+/* C23 roundeven - ties to even, current mode ignored. Quiet: C23
+ * lets INEXACT stay silent here and glibc keeps it silent. */
+static inline double roundeven(double x) {
+    return __rin_math_round_even(x);
+}
+
+static inline float roundevenf(float x) {
+    return (float)__rin_math_round_even((double)x);
+}
+
+static inline long double roundevenl(long double x) {
+    return (long double)__rin_math_round_even((double)x);
+}
+
+/* C23 fmaximum/fminimum - NaN-propagating extrema (glibc-2.39
+ * parity; C23-final prefers numbers, tracked as follow-up).
+ * Signed zeros: maximum prefers +0, minimum prefers -0.
+ * Quiet: no errno, no exceptions. */
+static inline double fmaximum(double x, double y) {
+    if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) return NAN;
+    if (x == y) {
+        if (x == 0.0)
+            return (__rin_math_signbit_d(x) && __rin_math_signbit_d(y))
+                ? -0.0 : 0.0;
+        return x;
+    }
+    return x > y ? x : y;
+}
+
+static inline float fmaximumf(float x, float y) {
+    if (__rin_math_isnan_f(x) || __rin_math_isnan_f(y))
+        return __builtin_nanf("");
+    if (x == y) {
+        if (x == 0.0f)
+            return (__rin_math_signbit_f(x) && __rin_math_signbit_f(y))
+                ? -0.0f : 0.0f;
+        return x;
+    }
+    return x > y ? x : y;
+}
+
+static inline long double fmaximuml(long double x, long double y) {
+    return (long double)fmaximum((double)x, (double)y);
+}
+
+static inline double fminimum(double x, double y) {
+    if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) return NAN;
+    if (x == y) {
+        if (x == 0.0)
+            return (__rin_math_signbit_d(x) || __rin_math_signbit_d(y))
+                ? -0.0 : 0.0;
+        return x;
+    }
+    return x < y ? x : y;
+}
+
+static inline float fminimumf(float x, float y) {
+    if (__rin_math_isnan_f(x) || __rin_math_isnan_f(y))
+        return __builtin_nanf("");
+    if (x == y) {
+        if (x == 0.0f)
+            return (__rin_math_signbit_f(x) || __rin_math_signbit_f(y))
+                ? -0.0f : 0.0f;
+        return x;
+    }
+    return x < y ? x : y;
+}
+
+static inline long double fminimuml(long double x, long double y) {
+    return (long double)fminimum((double)x, (double)y);
+}
+
+/* C23 _num variants - numbers win over NaN (NaN only if both are). */
+static inline double fmaximum_num(double x, double y) {
+    if (__rin_math_isnan_d(x)) return y;
+    if (__rin_math_isnan_d(y)) return x;
+    return fmaximum(x, y);
+}
+
+static inline float fmaximum_numf(float x, float y) {
+    if (__rin_math_isnan_f(x)) return y;
+    if (__rin_math_isnan_f(y)) return x;
+    return fmaximumf(x, y);
+}
+
+static inline long double fmaximum_numl(long double x, long double y) {
+    return (long double)fmaximum_num((double)x, (double)y);
+}
+
+static inline double fminimum_num(double x, double y) {
+    if (__rin_math_isnan_d(x)) return y;
+    if (__rin_math_isnan_d(y)) return x;
+    return fminimum(x, y);
+}
+
+static inline float fminimum_numf(float x, float y) {
+    if (__rin_math_isnan_f(x)) return y;
+    if (__rin_math_isnan_f(y)) return x;
+    return fminimumf(x, y);
+}
+
+static inline long double fminimum_numl(long double x, long double y) {
+    return (long double)fminimum_num((double)x, (double)y);
+}
+
+/* C23 _mag variants - larger magnitude wins (sign kept); ties
+ * delegate to the base function; NaN propagates. */
+static inline double fmaximum_mag(double x, double y) {
+    if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) return NAN;
+    double ax = fabs(x), ay = fabs(y);
+    if (ax > ay) return x;
+    if (ay > ax) return y;
+    return fmaximum(x, y);
+}
+
+static inline float fmaximum_magf(float x, float y) {
+    if (__rin_math_isnan_f(x) || __rin_math_isnan_f(y))
+        return __builtin_nanf("");
+    float ax = fabsf(x), ay = fabsf(y);
+    if (ax > ay) return x;
+    if (ay > ax) return y;
+    return fmaximumf(x, y);
+}
+
+static inline long double fmaximum_magl(long double x, long double y) {
+    return (long double)fmaximum_mag((double)x, (double)y);
+}
+
+static inline double fminimum_mag(double x, double y) {
+    if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) return NAN;
+    double ax = fabs(x), ay = fabs(y);
+    if (ax < ay) return x;
+    if (ay < ax) return y;
+    return fminimum(x, y);
+}
+
+static inline float fminimum_magf(float x, float y) {
+    if (__rin_math_isnan_f(x) || __rin_math_isnan_f(y))
+        return __builtin_nanf("");
+    float ax = fabsf(x), ay = fabsf(y);
+    if (ax < ay) return x;
+    if (ay < ax) return y;
+    return fminimumf(x, y);
+}
+
+static inline long double fminimum_magl(long double x, long double y) {
+    return (long double)fminimum_mag((double)x, (double)y);
+}
+
+/* C23 canonicalize - store the canonical encoding of *x in *cx.
+ * x86: every encoding is canonical (return 0 always); sNaN input
+ * is quieted (payload kept) and raises INVALID (M64 parity; the
+ * M32 host stays silent and is carved in tests). */
+static inline int canonicalize(double *cx, const double *x) {
+    union {
+        double value;
+        unsigned long long bits;
+    } u;
+    u.value = *x;
+    if ((u.bits & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL &&
+        (u.bits & 0x000FFFFFFFFFFFFFULL) != 0) {
+        if ((u.bits & 0x0008000000000000ULL) == 0)
+            (void)feraiseexcept(FE_INVALID);
+        u.bits |= 0x0008000000000000ULL;
+    }
+    *cx = u.value;
+    return 0;
+}
+
+static inline int canonicalizef(float *cx, const float *x) {
+    union {
+        float value;
+        unsigned int bits;
+    } u;
+    u.value = *x;
+    if ((u.bits & 0x7F800000U) == 0x7F800000U &&
+        (u.bits & 0x007FFFFFU) != 0) {
+        if ((u.bits & 0x00400000U) == 0)
+            (void)feraiseexcept(FE_INVALID);
+        u.bits |= 0x00400000U;
+    }
+    *cx = u.value;
+    return 0;
+}
+
+static inline int canonicalizel(long double *cx, const long double *x) {
+    double v = (double)*x, c;
+    int k = canonicalize(&c, &v);
+    *cx = (long double)c;
+    return k;
 }
 
 /* fdim - 正の差 */
