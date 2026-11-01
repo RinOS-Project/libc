@@ -3,6 +3,13 @@
  * BSD-style whole-file locking using the RinOS OFD-owned flock namespace.
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64)
+#include_next <sys/file.h>
+#else
 #ifndef _SYS_FILE_H
 #define _SYS_FILE_H
 
@@ -48,3 +55,4 @@ static inline int flock(int fd, int operation)
 #endif /* !MIDL_PASS */
 
 #endif /* _SYS_FILE_H */
+#endif /* hosted Linux delegates to native provider */
