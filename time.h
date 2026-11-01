@@ -1215,8 +1215,9 @@ static inline int _rin_time_timer_value_to_ns(
         return EINVAL;
     if (input->tv_sec < 0) {
         if ((flags & TIMER_ABSTIME) == 0) return EINVAL;
-        /* A normalized negative absolute deadline is already expired. */
-        *output = 0u;
+        /* Preserve nonzero so the kernel distinguishes a negative past
+         * deadline from the zero it_value that disarms an absolute timer. */
+        *output = 1u;
         return 0;
     }
     return _rin_time_timespec_to_ns(input, output);
