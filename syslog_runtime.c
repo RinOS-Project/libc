@@ -17,6 +17,7 @@
 #define RIN_SYSLOG_IO_TIMEOUT_NS UINT64_C(1000000000)
 
 static pthread_mutex_t g_syslog_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_syslog_stderr_lock = PTHREAD_MUTEX_INITIALIZER;
 static char g_syslog_ident[RIN_SYSLOG_IDENT_MAX + 1u];
 static uint64_t g_syslog_request_id;
 
@@ -31,6 +32,14 @@ void _rin_syslog_lock(void) {
 
 void _rin_syslog_unlock(void) {
     (void)pthread_mutex_unlock(&g_syslog_lock);
+}
+
+void _rin_syslog_stderr_lock(void) {
+    (void)pthread_mutex_lock(&g_syslog_stderr_lock);
+}
+
+void _rin_syslog_stderr_unlock(void) {
+    (void)pthread_mutex_unlock(&g_syslog_stderr_lock);
 }
 
 /* Called under g_syslog_lock. Copy the identifier so subsequent logging does

@@ -101,6 +101,8 @@ extern int _syslog_facility;
 extern int _syslog_mask;
 void _rin_syslog_lock(void);
 void _rin_syslog_unlock(void);
+void _rin_syslog_stderr_lock(void);
+void _rin_syslog_stderr_unlock(void);
 void _rin_syslog_set_ident_locked(const char* ident);
 int _rin_syslog_transport_send(unsigned int facility,
                                unsigned int severity,
@@ -151,6 +153,7 @@ static inline int setlogmask(int mask) {
 
 static inline void _syslog_write_stderr(const char* message, size_t length) {
     size_t offset = 0;
+    _rin_syslog_stderr_lock();
     while (offset < length) {
         size_t remaining = length - offset;
         intptr_t written = _RIN_SYSLOG_SYSCALL3(
@@ -161,6 +164,7 @@ static inline void _syslog_write_stderr(const char* message, size_t length) {
         if ((uintptr_t)written > (uintptr_t)remaining) break;
         offset += (size_t)(uintptr_t)written;
     }
+    _rin_syslog_stderr_unlock();
 }
 
 /* LOG_PID is advisory formatting, but its getpid result still crosses a
