@@ -5,6 +5,15 @@
 #include "limits.h"
 #include "sys/syscall.h"
 
+int epoll_create(int size)
+{
+    if (size <= 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    return epoll_create1(0);
+}
+
 int epoll_create1(int flags)
 {
     intptr_t result;

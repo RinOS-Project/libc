@@ -45,6 +45,7 @@ _Static_assert(sizeof(struct epoll_event) == 12u,
 #define EPOLLONESHOT  0x40000000u
 #define EPOLLET       0x80000000u
 
+int epoll_create(int size);
 int epoll_create1(int flags);
 int epoll_ctl(int epoll_fd, int operation, int fd,
               struct epoll_event* event);
