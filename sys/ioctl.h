@@ -191,8 +191,39 @@ struct winsize {
  * the urgent-data mark; non-TCP descriptors return ENOTTY. */
 #define SIOCATMARK  0x8905
 
-/* ネットワークインターフェースioctlはkernel handler未実装のため公開しない。
- * 列挙にはgetifaddrs()/if_nameindex()を使用する。 */
+/* Linux互換のネットワークinterface ioctl。kernelはIPv4 address/netmask、
+ * index、flags、MTU、IFCONF列挙とIPv4 address/netmask更新を処理する。
+ * その他の未対応要求はEOPNOTSUPPを返す。 */
+#ifndef SIOCGIFNAME
+#define SIOCGIFNAME    0x8910
+#endif
+#ifndef SIOCGIFCONF
+#define SIOCGIFCONF    0x8912
+#endif
+#ifndef SIOCGIFFLAGS
+#define SIOCGIFFLAGS   0x8913
+#endif
+#ifndef SIOCSIFFLAGS
+#define SIOCSIFFLAGS   0x8914
+#endif
+#ifndef SIOCGIFADDR
+#define SIOCGIFADDR    0x8915
+#endif
+#ifndef SIOCSIFADDR
+#define SIOCSIFADDR    0x8916
+#endif
+#ifndef SIOCGIFNETMASK
+#define SIOCGIFNETMASK 0x891b
+#endif
+#ifndef SIOCSIFNETMASK
+#define SIOCSIFNETMASK 0x891c
+#endif
+#ifndef SIOCGIFMTU
+#define SIOCGIFMTU     0x8921
+#endif
+#ifndef SIOCGIFINDEX
+#define SIOCGIFINDEX   0x8933
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * ioctl関数
