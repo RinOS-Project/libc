@@ -10,9 +10,6 @@
 #ifndef _LINUX_AUXVEC_H
 #define _LINUX_AUXVEC_H
 
-#include "../errno.h"
-#include "../internal/posix_clock.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -200,33 +197,6 @@ typedef struct {
 } Elf64_auxv_t;
 #endif /* RIN_ELF64_AUXV_TYPE_DEFINED */
 #endif
-#endif /* !__ASSEMBLY__ */
-
-/* ═══════════════════════════════════════════════════════════════
- * RinOS Auxiliary Vector Access
- * ═══════════════════════════════════════════════════════════════*/
-
-/* The CRT validates and snapshots the kernel-provided auxiliary vector before
- * constructors or application code run.  The snapshot lookup is supplied by
- * the common app entry object. */
-#ifndef __ASSEMBLY__
-
-/* Hosted tools and small ABI fixtures may use this header without the RinOS
- * CRT.  In that case there is no startup snapshot and all lookups fail with
- * ENOENT. */
-__attribute__((visibility("hidden")))
-int __rin_auxv_lookup(unsigned long type, unsigned long* value);
-
-static inline unsigned long getauxval(unsigned long type) {
-    unsigned long value = 0u;
-    int result = __rin_auxv_lookup(type, &value);
-    if (result != 0) {
-        errno = result > 0 ? ENOENT : EIO;
-        return 0u;
-    }
-    return value;
-}
-
 #endif /* !__ASSEMBLY__ */
 
 #ifdef __cplusplus

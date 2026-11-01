@@ -17,6 +17,7 @@
 #ifndef _SYS_AUXV_H
 #define _SYS_AUXV_H
 
+#include "../errno.h"
 #include "../linux/auxvec.h"
 
 #ifdef __cplusplus
@@ -41,13 +42,21 @@ extern "C" {
  * the exec that created the image; absent types fail with ENOENT.
  */
 
-/* getauxval is already defined inline in linux/auxvec.h */
+/* The CRT validates and snapshots the kernel-provided auxiliary vector before
+ * constructors or application code run. */
+__attribute__((visibility("hidden")))
+int __rin_auxv_lookup(unsigned long type, unsigned long* value);
 
-/*
- * For compatibility with glibc, also provide:
- */
-
-/* errno disambiguates valid zero values (for example AT_HWCAP2) from errors. */
+/* errno disambiguates valid zero values from an absent entry. */
+static inline unsigned long getauxval(unsigned long type) {
+    unsigned long value = 0u;
+    int result = __rin_auxv_lookup(type, &value);
+    if (result != 0) {
+        errno = result > 0 ? ENOENT : EIO;
+        return 0u;
+    }
+    return value;
+}
 
 #ifdef __cplusplus
 }
