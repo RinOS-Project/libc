@@ -2120,7 +2120,7 @@ static inline long sysconf(int name) {
         case _SC_THREAD_KEYS_MAX:
             return PTHREAD_KEYS_MAX;
         case _SC_THREAD_THREADS_MAX:
-            return _POSIX_THREAD_THREADS_MAX;
+            return PTHREAD_THREADS_MAX;
         case _SC_THREAD_STACK_MIN:
             return PTHREAD_STACK_MIN;
         case _SC_THREAD_ATTR_STACKSIZE:

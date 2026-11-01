@@ -161,8 +161,13 @@
 #define PATH_MAX    1024
 #endif
 
+/* POSIX default process priority; the nice API uses [-NZERO, NZERO - 1]. */
+#ifndef NZERO
+#define NZERO 20
+#endif
+
 #ifndef NAME_MAX
-#define NAME_MAX    255
+#define NAME_MAX    765
 #endif
 #ifndef LINE_MAX
 #define LINE_MAX    2048
@@ -304,6 +309,9 @@
 #endif
 #ifndef PTHREAD_KEYS_MAX
 #define PTHREAD_KEYS_MAX 128
+#endif
+#ifndef PTHREAD_THREADS_MAX
+#define PTHREAD_THREADS_MAX 64
 #endif
 #ifndef _POSIX_THREAD_THREADS_MAX
 #define _POSIX_THREAD_THREADS_MAX 64
