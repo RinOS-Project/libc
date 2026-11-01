@@ -183,25 +183,21 @@ static int mq_getattr_raw(mqd_t queue, RinPosixMqAttrV1* attributes)
 }
 
 static int mq_setattr_raw(mqd_t queue, const RinPosixMqAttrV1* attributes,
-                          RinPosixMqAttrV1* old_attributes)
+                          struct mq_attr* old_attributes)
 {
     RinSdkArgsV1 request;
-    int32_t result;
-    if (!attributes || !old_attributes) return RIN_ERROR_INVALID_ARGUMENT;
+    if (!attributes) return RIN_ERROR_INVALID_ARGUMENT;
     mq_sdk_request_init(&request);
     request.value[0] = queue;
     request.value[1] = (uint64_t)(uintptr_t)attributes;
-    result = mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
-                             RIN_LIBC_SDK_IPC_POSIX_MQ_SETATTR,
-                             &request, old_attributes,
-                             sizeof(*old_attributes));
-    if (result == RIN_SUCCESS &&
-        (old_attributes->struct_size != sizeof(*old_attributes) ||
-         old_attributes->version != RIN_POSIX_MQ_ABI_VERSION ||
-         old_attributes->reserved[0] != 0u ||
-         old_attributes->reserved[1] != 0u))
-        return RIN_ERROR_ABI_MISMATCH;
-    return result;
+    if (old_attributes) {
+        request.value[2] = (uint64_t)(uintptr_t)old_attributes;
+        request.value[3] = sizeof(long);
+        request.value[4] = O_NONBLOCK;
+    }
+    return mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
+                           RIN_LIBC_SDK_IPC_POSIX_MQ_SETATTR,
+                           &request, NULL, 0u);
 }
 
 static int32_t mq_send_once(mqd_t queue, const char* message, size_t length,
@@ -737,6 +733,7 @@ int mq_unlink(const char* name)
 int mq_getattr(mqd_t mqdes, struct mq_attr* attr)
 {
     RinPosixMqAttrV1 wire_attributes;
+    struct mq_attr attr_copy;
     int32_t result;
     if (!attr) {
         errno = EFAULT;
@@ -746,15 +743,14 @@ int mq_getattr(mqd_t mqdes, struct mq_attr* attr)
     if (mq_error_from_result(result,
                              RIN_LIBC_SDK_IPC_POSIX_MQ_GETATTR, 0) != 0)
         return -1;
-    mq_attributes_to_posix(&wire_attributes, attr);
-    return 0;
+    mq_attributes_to_posix(&wire_attributes, &attr_copy);
+    return mq_user_snapshot(&attr_copy, sizeof(attr_copy), 0, attr);
 }
 
 int mq_setattr(mqd_t mqdes, const struct mq_attr* newattr,
                struct mq_attr* oldattr)
 {
     RinPosixMqAttrV1 requested;
-    RinPosixMqAttrV1 previous;
     struct mq_attr attr_copy;
     int32_t result;
     if (!newattr) {
@@ -776,11 +772,10 @@ int mq_setattr(mqd_t mqdes, const struct mq_attr* newattr,
     requested.mq_curmsgs = 0u;
     requested.reserved[0] = 0u;
     requested.reserved[1] = 0u;
-    result = mq_setattr_raw(mqdes, &requested, &previous);
+    result = mq_setattr_raw(mqdes, &requested, oldattr);
     if (mq_error_from_result(result,
                              RIN_LIBC_SDK_IPC_POSIX_MQ_SETATTR, 0) != 0)
         return -1;
-    if (oldattr) mq_attributes_to_posix(&previous, oldattr);
     return 0;
 }
 
