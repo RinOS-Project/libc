@@ -367,6 +367,7 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define SO_SNDTIMEO     21  /* 送信タイムアウト */
 #define SO_ACCEPTCONN   30  /* accept可能か */
 #define SO_REUSEPORT    15  /* ポート再利用 */
+#define SO_RXQ_OVFL     40  /* UDP receive queue drop count in SCM_RXQ_OVFL */
 #define SO_ZEROCOPY     60  /* 完了通知はMSG_ERRQUEUEから取得 */
 #define SO_PASSCRED     16  /* UNIX socketで送信者資格情報を受信 */
 #define SO_PEERCRED     17  /* UNIX socketの接続時peer資格情報 */
@@ -383,6 +384,8 @@ static inline uint32_t ntohl(uint32_t netlong) {
  *   受信queue内のデータより小さい値への変更はEBUSY。
  * - SO_KEEPALIVEはTCPのみ（既定off）。probe開始は7200秒、間隔75秒、最大9回。
  * - SO_BROADCASTはIPv4 UDPのみ。SO_LINGERはTCPのみ。
+ * - SO_RXQ_OVFLはIPv4 UDPのみ。有効時はrecvmsg()のSCM_RXQ_OVFLに
+ *   socket生成後の受信queue drop累積数をuint32_tで返す。
  * - SO_ERRORは取得のみ。TCP/UNIXは保留errorを返し、TCPは取得時にclearする。
  *   UDP/raw/packetは現状0を返す。SO_ACCEPTCONNはTCP/UNIXで取得可能。
  * - TCP_USER_TIMEOUTはTCP levelでミリ秒単位の未ACK／zero-window停滞上限を設定し、
@@ -482,6 +485,7 @@ struct cmsghdr {
 
 #define SCM_RIGHTS 0x01
 #define SCM_CREDENTIALS 0x02
+#define SCM_RXQ_OVFL SO_RXQ_OVFL
 
 struct ucred {
     pid_t pid;
