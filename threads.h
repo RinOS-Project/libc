@@ -167,7 +167,9 @@ static inline void mtx_destroy(mtx_t* mutex)
 
 static inline int cnd_init(cnd_t* condition)
 {
-    return pthread_cond_init(condition, NULL) == 0 ? thrd_success : thrd_error;
+    int error = pthread_cond_init(condition, NULL);
+    if (error == 0) return thrd_success;
+    return error == ENOMEM ? thrd_nomem : thrd_error;
 }
 
 static inline int cnd_signal(cnd_t* condition)
