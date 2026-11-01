@@ -1,4 +1,11 @@
 /* SPDX-License-Identifier: MIT */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(RIN_USERSPACE) && !defined(RIN_KERNEL) && \
+    !defined(RIN_ARCH_32) && !defined(RIN_ARCH_64)
+#include_next <sys/epoll.h>
+#else
 #ifndef _SYS_EPOLL_H
 #define _SYS_EPOLL_H
 
@@ -41,6 +48,11 @@ _Static_assert(sizeof(struct epoll_event) == 12u,
 #define EPOLLOUT      0x00000004u
 #define EPOLLERR      0x00000008u
 #define EPOLLHUP      0x00000010u
+#define EPOLLRDNORM   0x00000040u
+#define EPOLLRDBAND   0x00000080u
+#define EPOLLWRNORM   0x00000100u
+#define EPOLLWRBAND   0x00000200u
+#define EPOLLMSG      0x00000400u
 #define EPOLLRDHUP    0x00002000u
 #define EPOLLONESHOT  0x40000000u
 #define EPOLLET       0x80000000u
@@ -62,3 +74,4 @@ int epoll_pwait2(int epoll_fd, struct epoll_event* events,
 #endif
 
 #endif /* _SYS_EPOLL_H */
+#endif /* hosted Linux delegates to native provider */
