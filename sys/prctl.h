@@ -120,12 +120,13 @@ extern "C" {
 #define RIN_PRCTL_TAGGED_ADDRESS_CONTROL_SUPPORTED 0
 #define RIN_PRCTL_SME_CONTROL_SUPPORTED 0
 #define RIN_PRCTL_SYSCALL_USER_DISPATCH_SUPPORTED 1
-/* PR_SET_THP_DISABLE is available on both ABIs.  x86_64 applies the mode to
- * opportunistic anonymous first-touch THP allocation; IA-32 has no THP path,
- * and neither architecture currently performs background page collapse. */
+/* PR_SET_THP_DISABLE is available on both ABIs. x86_64 applies the mode to
+ * opportunistic anonymous 2 MiB first-touch allocation; IA-32 applies it to
+ * aligned anonymous 4 MiB PSE first-touch allocation. Neither architecture
+ * currently performs background page collapse or promotes existing pages. */
 #define RIN_PRCTL_THP_DISABLE_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_THP_ENFORCEMENT_SUPPORTED_X86_64 1
-#define RIN_PRCTL_THP_ENFORCEMENT_SUPPORTED_IA32   0
+#define RIN_PRCTL_THP_ENFORCEMENT_SUPPORTED_IA32   1
 #define RIN_PRCTL_TIMING_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_SET_MM_SCALAR_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_SET_MM_MAP_CONTROL_SUPPORTED 1
