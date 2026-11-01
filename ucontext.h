@@ -187,9 +187,10 @@ struct __ucontext {
     mcontext_t         uc_mcontext;
     sigset_t           uc_sigmask;
     struct _libc_fpstate __fpregs_mem;
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__) || defined(_M_X64) || \
+    defined(__i386__) || defined(_M_IX86)
     /* Versioned tail extension.  Keep the historical register, signal-mask,
-     * and FXSAVE offsets stable while giving x86_64 contexts room for the
+     * and FXSAVE offsets stable while giving x86 contexts room for the
      * complete state enabled by the kernel's XCR0 mask. */
     struct {
         uint32_t version;
@@ -846,6 +847,11 @@ swapcontext(ucontext_t* old_context, const ucontext_t* new_context) {
 
 #define RIN_UCONTEXT_EFLAGS_MASK       0x00000cd5UL
 #define RIN_UCONTEXT_EFLAGS_REQUIRED   0x00000202UL
+#define RIN_UCONTEXT_XSTATE_VERSION    1u
+#define RIN_UCONTEXT_XSTATE_FXSAVE     1u
+#define RIN_UCONTEXT_XSTATE_XSAVE      2u
+#define RIN_UCONTEXT_XSTATE_MAX_BYTES  4096u
+#define RIN_UCONTEXT_XSTATE_BASE_MASK UINT64_C(3)
 
 /* Pin the naked i386 assembly to the public mcontext control-flow offsets. */
 RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_mcontext.gregs[REG_EDI]) == 36u,
@@ -858,6 +864,137 @@ RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_mcontext.gregs[REG_EFL]) == 8
                "ucontext i386 EFLAGS offset changed");
 RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_mcontext.fpregs) == 96u,
                "ucontext i386 FP pointer offset changed");
+RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_xstate.version) == 640u,
+                "ucontext i386 xstate version offset changed");
+RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_xstate.mode) == 644u,
+                "ucontext i386 xstate mode offset changed");
+RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_xstate.size) == 648u,
+                "ucontext i386 xstate size offset changed");
+RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_xstate.mask) == 656u,
+                "ucontext i386 xstate mask offset changed");
+RIN_UCONTEXT_STATIC_ASSERT(offsetof(ucontext_t, uc_xstate.bytes) == 664u,
+                "ucontext i386 xstate data offset changed");
+
+static inline unsigned char* rin_ucontext_i386_xstate_area(
+    ucontext_t* context) {
+    uintptr_t address = (uintptr_t)context->uc_xstate.bytes;
+    address = (address + 63u) & ~(uintptr_t)63u;
+    return (unsigned char*)address;
+}
+
+static inline const unsigned char* rin_ucontext_i386_xstate_area_const(
+    const ucontext_t* context) {
+    uintptr_t address = (uintptr_t)context->uc_xstate.bytes;
+    address = (address + 63u) & ~(uintptr_t)63u;
+    return (const unsigned char*)address;
+}
+
+static inline void rin_ucontext_i386_cpuid(uint32_t leaf, uint32_t subleaf,
+                                           uint32_t* eax_out,
+                                           uint32_t* ebx_out,
+                                           uint32_t* ecx_out,
+                                           uint32_t* edx_out) {
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(leaf), "c"(subleaf));
+    if (eax_out) *eax_out = eax;
+    if (ebx_out) *ebx_out = ebx;
+    if (ecx_out) *ecx_out = ecx;
+    if (edx_out) *edx_out = edx;
+}
+
+/* Returns 0 for an FXSAVE-only CPU, 1 for enabled XSAVE state, and -1 when
+ * enabled state does not fit the fixed versioned tail. */
+static inline int rin_ucontext_i386_xstate_query(uint64_t* mask_out,
+                                                 uint32_t* size_out) {
+    uint32_t max_leaf = 0u, eax = 0u, ebx = 0u, ecx = 0u, edx = 0u;
+    uint64_t mask;
+    uint64_t supported_mask;
+    rin_ucontext_i386_cpuid(0u, 0u, &max_leaf, 0, 0, 0);
+    if (max_leaf < 1u) return 0;
+    rin_ucontext_i386_cpuid(1u, 0u, &eax, &ebx, &ecx, &edx);
+    if ((ecx & (UINT32_C(1) << 26)) == 0u ||
+        (ecx & (UINT32_C(1) << 27)) == 0u)
+        return 0;
+    if (max_leaf < 0xdu) return -1;
+    rin_ucontext_i386_cpuid(0xdu, 0u, &eax, &ebx, &ecx, &edx);
+    supported_mask = ((uint64_t)edx << 32u) | eax;
+    {
+        uint32_t xcr0_lo = 0u, xcr0_hi = 0u;
+        __asm__ volatile("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi)
+                         : "c"(0u));
+        mask = ((uint64_t)xcr0_hi << 32u) | xcr0_lo;
+    }
+    if ((mask & RIN_UCONTEXT_XSTATE_BASE_MASK) !=
+            RIN_UCONTEXT_XSTATE_BASE_MASK ||
+        (mask & ~supported_mask) != 0u ||
+        ebx < RIN_UCONTEXT_FXSAVE_BYTES + 64u ||
+        ebx > RIN_UCONTEXT_XSTATE_MAX_BYTES)
+        return -1;
+    if (mask_out) *mask_out = mask;
+    if (size_out) *size_out = ebx;
+    return 1;
+}
+
+static inline int rin_ucontext_i386_xstate_prepare(ucontext_t* context) {
+    uint64_t mask = RIN_UCONTEXT_XSTATE_BASE_MASK;
+    uint32_t size = RIN_UCONTEXT_FXSAVE_BYTES;
+    int mode;
+    if (!context) return 0;
+    mode = rin_ucontext_i386_xstate_query(&mask, &size);
+    if (mode < 0) {
+        errno = EINVAL;
+        return 0;
+    }
+    context->uc_xstate.version = RIN_UCONTEXT_XSTATE_VERSION;
+    context->uc_xstate.mode = mode != 0
+        ? RIN_UCONTEXT_XSTATE_XSAVE : RIN_UCONTEXT_XSTATE_FXSAVE;
+    context->uc_xstate.size = size;
+    context->uc_xstate.reserved = 0u;
+    context->uc_xstate.mask = mask;
+    return 1;
+}
+
+static inline int rin_ucontext_i386_xstate_valid(
+    const ucontext_t* context) {
+    uint64_t current_mask = 0u;
+    uint32_t current_size = 0u;
+    int current_mode;
+    if (!context || context->uc_xstate.version !=
+                        RIN_UCONTEXT_XSTATE_VERSION ||
+        context->uc_xstate.reserved != 0u ||
+        (((uintptr_t)rin_ucontext_i386_xstate_area_const(context) & 63u) != 0u))
+        return 0;
+    current_mode = rin_ucontext_i386_xstate_query(&current_mask,
+                                                   &current_size);
+    if (context->uc_xstate.mode == RIN_UCONTEXT_XSTATE_FXSAVE)
+        return current_mode == 0 &&
+               context->uc_xstate.size == RIN_UCONTEXT_FXSAVE_BYTES &&
+               context->uc_xstate.mask == RIN_UCONTEXT_XSTATE_BASE_MASK;
+    if (context->uc_xstate.mode == RIN_UCONTEXT_XSTATE_XSAVE &&
+        current_mode == 1 && context->uc_xstate.mask == current_mask &&
+        context->uc_xstate.size == current_size &&
+        (current_mask & RIN_UCONTEXT_XSTATE_BASE_MASK) ==
+            RIN_UCONTEXT_XSTATE_BASE_MASK) {
+        const unsigned char* area =
+            rin_ucontext_i386_xstate_area_const(context);
+        uint64_t state_bv = 0u;
+        uint64_t compacted_bv = 0u;
+        uint32_t index;
+        memcpy(&state_bv, area + RIN_UCONTEXT_FXSAVE_BYTES,
+               sizeof(state_bv));
+        memcpy(&compacted_bv, area + RIN_UCONTEXT_FXSAVE_BYTES + 8u,
+               sizeof(compacted_bv));
+        if ((state_bv & ~current_mask) != 0u || compacted_bv != 0u)
+            return 0;
+        for (index = 16u; index < 64u; ++index)
+            if (area[RIN_UCONTEXT_FXSAVE_BYTES + index] != 0u)
+                return 0;
+        return 1;
+    }
+    return 0;
+}
 
 static inline int rin_ucontext_i386_ready(const ucontext_t* context) {
     uintptr_t eip;
@@ -873,7 +1010,8 @@ static inline int rin_ucontext_i386_ready(const ucontext_t* context) {
     esp = (uintptr_t)(unsigned int)context->uc_mcontext.gregs[REG_ESP];
     return eip != 0u && esp != 0u && (esp & 3u) == 0u &&
            context->uc_mcontext.fpregs != NULL &&
-           (((uintptr_t)context->uc_mcontext.fpregs & 15u) == 0u);
+           (((uintptr_t)context->uc_mcontext.fpregs & 15u) == 0u) &&
+           rin_ucontext_i386_xstate_valid(context);
 }
 
 /* Capture the normal continuation after this helper returns.  EAX/EDX are
@@ -913,6 +1051,14 @@ rin_ucontext_i386_capture(ucontext_t* context __attribute__((unused))) {
         "leal 12(%esp), %edx\n\t"
         "movl %edx, 88(%eax)\n\t"
         "movl $0, 92(%eax)\n\t"
+        "cmpl $2, 644(%eax)\n\t"
+        "jne 1f\n\t"
+        "leal 727(%eax), %ecx\n\t"
+        "andl $-64, %ecx\n\t"
+        "movl 660(%eax), %edx\n\t"
+        "movl 656(%eax), %eax\n\t"
+        "xsave (%ecx)\n\t"
+        "1:\n\t"
         "addl $8, %esp\n\t"
         "xorl %eax, %eax\n\t"
         "ret\n\t");
@@ -925,8 +1071,21 @@ static __attribute__((naked, noinline, noreturn)) void
 rin_ucontext_i386_restore(const ucontext_t* context __attribute__((unused))) {
     __asm__(
         "movl 4(%esp), %eax\n\t"
+        "cmpl $2, 644(%eax)\n\t"
+        "jne 1f\n\t"
+        "movl %eax, %edi\n\t"
+        "leal 727(%edi), %ecx\n\t"
+        "andl $-64, %ecx\n\t"
+        "movl 660(%edi), %edx\n\t"
+        "movl 656(%edi), %eax\n\t"
+        "xrstor (%ecx)\n\t"
+        "movl %edi, %eax\n\t"
+        "jmp 2f\n\t"
+        "1:\n\t"
+        "movl 4(%esp), %eax\n\t"
         "movl 96(%eax), %ecx\n\t"
         "fxrstor (%ecx)\n\t"
+        "2:\n\t"
         "movl 48(%eax), %edx\n\t"
         "subl $4, %edx\n\t"
         "movl 76(%eax), %ecx\n\t"
@@ -958,6 +1117,10 @@ getcontext(ucontext_t* context) {
     context->uc_mcontext.fpregs = &context->__fpregs_mem;
     context->uc_mcontext.oldmask = 0u;
     context->uc_mcontext.cr2 = 0u;
+    if (!rin_ucontext_i386_xstate_prepare(context)) {
+        context->uc_flags = 0u;
+        return -1;
+    }
     if (rin_ucontext_sigmask(NULL, &context->uc_sigmask) != 0)
         return -1;
     return rin_ucontext_i386_capture(context);
