@@ -46,7 +46,7 @@ void* tdelete(const void* key, void** rootp,
 void twalk(const void* root,
            void (*action)(const void*, VISIT, int));
 
-#if defined(__USE_GNU) || defined(__RINOS__)
+#if defined(__USE_GNU) || defined(_RIN_USE_GNU_SEARCH)
 /* GNU-compatible caller-owned hash table.  Initialize with {0}; distinct
  * instances do not share the process-global hsearch() table. */
 struct _ENTRY;
