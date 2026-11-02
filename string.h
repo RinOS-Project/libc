@@ -540,6 +540,11 @@ RIN_STRING_INLINE int strerror_r(int errnum, char* buf, size_t buflen) {
 int strverscmp(const char* left, const char* right);
 #endif
 
+#if defined(_GNU_SOURCE) || defined(RIN_STRING_IMPLEMENTATION)
+const char* strerrorname_np(int errnum);
+const char* strerrordesc_np(int errnum);
+#endif
+
 #ifdef __cplusplus
 }
 #endif
