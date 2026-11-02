@@ -52,9 +52,97 @@ static int rin_sscanf_scanset_contains(const struct RinSscanfSpec* spec,
     return spec->scanset_invert ? !contained : contained;
 }
 
-/* bound_width keeps the legacy 4096 field-width cap for stream entries,
- * whose collectors read into fixed stack buffers; string entries pass
- * zero and accept any representable width (B47: no fixed input bound). */
+/* B56: growable stream-scanf candidate. Fields read from streams cannot
+ * be measured before they are consumed, so width-omitted (and very wide)
+ * conversions accumulate here instead of the legacy 4096-byte stack
+ * scratch. Inline storage covers ordinary fields with no heap traffic;
+ * larger fields spill to the heap with geometric, overflow-checked
+ * growth. Appends always keep room for a trailing NUL, so data[count]
+ * is writable after any successful append. The owning frame releases
+ * its candidate on every exit; stack cost is input-length independent. */
+#define RIN_FSCANF_CANDIDATE_INLINE 256u
+struct RinFscanfCandidate {
+    char* data;
+    size_t count;
+    size_t capacity;
+    char inline_data[RIN_FSCANF_CANDIDATE_INLINE];
+};
+
+#ifdef RIN_SSCANF_TEST_ALLOC_HOOKS
+/* Test seam (B56): the unbounded-field test injects allocation failures
+ * and checks for leaks through these. Zero cost when the macro is off. */
+extern void* (*rin_fscanf_candidate_malloc_hook)(size_t size);
+extern void (*rin_fscanf_candidate_free_hook)(void* pointer);
+#endif
+
+static void* rin_fscanf_candidate_alloc(size_t size) {
+#ifdef RIN_SSCANF_TEST_ALLOC_HOOKS
+    if (rin_fscanf_candidate_malloc_hook)
+        return rin_fscanf_candidate_malloc_hook(size);
+#endif
+    return malloc(size);
+}
+
+static void rin_fscanf_candidate_dealloc(void* pointer) {
+    if (!pointer) return;
+#ifdef RIN_SSCANF_TEST_ALLOC_HOOKS
+    if (rin_fscanf_candidate_free_hook) {
+        rin_fscanf_candidate_free_hook(pointer);
+        return;
+    }
+#endif
+    free(pointer);
+}
+
+static void rin_fscanf_candidate_init(struct RinFscanfCandidate* cand) {
+    cand->data = cand->inline_data;
+    cand->count = 0u;
+    cand->capacity = RIN_FSCANF_CANDIDATE_INLINE;
+}
+
+static void rin_fscanf_candidate_release(struct RinFscanfCandidate* cand) {
+    if (cand->data != cand->inline_data) {
+        rin_fscanf_candidate_dealloc(cand->data);
+        cand->data = cand->inline_data;
+    }
+    cand->count = 0u;
+    cand->capacity = RIN_FSCANF_CANDIDATE_INLINE;
+}
+
+/* Appends one byte, growing the heap on demand. Returns 0 on success,
+ * -1 with errno == ENOMEM when growth fails (partial bytes stay). */
+static int rin_fscanf_candidate_append(struct RinFscanfCandidate* cand,
+                                       unsigned char value) {
+    if (cand->count + 1u >= cand->capacity) {
+        size_t grown;
+        char* replacement;
+        size_t index;
+        if (cand->capacity > (SIZE_MAX - 1u) / 2u) {
+            errno = ENOMEM;
+            return -1;
+        }
+        grown = cand->capacity * 2u;
+        replacement = (char*)rin_fscanf_candidate_alloc(grown);
+        if (!replacement) {
+            errno = ENOMEM;
+            return -1;
+        }
+        for (index = 0u; index < cand->count; ++index)
+            replacement[index] = cand->data[index];
+        if (cand->data != cand->inline_data)
+            rin_fscanf_candidate_dealloc(cand->data);
+        cand->data = replacement;
+        cand->capacity = grown;
+    }
+    cand->data[cand->count++] = (char)value;
+    return 0;
+}
+
+/* bound_width once kept a 4096 field-width cap for stream entries, whose
+ * collectors read into fixed stack buffers. B56 lifted the stream cap:
+ * collectors now grow a heap candidate, so every caller passes zero and
+ * any representable width is accepted on both paths. The parameter is
+ * retained so the shared parser signature is untouched. */
 static int rin_sscanf_parse_spec(const char* format, size_t* offset,
                                  struct RinSscanfSpec* spec,
                                  int bound_width) {
@@ -129,8 +217,10 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
         size_t digit = (size_t)(format[current] - '0');
         size_t width_limit;
         have_width = 1;
-        /* B47: only stream entries cap widths at 4096 (their fixed
-         * collectors); string entries check against SIZE_MAX. */
+        /* B56: stream entries take any representable width (growable
+         * collectors); the SIZE_MAX check below still rejects digit
+         * runs no size_t can hold. bound_width stays so the shared
+         * parser signature is untouched. */
         width_limit = bound_width ? RIN_SSCANF_MAX_INPUT : SIZE_MAX;
         if (width > (width_limit - digit) / 10u) {
             errno = EOVERFLOW;
@@ -227,9 +317,10 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
         }
     } else if (spec->conversion == 's') {
         /* A width is optional for %s.  The standard leaves the destination
-         * buffer size to the caller; this freestanding owner still bounds
-         * the amount read from a stream/string to RIN_SSCANF_MAX_INPUT so a
-         * missing delimiter cannot turn into an unbounded kernel read. */
+         * buffer size to the caller; fields read to the token end on both
+         * paths (B47 strings, B56 streams), so a missing delimiter ends
+         * the field at EOF instead of truncating it. Stack stays bounded:
+         * the stream candidate spills to the heap past inline storage. */
         if (spec->length != RIN_SSCANF_LENGTH_NONE &&
             spec->length != RIN_SSCANF_LENGTH_LONG) {
             errno = ENOSYS;
@@ -240,7 +331,7 @@ static int rin_sscanf_parse_spec(const char* format, size_t* offset,
         int have_previous = 0;
         unsigned char previous = 0u;
         /* Like %s, a scanset may omit its width.  The conversion loop uses
-         * the same bounded default as stream integer/float readers. */
+         * the same unbounded default as stream integer/float readers. */
         if (spec->length != RIN_SSCANF_LENGTH_NONE &&
             spec->length != RIN_SSCANF_LENGTH_LONG) {
             errno = ENOSYS;
@@ -1254,11 +1345,12 @@ static int rin_sscanf_store_wide_field(
             return -1;
         }
         if (wide_capacity == 0u) wide_capacity = 1u;
-        storage = (wchar_t*)malloc(wide_capacity * sizeof(wchar_t));
+        storage = (wchar_t*)rin_fscanf_candidate_alloc(
+            wide_capacity * sizeof(wchar_t));
         if (!storage) { errno = ENOMEM; return -1; }
         if (rin_sscanf_decode_wide_candidate(candidate, byte_count, storage,
                                              wide_count, &decoded) != 0) {
-            free(storage);
+            rin_fscanf_candidate_dealloc(storage);
             return -1;
         }
         if (terminate) storage[wide_count] = L'\0';
@@ -1287,7 +1379,7 @@ static int rin_sscanf_store_narrow_field(
             arguments, spec, RIN_SSCANF_ARG_CHAR_POINTER_POINTER);
         if (!output) { errno = EFAULT; return -1; }
         if (allocation_count == 0u) allocation_count = 1u;
-        storage = (char*)malloc(allocation_count);
+        storage = (char*)rin_fscanf_candidate_alloc(allocation_count);
         if (!storage) { errno = ENOMEM; return -1; }
         for (size_t index = 0u; index < count; ++index)
             storage[index] = candidate[index];
@@ -1642,15 +1734,13 @@ static int rin_fscanf_stream_skip_space(struct RinFscanfStreamInput* input) {
  * conversion error rather than a truncated wide character. */
 static int rin_fscanf_stream_wide_field(
         struct RinFscanfStreamInput* input,
-        const struct RinSscanfSpec* spec, char* candidate,
-        size_t candidate_capacity, size_t* byte_count_out,
+        const struct RinSscanfSpec* spec, struct RinFscanfCandidate* cand,
         size_t* scalar_count_out, int* input_failure_out) {
-    size_t byte_count = 0u;
     size_t scalar_count = 0u;
     size_t scalar_limit = spec->has_width ? spec->width :
-        (spec->conversion == 'c' ? 1u : RIN_SSCANF_MAX_INPUT);
+        (spec->conversion == 'c' ? 1u : SIZE_MAX);
     int status;
-    if (!input || !spec || !candidate || !byte_count_out ||
+    if (!input || !spec || !cand ||
         !scalar_count_out || !input_failure_out || scalar_limit == 0u) {
         errno = EINVAL;
         return -1;
@@ -1686,22 +1776,20 @@ static int rin_fscanf_stream_wide_field(
             uint32_t value = 0u;
             char byte = (char)first;
             char scalar_bytes[4];
-            size_t scalar_begin = byte_count;
+            size_t scalar_begin = cand->count;
             size_t scalar_byte_count = 0u;
             size_t conversion;
             state.state = 0u;
             state.codepoint = 0u;
             for (;;) {
-                if (byte_count >= candidate_capacity) {
-                    errno = EOVERFLOW;
-                    return -1;
-                }
+                /* B56: the candidate grows; no fixed capacity. */
                 if (scalar_byte_count >= sizeof(scalar_bytes)) {
                     errno = EILSEQ;
                     return -1;
                 }
                 scalar_bytes[scalar_byte_count++] = byte;
-                candidate[byte_count++] = byte;
+                if (rin_fscanf_candidate_append(cand, (unsigned char)byte) != 0)
+                    return -1;
                 conversion = rin_sscanf_mbrtowc32(
                     &value, &byte, 1u, &state);
                 if (conversion == (size_t)-1) {
@@ -1727,7 +1815,7 @@ static int rin_fscanf_stream_wide_field(
                                     scalar_byte_count]) != 0)
                             return -1;
                     }
-                    byte_count = scalar_begin;
+                    cand->count = scalar_begin;
                     break;
                 }
             }
@@ -1736,7 +1824,6 @@ static int rin_fscanf_stream_wide_field(
     }
     if (scalar_count == 0u) return 0;
     /* BATCH41: partial %c/%lc is success (see Fix C above). */
-    *byte_count_out = byte_count;
     *scalar_count_out = scalar_count;
     return 1;
 }
@@ -1814,7 +1901,7 @@ static int rin_fscanf_stream_parse_integer(
         int* range_error_out) {
     unsigned char value = '\0';
     size_t used = 0u;
-    size_t limit = spec->has_width ? spec->width : RIN_SSCANF_MAX_INPUT;
+    size_t limit = spec->has_width ? spec->width : SIZE_MAX;
     uint64_t magnitude = 0u;
     int negative = 0;
     int prefixed = 0;
@@ -1931,18 +2018,21 @@ static int rin_fscanf_stream_case_equal(unsigned char value, char lower) {
 }
 
 static int rin_fscanf_stream_parse_float_candidate(
-        char* candidate, size_t count, const struct RinSscanfSpec* spec,
+        struct RinFscanfCandidate* cand, const struct RinSscanfSpec* spec,
         struct RinSscanfFloat* value_out, int* input_failure_out) {
     size_t candidate_offset = 0u;
     int parser_input_failure = 0;
     int parsed;
 
     *input_failure_out = 0;
-    candidate[count] = '\0';
-    parsed = rin_sscanf_parse_float(candidate, count, &candidate_offset, spec,
+    /* B56: every successful append keeps the NUL slot writable, so the
+     * terminator below never writes out of bounds. */
+    cand->data[cand->count] = '\0';
+    parsed = rin_sscanf_parse_float(cand->data, cand->count,
+                                    &candidate_offset, spec,
                                     value_out, &parser_input_failure);
     if (parsed == 0 && parser_input_failure) *input_failure_out = 1;
-    if (parsed > 0 && candidate_offset != count) {
+    if (parsed > 0 && candidate_offset != cand->count) {
         errno = EIO;
         return -1;
     }
@@ -1955,21 +2045,21 @@ static int rin_fscanf_stream_parse_float_candidate(
  * scanf item at all (B46: glibc stops after "nan"). */
 static int rin_fscanf_stream_parse_special_float(
         struct RinFscanfStreamInput* input,
-        const struct RinSscanfSpec* spec, char* candidate, size_t count,
+        const struct RinSscanfSpec* spec, struct RinFscanfCandidate* cand,
         unsigned char first, struct RinSscanfFloat* value_out,
         int* input_failure_out) {
     const char* base_suffix =
         rin_fscanf_stream_case_equal(first, 'i') ? "nf" : "an";
-    size_t limit = spec->has_width ? spec->width : RIN_SSCANF_MAX_INPUT;
+    size_t limit = spec->has_width ? spec->width : SIZE_MAX;
     size_t suffix_index;
     int status;
     unsigned char value = '\0';
 
     *input_failure_out = 0;
-    candidate[count++] = (char)first;
+    if (rin_fscanf_candidate_append(cand, (unsigned char)first) != 0) return -1;
     for (suffix_index = 0u; base_suffix[suffix_index] != '\0';
          ++suffix_index) {
-        if (count == limit) return 0;
+        if (cand->count == limit) return 0;
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
         if (status == 0) {
@@ -1981,10 +2071,10 @@ static int rin_fscanf_stream_parse_special_float(
              * byte (glibc); nothing goes back. */
             return 0;
         }
-        candidate[count++] = (char)value;
+        if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
     }
 
-    if (rin_fscanf_stream_case_equal(first, 'n') && count < limit) {
+    if (rin_fscanf_stream_case_equal(first, 'n') && cand->count < limit) {
         /* B46: scanf never consumes nan(...) payloads (glibc
          * stops after "nan"); only peek so the terminator goes
          * back. */
@@ -1994,15 +2084,15 @@ static int rin_fscanf_stream_parse_special_float(
             return -1;
     }
 
-    if (rin_fscanf_stream_case_equal(first, 'i') && count < limit) {
+    if (rin_fscanf_stream_case_equal(first, 'i') && cand->count < limit) {
         static const char infinity_suffix[] = "nity";
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
         if (status > 0 && rin_fscanf_stream_case_equal(value, 'i')) {
-            candidate[count++] = (char)value;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
             for (suffix_index = 0u; infinity_suffix[suffix_index] != '\0';
                  ++suffix_index) {
-                if (count == limit) return 0;
+                if (cand->count == limit) return 0;
                 status = rin_fscanf_stream_read(input, &value);
                 if (status < 0) return -1;
                 if (status == 0) return 0;
@@ -2012,7 +2102,7 @@ static int rin_fscanf_stream_parse_special_float(
                      * consumed byte (glibc); nothing goes back. */
                     return 0;
                 }
-                candidate[count++] = (char)value;
+                if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
             }
         } else if (status > 0 && rin_fscanf_stream_unread(input, value) != 0) {
             return -1;
@@ -2020,7 +2110,7 @@ static int rin_fscanf_stream_parse_special_float(
     }
 
     return rin_fscanf_stream_parse_float_candidate(
-        candidate, count, spec, value_out, input_failure_out);
+        cand, spec, value_out, input_failure_out);
 }
 
 /* Direct hexadecimal float lexer.  A rejected `0x` prefix is matching
@@ -2029,7 +2119,7 @@ static int rin_fscanf_stream_parse_special_float(
  * binary exponent still converts the mantissa it hangs off. */
 static int rin_fscanf_stream_parse_hex_float(
         struct RinFscanfStreamInput* input,
-        const struct RinSscanfSpec* spec, char* candidate, size_t count,
+        const struct RinSscanfSpec* spec, struct RinFscanfCandidate* cand,
         unsigned char prefix_marker, struct RinSscanfFloat* value_out,
         int* input_failure_out) {
     unsigned char value = '\0';
@@ -2037,15 +2127,15 @@ static int rin_fscanf_stream_parse_hex_float(
     unsigned char decimal_point =
         (unsigned char)rin_sscanf_decimal_point();
     size_t tail_count = 1u;
-    size_t limit = spec->has_width ? spec->width : RIN_SSCANF_MAX_INPUT;
+    size_t limit = spec->has_width ? spec->width : SIZE_MAX;
     int status;
     int any_digit = 0;
     int seen_point = 0;
 
-    candidate[count++] = '0';
-    candidate[count++] = (char)prefix_marker;
+    if (rin_fscanf_candidate_append(cand, (unsigned char)'0') != 0) return -1;
+    if (rin_fscanf_candidate_append(cand, (unsigned char)prefix_marker) != 0) return -1;
     tail[0] = prefix_marker;
-    if (count == limit) goto decimal_zero;
+    if (cand->count == limit) goto decimal_zero;
     status = rin_fscanf_stream_read(input, &value);
     if (status < 0) return -1;
     /* B46: end of input after 0x is matching failure with the
@@ -2055,15 +2145,15 @@ static int rin_fscanf_stream_parse_hex_float(
         int digit = rin_fp_hex_digit((char)value);
         if (digit >= 0) {
             any_digit = 1;
-            candidate[count++] = (char)value;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
         } else if (value == decimal_point && !seen_point) {
             seen_point = 1;
-            candidate[count++] = (char)value;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
             tail[tail_count++] = value;
         } else {
             break;
         }
-        if (count == limit) {
+        if (cand->count == limit) {
             status = 2;
             break;
         }
@@ -2101,18 +2191,18 @@ static int rin_fscanf_stream_parse_hex_float(
         /* B46: a partial binary exponent still converts the
          * mantissa (glibc); the p stays consumed in the stream
          * while the candidate holds the valid prefix. */
-        if (count + 1u >= limit) {
+        if (cand->count + 1u >= limit) {
             goto parse_candidate;
         }
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
         if (status == 0) goto parse_candidate;
         if (value >= '0' && value <= '9') {
-            candidate[count++] = (char)marker;
-            candidate[count++] = (char)value;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)marker) != 0) return -1;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
         } else if (value == '+' || value == '-') {
             unsigned char sign = value;
-            if (count + 2u >= limit) goto parse_candidate;
+            if (cand->count + 2u >= limit) goto parse_candidate;
             status = rin_fscanf_stream_read(input, &value);
             if (status < 0) return -1;
             if (status == 0) goto parse_candidate;
@@ -2120,14 +2210,14 @@ static int rin_fscanf_stream_parse_hex_float(
                 if (rin_fscanf_stream_unread(input, value) != 0) return -1;
                 goto parse_candidate;
             }
-            candidate[count++] = (char)marker;
-            candidate[count++] = (char)sign;
-            candidate[count++] = (char)value;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)marker) != 0) return -1;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)sign) != 0) return -1;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
         } else {
             if (rin_fscanf_stream_unread(input, value) != 0) return -1;
             goto parse_candidate;
         }
-        while (count < limit) {
+        while (cand->count < limit) {
             status = rin_fscanf_stream_read(input, &value);
             if (status < 0) return -1;
             if (status == 0) break;
@@ -2135,7 +2225,7 @@ static int rin_fscanf_stream_parse_hex_float(
                 if (rin_fscanf_stream_unread(input, value) != 0) return -1;
                 break;
             }
-            candidate[count++] = (char)value;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
         }
         goto parse_candidate;
     }
@@ -2143,29 +2233,27 @@ static int rin_fscanf_stream_parse_hex_float(
 
 parse_candidate:
     return rin_fscanf_stream_parse_float_candidate(
-        candidate, count, spec, value_out, input_failure_out);
+        cand, spec, value_out, input_failure_out);
 
 decimal_zero:
-    --count;
+    --cand->count;
     if (rin_fscanf_stream_unread(input, tail[0]) != 0) return -1;
     return rin_fscanf_stream_parse_float_candidate(
-        candidate, count, spec, value_out, input_failure_out);
+        cand, spec, value_out, input_failure_out);
 }
 
 /* Direct float lexer.  A partial exponent still converts the mantissa it
  * hangs off (B46: glibc longest match); the e/E and its sign stay
  * consumed in the stream while the candidate holds the valid prefix. */
-static int rin_fscanf_stream_parse_decimal_float(
+static int rin_fscanf_stream_parse_decimal_float_inner(
         struct RinFscanfStreamInput* input,
-        const struct RinSscanfSpec* spec, struct RinSscanfFloat* value_out,
-        int* input_failure_out) {
-    char candidate[RIN_SSCANF_MAX_INPUT + 1u];
+        const struct RinSscanfSpec* spec, struct RinFscanfCandidate* cand,
+        struct RinSscanfFloat* value_out, int* input_failure_out) {
     unsigned char value = '\0';
     unsigned char tail[3];
     unsigned char decimal_point =
         (unsigned char)rin_sscanf_decimal_point();
-    size_t count = 0u;
-    size_t limit = spec->has_width ? spec->width : RIN_SSCANF_MAX_INPUT;
+    size_t limit = spec->has_width ? spec->width : SIZE_MAX;
     int status;
     int any_digit = 0;
     int seen_point = 0;
@@ -2182,8 +2270,8 @@ static int rin_fscanf_stream_parse_decimal_float(
         return status < 0 ? -1 : 0;
     }
     if (value == '+' || value == '-') {
-        candidate[count++] = (char)value;
-        if (count == limit) goto parse_candidate;
+        if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
+        if (cand->count == limit) goto parse_candidate;
         status = rin_fscanf_stream_read(input, &value);
         if (status <= 0) {
             /* B46: a consumed sign is a nonempty, non-convertible
@@ -2192,12 +2280,12 @@ static int rin_fscanf_stream_parse_decimal_float(
             return status < 0 ? -1 : 0;
         }
     }
-    if (value == '0' && count + 1u < limit) {
+    if (value == '0' && cand->count + 1u < limit) {
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
         if (status > 0 && (value == 'x' || value == 'X'))
             return rin_fscanf_stream_parse_hex_float(
-                input, spec, candidate, count, value, value_out,
+                input, spec, cand, value, value_out,
                 input_failure_out);
         if (status > 0 && rin_fscanf_stream_unread(input, value) != 0)
             return -1;
@@ -2205,19 +2293,19 @@ static int rin_fscanf_stream_parse_decimal_float(
     }
     if (value == 'i' || value == 'I' || value == 'n' || value == 'N')
         return rin_fscanf_stream_parse_special_float(
-            input, spec, candidate, count, value, value_out,
+            input, spec, cand, value, value_out,
             input_failure_out);
     for (;;) {
         if (value >= '0' && value <= '9') {
             any_digit = 1;
-            candidate[count++] = (char)value;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
         } else if (value == decimal_point && !seen_point) {
             seen_point = 1;
-            candidate[count++] = (char)value;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
         } else {
             break;
         }
-        if (count == limit) {
+        if (cand->count == limit) {
             status = 2;
             break;
         }
@@ -2238,13 +2326,13 @@ static int rin_fscanf_stream_parse_decimal_float(
     }
     if (status == 0 || status == 2) goto parse_candidate;
     if ((value == 'x' || value == 'X') && !seen_point &&
-        candidate[count - 1u] == '0' &&
-        (count == 1u || (count == 2u &&
-                         (candidate[0] == '+' || candidate[0] == '-')))) {
-        tail[0] = (unsigned char)candidate[0];
-        if (count == 2u) tail[1] = (unsigned char)candidate[1];
-        tail[count] = value;
-        if (rin_fscanf_stream_unread_float_tail(input, tail, count + 1u) != 0)
+        cand->data[cand->count - 1u] == '0' &&
+        (cand->count == 1u || (cand->count == 2u &&
+                         (cand->data[0] == '+' || cand->data[0] == '-')))) {
+        tail[0] = (unsigned char)cand->data[0];
+        if (cand->count == 2u) tail[1] = (unsigned char)cand->data[1];
+        tail[cand->count] = value;
+        if (rin_fscanf_stream_unread_float_tail(input, tail, cand->count + 1u) != 0)
             return -1;
         return 0;
     }
@@ -2253,18 +2341,18 @@ static int rin_fscanf_stream_parse_decimal_float(
         /* B46: a partial exponent still converts the mantissa
          * (glibc); the e stays consumed in the stream while the
          * candidate holds the valid prefix. */
-        if (count + 1u >= limit) {
+        if (cand->count + 1u >= limit) {
             goto parse_candidate;
         }
         status = rin_fscanf_stream_read(input, &value);
         if (status < 0) return -1;
         if (status == 0) goto parse_candidate;
         if (value >= '0' && value <= '9') {
-            candidate[count++] = (char)marker;
-            candidate[count++] = (char)value;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)marker) != 0) return -1;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
         } else if (value == '+' || value == '-') {
             unsigned char sign = value;
-            if (count + 2u >= limit) goto parse_candidate;
+            if (cand->count + 2u >= limit) goto parse_candidate;
             status = rin_fscanf_stream_read(input, &value);
             if (status < 0) return -1;
             if (status == 0) goto parse_candidate;
@@ -2272,14 +2360,14 @@ static int rin_fscanf_stream_parse_decimal_float(
                 if (rin_fscanf_stream_unread(input, value) != 0) return -1;
                 goto parse_candidate;
             }
-            candidate[count++] = (char)marker;
-            candidate[count++] = (char)sign;
-            candidate[count++] = (char)value;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)marker) != 0) return -1;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)sign) != 0) return -1;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
         } else {
             if (rin_fscanf_stream_unread(input, value) != 0) return -1;
             goto parse_candidate;
         }
-        while (count < limit) {
+        while (cand->count < limit) {
             status = rin_fscanf_stream_read(input, &value);
             if (status < 0) return -1;
             if (status == 0) break;
@@ -2287,7 +2375,7 @@ static int rin_fscanf_stream_parse_decimal_float(
                 if (rin_fscanf_stream_unread(input, value) != 0) return -1;
                 break;
             }
-            candidate[count++] = (char)value;
+            if (rin_fscanf_candidate_append(cand, (unsigned char)value) != 0) return -1;
         }
         goto parse_candidate;
     }
@@ -2295,7 +2383,22 @@ static int rin_fscanf_stream_parse_decimal_float(
 
 parse_candidate:
     return rin_fscanf_stream_parse_float_candidate(
-        candidate, count, spec, value_out, input_failure_out);
+        cand, spec, value_out, input_failure_out);
+}
+
+/* The decimal lexer borrows its candidate from this wrapper, so the
+ * returns and gotos below share a single heap release. */
+static int rin_fscanf_stream_parse_decimal_float(
+        struct RinFscanfStreamInput* input,
+        const struct RinSscanfSpec* spec, struct RinSscanfFloat* value_out,
+        int* input_failure_out) {
+    struct RinFscanfCandidate candidate;
+    int parsed;
+    rin_fscanf_candidate_init(&candidate);
+    parsed = rin_fscanf_stream_parse_decimal_float_inner(
+        input, spec, &candidate, value_out, input_failure_out);
+    rin_fscanf_candidate_release(&candidate);
+    return parsed;
 }
 
 /* Validate every supported stream conversion before the first read.  Unsupported
@@ -2303,11 +2406,11 @@ parse_candidate:
 static int rin_fscanf_validate_format(
         const char* format, struct RinSscanfArgumentPlan* plan) {
     size_t offset = 0u;
-    if (rin_sscanf_validate_format(format, plan, 1) != 0) return -1;
+    if (rin_sscanf_validate_format(format, plan, 0) != 0) return -1;
     while (format[offset] != '\0') {
         struct RinSscanfSpec spec;
         if (format[offset++] != '%') continue;
-        if (rin_sscanf_parse_spec(format, &offset, &spec, 1) != 0)
+        if (rin_sscanf_parse_spec(format, &offset, &spec, 0) != 0)
             return -1;
         if (spec.conversion == 'e' || spec.conversion == 'E' ||
             spec.conversion == 'f' || spec.conversion == 'F' ||
@@ -2336,9 +2439,10 @@ static int rin_fscanf_validate_format(
     return 0;
 }
 
-/* Direct byte-stream subset: literals, whitespace, %%, %c, width-bounded %s,
- * %n, and bounded integer/pointer conversions.  A delimiter is put back
- * before caller output is published. */
+/* Direct byte-stream subset: literals, whitespace, %%, %c, %s, %n,
+ * and integer/pointer conversions.  Width-omitted fields are unbounded
+ * on every path (B56: growable heap candidates); explicit widths are
+ * honored.  A delimiter is put back before caller output is published. */
 static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_list ap) {
     struct RinFscanfStreamInput input;
     struct RinSscanfArgumentPlan argument_plan;
@@ -2391,11 +2495,9 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
         }
         {
             struct RinSscanfSpec spec;
-            char candidate[RIN_SSCANF_MAX_INPUT + 1u];
-            size_t count;
             ++format_offset;
             if (rin_sscanf_parse_spec(format, &format_offset, &spec,
-                                      1) != 0) {
+                                      0) != 0) {
                 va_end(arguments);
                 return rin_sscanf_input_error_result(assignments);
             }
@@ -2428,28 +2530,34 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
             if (spec.length == RIN_SSCANF_LENGTH_LONG &&
                 (spec.conversion == 'c' || spec.conversion == 's' ||
                  spec.conversion == '[')) {
-                size_t byte_count = 0u;
+                struct RinFscanfCandidate candidate;
                 size_t scalar_count = 0u;
                 int input_failure = 0;
-                int parsed = rin_fscanf_stream_wide_field(
-                    &input, &spec, candidate, sizeof(candidate),
-                    &byte_count, &scalar_count, &input_failure);
+                int parsed;
+                rin_fscanf_candidate_init(&candidate);
+                parsed = rin_fscanf_stream_wide_field(
+                    &input, &spec, &candidate, &scalar_count,
+                    &input_failure);
                 (void)scalar_count;
                 if (parsed < 0) {
+                    rin_fscanf_candidate_release(&candidate);
                     va_end(arguments);
                     return rin_sscanf_input_error_result(assignments);
                 }
                 if (parsed == 0) {
+                    rin_fscanf_candidate_release(&candidate);
                     va_end(arguments);
                     return input_failure ?
                         rin_sscanf_input_error_result(assignments) : assignments;
                 }
                 if (rin_sscanf_store_wide_field(
-                        &arguments, &spec, candidate, byte_count,
+                        &arguments, &spec, candidate.data, candidate.count,
                         spec.suppress) != 0) {
+                    rin_fscanf_candidate_release(&candidate);
                     va_end(arguments);
                     return rin_sscanf_input_error_result(assignments);
                 }
+                rin_fscanf_candidate_release(&candidate);
                 if (!spec.suppress) ++assignments;
                 continue;
             }
@@ -2521,106 +2629,135 @@ static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_lis
             }
             if (spec.conversion == '[') {
                 int status = 1;
-                size_t limit = spec.has_width ? spec.width : RIN_SSCANF_MAX_INPUT;
-                count = 0u;
-                while (count < limit) {
+                size_t limit = spec.has_width ? spec.width : SIZE_MAX;
+                struct RinFscanfCandidate candidate;
+                rin_fscanf_candidate_init(&candidate);
+                while (candidate.count < limit) {
                     unsigned char value = '\0';
                     status = rin_fscanf_stream_read(&input, &value);
                     if (status < 0) {
+                        rin_fscanf_candidate_release(&candidate);
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
                     if (status == 0) break;
                     if (!rin_sscanf_scanset_contains(&spec, value)) {
                         if (rin_fscanf_stream_unread(&input, value) != 0) {
+                            rin_fscanf_candidate_release(&candidate);
                             va_end(arguments);
                             return rin_sscanf_input_error_result(assignments);
                         }
                         break;
                     }
-                    candidate[count++] = (char)value;
+                    if (rin_fscanf_candidate_append(&candidate, value) != 0) {
+                        rin_fscanf_candidate_release(&candidate);
+                        va_end(arguments);
+                        return rin_sscanf_input_error_result(assignments);
+                    }
                 }
-                if (count == 0u) {
+                if (candidate.count == 0u) {
+                    rin_fscanf_candidate_release(&candidate);
                     va_end(arguments);
                     return status == 0 ?
                         rin_sscanf_input_error_result(assignments) : assignments;
                 }
                 if (!spec.suppress) {
                     if (rin_sscanf_store_narrow_field(
-                            &arguments, &spec, candidate, count, 1) != 0) {
+                            &arguments, &spec, candidate.data, candidate.count, 1) != 0) {
+                        rin_fscanf_candidate_release(&candidate);
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
                     ++assignments;
                 }
+                rin_fscanf_candidate_release(&candidate);
                 continue;
             }
             if (spec.conversion == 'c') {
                 /* BATCH41: partial %c assigns what is there (glibc). */
                 size_t want = spec.has_width ? spec.width : 1u;
-                count = 0u;
+                struct RinFscanfCandidate candidate;
+                rin_fscanf_candidate_init(&candidate);
                 for (size_t index = 0u; index < want; ++index) {
                     unsigned char value = '\0';
                     int status = rin_fscanf_stream_read(&input, &value);
                     if (status < 0) {
+                        rin_fscanf_candidate_release(&candidate);
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
                     if (status == 0) break;
-                    candidate[index] = (char)value;
-                    ++count;
+                    if (rin_fscanf_candidate_append(&candidate, value) != 0) {
+                        rin_fscanf_candidate_release(&candidate);
+                        va_end(arguments);
+                        return rin_sscanf_input_error_result(assignments);
+                    }
                 }
-                if (count == 0u) {
+                if (candidate.count == 0u) {
+                    rin_fscanf_candidate_release(&candidate);
                     va_end(arguments);
                     return rin_sscanf_input_error_result(assignments);
                 }
                 if (!spec.suppress) {
                     if (rin_sscanf_store_narrow_field(
-                            &arguments, &spec, candidate, count, 0) != 0) {
+                            &arguments, &spec, candidate.data, candidate.count, 0) != 0) {
+                        rin_fscanf_candidate_release(&candidate);
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
                     ++assignments;
                 }
+                rin_fscanf_candidate_release(&candidate);
                 continue;
             }
             {
                 int status = rin_fscanf_stream_skip_space(&input);
-                size_t limit = spec.has_width ? spec.width : RIN_SSCANF_MAX_INPUT;
-                count = 0u;
+                size_t limit = spec.has_width ? spec.width : SIZE_MAX;
+                struct RinFscanfCandidate candidate;
+                rin_fscanf_candidate_init(&candidate);
                 if (status <= 0) {
+                    rin_fscanf_candidate_release(&candidate);
                     va_end(arguments);
                     return rin_sscanf_input_error_result(assignments);
                 }
-                while (count < limit) {
+                while (candidate.count < limit) {
                     unsigned char value = '\0';
                     status = rin_fscanf_stream_read(&input, &value);
                     if (status < 0) {
+                        rin_fscanf_candidate_release(&candidate);
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
                     if (status == 0) break;
                     if (rin_sscanf_space(value)) {
                         if (rin_fscanf_stream_unread(&input, value) != 0) {
+                            rin_fscanf_candidate_release(&candidate);
                             va_end(arguments);
                             return rin_sscanf_input_error_result(assignments);
                         }
                         break;
                     }
-                    candidate[count++] = (char)value;
+                    if (rin_fscanf_candidate_append(&candidate, value) != 0) {
+                        rin_fscanf_candidate_release(&candidate);
+                        va_end(arguments);
+                        return rin_sscanf_input_error_result(assignments);
+                    }
                 }
-                if (count == 0u) {
+                if (candidate.count == 0u) {
+                    rin_fscanf_candidate_release(&candidate);
                     va_end(arguments);
                     return rin_sscanf_input_error_result(assignments);
                 }
                 if (!spec.suppress) {
                     if (rin_sscanf_store_narrow_field(
-                            &arguments, &spec, candidate, count, 1) != 0) {
+                            &arguments, &spec, candidate.data, candidate.count, 1) != 0) {
+                        rin_fscanf_candidate_release(&candidate);
                         va_end(arguments);
                         return rin_sscanf_input_error_result(assignments);
                     }
                     ++assignments;
                 }
+                rin_fscanf_candidate_release(&candidate);
             }
         }
     }
