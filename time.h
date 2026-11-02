@@ -21,6 +21,13 @@
 #define RIN_TIME_CUSTOM_SYSCALL_HOOK 1
 #endif
 
+/* Freestanding host tests that inject only clock/futex hooks retain the
+ * legacy hook path; product builds use the checked-copy NANOSLEEP syscall. */
+#if defined(__linux__) && defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    defined(RIN_TIME_CUSTOM_SYSCALL_HOOK) && !defined(_RIN_TIME_SYSCALL2)
+#define RIN_TIME_HOST_HOOK_COMPAT 1
+#endif
+
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
     defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
@@ -46,6 +53,7 @@
 #include <rin/time/cpu_time_abi.h>
 #include <rin/time/timer_abi.h>
 #include <rin/time/timer_userptr_abi_v1.h>
+#include <rin/nanosleep_abi.h>
 
 #if defined(RIN_TIME_ABI64)
 #define __RIN_TIMER_USERPTR_TIME_MODE RIN_TIMER_USERPTR_TIME64
@@ -1587,6 +1595,7 @@ static inline int timer_getoverrun(timer_t timer_id) {
 #endif
 }
 
+#if defined(RIN_TIME_HOST_HOOK_COMPAT)
 static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
     struct timespec deadline;
     struct timespec now;
@@ -1803,6 +1812,68 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
         }
     }
 }
+
+#else
+static inline intptr_t __rin_time_sleep_userptr_call(
+    clockid_t clock_id, int flags, const struct timespec* request,
+    struct timespec* remaining) {
+    RinNanosleepUserRequestV2 user_request = {0};
+    user_request.struct_size = sizeof(user_request);
+    user_request.version = RIN_NANOSLEEP_ABI_VERSION_USERPTR_V2;
+    user_request.flags = (flags & TIMER_ABSTIME) != 0
+        ? RIN_NANOSLEEP_USERPTR_FLAG_ABSOLUTE : 0u;
+    user_request.clock_id = (uint32_t)clock_id;
+    user_request.time_width = (uint32_t)sizeof(request->tv_sec);
+    user_request.long_width = (uint32_t)sizeof(request->tv_nsec);
+    user_request.request_address = (uint64_t)(uintptr_t)request;
+    user_request.remaining_address =
+        (flags & TIMER_ABSTIME) == 0
+            ? (uint64_t)(uintptr_t)remaining : 0u;
+    return __rin_syscall_posixize(_RIN_TIME_SYSCALL2(
+        SYS_NANOSLEEP, &user_request,
+        RIN_NANOSLEEP_ABI_SELECTOR_USERPTR_V2));
+}
+
+static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
+    const int entry_errno = errno;
+    intptr_t result;
+    __rin_pthread_cancel_point_if_linked();
+    result = __rin_time_sleep_userptr_call(CLOCK_MONOTONIC, 0, req, rem);
+    __rin_pthread_cancel_point_if_linked();
+    if (result == 0) {
+        errno = entry_errno;
+        return 0;
+    }
+    return -1;
+}
+
+/* POSIX clock_nanosleep returns an errno value directly rather than using
+ * errno as its result channel.  Relative waits keep the nanosleep owner;
+ * absolute waits pass their original deadline to FUTEX_WAIT_BITSET so the
+ * kernel can re-evaluate realtime clock changes while the thread is blocked. */
+static inline int clock_nanosleep(clockid_t clock_id, int flags,
+                                  const struct timespec* request,
+                                  struct timespec* remain) {
+    const int entry_errno = errno;
+    intptr_t result;
+    if ((flags & ~TIMER_ABSTIME) != 0 ||
+        (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC))
+        return EINVAL;
+    __rin_pthread_cancel_point_if_linked();
+    result = __rin_time_sleep_userptr_call(clock_id, flags, request, remain);
+    __rin_pthread_cancel_point_if_linked();
+    if (result == 0) {
+        errno = entry_errno;
+        return 0;
+    }
+    {
+        int error = errno != 0 ? errno : EIO;
+        errno = entry_errno;
+        return error;
+    }
+}
+
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * strptime - 文字列から時刻への変換 (POSIX)
