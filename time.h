@@ -39,11 +39,19 @@
 #include "signal.h"
 #include "limits.h"
 #include "internal/time_type.h"
+#include "internal/user_snapshot.h"
 #include "sys/syscall.h"
 #include "internal/pthread_cancel_point.h"
 #include "linux/futex.h"
 #include <rin/time/cpu_time_abi.h>
 #include <rin/time/timer_abi.h>
+#include <rin/time/timer_userptr_abi_v1.h>
+
+#if defined(RIN_TIME_ABI64)
+#define __RIN_TIMER_USERPTR_TIME_MODE RIN_TIMER_USERPTR_TIME64
+#else
+#define __RIN_TIMER_USERPTR_TIME_MODE RIN_TIMER_USERPTR_TIME32
+#endif
 
 #if defined(RIN_USERSPACE)
 #include "locale.h"
@@ -151,6 +159,7 @@ typedef void* RinStrptimeLocale;
 #ifndef _RIN_TIME_TIMER_CREATE
 #define _RIN_TIME_TIMER_CREATE(request) \
     _RIN_TIME_SYSCALL1(SYS_TIMER_CREATE, (uintptr_t)(request))
+#define RIN_TIME_TIMER_CREATE_DEFAULT_HOOK 1
 #endif
 
 #ifndef _RIN_TIME_TIMER_SETTIME
@@ -158,12 +167,14 @@ typedef void* RinStrptimeLocale;
     _syscall4((uintptr_t)SYS_TIMER_SETTIME, (uintptr_t)(timer_id), \
               (uintptr_t)(flags), (uintptr_t)(new_value), \
               (uintptr_t)(old_value))
+#define RIN_TIME_TIMER_SETTIME_DEFAULT_HOOK 1
 #endif
 
 #ifndef _RIN_TIME_TIMER_GETTIME
 #define _RIN_TIME_TIMER_GETTIME(timer_id, value) \
     _RIN_TIME_SYSCALL2(SYS_TIMER_GETTIME, (uintptr_t)(timer_id), \
                        (uintptr_t)(value))
+#define RIN_TIME_TIMER_GETTIME_DEFAULT_HOOK 1
 #endif
 
 #ifndef _RIN_TIME_TIMER_DELETE
@@ -1263,6 +1274,9 @@ static inline int timer_create(clockid_t clock_id,
                                const struct sigevent* event,
                                timer_t* timer_id) {
     RinTimerCreateV1 request;
+#if defined(RIN_TIME_TIMER_CREATE_DEFAULT_HOOK)
+    RinTimerCreateUserOutputV1 user_output_request;
+#endif
     struct sigevent event_snapshot;
     const struct sigevent* effective_event = (const struct sigevent*)0;
     void (*thread_function)(union sigval) =
@@ -1283,10 +1297,16 @@ static inline int timer_create(clockid_t clock_id,
         return -1;
     }
     if (event) {
+#if defined(RIN_TIME_TIMER_CREATE_DEFAULT_HOOK)
+        if (__rin_user_snapshot(event, sizeof(event_snapshot), 0,
+                                &event_snapshot) != 0)
+            return -1;
+#else
         const unsigned char* source = (const unsigned char*)event;
         unsigned char* destination = (unsigned char*)&event_snapshot;
         for (size_t index = 0u; index < sizeof(event_snapshot); ++index)
             destination[index] = source[index];
+#endif
         effective_event = &event_snapshot;
         notify = effective_event->sigev_notify;
         if (notify != SIGEV_SIGNAL && notify != SIGEV_NONE &&
@@ -1335,7 +1355,16 @@ static inline int timer_create(clockid_t clock_id,
             destination[index] = source[index];
     }
 #if defined(RIN_TIME_TARGET_FUNCTIONS)
+#if defined(RIN_TIME_TIMER_CREATE_DEFAULT_HOOK)
+    user_output_request.request = request;
+    user_output_request.request.flags |=
+        RIN_TIMER_CREATE_FLAG_USER_ID_OUTPUT;
+    user_output_request.timer_id_user_address =
+        (uint64_t)(uintptr_t)timer_id;
+    result = _rin_time_result(_RIN_TIME_TIMER_CREATE(&user_output_request));
+#else
     result = _rin_time_result(_RIN_TIME_TIMER_CREATE(&request));
+#endif
     if (result < 0) return -1;
     if (result == 0 || (uintmax_t)result > (uintmax_t)INT_MAX) {
         errno = EOVERFLOW;
@@ -1356,7 +1385,9 @@ static inline int timer_create(clockid_t clock_id,
         }
     }
 #endif
+#if !defined(RIN_TIME_TIMER_CREATE_DEFAULT_HOOK)
     *timer_id = created_id;
+#endif
     return 0;
 #else
     (void)result;
@@ -1369,8 +1400,14 @@ static inline int timer_settime(timer_t timer_id, int flags,
                                 const struct itimerspec* value,
                                 struct itimerspec* old_value) {
     RinTimerSpecV1 request;
+#if !defined(RIN_TIME_TIMER_SETTIME_DEFAULT_HOOK)
     RinTimerSpecV1 previous = {0};
     struct itimerspec converted;
+#endif
+#if defined(RIN_TIME_TIMER_SETTIME_DEFAULT_HOOK)
+    struct itimerspec value_snapshot;
+#endif
+    const struct itimerspec* effective_value = value;
     uint64_t value_ns;
     uint64_t interval_ns;
     intptr_t result;
@@ -1383,13 +1420,20 @@ static inline int timer_settime(timer_t timer_id, int flags,
         errno = EINVAL;
         return -1;
     }
+#if defined(RIN_TIME_TIMER_SETTIME_DEFAULT_HOOK)
+    if (__rin_user_snapshot(value, sizeof(value_snapshot), 0,
+                            &value_snapshot) != 0)
+        return -1;
+    effective_value = &value_snapshot;
+#endif
     error = _rin_time_timer_value_to_ns(
-        &value->it_value, flags, &value_ns);
+        &effective_value->it_value, flags, &value_ns);
     if (error != 0) {
         errno = error;
         return -1;
     }
-    error = _rin_time_timespec_to_ns(&value->it_interval, &interval_ns);
+    error = _rin_time_timespec_to_ns(&effective_value->it_interval,
+                                     &interval_ns);
     if (error != 0) {
         errno = error;
         return -1;
@@ -1402,14 +1446,21 @@ static inline int timer_settime(timer_t timer_id, int flags,
     request.reserved0 = 0u;
     request.reserved1 = 0u;
 #if defined(RIN_TIME_TARGET_FUNCTIONS)
+#if defined(RIN_TIME_TIMER_SETTIME_DEFAULT_HOOK)
+    result = _rin_time_result(_RIN_TIME_TIMER_SETTIME(
+        timer_id, (uint32_t)flags | __RIN_TIMER_USERPTR_TIME_MODE,
+        &request, old_value));
+#else
     result = _rin_time_result(_RIN_TIME_TIMER_SETTIME(
         timer_id, (uint32_t)flags, &request,
         old_value ? &previous : (void*)0));
+#endif
     if (result < 0) return -1;
     if (result != 0) {
         errno = EIO;
         return -1;
     }
+#if !defined(RIN_TIME_TIMER_SETTIME_DEFAULT_HOOK)
     if (old_value) {
         if (!rin_timer_spec_v1_valid(&previous)) {
             errno = EIO;
@@ -1425,6 +1476,7 @@ static inline int timer_settime(timer_t timer_id, int flags,
         }
         *old_value = converted;
     }
+#endif
     return 0;
 #else
     (void)result;
@@ -1436,15 +1488,28 @@ static inline int timer_settime(timer_t timer_id, int flags,
 
 static inline int timer_gettime(timer_t timer_id,
                                 struct itimerspec* value) {
+#if !defined(RIN_TIME_TIMER_GETTIME_DEFAULT_HOOK)
     RinTimerSpecV1 result_wire = {0};
     struct itimerspec converted;
-    intptr_t result;
     int error;
+#endif
+    intptr_t result;
     if (timer_id <= 0 || !value) {
         errno = !value ? EFAULT : EINVAL;
         return -1;
     }
 #if defined(RIN_TIME_TARGET_FUNCTIONS)
+#if defined(RIN_TIME_TIMER_GETTIME_DEFAULT_HOOK)
+    result = _rin_time_result(_RIN_TIME_TIMER_GETTIME(
+        (uintptr_t)((uint32_t)timer_id | __RIN_TIMER_USERPTR_TIME_MODE),
+        value));
+    if (result < 0) return -1;
+    if (result != 0) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+#else
     result = _rin_time_result(_RIN_TIME_TIMER_GETTIME(timer_id, &result_wire));
     if (result < 0) return -1;
     if (result != 0) {
@@ -1466,6 +1531,7 @@ static inline int timer_gettime(timer_t timer_id,
     }
     *value = converted;
     return 0;
+#endif
 #else
     (void)result;
     errno = ENOSYS;

@@ -87,9 +87,15 @@ static inline int _rin_itimer_us_to_timeval(uint64_t value_us,
 static inline int setitimer(int which, const struct itimerval* new_value,
                             struct itimerval* old_value) {
     RinItimerV1 request;
+#if !defined(RIN_TIME_SETITIMER_DEFAULT_HOOK)
     RinItimerV1 previous;
     struct timeval converted_value;
     struct timeval converted_interval;
+#endif
+#if defined(RIN_TIME_SETITIMER_DEFAULT_HOOK)
+    struct itimerval new_snapshot;
+#endif
+    const struct itimerval* effective_value = new_value;
     uint64_t value_us;
     uint64_t interval_us;
     int error;
@@ -99,16 +105,29 @@ static inline int setitimer(int which, const struct itimerval* new_value,
         errno = EINVAL;
         return -1;
     }
+#if defined(RIN_TIME_SETITIMER_DEFAULT_HOOK) && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING))
+    (void)old_value;
+    errno = ENOSYS;
+    return -1;
+#endif
     if (!new_value) {
         errno = EFAULT;
         return -1;
     }
-    error = _rin_itimer_timeval_to_us(&new_value->it_value, &value_us);
+#if defined(RIN_TIME_SETITIMER_DEFAULT_HOOK)
+    if (__rin_user_snapshot(new_value, sizeof(new_snapshot), 0,
+                            &new_snapshot) != 0)
+        return -1;
+    effective_value = &new_snapshot;
+#endif
+    error = _rin_itimer_timeval_to_us(&effective_value->it_value, &value_us);
     if (error != 0) {
         errno = error;
         return -1;
     }
-    error = _rin_itimer_timeval_to_us(&new_value->it_interval, &interval_us);
+    error = _rin_itimer_timeval_to_us(&effective_value->it_interval,
+                                      &interval_us);
     if (error != 0) {
         errno = error;
         return -1;
@@ -119,6 +138,7 @@ static inline int setitimer(int which, const struct itimerval* new_value,
     request.value_us = value_us;
     request.interval_us = interval_us;
     request.reserved = 0u;
+#if !defined(RIN_TIME_SETITIMER_DEFAULT_HOOK)
     if (old_value) {
         previous.struct_size = 0u;
         previous.version = 0u;
@@ -127,15 +147,17 @@ static inline int setitimer(int which, const struct itimerval* new_value,
         previous.interval_us = 0u;
         previous.reserved = 0u;
     }
-#if defined(RIN_FREESTANDING) || !defined(RIN_TIME_SETITIMER_DEFAULT_HOOK)
+#endif
+#if defined(RIN_TIME_SETITIMER_DEFAULT_HOOK)
+    result = _RIN_TIME_SETITIMER(
+        (uintptr_t)((uint32_t)which | __RIN_TIMER_USERPTR_TIME_MODE),
+        &request, old_value);
+    if (_rin_time_status(result) != 0) return -1;
+    return 0;
+#else
     result = _RIN_TIME_SETITIMER(which, &request,
                                   old_value ? &previous : (void*)0);
     if (_rin_time_status(result) != 0) return -1;
-#else
-    (void)result;
-    errno = ENOSYS;
-    return -1;
-#endif
     if (old_value) {
         error = _rin_itimer_us_to_timeval(previous.value_us,
                                            &converted_value);
@@ -153,12 +175,15 @@ static inline int setitimer(int which, const struct itimerval* new_value,
         old_value->it_interval = converted_interval;
     }
     return 0;
+#endif
 }
 
 static inline int getitimer(int which, struct itimerval* value) {
+#if !defined(RIN_TIME_GETITIMER_DEFAULT_HOOK)
     RinItimerV1 current;
     struct timeval converted_value;
     struct timeval converted_interval;
+#endif
     int error;
     intptr_t result;
 
@@ -170,21 +195,25 @@ static inline int getitimer(int which, struct itimerval* value) {
         errno = EFAULT;
         return -1;
     }
+#if defined(RIN_TIME_GETITIMER_DEFAULT_HOOK) && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING))
+    errno = ENOSYS;
+    return -1;
+#elif defined(RIN_TIME_GETITIMER_DEFAULT_HOOK)
+    result = _RIN_TIME_GETITIMER(
+        (uintptr_t)((uint32_t)which | __RIN_TIMER_USERPTR_TIME_MODE), value);
+    error = _rin_time_status(result);
+    return error == 0 ? 0 : -1;
+#else
     current.struct_size = 0u;
     current.version = 0u;
     current.reserved0 = 0u;
     current.value_us = 0u;
     current.interval_us = 0u;
     current.reserved = 0u;
-#if defined(RIN_FREESTANDING) || !defined(RIN_TIME_GETITIMER_DEFAULT_HOOK)
     result = _RIN_TIME_GETITIMER(which, &current);
     error = _rin_time_status(result);
     if (error != 0) return -1;
-#else
-    (void)result;
-    errno = ENOSYS;
-    return -1;
-#endif
     if (current.struct_size != (uint32_t)sizeof(current) ||
         current.version != (uint16_t)RIN_ITIMER_ABI_VERSION ||
         current.reserved0 != 0u || current.reserved != 0u) {
@@ -205,6 +234,7 @@ static inline int getitimer(int which, struct itimerval* value) {
     value->it_value = converted_value;
     value->it_interval = converted_interval;
     return 0;
+#endif
 }
 
 #endif /* !MIDL_PASS */

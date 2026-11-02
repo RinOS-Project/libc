@@ -29,8 +29,7 @@ int timerfd_settime(int fd, int flags, const struct itimerspec* value,
                     struct itimerspec* old_value)
 {
     RinTimerSpecV1 request = {0};
-    RinTimerSpecV1 previous = {0};
-    struct itimerspec converted;
+    struct itimerspec value_snapshot;
     intptr_t result;
     int error;
     uint64_t value_ns;
@@ -46,10 +45,13 @@ int timerfd_settime(int fd, int flags, const struct itimerspec* value,
         errno = EINVAL;
         return -1;
     }
+    if (__rin_user_snapshot(value, sizeof(value_snapshot), 0,
+                            &value_snapshot) != 0)
+        return -1;
     error = _rin_time_timer_value_to_ns(
-        &value->it_value, flags, &value_ns);
+        &value_snapshot.it_value, flags, &value_ns);
     if (error == 0)
-        error = _rin_time_timespec_to_ns(&value->it_interval,
+        error = _rin_time_timespec_to_ns(&value_snapshot.it_interval,
                                          &interval_ns);
     if (error != 0) {
         errno = error;
@@ -65,59 +67,31 @@ int timerfd_settime(int fd, int flags, const struct itimerspec* value,
     request.reserved1 = 0u;
     result = __rin_syscall_posixize(_syscall4(
         SYS_TIMERFD_SETTIME, (uintptr_t)(unsigned int)fd,
-        (uintptr_t)(unsigned int)flags, (uintptr_t)&request,
-        (uintptr_t)(old_value != NULL ? &previous : NULL)));
+        (uintptr_t)((uint32_t)flags | __RIN_TIMER_USERPTR_TIME_MODE),
+        (uintptr_t)&request, (uintptr_t)old_value));
     if (result < 0) return -1;
     if (result != 0) {
         errno = EIO;
         return -1;
-    }
-    if (old_value != NULL) {
-        if (!rin_timer_spec_v1_valid(&previous)) {
-            errno = EIO;
-            return -1;
-        }
-        error = _rin_time_ns_to_timespec(previous.value_ns,
-                                         &converted.it_value);
-        if (error == 0)
-            error = _rin_time_ns_to_timespec(previous.interval_ns,
-                                             &converted.it_interval);
-        if (error != 0) {
-            errno = error;
-            return -1;
-        }
-        *old_value = converted;
     }
     return 0;
 }
 
 int timerfd_gettime(int fd, struct itimerspec* value)
 {
-    RinTimerSpecV1 result_wire = {0};
-    struct itimerspec converted;
     intptr_t result;
-    int error;
     if (fd < 0 || value == NULL) {
         errno = value == NULL ? EFAULT : EINVAL;
         return -1;
     }
     result = __rin_syscall_posixize(_syscall2(
-        SYS_TIMERFD_GETTIME, (uintptr_t)(unsigned int)fd,
-        (uintptr_t)&result_wire));
+        SYS_TIMERFD_GETTIME,
+        (uintptr_t)((uint32_t)fd | __RIN_TIMER_USERPTR_TIME_MODE),
+        (uintptr_t)value));
     if (result < 0) return -1;
-    if (result != 0 || !rin_timer_spec_v1_valid(&result_wire)) {
+    if (result != 0) {
         errno = EIO;
         return -1;
     }
-    error = _rin_time_ns_to_timespec(result_wire.value_ns,
-                                     &converted.it_value);
-    if (error == 0)
-        error = _rin_time_ns_to_timespec(result_wire.interval_ns,
-                                         &converted.it_interval);
-    if (error != 0) {
-        errno = error;
-        return -1;
-    }
-    *value = converted;
     return 0;
 }
