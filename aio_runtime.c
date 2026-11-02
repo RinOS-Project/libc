@@ -11,6 +11,7 @@
 #include "stdlib.h"
 #include "string.h"
 #include "unistd.h"
+#include "sys/stat.h"
 
 #define RIN_AIO_CAPACITY AIO_MAX
 #define RIN_AIO_WORKERS 4u
@@ -32,6 +33,16 @@ enum RinAioOperation {
 
 typedef struct RinAioRequest RinAioRequest;
 typedef struct RinAioSuspendWaiter RinAioSuspendWaiter;
+
+/* AIO owns a duplicate of each submitted FD.  Keep an identity for the
+ * underlying filesystem object as well, because the caller's descriptor
+ * number can be closed and reused before an aio_fsync barrier is scheduled. */
+typedef struct RinAioFileIdentity {
+    uint64_t device;
+    uint64_t inode;
+    uint64_t special_device;
+    uint32_t file_type;
+} RinAioFileIdentity;
 
 typedef struct RinAioSubscription {
     RinAioSuspendWaiter* waiter;
@@ -62,6 +73,8 @@ struct RinAioRequest {
     int operation;
     int original_fd;
     int held_fd;
+    RinAioFileIdentity file_identity;
+    uint32_t file_identity_valid;
     int completion_error;
     ssize_t result;
     uint64_t sequence;
@@ -436,14 +449,48 @@ static int rin_aio_start_workers_locked(uint32_t incoming_requests)
     return g_rin_aio_worker_count != 0u ? 0 : EAGAIN;
 }
 
+static int rin_aio_file_identity(int fd, RinAioFileIdentity* identity_out)
+{
+    struct stat status;
+    uint32_t file_type;
+
+    if (fd < 0 || !identity_out) return EINVAL;
+    if (fstat(fd, &status) != 0) return errno != 0 ? errno : EIO;
+    file_type = (uint32_t)(status.st_mode & S_IFMT);
+    /* An inode number is the stable identity for ordinary VFS objects.
+     * Some character/block devices may expose inode zero, so their device
+     * type and st_rdev are used instead.  Reject an unidentifiable object
+     * rather than allowing a barrier to associate unrelated requests. */
+    if (status.st_ino == 0u &&
+        ((file_type != S_IFCHR && file_type != S_IFBLK) ||
+         status.st_rdev == 0u))
+        return EOPNOTSUPP;
+    identity_out->device = (uint64_t)status.st_dev;
+    identity_out->inode = (uint64_t)status.st_ino;
+    identity_out->special_device = (uint64_t)status.st_rdev;
+    identity_out->file_type = file_type;
+    return 0;
+}
+
+static int rin_aio_file_identity_equal(const RinAioFileIdentity* left,
+                                       const RinAioFileIdentity* right)
+{
+    return left && right && left->device == right->device &&
+           left->inode == right->inode &&
+           left->special_device == right->special_device &&
+           left->file_type == right->file_type;
+}
+
 static int rin_aio_prepare(struct aiocb* control, int operation,
                            int* held_fd_out,
+                           RinAioFileIdentity* file_identity_out,
                            RinAioNotification* notification_out)
 {
     int flags;
     int held_fd;
     int error;
-    if (!control || !held_fd_out || !notification_out) return EINVAL;
+    if (!control || !held_fd_out || !file_identity_out ||
+        !notification_out) return EINVAL;
     if (control->aio_fildes < 0 ||
         ((operation == RIN_AIO_OP_READ || operation == RIN_AIO_OP_WRITE) &&
          control->aio_reqprio != 0) ||
@@ -482,6 +529,12 @@ static int rin_aio_prepare(struct aiocb* control, int operation,
         rin_aio_notification_release(notification_out);
         return EBADF;
     }
+    error = rin_aio_file_identity(held_fd, file_identity_out);
+    if (error != 0) {
+        (void)close(held_fd);
+        rin_aio_notification_release(notification_out);
+        return error;
+    }
     *held_fd_out = held_fd;
     return 0;
 }
@@ -498,6 +551,7 @@ static RinAioGroup* rin_aio_group_complete_locked(RinAioGroup* group,
 
 static int rin_aio_submit_prepared(struct aiocb* control, int operation,
                                    int held_fd,
+                                   const RinAioFileIdentity* file_identity,
                                    const RinAioNotification* notification,
                                    RinAioGroup* group)
 {
@@ -511,7 +565,7 @@ static int rin_aio_submit_prepared(struct aiocb* control, int operation,
         return -1;
     }
     (void)pthread_mutex_lock(&g_rin_aio_mutex);
-    if (rin_aio_find_locked(control) >= 0) {
+    if (!file_identity || rin_aio_find_locked(control) >= 0) {
         error = EINVAL;
     } else if ((slot = rin_aio_free_slot_locked()) < 0) {
         error = EAGAIN;
@@ -523,6 +577,8 @@ static int rin_aio_submit_prepared(struct aiocb* control, int operation,
         request->operation = operation;
         request->original_fd = control->aio_fildes;
         request->held_fd = held_fd;
+        request->file_identity = *file_identity;
+        request->file_identity_valid = 1u;
         if (operation == RIN_AIO_OP_FSYNC)
             request->barrier_sequence = g_rin_aio_next_sequence - 1u;
         request->sequence = g_rin_aio_next_sequence++;
@@ -545,14 +601,15 @@ static int rin_aio_submit_prepared(struct aiocb* control, int operation,
 static int rin_aio_submit(struct aiocb* control, int operation)
 {
     RinAioNotification notification;
+    RinAioFileIdentity file_identity;
     int held_fd = -1;
-    int error = rin_aio_prepare(control, operation, &held_fd,
+    int error = rin_aio_prepare(control, operation, &held_fd, &file_identity,
                                 &notification);
     if (error != 0) {
         errno = error;
         return -1;
     }
-    return rin_aio_submit_prepared(control, operation, held_fd,
+    return rin_aio_submit_prepared(control, operation, held_fd, &file_identity,
                                    &notification, NULL);
 }
 
@@ -565,8 +622,15 @@ static int rin_aio_fsync_barrier_ready_locked(
         const RinAioRequest* candidate = &g_rin_aio_requests[index];
         if (candidate == barrier || candidate->state == RIN_AIO_FREE ||
             candidate->state == RIN_AIO_DONE ||
-            candidate->original_fd != barrier->original_fd ||
             candidate->sequence > barrier->barrier_sequence)
+            continue;
+        /* An active request without a published identity cannot safely be
+         * classified as unrelated.  Keep the barrier queued on corruption. */
+        if (candidate->file_identity_valid != 1u ||
+            barrier->file_identity_valid != 1u)
+            return 0;
+        if (!rin_aio_file_identity_equal(&candidate->file_identity,
+                                         &barrier->file_identity))
             continue;
         return 0;
     }
@@ -1052,6 +1116,7 @@ int lio_listio(int mode, struct aiocb* const requests[], int count,
     struct aiocb* controls[AIO_LISTIO_MAX];
     int operations[AIO_LISTIO_MAX];
     int held_fds[AIO_LISTIO_MAX];
+    RinAioFileIdentity file_identities[AIO_LISTIO_MAX];
     RinAioNotification request_notifications[AIO_LISTIO_MAX];
     RinAioNotification list_notification;
     RinAioGroup* group = NULL;
@@ -1088,6 +1153,7 @@ int lio_listio(int mode, struct aiocb* const requests[], int count,
 
     for (index = 0; index < count; ++index) {
         struct aiocb* control = requests[index];
+        RinAioFileIdentity file_identity;
         int operation;
         int held_fd = -1;
         if (!control || control->aio_lio_opcode == LIO_NOP) continue;
@@ -1099,12 +1165,13 @@ int lio_listio(int mode, struct aiocb* const requests[], int count,
             error = EINVAL;
             break;
         }
-        error = rin_aio_prepare(control, operation, &held_fd,
+        error = rin_aio_prepare(control, operation, &held_fd, &file_identity,
                                 &request_notifications[active_count]);
         if (error != 0) break;
         controls[active_count] = control;
         operations[active_count] = operation;
         held_fds[active_count] = held_fd;
+        file_identities[active_count] = file_identity;
         ++active_count;
     }
     if (error == 0) {
@@ -1150,6 +1217,8 @@ int lio_listio(int mode, struct aiocb* const requests[], int count,
                     request->operation = operations[index];
                     request->original_fd = controls[index]->aio_fildes;
                     request->held_fd = held_fds[index];
+                    request->file_identity = file_identities[index];
+                    request->file_identity_valid = 1u;
                     request->notification = request_notifications[index];
                     request->sequence = g_rin_aio_next_sequence++;
                     if (g_rin_aio_next_sequence == 0u)
