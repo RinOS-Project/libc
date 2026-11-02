@@ -4,6 +4,8 @@
 #include "stdlib.h"
 #include "internal/rin_environment_runtime.h"
 #include "rin_account_compat.h"
+#include "pthread.h"
+#include "time.h"
 
 typedef struct RinEnvironmentAllocation {
     void* pointer;
@@ -11,9 +13,13 @@ typedef struct RinEnvironmentAllocation {
     struct RinEnvironmentAllocation* next;
 } RinEnvironmentAllocation;
 
-static volatile int g_environment_writer_lock;
+static pthread_mutex_t g_environment_sync_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_environment_sync_changed = PTHREAD_COND_INITIALIZER;
+static unsigned int g_environment_writer_active;
+static _Thread_local int g_environment_saved_cancel_state;
 static volatile unsigned int g_environment_epoch;
 static volatile unsigned int g_environment_readers[2];
+static volatile unsigned int g_environment_reader_waiters[2];
 static RinEnvironmentAllocation* g_environment_allocations;
 
 #if defined(RIN_ENVIRONMENT_RUNTIME_TESTING)
@@ -32,15 +38,81 @@ size_t __rin_env_test_reclaim_comparisons(void) {
 #define ENVIRONMENT_RECLAIM_COUNT_COMPARISON() ((void)0)
 #endif
 
-static void environment_lock(void) {
-    while (__sync_lock_test_and_set(&g_environment_writer_lock, 1)) {
-        while (__atomic_load_n(&g_environment_writer_lock, __ATOMIC_RELAXED))
-            __asm__ volatile("pause" ::: "memory");
+static void environment_sleep_briefly(void) {
+    struct timespec request = {0, 1000000L};
+    struct timespec remaining;
+    while (nanosleep(&request, &remaining) != 0 && errno == EINTR)
+        request = remaining;
+}
+
+static void environment_sync_mutex_lock(void) {
+    while (pthread_mutex_lock(&g_environment_sync_mutex) != 0)
+        environment_sleep_briefly();
+}
+
+/* Condition waits are cancellation points.  Keep cancellation disabled while
+ * this thread owns the logical writer slot and may be waiting for readers. */
+static int environment_lock(void) {
+    int previous_cancel_state;
+    const int cancel_error = pthread_setcancelstate(
+        PTHREAD_CANCEL_DISABLE, &previous_cancel_state);
+    if (cancel_error != 0) return cancel_error;
+    g_environment_saved_cancel_state = previous_cancel_state;
+    environment_sync_mutex_lock();
+    while (g_environment_writer_active) {
+        if (pthread_cond_wait(&g_environment_sync_changed,
+                              &g_environment_sync_mutex) != 0) {
+            (void)pthread_mutex_unlock(&g_environment_sync_mutex);
+            environment_sleep_briefly();
+            environment_sync_mutex_lock();
+        }
     }
+    g_environment_writer_active = 1u;
+    (void)pthread_mutex_unlock(&g_environment_sync_mutex);
+    return 0;
 }
 
 static void environment_unlock(void) {
-    __sync_lock_release(&g_environment_writer_lock);
+    environment_sync_mutex_lock();
+    g_environment_writer_active = 0u;
+    (void)pthread_cond_broadcast(&g_environment_sync_changed);
+    (void)pthread_mutex_unlock(&g_environment_sync_mutex);
+    (void)pthread_setcancelstate(g_environment_saved_cancel_state, NULL);
+}
+
+static void environment_reader_leave(unsigned int epoch) {
+    const unsigned int slot = epoch & 1u;
+    const unsigned int previous = __atomic_fetch_sub(
+        &g_environment_readers[slot], 1u, __ATOMIC_RELEASE);
+    if (previous != 1u ||
+        !__atomic_load_n(&g_environment_reader_waiters[slot],
+                         __ATOMIC_SEQ_CST))
+        return;
+    environment_sync_mutex_lock();
+    (void)pthread_cond_broadcast(&g_environment_sync_changed);
+    (void)pthread_mutex_unlock(&g_environment_sync_mutex);
+}
+
+static void environment_wait_for_readers(unsigned int epoch) {
+    const unsigned int slot = epoch & 1u;
+    environment_sync_mutex_lock();
+    while (__atomic_load_n(&g_environment_readers[slot], __ATOMIC_ACQUIRE) !=
+           0u) {
+        __atomic_store_n(&g_environment_reader_waiters[slot], 1u,
+                         __ATOMIC_SEQ_CST);
+        if (__atomic_load_n(&g_environment_readers[slot], __ATOMIC_ACQUIRE) ==
+            0u)
+            break;
+        if (pthread_cond_wait(&g_environment_sync_changed,
+                             &g_environment_sync_mutex) != 0) {
+            (void)pthread_mutex_unlock(&g_environment_sync_mutex);
+            environment_sleep_briefly();
+            environment_sync_mutex_lock();
+        }
+    }
+    __atomic_store_n(&g_environment_reader_waiters[slot], 0u,
+                     __ATOMIC_SEQ_CST);
+    (void)pthread_mutex_unlock(&g_environment_sync_mutex);
 }
 
 char** __rin_env_read_begin(unsigned int* epoch_out) {
@@ -54,14 +126,12 @@ char** __rin_env_read_begin(unsigned int* epoch_out) {
             *epoch_out = epoch;
             return __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
         }
-        __atomic_fetch_sub(&g_environment_readers[epoch & 1u], 1u,
-                           __ATOMIC_RELEASE);
+        environment_reader_leave(epoch);
     }
 }
 
 void __rin_env_read_end(unsigned int epoch) {
-    __atomic_fetch_sub(&g_environment_readers[epoch & 1u], 1u,
-                       __ATOMIC_RELEASE);
+    environment_reader_leave(epoch);
 }
 
 unsigned int __rin_env_generation(void) {
@@ -222,9 +292,7 @@ static void environment_synchronize_and_reclaim(char** survivor) {
         __atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE);
     __atomic_store_n(&g_environment_epoch, old_epoch + 1u,
                      __ATOMIC_RELEASE);
-    while (__atomic_load_n(&g_environment_readers[old_epoch & 1u],
-                           __ATOMIC_ACQUIRE) != 0u)
-        __asm__ volatile("pause" ::: "memory");
+    environment_wait_for_readers(old_epoch);
     environment_reclaim(survivor);
 }
 
@@ -236,9 +304,7 @@ static int environment_publish(char** expected, char** replacement) {
     old_epoch = __atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE);
     __atomic_store_n(&g_environment_epoch, old_epoch + 1u,
                      __ATOMIC_RELEASE);
-    while (__atomic_load_n(&g_environment_readers[old_epoch & 1u],
-                           __ATOMIC_ACQUIRE) != 0u)
-        __asm__ volatile("pause" ::: "memory");
+    environment_wait_for_readers(old_epoch);
     environment_reclaim(replacement);
     return 1;
 }
@@ -317,11 +383,16 @@ char* secure_getenv(const char* name) {
 }
 
 int setenv(const char* name, const char* value, int overwrite) {
+    int lock_error;
     if (!environment_name_valid(name) || !value) {
         errno = EINVAL;
         return -1;
     }
-    environment_lock();
+    lock_error = environment_lock();
+    if (lock_error != 0) {
+        errno = lock_error;
+        return -1;
+    }
     for (;;) {
         char** snapshot = __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
         size_t count = environment_count(snapshot);
@@ -382,11 +453,16 @@ int setenv(const char* name, const char* value, int overwrite) {
 }
 
 int unsetenv(const char* name) {
+    int lock_error;
     if (!environment_name_valid(name)) {
         errno = EINVAL;
         return -1;
     }
-    environment_lock();
+    lock_error = environment_lock();
+    if (lock_error != 0) {
+        errno = lock_error;
+        return -1;
+    }
     for (;;) {
         char** snapshot = __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
         size_t count = environment_count(snapshot);
@@ -427,6 +503,7 @@ int unsetenv(const char* name) {
 int putenv(char* string) {
     char* equals = NULL;
     size_t name_length;
+    int lock_error;
     if (!string) {
         errno = EINVAL;
         return -1;
@@ -442,7 +519,11 @@ int putenv(char* string) {
         return -1;
     }
     name_length = (size_t)(equals - string);
-    environment_lock();
+    lock_error = environment_lock();
+    if (lock_error != 0) {
+        errno = lock_error;
+        return -1;
+    }
     for (;;) {
         char** snapshot = __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
         size_t count = environment_count(snapshot);
@@ -506,7 +587,11 @@ int putenv(char* string) {
 }
 
 int clearenv(void) {
-    environment_lock();
+    const int lock_error = environment_lock();
+    if (lock_error != 0) {
+        errno = lock_error;
+        return -1;
+    }
     for (;;) {
         char** snapshot = __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
         char** empty_table = environment_allocate_table(0u);
