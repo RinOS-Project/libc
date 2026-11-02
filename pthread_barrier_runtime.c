@@ -4,6 +4,7 @@
 #include "pthread.h"
 
 #include <limits.h>
+#include <sched.h>
 
 #define RIN_PTHREAD_BARRIER_MAGIC UINT32_C(0x52424152)
 
@@ -39,6 +40,27 @@ static int barrier_futex_wake(pthread_barrier_t* barrier,
     return error;
 }
 
+/* 到着を公開した後にfutex待機の登録が失敗しても到着数は戻さない。
+ * ここで撤回すると同じphaseの参加者を停止させる可能性があるため、
+ * yieldしながら世代が進むまで確認する。 */
+static void barrier_wait_for_generation_change(
+    pthread_barrier_t* barrier, uint32_t generation)
+{
+    while (__atomic_load_n(&barrier->generation, __ATOMIC_ACQUIRE) ==
+           generation)
+        (void)sched_yield();
+}
+
+/* 有効なbarrierで待機中の参加者を解放するためwakeを完了させる。
+ * phase遷移を公開した後にエラーを返さないよう、成功まで再試行する。 */
+static void barrier_futex_wake_retry(pthread_barrier_t* barrier,
+                                     volatile uint32_t* address,
+                                     int count)
+{
+    while (barrier_futex_wake(barrier, address, count) != 0)
+        (void)sched_yield();
+}
+
 static int barrier_lock(pthread_barrier_t* barrier)
 {
     for (;;) {
@@ -64,7 +86,7 @@ static int barrier_unlock(pthread_barrier_t* barrier)
 {
     __atomic_store_n(&barrier->lock, 0u, __ATOMIC_RELEASE);
     if (__atomic_load_n(&barrier->lock_waiters, __ATOMIC_ACQUIRE) != 0u)
-        return barrier_futex_wake(barrier, &barrier->lock, 1);
+        barrier_futex_wake_retry(barrier, &barrier->lock, 1);
     return 0;
 }
 
@@ -141,8 +163,8 @@ int pthread_barrier_wait(pthread_barrier_t* barrier)
                          __ATOMIC_RELEASE);
         error = barrier_unlock(barrier);
         if (error == 0)
-            error = barrier_futex_wake(barrier, &barrier->generation,
-                                       INT_MAX);
+            barrier_futex_wake_retry(barrier, &barrier->generation,
+                                     INT_MAX);
         __atomic_fetch_sub(&barrier->active_waiters, 1u, __ATOMIC_ACQ_REL);
         return error == 0 ? PTHREAD_BARRIER_SERIAL_THREAD : error;
     }
@@ -156,9 +178,8 @@ int pthread_barrier_wait(pthread_barrier_t* barrier)
            generation) {
         error = barrier_futex_wait(barrier, &barrier->generation, generation);
         if (error != 0 && error != EAGAIN && error != EINTR) {
-            __atomic_fetch_sub(&barrier->active_waiters, 1u,
-                               __ATOMIC_ACQ_REL);
-            return error;
+            barrier_wait_for_generation_change(barrier, generation);
+            break;
         }
     }
     __atomic_fetch_sub(&barrier->active_waiters, 1u, __ATOMIC_ACQ_REL);
