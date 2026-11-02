@@ -1406,6 +1406,60 @@ static inline long long __rin_math_lround_to_ll(double rounded) {
     return (long long)rounded;
 }
 
+/* Keep long-double inputs at their source precision until the range check.
+ * In particular, converting first to double can move a value across LONG_MAX
+ * on targets where long double has more significand bits than double. */
+static inline long __rin_math_lroundl_to_long(long double rounded) {
+    if (__builtin_isnan(rounded)) {
+        (void)feraiseexcept(FE_INVALID);
+        return 0L;
+    }
+    if (__builtin_isinf(rounded)) {
+        (void)feraiseexcept(FE_INVALID);
+        return __builtin_signbit(rounded) ? LONG_MIN : LONG_MAX;
+    }
+#if __LONG_MAX__ > 2147483647L
+    if (rounded >= 0x1p63L) {
+        (void)feraiseexcept(FE_INVALID);
+        return LONG_MAX;
+    }
+    if (rounded < -0x1p63L) {
+        (void)feraiseexcept(FE_INVALID);
+        return LONG_MIN;
+    }
+#else
+    if (rounded > (long double)LONG_MAX) {
+        (void)feraiseexcept(FE_INVALID);
+        return LONG_MAX;
+    }
+    if (rounded < (long double)LONG_MIN) {
+        (void)feraiseexcept(FE_INVALID);
+        return LONG_MIN;
+    }
+#endif
+    return (long)rounded;
+}
+
+static inline long long __rin_math_lroundl_to_ll(long double rounded) {
+    if (__builtin_isnan(rounded)) {
+        (void)feraiseexcept(FE_INVALID);
+        return 0LL;
+    }
+    if (__builtin_isinf(rounded)) {
+        (void)feraiseexcept(FE_INVALID);
+        return __builtin_signbit(rounded) ? LLONG_MIN : LLONG_MAX;
+    }
+    if (rounded >= 0x1p63L) {
+        (void)feraiseexcept(FE_INVALID);
+        return LLONG_MAX;
+    }
+    if (rounded < -0x1p63L) {
+        (void)feraiseexcept(FE_INVALID);
+        return LLONG_MIN;
+    }
+    return (long long)rounded;
+}
+
 static inline long lround(double x) {
     return __rin_math_lround_to_long(round(x));
 }
@@ -1415,7 +1469,7 @@ static inline long lroundf(float x) {
 }
 
 static inline long lroundl(long double x) {
-    return __rin_math_lround_to_long(round((double)x));
+    return __rin_math_lroundl_to_long(roundl(x));
 }
 
 static inline long long llround(double x) {
@@ -1427,7 +1481,7 @@ static inline long long llroundf(float x) {
 }
 
 static inline long long llroundl(long double x) {
-    return __rin_math_lround_to_ll(round((double)x));
+    return __rin_math_lroundl_to_ll(roundl(x));
 }
 
 /* trunc - 0方向への切り捨て */
@@ -2838,7 +2892,7 @@ static inline long lrintf(float x) {
 }
 
 static inline long lrintl(long double x) {
-    return __rin_math_lround_to_long(__rin_math_round_mode((double)x));
+    return __rin_math_lroundl_to_long(rintl(x));
 }
 
 /* llrint - 四捨五入してlong longへ */
@@ -2851,7 +2905,7 @@ static inline long long llrintf(float x) {
 }
 
 static inline long long llrintl(long double x) {
-    return __rin_math_lround_to_ll(__rin_math_round_mode((double)x));
+    return __rin_math_lroundl_to_ll(rintl(x));
 }
 
 /* C23 fromfp/ufromfp/fromfpx/ufromfpx - round x per the FP_INT_*
