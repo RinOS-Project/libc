@@ -35,8 +35,12 @@ int timerfd_settime(int fd, int flags, const struct itimerspec* value,
     uint64_t interval_ns;
     int64_t value_seconds;
 
-    if (fd < 0 || value == NULL) {
-        errno = value == NULL ? EFAULT : EINVAL;
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    if (value == NULL) {
+        errno = EFAULT;
         return -1;
     }
     if ((flags & ~(TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET)) != 0 ||
@@ -90,8 +94,12 @@ int timerfd_settime(int fd, int flags, const struct itimerspec* value,
 int timerfd_gettime(int fd, struct itimerspec* value)
 {
     intptr_t result;
-    if (fd < 0 || value == NULL) {
-        errno = value == NULL ? EFAULT : EINVAL;
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    if (value == NULL) {
+        errno = EFAULT;
         return -1;
     }
     result = __rin_syscall_posixize(_syscall2(
