@@ -465,8 +465,10 @@ _RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addopen(posix_spawn_fil
     _rin_posix_spawn_file_action_t* action;
     size_t path_length;
     int error;
-    if (!actions || !path || fd < 0)
+    if (!actions || !path)
         return EINVAL;
+    if (fd < 0 || fd >= OPEN_MAX)
+        return EBADF;
     error = _rin_posix_spawn_bounded_path_length(path, &path_length);
     if (error != 0)
         return error;
