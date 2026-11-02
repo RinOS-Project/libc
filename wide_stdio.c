@@ -2193,6 +2193,11 @@ typedef struct {
     uint32_t conversion;
 } RinWscanfSpec;
 
+typedef struct {
+    void* destination_slot;
+    void* buffer;
+} RinWscanfAllocatedField;
+
 enum RinWscanfArgumentKind {
     RIN_WSCANF_ARG_NONE = 0,
     RIN_WSCANF_ARG_VOID_POINTER,
@@ -2919,33 +2924,41 @@ static int rin_wscanf_store_count(int length, size_t count,
 static int rin_wscanf_store_characters(const uint32_t* candidate,
                                        unsigned int length, int string,
                                        int wide, va_list* arguments,
-                                       const RinWscanfSpec* spec) {
+                                       const RinWscanfSpec* spec,
+                                       RinWscanfAllocatedField* allocated_field) {
     unsigned int index;
     if (wide) {
         wchar_t* output;
         if (spec && spec->allocate) {
-            wchar_t** allocated = (wchar_t**)rin_wscanf_argument(
-                arguments, spec, RIN_WSCANF_ARG_WCHAR_POINTER_POINTER);
-            size_t units = (size_t)length + (string ? 1u : 0u);
-            wchar_t* buffer;
+            wchar_t** allocated = allocated_field
+                ? (wchar_t**)allocated_field->destination_slot : NULL;
+            wchar_t* buffer = allocated_field
+                ? (wchar_t*)allocated_field->buffer : NULL;
             if (!allocated) {
                 errno = EFAULT;
                 return RIN_WSCANF_ERROR;
             }
-            if (units > SIZE_MAX / sizeof(wchar_t)) {
-                errno = EOVERFLOW;
-                return RIN_WSCANF_ERROR;
-            }
-            buffer = (wchar_t*)rin_wscanf_candidate_alloc(
-                units * sizeof(wchar_t));
             if (!buffer) {
-                errno = ENOMEM;
-                return RIN_WSCANF_ERROR;
+                /* B58: deferred stream %m sizing (see prepare above). */
+                size_t units = (size_t)length + (string ? 1u : 0u);
+                if (units == 0u) units = 1u;
+                if (units > SIZE_MAX / sizeof(wchar_t)) {
+                    errno = EOVERFLOW;
+                    return RIN_WSCANF_ERROR;
+                }
+                buffer = (wchar_t*)rin_wscanf_candidate_alloc(
+                    units * sizeof(wchar_t));
+                if (!buffer) {
+                    errno = ENOMEM;
+                    return RIN_WSCANF_ERROR;
+                }
+                allocated_field->buffer = buffer;
             }
             for (index = 0u; index < length; ++index)
                 buffer[index] = (wchar_t)candidate[index];
             if (string) buffer[length] = L'\0';
             *allocated = buffer;
+            allocated_field->buffer = NULL;
             return RIN_WSCANF_MATCH;
         }
         output = (wchar_t*)rin_wscanf_argument(
@@ -2963,8 +2976,8 @@ static int rin_wscanf_store_characters(const uint32_t* candidate,
         char* output;
         char** allocated = NULL;
         if (spec && spec->allocate) {
-            allocated = (char**)rin_wscanf_argument(
-                arguments, spec, RIN_WSCANF_ARG_CHAR_POINTER_POINTER);
+            allocated = allocated_field
+                ? (char**)allocated_field->destination_slot : NULL;
             if (!allocated) {
                 errno = EFAULT;
                 return RIN_WSCANF_ERROR;
@@ -2987,17 +3000,24 @@ static int rin_wscanf_store_characters(const uint32_t* candidate,
             }
         }
         if (allocated != NULL) {
-            size_t bytes = (size_t)length + (string ? 1u : 0u);
-            char* buffer =
-                (char*)rin_wscanf_candidate_alloc(bytes);
+            char* buffer = (char*)allocated_field->buffer;
             if (!buffer) {
-                errno = ENOMEM;
-                return RIN_WSCANF_ERROR;
+                /* B58: deferred stream %m sizing (see prepare above);
+                 * validation already passed, so this cannot leak. */
+                size_t units = (size_t)length + (string ? 1u : 0u);
+                if (units == 0u) units = 1u;
+                buffer = (char*)rin_wscanf_candidate_alloc(units);
+                if (!buffer) {
+                    errno = ENOMEM;
+                    return RIN_WSCANF_ERROR;
+                }
+                allocated_field->buffer = buffer;
             }
             for (index = 0u; index < length; ++index)
                 buffer[index] = (char)candidate[index];
             if (string) buffer[length] = '\0';
             *allocated = buffer;
+            allocated_field->buffer = NULL;
         } else {
             for (index = 0u; index < length; ++index)
                 output[index] = (char)candidate[index];
@@ -3029,14 +3049,77 @@ static size_t rin_wscanf_string_characters_extent(RinWscanfInput* input,
     return extent;
 }
 
+static int rin_wscanf_allocate_field_buffer(
+    size_t capacity, int string, int wide,
+    RinWscanfAllocatedField* allocated_field) {
+    size_t units;
+    size_t element_size;
+    if (capacity == 0u) return RIN_WSCANF_MATCH;
+    if (string && capacity == SIZE_MAX) {
+        errno = EOVERFLOW;
+        return RIN_WSCANF_ERROR;
+    }
+    units = capacity + (string ? 1u : 0u);
+    if (units == 0u) return RIN_WSCANF_MATCH;
+    element_size = wide ? sizeof(wchar_t) : sizeof(char);
+    if (units > SIZE_MAX / element_size) {
+        errno = EOVERFLOW;
+        return RIN_WSCANF_ERROR;
+    }
+    allocated_field->buffer =
+        rin_wscanf_candidate_alloc(units * element_size);
+    if (!allocated_field->buffer) {
+        errno = ENOMEM;
+        return RIN_WSCANF_ERROR;
+    }
+    return RIN_WSCANF_MATCH;
+}
+
+static int rin_wscanf_prepare_allocated_field(
+    RinWscanfInput* input, unsigned int width, int string, int wide,
+    va_list* arguments, const RinWscanfSpec* spec,
+    RinWscanfAllocatedField* allocated_field) {
+    size_t capacity;
+    enum RinWscanfArgumentKind argument_kind;
+    if (!allocated_field) {
+        errno = EINVAL;
+        return RIN_WSCANF_ERROR;
+    }
+    allocated_field->destination_slot = NULL;
+    allocated_field->buffer = NULL;
+    if (!spec || !spec->allocate) return RIN_WSCANF_MATCH;
+    argument_kind = wide ? RIN_WSCANF_ARG_WCHAR_POINTER_POINTER
+                         : RIN_WSCANF_ARG_CHAR_POINTER_POINTER;
+    allocated_field->destination_slot = rin_wscanf_argument(
+        arguments, spec, argument_kind);
+    if (!allocated_field->destination_slot) {
+        errno = EFAULT;
+        return RIN_WSCANF_ERROR;
+    }
+    if (input->string_backed) {
+        capacity = rin_wscanf_string_characters_extent(input, width, string);
+    } else {
+        /* B58: stream %m buffers are sized from the measured field at
+         * store time (narrow B56 parity); the destination slot above
+         * is still validated before anything is read. */
+        allocated_field->buffer = NULL;
+        return RIN_WSCANF_MATCH;
+    }
+    return rin_wscanf_allocate_field_buffer(capacity, string, wide,
+                                             allocated_field);
+}
+
 static int rin_wscanf_characters(RinWscanfInput* input, unsigned int width,
                                  int string, int wide, int suppress,
                                  va_list* arguments,
                                  const RinWscanfSpec* spec) {
     /* B58: exact-extent reserve on strings (B47 malloc-before-read
      * kept), growable candidate on streams (narrow B56 parity).
-     * Growth failure fails fast with partial scalars consumed. */
+     * Stream %m buffers are sized at store time; only the destination
+     * slot is validated before reading. Growth failure fails fast with
+     * partial scalars consumed. */
     RinWscanfCandidate field;
+    RinWscanfAllocatedField allocated_field = {NULL, NULL};
     unsigned int index = 0u;
     int status;
     rin_wscanf_candidate_init(&field);
@@ -3048,9 +3131,17 @@ static int rin_wscanf_characters(RinWscanfInput* input, unsigned int width,
             return RIN_WSCANF_ERROR;
         }
     }
+    status = rin_wscanf_prepare_allocated_field(input, width, string, wide,
+                                                 arguments, spec,
+                                                 &allocated_field);
+    if (status != RIN_WSCANF_MATCH) {
+        rin_wscanf_candidate_release(&field);
+        return status;
+    }
     if (string) {
         status = rin_wscanf_skip_space(input);
         if (status != RIN_WSCANF_MATCH) {
+            rin_wscanf_candidate_dealloc(allocated_field.buffer);
             rin_wscanf_candidate_release(&field);
             return status;
         }
@@ -3059,32 +3150,39 @@ static int rin_wscanf_characters(RinWscanfInput* input, unsigned int width,
             status = rin_wscanf_read(input, &value);
             if (status == RIN_WSCANF_EOF) break;
             if (status != RIN_WSCANF_MATCH) {
+                rin_wscanf_candidate_dealloc(allocated_field.buffer);
                 rin_wscanf_candidate_release(&field);
                 return status;
             }
             if (rin_wscanf_space(value)) {
                 if (rin_wscanf_unread(input, value) != RIN_WSCANF_MATCH) {
+                    rin_wscanf_candidate_dealloc(allocated_field.buffer);
                     rin_wscanf_candidate_release(&field);
                     return RIN_WSCANF_ERROR;
                 }
                 break;
             }
             if (rin_wscanf_candidate_append(&field, value) != 0) {
+                rin_wscanf_candidate_dealloc(allocated_field.buffer);
                 rin_wscanf_candidate_release(&field);
                 return RIN_WSCANF_ERROR;
             }
             ++index;
         }
         if (index == 0u) {
+            rin_wscanf_candidate_dealloc(allocated_field.buffer);
             rin_wscanf_candidate_release(&field);
             return RIN_WSCANF_NOMATCH;
         }
         if (suppress) {
+            rin_wscanf_candidate_dealloc(allocated_field.buffer);
             rin_wscanf_candidate_release(&field);
             return RIN_WSCANF_MATCH;
         }
         status = rin_wscanf_store_characters(field.data, index, 1, wide,
-                                              arguments, spec);
+                                              arguments, spec,
+                                              &allocated_field);
+        rin_wscanf_candidate_dealloc(allocated_field.buffer);
         rin_wscanf_candidate_release(&field);
         return status;
     }
@@ -3093,21 +3191,26 @@ static int rin_wscanf_characters(RinWscanfInput* input, unsigned int width,
         uint32_t value;
         status = rin_wscanf_read(input, &value);
         if (status != RIN_WSCANF_MATCH) {
+            rin_wscanf_candidate_dealloc(allocated_field.buffer);
             rin_wscanf_candidate_release(&field);
             return status;
         }
         if (rin_wscanf_candidate_append(&field, value) != 0) {
+            rin_wscanf_candidate_dealloc(allocated_field.buffer);
             rin_wscanf_candidate_release(&field);
             return RIN_WSCANF_ERROR;
         }
         ++index;
     }
     if (suppress) {
+        rin_wscanf_candidate_dealloc(allocated_field.buffer);
         rin_wscanf_candidate_release(&field);
         return RIN_WSCANF_MATCH;
     }
     status = rin_wscanf_store_characters(field.data, index, 0, wide,
-                                          arguments, spec);
+                                          arguments, spec,
+                                          &allocated_field);
+    rin_wscanf_candidate_dealloc(allocated_field.buffer);
     rin_wscanf_candidate_release(&field);
     return status;
 }
@@ -3736,8 +3839,11 @@ static int rin_wscanf_scanset(RinWscanfInput* input,
                                const RinWscanfSpec* spec) {
     /* B58: exact-extent reserve on strings (B47 malloc-before-read
      * kept), growable candidate on streams (narrow B56 parity).
-     * Growth failure fails fast with partial scalars consumed. */
+     * Stream %m buffers are sized at store time; only the destination
+     * slot is validated before reading. Growth failure fails fast with
+     * partial scalars consumed. */
     RinWscanfCandidate field;
+    RinWscanfAllocatedField allocated_field = {NULL, NULL};
     unsigned int index = 0u;
     int saw_eof = 0;
     rin_wscanf_candidate_init(&field);
@@ -3747,6 +3853,33 @@ static int rin_wscanf_scanset(RinWscanfInput* input,
         if (rin_wscanf_candidate_reserve(&field, extent) != 0) {
             rin_wscanf_candidate_release(&field);
             return RIN_WSCANF_ERROR;
+        }
+    }
+    if (spec && spec->allocate) {
+        enum RinWscanfArgumentKind argument_kind = wide
+            ? RIN_WSCANF_ARG_WCHAR_POINTER_POINTER
+            : RIN_WSCANF_ARG_CHAR_POINTER_POINTER;
+        allocated_field.destination_slot = rin_wscanf_argument(
+            arguments, spec, argument_kind);
+        if (!allocated_field.destination_slot) {
+            rin_wscanf_candidate_release(&field);
+            errno = EFAULT;
+            return RIN_WSCANF_ERROR;
+        }
+        if (input->string_backed) {
+            size_t capacity =
+                rin_wscanf_string_scanset_extent(input, set, width);
+            if (rin_wscanf_allocate_field_buffer(capacity, 1, wide,
+                                                 &allocated_field) !=
+                RIN_WSCANF_MATCH) {
+                rin_wscanf_candidate_release(&field);
+                return RIN_WSCANF_ERROR;
+            }
+        } else {
+            /* B58: stream %m buffers are sized from the measured field
+             * at store time; the destination slot above is still
+             * validated before anything is read. */
+            allocated_field.buffer = NULL;
         }
     }
     for (;;) {
@@ -3759,34 +3892,41 @@ static int rin_wscanf_scanset(RinWscanfInput* input,
             break;
         }
         if (status != RIN_WSCANF_MATCH) {
+            rin_wscanf_candidate_dealloc(allocated_field.buffer);
             rin_wscanf_candidate_release(&field);
             return status;
         }
         if (!rin_wscanf_scanset_contains(set, value)) {
             if (rin_wscanf_unread(input, value) != RIN_WSCANF_MATCH) {
+                rin_wscanf_candidate_dealloc(allocated_field.buffer);
                 rin_wscanf_candidate_release(&field);
                 return RIN_WSCANF_ERROR;
             }
             break;
         }
         if (rin_wscanf_candidate_append(&field, value) != 0) {
+            rin_wscanf_candidate_dealloc(allocated_field.buffer);
             rin_wscanf_candidate_release(&field);
             return RIN_WSCANF_ERROR;
         }
         ++index;
     }
     if (index == 0u) {
+        rin_wscanf_candidate_dealloc(allocated_field.buffer);
         rin_wscanf_candidate_release(&field);
         return saw_eof ? RIN_WSCANF_EOF : RIN_WSCANF_NOMATCH;
     }
     if (suppress) {
+        rin_wscanf_candidate_dealloc(allocated_field.buffer);
         rin_wscanf_candidate_release(&field);
         return RIN_WSCANF_MATCH;
     }
     {
         int store_status = rin_wscanf_store_characters(field.data, index, 1,
                                                         wide, arguments,
-                                                        spec);
+                                                        spec,
+                                                        &allocated_field);
+        rin_wscanf_candidate_dealloc(allocated_field.buffer);
         rin_wscanf_candidate_release(&field);
         return store_status;
     }
