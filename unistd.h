@@ -58,6 +58,10 @@
 #include "internal/pthread_atfork.h"
 #endif
 #include "internal/pthread_cancel_point.h"
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    defined(RIN_USERSPACE) && RIN_USERSPACE
+#include "internal/rin_environment_runtime.h"
+#endif
 #if !defined(RIN_LIBC_NO_ACCOUNT_COMPAT)
 #include "rin_account_compat.h"
 #endif
@@ -3057,8 +3061,12 @@ static inline int __rin_exec_text_length(
 
 static inline const char* __rin_exec_search_path(
     char** environment, int* error) {
-    size_t entry_index;
     if (error) *error = 0;
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    defined(RIN_USERSPACE) && RIN_USERSPACE
+    return __rin_env_get_secure_from_snapshot(environment, "PATH");
+#else
+    size_t entry_index;
     if (!environment) return NULL;
     for (entry_index = 0u;
          entry_index <= __RIN_EXEC_ENVIRONMENT_COUNT_MAX;
@@ -3082,6 +3090,7 @@ static inline const char* __rin_exec_search_path(
     }
     if (error) *error = E2BIG;
     return NULL;
+#endif
 }
 
 static inline int __rin_exec_shell_fallback(
