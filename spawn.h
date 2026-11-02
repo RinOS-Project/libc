@@ -626,9 +626,7 @@ static inline int _rin_posix_spawn_validate(
     if (attr && (attr->flags & (short)~supported_flags) != 0)
         return EINVAL;
     if (attr && (attr->flags & POSIX_SPAWN_SETSID) != 0 &&
-        (attr->flags & (POSIX_SPAWN_SETPGROUP |
-                        POSIX_SPAWN_SETSCHEDPARAM |
-                        POSIX_SPAWN_SETSCHEDULER)) != 0)
+        (attr->flags & POSIX_SPAWN_SETPGROUP) != 0)
         return EINVAL;
     if (attr && (attr->flags & POSIX_SPAWN_SETPGROUP) != 0 &&
         attr->pgroup < 0)
