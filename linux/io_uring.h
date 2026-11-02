@@ -209,6 +209,11 @@ struct io_uring_restriction {
 #define IOSQE_BUFFER_SELECT               (1U << 5)
 #define IOSQE_CQE_SKIP_SUCCESS            (1U << 6)
 
+#define IORING_TIMEOUT_ABS                (1U << 0)
+#define IORING_TIMEOUT_ETIME_SUCCESS      (1U << 5)
+
+#define SPLICE_F_FD_IN_FIXED              (1U << 31)
+
 #define IORING_REGISTER_BUFFERS           0
 #define IORING_UNREGISTER_BUFFERS         1
 #define IORING_REGISTER_FILES             2
