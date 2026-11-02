@@ -86,6 +86,7 @@ static inline pid_t __rin_fork_with_pidfd(int* pidfd_out) {
     __rin_pthread_atfork_snapshot atfork_snapshot = {0u};
 #endif
     intptr_t result;
+    int pidfd_missing = 0;
     if (pidfd_out != NULL) *pidfd_out = -1;
 #if !defined(MIDL_PASS)
     if (__rin_pthread_atfork_prepare != NULL) {
@@ -158,10 +159,7 @@ static inline pid_t __rin_fork_with_pidfd(int* pidfd_out) {
 #endif
         return -1;
     }
-    if (result > 0 && pidfd_out != NULL && *pidfd_out < 0) {
-        errno = EIO;
-        return -1;
-    }
+    pidfd_missing = result > 0 && pidfd_out != NULL && *pidfd_out < 0;
 #if !defined(MIDL_PASS)
     {
         int complete_result = __rin_fork_complete_local(
@@ -182,6 +180,10 @@ static inline pid_t __rin_fork_with_pidfd(int* pidfd_out) {
         if (result != 0 && complete_result != 0) errno = EIO;
     }
 #endif
+    if (pidfd_missing) {
+        errno = EIO;
+        return -1;
+    }
     return (pid_t)result;
 }
 
