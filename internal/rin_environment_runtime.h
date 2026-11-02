@@ -6,8 +6,8 @@
 extern "C" {
 #endif
 
-/* 成功時はsnapshotの参照leaseを取得する。参照値はlease中のみ有効で、
- * 最後の参照後に必ず対応するread_endを呼ぶこと。 */
+/* 呼出しごとにsnapshotの参照leaseを取得する。返却値とそこから得た
+ * ポインターはlease中のみ有効で、最後の参照後に必ずread_endを呼ぶこと。 */
 char** __rin_env_read_begin(unsigned int* epoch_out);
 void __rin_env_read_end(unsigned int epoch);
 unsigned int __rin_env_generation(void);
