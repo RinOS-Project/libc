@@ -187,6 +187,7 @@ typedef struct rin_thread_stack_info_v1 {
 #endif
 #define SYS_clone           SYS_CLONE
 #define SYS_getcpu          SYS_GETCPU
+#define SYS_rseq            SYS_RSEQ
 
 /* ═══════════════════════════════════════════════════════════════
  * Linux __NR_* 互換マクロ
@@ -263,6 +264,7 @@ typedef struct rin_thread_stack_info_v1 {
 #endif
 #define __NR_clone          SYS_CLONE
 #define __NR_getcpu         SYS_GETCPU
+#define __NR_rseq           SYS_rseq
 #define __NR_tkill          SYS_TKILL       /* 500 (RinOS独自, Linux 200はGUIと衝突) */
 #define __NR_tgkill         SYS_TGKILL      /* 501 */
 #if defined(RIN_SYS_IO_URING_SETUP) && \

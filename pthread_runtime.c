@@ -13,6 +13,7 @@
 #include "stdlib.h"
 #include "string.h"
 #include "unistd.h"
+#include "linux/rseq.h"
 
 #define CLONE_THREAD    0x00010000UL
 #define CLONE_VM        0x00000100UL
@@ -57,6 +58,48 @@ static __thread uint64_t g_rin_pthread_cond_signal_interrupt_epoch;
 #define _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(address, operation, value, timeout, \
                                          bitset) \
     syscall(SYS_futex, address, operation, value, timeout, NULL, bitset)
+#endif
+
+#if (defined(RIN_USERSPACE) || defined(RIN_FREESTANDING)) && !defined(_WIN32)
+static __thread struct rseq g_rin_pthread_rseq_area
+    __attribute__((aligned(RSEQ_ALIGN)));
+static __thread int g_rin_pthread_rseq_registered;
+
+static void rin_pthread_rseq_register_current(void)
+{
+    if (g_rin_pthread_rseq_registered) return;
+    g_rin_pthread_rseq_area.cpu_id_start =
+        (uint32_t)RSEQ_CPU_ID_UNINITIALIZED;
+    g_rin_pthread_rseq_area.cpu_id =
+        (uint32_t)RSEQ_CPU_ID_UNINITIALIZED;
+    g_rin_pthread_rseq_area.rseq_cs = 0u;
+    if (syscall(SYS_rseq, &g_rin_pthread_rseq_area, RSEQ_ORIG_SIZE,
+                0u, RSEQ_SIG) == 0)
+        g_rin_pthread_rseq_registered = 1;
+}
+
+static void rin_pthread_rseq_unregister_current(void)
+{
+    if (!g_rin_pthread_rseq_registered) return;
+    (void)syscall(SYS_rseq, &g_rin_pthread_rseq_area, RSEQ_ORIG_SIZE,
+                  RSEQ_FLAG_UNREGISTER, RSEQ_SIG);
+    g_rin_pthread_rseq_registered = 0;
+}
+
+static void rin_pthread_rseq_after_fork_child(void)
+{
+    g_rin_pthread_rseq_registered = 0;
+    rin_pthread_rseq_register_current();
+}
+
+static void __attribute__((constructor(102))) rin_pthread_rseq_initialize(void)
+{
+    rin_pthread_rseq_register_current();
+    (void)pthread_atfork(NULL, NULL, rin_pthread_rseq_after_fork_child);
+}
+#else
+static void rin_pthread_rseq_register_current(void) { }
+static void rin_pthread_rseq_unregister_current(void) { }
 #endif
 
 static int rin_pthread_mutexattr_is_shared(const pthread_mutexattr_t* attr) {
@@ -606,6 +649,7 @@ void pthread_exit(void* retval) {
     rin_pthread_cancel_run_cleanups(self);
     rin_pthread_cancel_exit(self, retval);
     __rin_pthread_run_exit_destructors();
+    rin_pthread_rseq_unregister_current();
 #if defined(__x86_64__) || defined(_M_X64)
     __asm__ volatile(
         "xor %%rdi, %%rdi\n"
@@ -654,6 +698,7 @@ static void* __attribute__((used)) __pthread_thread_bootstrap(void* raw_arg) {
     void* result = NULL;
     int start_error = 0;
 
+    rin_pthread_rseq_register_current();
     (void)rin_pthread_cancel_register(_RIN_PTHREAD_RUNTIME_SELF());
 
     if (start) {

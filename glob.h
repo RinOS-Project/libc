@@ -108,34 +108,6 @@ static inline size_t _rin_glob_strlen(const char* text) {
 #ifndef _RIN_GLOB_GETENV
 #define _RIN_GLOB_GETENV getenv
 #endif
-static inline char* _rin_glob_environment_copy(const char* name) {
-#if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
-    return rin_getenv_copy(name);
-#else
-    const char* value = _RIN_GLOB_GETENV(name);
-    size_t length;
-    char* copy;
-    if (!value) {
-        errno = ENOENT;
-        return NULL;
-    }
-    length = _rin_glob_strlen(value);
-    if (length >= _RIN_GLOB_MAX_PATTERN) {
-        errno = ENAMETOOLONG;
-        return NULL;
-    }
-    copy = (char*)malloc(length + 1u);
-    if (!copy) {
-        errno = ENOMEM;
-        return NULL;
-    }
-    memcpy(copy, value, length + 1u);
-    return copy;
-#endif
-}
-#ifndef _RIN_GLOB_GETENV_COPY
-#define _RIN_GLOB_GETENV_COPY(name) _rin_glob_environment_copy(name)
-#endif
 #ifndef _RIN_GLOB_GETUID
 #define _RIN_GLOB_GETUID getuid
 #endif
@@ -1474,7 +1446,6 @@ static inline int _rin_glob_tilde_expand(const char* pattern, int flags,
     size_t home_length;
     size_t suffix_length;
     size_t total_length;
-    char* environment_home;
     char* expanded;
     size_t cursor;
     struct passwd account;
@@ -1492,19 +1463,7 @@ static inline int _rin_glob_tilde_expand(const char* pattern, int flags,
 
     current_user = pattern[1] == '\0' || pattern[1] == '/';
     if (current_user) {
-        environment_home = _RIN_GLOB_GETENV_COPY("HOME");
-        if (environment_home) {
-            home_length = _rin_glob_strlen(environment_home);
-            if (home_length >= _RIN_GLOB_MAX_PATTERN) {
-                free(environment_home);
-                return GLOB_NOSPACE;
-            }
-            memcpy(scratch->expanded, environment_home, home_length + 1u);
-            free(environment_home);
-            home = scratch->expanded;
-        } else if (errno != ENOENT) {
-            return GLOB_NOSPACE;
-        }
+        home = _RIN_GLOB_GETENV("HOME");
         if (home && home[0] == '/') {
             home_length = 0u;
             while (home_length < _RIN_GLOB_MAX_PATTERN &&

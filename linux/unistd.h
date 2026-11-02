@@ -258,6 +258,7 @@
 #define LINUX_NR_tkill          238
 #define LINUX_NR_sendfile64     239
 #define LINUX_NR_futex          240
+#define LINUX_NR_rseq           386
 #define LINUX_NR_sched_setaffinity 241
 #define LINUX_NR_sched_getaffinity 242
 #define LINUX_NR_set_thread_area 243
@@ -340,6 +341,11 @@
 #define LINUX_NR_io_uring_register 427
 #define LINUX_NR_clone3            435
 #define LINUX_NR_futex_waitv       449
+
+#if defined(__x86_64__) && defined(__SIZEOF_POINTER__) && \
+    __SIZEOF_POINTER__ == 8
+#define LINUX_NR_rseq 334
+#endif
 
 #if defined(__x86_64__) && defined(__SIZEOF_POINTER__) && \
     __SIZEOF_POINTER__ == 8
