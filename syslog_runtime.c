@@ -115,9 +115,9 @@ static int syslog_wait_socket(int fd, short events, uint64_t deadline_ns)
         if (result < 0 && errno == EINTR) continue;
         if (result < 0) return 0;
         if (result == 0) continue;
-        if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
-            return 0;
+        if ((descriptor.revents & POLLNVAL) != 0) return 0;
         if ((descriptor.revents & events) != 0) return 1;
+        if ((descriptor.revents & (POLLERR | POLLHUP)) != 0) return 0;
     }
 }
 
