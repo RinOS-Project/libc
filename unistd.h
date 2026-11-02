@@ -2421,7 +2421,11 @@ static inline long pathconf(const char* path, int name) {
         case _PC_PATH_MAX:
             return PATH_MAX;
         case _PC_PIPE_BUF:
-            if (S_ISFIFO(status.st_mode)) return PIPE_BUF;
+            if (S_ISFIFO(status.st_mode) || S_ISDIR(status.st_mode)) {
+                errno = saved_errno;
+                return PIPE_BUF;
+            }
+            errno = EINVAL;
             return -1;
         case _PC_CHOWN_RESTRICTED:
             return 1;
@@ -2430,12 +2434,18 @@ static inline long pathconf(const char* path, int name) {
         case _PC_MAX_CANON:
         case _PC_MAX_INPUT:
         case _PC_VDISABLE:
-            if (!S_ISCHR(status.st_mode)) return -1;
+            if (!S_ISCHR(status.st_mode)) {
+                errno = EINVAL;
+                return -1;
+            }
             saved_errno = errno;
             terminal = _rin_pathconf_path_is_terminal(path);
             if (terminal < 0) return -1;
             errno = saved_errno;
-            if (!terminal) return -1;
+            if (!terminal) {
+                errno = EINVAL;
+                return -1;
+            }
             if (name == _PC_VDISABLE) return _POSIX_VDISABLE;
             /* The terminal ioctl ABI does not publish canonical/input queue
              * limits.  Report an indeterminate limit instead of guessing. */
@@ -2488,7 +2498,11 @@ static inline long fpathconf(int fd, int name) {
         case _PC_PATH_MAX:
             return PATH_MAX;
         case _PC_PIPE_BUF:
-            if (S_ISFIFO(status.st_mode)) return PIPE_BUF;
+            if (S_ISFIFO(status.st_mode)) {
+                errno = saved_errno;
+                return PIPE_BUF;
+            }
+            errno = EINVAL;
             return -1;
         case _PC_CHOWN_RESTRICTED:
         case _PC_NO_TRUNC:
@@ -2496,11 +2510,17 @@ static inline long fpathconf(int fd, int name) {
         case _PC_MAX_CANON:
         case _PC_MAX_INPUT:
         case _PC_VDISABLE:
-            if (!S_ISCHR(status.st_mode)) return -1;
+            if (!S_ISCHR(status.st_mode)) {
+                errno = EINVAL;
+                return -1;
+            }
             saved_errno = errno;
             terminal = _rin_pathconf_fd_is_terminal(fd);
             errno = saved_errno;
-            if (!terminal) return -1;
+            if (!terminal) {
+                errno = EINVAL;
+                return -1;
+            }
             if (name == _PC_VDISABLE) return _POSIX_VDISABLE;
             return -1;
         case _PC_LINK_MAX:
