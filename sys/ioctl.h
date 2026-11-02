@@ -192,7 +192,7 @@ struct winsize {
 #define SIOCATMARK  0x8905
 
 /* Linux互換のネットワークinterface ioctl。kernelはIPv4 address/netmask、
- * index、flags、MTU、IFCONF列挙とIPv4 address/netmask更新を処理する。
+ * point-to-point peer、index、flags、MTU、IFCONF列挙とIPv4 address/netmask更新を処理する。
  * その他の未対応要求はEOPNOTSUPPを返す。 */
 #ifndef SIOCGIFNAME
 #define SIOCGIFNAME    0x8910
@@ -211,6 +211,12 @@ struct winsize {
 #endif
 #ifndef SIOCSIFADDR
 #define SIOCSIFADDR    0x8916
+#endif
+#ifndef SIOCGIFDSTADDR
+#define SIOCGIFDSTADDR 0x8917
+#endif
+#ifndef SIOCSIFDSTADDR
+#define SIOCSIFDSTADDR 0x8918
 #endif
 #ifndef SIOCGIFNETMASK
 #define SIOCGIFNETMASK 0x891b
