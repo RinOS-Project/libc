@@ -679,25 +679,63 @@ static inline int fcntl(int fd, int cmd, ...) {
             break;
         }
 
-        case F_GETOWN:
-            errno = ENOSYS;
-            result = -1;
+        case F_GETOWN: {
+            struct f_owner_ex owner = {0};
+            intptr_t kernel_result = _RIN_FCNTL_SYSCALL3(
+                SYS_FCNTL, (uintptr_t)fd, (uintptr_t)F_GETOWN_EX,
+                (uintptr_t)&owner);
+            if (_fcntl_result_status_zero(kernel_result) != 0) {
+                result = -1;
+            } else if (owner.type == F_OWNER_PGRP && owner.pid > 0) {
+                /* Avoid the syscall ABI's negative-PGID/negative-errno
+                 * collision by decoding the unambiguous extended result. */
+                result = -owner.pid;
+            } else if ((owner.type == F_OWNER_TID ||
+                        owner.type == F_OWNER_PID) && owner.pid >= 0) {
+                result = owner.pid;
+            } else {
+                errno = EIO;
+                result = -1;
+            }
             break;
+        }
 
-        case F_SETOWN:
-            errno = ENOSYS;
-            result = -1;
+        case F_SETOWN: {
+            int owner = va_arg(ap, int);
+            result = _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL3(
+                SYS_FCNTL, (uintptr_t)fd, (uintptr_t)F_SETOWN,
+                (uintptr_t)(intptr_t)owner));
             break;
+        }
 
         case F_GETSIG:
-            errno = ENOSYS;
-            result = -1;
+            result = _fcntl_result_to_int(_RIN_FCNTL_SYSCALL3(
+                SYS_FCNTL, (uintptr_t)fd, (uintptr_t)F_GETSIG, 0u));
             break;
 
-        case F_SETSIG:
-            errno = ENOSYS;
-            result = -1;
+        case F_SETSIG: {
+            int signal_number = va_arg(ap, int);
+            result = _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL3(
+                SYS_FCNTL, (uintptr_t)fd, (uintptr_t)F_SETSIG,
+                (uintptr_t)(intptr_t)signal_number));
             break;
+        }
+
+        case F_SETOWN_EX: {
+            struct f_owner_ex* owner = va_arg(ap, struct f_owner_ex*);
+            result = _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL3(
+                SYS_FCNTL, (uintptr_t)fd, (uintptr_t)F_SETOWN_EX,
+                (uintptr_t)owner));
+            break;
+        }
+
+        case F_GETOWN_EX: {
+            struct f_owner_ex* owner = va_arg(ap, struct f_owner_ex*);
+            result = _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL3(
+                SYS_FCNTL, (uintptr_t)fd, (uintptr_t)F_GETOWN_EX,
+                (uintptr_t)owner));
+            break;
+        }
 
         default:
             errno = EINVAL;
