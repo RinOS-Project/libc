@@ -179,16 +179,145 @@ static inline int fetestexcept(int excepts) {
 #endif
 }
 
-/* 例外フラグを発生させる */
+/* Execute real operations after installing the requested status bits.  The
+ * arithmetic is deliberately kept in inline assembly so compiler folding and
+ * the current optimization level cannot turn feraiseexcept into a flag-only
+ * update. */
+static inline void __rin_fenv_raise_x87(unsigned int requested) {
+    volatile double zero = 0.0;
+    volatile double one = 1.0;
+    volatile double two = 2.0;
+    volatile double maximum = 0x1.fffffffffffffp+1023;
+    volatile double minimum = 0x1p-1022;
+    volatile double tenth = 0x1.999999999999ap-4;
+    volatile double tiny = 0x1p-100;
+    volatile double denormal = 0x0.0000000000001p-1022;
+
+    if (requested & FE_INVALID) {
+        __asm__ volatile ("fldl %0\n\t"
+                          "fldl %0\n\t"
+                          "fdivp %%st, %%st(1)\n\t"
+                          "fwait\n\t"
+                          "fstp %%st(0)"
+                          : : "m"(zero));
+    }
+    if (requested & FE_DIVBYZERO) {
+        __asm__ volatile ("fldl %0\n\t"
+                          "fldl %1\n\t"
+                          "fdivp %%st, %%st(1)\n\t"
+                          "fwait\n\t"
+                          "fstp %%st(0)"
+                          : : "m"(one), "m"(zero));
+    }
+    if (requested & FE_OVERFLOW) {
+        __asm__ volatile ("fldl %0\n\t"
+                          "fldl %1\n\t"
+                          "fmulp %%st, %%st(1)\n\t"
+                          "fwait\n\t"
+                          "fstp %%st(0)"
+                          : : "m"(maximum), "m"(two));
+    }
+    if (requested & FE_UNDERFLOW) {
+        __asm__ volatile ("fldl %0\n\t"
+                          "fldl %1\n\t"
+                          "fmulp %%st, %%st(1)\n\t"
+                          "fwait\n\t"
+                          "fstp %%st(0)"
+                          : : "m"(minimum), "m"(tenth));
+    }
+    if (requested & FE_INEXACT) {
+        __asm__ volatile ("fldl %0\n\t"
+                          "fld1\n\t"
+                          "faddp %%st, %%st(1)\n\t"
+                          "fwait\n\t"
+                          "fstp %%st(0)"
+                          : : "m"(tiny));
+    }
+    if (requested & FE_DENORMAL) {
+        __asm__ volatile ("fldl %0\n\t"
+                          "fwait\n\t"
+                          "fstp %%st(0)"
+                          : : "m"(denormal));
+    }
+}
+
+#define __RIN_FENV_SSE_BINARY(operation, left_value, right_value) do { \
+    volatile double left = (left_value); \
+    volatile double right = (right_value); \
+    double result; \
+    __asm__ volatile ("movsd %1, %0\n\t" operation " %2, %0" \
+                      : "=&x"(result) : "m"(left), "m"(right)); \
+    (void)result; \
+} while (0)
+
+static inline void __rin_fenv_raise_sse(unsigned int requested) {
+    const volatile double zero = 0.0;
+    const volatile double one = 1.0;
+    const volatile double two = 2.0;
+    const volatile double maximum = 0x1.fffffffffffffp+1023;
+    const volatile double minimum = 0x1p-1022;
+    const volatile double tenth = 0x1.999999999999ap-4;
+    const volatile double tiny = 0x1p-100;
+    const volatile double denormal = 0x0.0000000000001p-1022;
+    unsigned int original_mxcsr;
+
+    if (requested & FE_INVALID)
+        __RIN_FENV_SSE_BINARY("divsd", zero, zero);
+    if (requested & FE_DIVBYZERO)
+        __RIN_FENV_SSE_BINARY("divsd", one, zero);
+    if (requested & FE_OVERFLOW)
+        __RIN_FENV_SSE_BINARY("mulsd", maximum, two);
+    if (requested & FE_UNDERFLOW)
+        __RIN_FENV_SSE_BINARY("mulsd", minimum, tenth);
+    if (requested & FE_INEXACT)
+        __RIN_FENV_SSE_BINARY("addsd", one, tiny);
+    if (requested & FE_DENORMAL) {
+        original_mxcsr = __rin_mxcsr_get();
+        if (original_mxcsr & (1u << 6)) {
+            __rin_mxcsr_set(original_mxcsr & ~(1u << 6));
+        }
+        __RIN_FENV_SSE_BINARY("addsd", one, denormal);
+        if (original_mxcsr & (1u << 6)) {
+            unsigned int current_mxcsr = __rin_mxcsr_get();
+            __rin_mxcsr_set(current_mxcsr | (1u << 6));
+        }
+    }
+}
+
+#undef __RIN_FENV_SSE_BINARY
+
+/* Raise the requested exceptions and preserve the prior status in each unit.
+ * The initial direct status update makes all requested flags visible even if
+ * an enabled exception traps before control reaches the second arithmetic
+ * unit. */
 static inline int feraiseexcept(int excepts) {
     unsigned int requested = (unsigned int)excepts & FE_ALL_EXCEPT;
     if (requested == 0u) return 0;
 
 #if defined(__i386__) || defined(__x86_64__)
+    unsigned short original_x87_status;
+    unsigned int original_mxcsr;
+    unsigned int desired_x87;
+    unsigned int desired_mxcsr;
+    unsigned int current_mxcsr;
+
+    __asm__ volatile ("fnstsw %0" : "=m"(original_x87_status));
+    original_mxcsr = __rin_mxcsr_get();
     __rin_x87_update_excepts(0u, requested);
-#if defined(__i386__) || defined(__x86_64__)
-    __rin_mxcsr_set(__rin_mxcsr_get() | requested);
-#endif
+    __rin_mxcsr_set(original_mxcsr | requested);
+
+    __rin_fenv_raise_x87(requested);
+    __rin_fenv_raise_sse(requested);
+
+    desired_x87 =
+        ((unsigned int)original_x87_status | requested) & FE_ALL_EXCEPT;
+    desired_mxcsr = (original_mxcsr | requested) & FE_ALL_EXCEPT;
+    __rin_x87_update_excepts(FE_ALL_EXCEPT & ~desired_x87, desired_x87);
+    current_mxcsr = __rin_mxcsr_get();
+    current_mxcsr =
+        (current_mxcsr & ~(FE_ALL_EXCEPT & ~desired_mxcsr)) |
+        desired_mxcsr;
+    __rin_mxcsr_set(current_mxcsr);
     return 0;
 #else
     return -1;
