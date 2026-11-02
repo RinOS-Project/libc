@@ -41,7 +41,7 @@
 #define O_SYNC      0x0080
 #endif
 #ifndef O_ASYNC
-#define O_ASYNC     0x10000
+#define O_ASYNC     0x40000
 #endif
 #ifndef O_DSYNC
 #define O_DSYNC     O_SYNC
