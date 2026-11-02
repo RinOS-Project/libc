@@ -5,6 +5,7 @@
 
 #include "errno.h"
 #include "stdint.h"
+#include "stdlib.h"
 #include "../libunicode/rin_unicode.h"
 #if defined(RIN_ICONV_RUNTIME_TESTING)
 extern int rin_iconv_runtime_test_wait(volatile uint32_t* address,
@@ -20,8 +21,15 @@ extern int rin_iconv_runtime_test_wake(volatile uint32_t* address,
                     rin_atomic_notify_all_u32((address)))
 #endif
 
-#define RIN_ICONV_SLOT_COUNT 31u
-#define RIN_ICONV_SLOT_MASK  63u
+#define RIN_ICONV_SLOT_INDEX_BITS 20u
+#define RIN_ICONV_SLOT_MASK ((uintptr_t)0x000fffffu)
+#define RIN_ICONV_SLOT_CHUNK_SHIFT 8u
+#define RIN_ICONV_SLOT_CHUNK_SIZE (1u << RIN_ICONV_SLOT_CHUNK_SHIFT)
+#define RIN_ICONV_SLOT_CHUNK_MASK (RIN_ICONV_SLOT_CHUNK_SIZE - 1u)
+#define RIN_ICONV_SLOT_MAX ((uint32_t)RIN_ICONV_SLOT_MASK)
+#define RIN_ICONV_SLOT_CHUNK_COUNT \
+    ((RIN_ICONV_SLOT_MAX + RIN_ICONV_SLOT_CHUNK_SIZE - 1u) / \
+     RIN_ICONV_SLOT_CHUNK_SIZE)
 #define RIN_ICONV_NAME_INPUT_MAX 128u
 
 typedef enum {
@@ -34,9 +42,10 @@ typedef enum {
     RIN_ICONV_ENCODING_UTF16LE
 } RinIconvEncoding;
 
-typedef struct {
+typedef struct RinIconvDescriptor {
     uintptr_t token;
     uintptr_t generation;
+    uint32_t slot_index;
     uint32_t input_encoding;
     uint32_t output_encoding;
     uint32_t input_byte_order;
@@ -47,9 +56,16 @@ typedef struct {
     uint32_t used;
     uint32_t closing;
     uint32_t retired;
+    struct RinIconvDescriptor* free_next;
 } RinIconvDescriptor;
 
-static RinIconvDescriptor g_iconv_descriptors[RIN_ICONV_SLOT_COUNT];
+/* Descriptor chunks are never moved, so a conversion pin remains valid while
+ * iconv_open grows the directory. The 20-bit slot field supports over one
+ * million descriptor slots on both IA-32 and x86_64. Chunks are allocated on
+ * demand and retained so generation history survives close/reopen churn. */
+static RinIconvDescriptor* g_iconv_chunks[RIN_ICONV_SLOT_CHUNK_COUNT];
+static RinIconvDescriptor* g_iconv_free_list;
+static uint32_t g_iconv_allocated_slots;
 static uint32_t g_iconv_table_lock;
 static volatile uint32_t g_iconv_table_wait_sequence;
 
@@ -146,18 +162,25 @@ static RinIconvEncoding rin_iconv_encoding_from_name(const char* name) {
 }
 
 static uintptr_t rin_iconv_token_for(uintptr_t generation, uint32_t index) {
-    return (generation << 6u) | ((uintptr_t)index + 1u);
+    return (generation << RIN_ICONV_SLOT_INDEX_BITS) |
+           ((uintptr_t)index + 1u);
 }
 
 static RinIconvDescriptor* rin_iconv_lookup_locked(uintptr_t token,
                                                    int allow_closing) {
     uintptr_t slot = token & RIN_ICONV_SLOT_MASK;
     uint32_t index;
+    uint32_t chunk_index;
     RinIconvDescriptor* descriptor;
-    if (slot == 0u || slot > RIN_ICONV_SLOT_COUNT || token == 0u)
+    if (slot == 0u || slot > RIN_ICONV_SLOT_MAX || token == 0u)
         return NULL;
     index = (uint32_t)(slot - 1u);
-    descriptor = &g_iconv_descriptors[index];
+    chunk_index = index >> RIN_ICONV_SLOT_CHUNK_SHIFT;
+    if (chunk_index >= RIN_ICONV_SLOT_CHUNK_COUNT ||
+        !g_iconv_chunks[chunk_index])
+        return NULL;
+    descriptor = &g_iconv_chunks[chunk_index][
+        index & RIN_ICONV_SLOT_CHUNK_MASK];
     if (!descriptor->used || descriptor->token != token ||
         (!allow_closing && descriptor->closing))
         return NULL;
@@ -200,39 +223,104 @@ iconv_t iconv_open(const char* tocode, const char* fromcode) {
         rin_iconv_encoding_from_name(tocode);
     RinIconvEncoding input_encoding =
         rin_iconv_encoding_from_name(fromcode);
-    uint32_t index;
     if (input_encoding == RIN_ICONV_ENCODING_INVALID ||
         output_encoding == RIN_ICONV_ENCODING_INVALID) {
         errno = EINVAL;
         return (iconv_t)(uintptr_t)-1;
     }
-    rin_iconv_table_lock();
-    for (index = 0u; index < RIN_ICONV_SLOT_COUNT; ++index) {
-        RinIconvDescriptor* descriptor = &g_iconv_descriptors[index];
-        uintptr_t max_generation = ((uintptr_t)~(uintptr_t)0) >> 6u;
-        if (descriptor->used || descriptor->retired) continue;
-        if (descriptor->generation >= max_generation) {
-            descriptor->retired = 1u;
+    for (;;) {
+        RinIconvDescriptor* descriptor;
+        RinIconvDescriptor* candidate_chunk = NULL;
+        uintptr_t max_generation = UINTPTR_MAX >>
+                                  RIN_ICONV_SLOT_INDEX_BITS;
+        uint32_t chunk_index;
+        uint32_t available;
+
+        rin_iconv_table_lock();
+        descriptor = g_iconv_free_list;
+        if (descriptor) {
+            g_iconv_free_list = descriptor->free_next;
+            descriptor->free_next = NULL;
+            if (descriptor->generation >= max_generation) {
+                descriptor->retired = 1u;
+                rin_iconv_table_unlock();
+                continue;
+            }
+            ++descriptor->generation;
+            descriptor->token = rin_iconv_token_for(
+                descriptor->generation, descriptor->slot_index - 1u);
+            if (descriptor->token == UINTPTR_MAX) {
+                descriptor->retired = 1u;
+                rin_iconv_table_unlock();
+                continue;
+            }
+            descriptor->input_encoding = (uint32_t)input_encoding;
+            descriptor->output_encoding = (uint32_t)output_encoding;
+            descriptor->input_byte_order = 0u;
+            descriptor->input_started = 0u;
+            descriptor->output_started = 0u;
+            descriptor->pins = 0u;
+            descriptor->descriptor_lock = 0u;
+            descriptor->closing = 0u;
+            descriptor->used = 1u;
+            rin_iconv_table_unlock();
+            return (iconv_t)descriptor->token;
+        }
+        if (g_iconv_allocated_slots >= RIN_ICONV_SLOT_MAX) {
+            rin_iconv_table_unlock();
+            errno = EMFILE;
+            return (iconv_t)(uintptr_t)-1;
+        }
+        chunk_index = g_iconv_allocated_slots >>
+                      RIN_ICONV_SLOT_CHUNK_SHIFT;
+        if (chunk_index >= RIN_ICONV_SLOT_CHUNK_COUNT) {
+            rin_iconv_table_unlock();
+            errno = EMFILE;
+            return (iconv_t)(uintptr_t)-1;
+        }
+        available = RIN_ICONV_SLOT_MAX - g_iconv_allocated_slots;
+        if (available > RIN_ICONV_SLOT_CHUNK_SIZE)
+            available = RIN_ICONV_SLOT_CHUNK_SIZE;
+        rin_iconv_table_unlock();
+
+        /* Allocate outside the table lock. Another opener can win the same
+         * growth race; the loser frees its private candidate and retries. */
+        candidate_chunk = (RinIconvDescriptor*)malloc(
+            (size_t)available * sizeof(*candidate_chunk));
+        if (!candidate_chunk) {
+            rin_iconv_table_lock();
+            if (g_iconv_free_list ||
+                g_iconv_allocated_slots >= RIN_ICONV_SLOT_MAX ||
+                g_iconv_allocated_slots !=
+                    chunk_index * RIN_ICONV_SLOT_CHUNK_SIZE) {
+                rin_iconv_table_unlock();
+                continue;
+            }
+            rin_iconv_table_unlock();
+            errno = ENOMEM;
+            return (iconv_t)(uintptr_t)-1;
+        }
+        __builtin_memset(candidate_chunk, 0,
+                         (size_t)available * sizeof(*candidate_chunk));
+
+        rin_iconv_table_lock();
+        if (g_iconv_free_list ||
+            g_iconv_allocated_slots !=
+                chunk_index * RIN_ICONV_SLOT_CHUNK_SIZE) {
+            rin_iconv_table_unlock();
+            free(candidate_chunk);
             continue;
         }
-        ++descriptor->generation;
-        descriptor->token = rin_iconv_token_for(descriptor->generation,
-                                                index);
-        descriptor->input_encoding = (uint32_t)input_encoding;
-        descriptor->output_encoding = (uint32_t)output_encoding;
-        descriptor->input_byte_order = 0u;
-        descriptor->input_started = 0u;
-        descriptor->output_started = 0u;
-        descriptor->pins = 0u;
-        descriptor->descriptor_lock = 0u;
-        descriptor->closing = 0u;
-        descriptor->used = 1u;
+        g_iconv_chunks[chunk_index] = candidate_chunk;
+        for (uint32_t offset = 0u; offset < available; ++offset) {
+            RinIconvDescriptor* added = &candidate_chunk[offset];
+            added->slot_index = g_iconv_allocated_slots + offset + 1u;
+            added->free_next = g_iconv_free_list;
+            g_iconv_free_list = added;
+        }
+        g_iconv_allocated_slots += available;
         rin_iconv_table_unlock();
-        return (iconv_t)descriptor->token;
     }
-    rin_iconv_table_unlock();
-    errno = EMFILE;
-    return (iconv_t)(uintptr_t)-1;
 }
 
 typedef enum {
@@ -509,6 +597,17 @@ int iconv_close(iconv_t opaque) {
             descriptor->input_started = 0u;
             descriptor->output_started = 0u;
             descriptor->descriptor_lock = 0u;
+            if (descriptor->generation >=
+                    (UINTPTR_MAX >> RIN_ICONV_SLOT_INDEX_BITS) ||
+                rin_iconv_token_for(descriptor->generation,
+                                    descriptor->slot_index - 1u) ==
+                    UINTPTR_MAX) {
+                descriptor->retired = 1u;
+                descriptor->free_next = NULL;
+            } else {
+                descriptor->free_next = g_iconv_free_list;
+                g_iconv_free_list = descriptor;
+            }
             rin_iconv_table_unlock();
             return 0;
         }
