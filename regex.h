@@ -1836,7 +1836,7 @@ static inline int regexec(const regex_t* preg, const char* string,
             const uint32_t pc = active_indices[active_index];
             const uint32_t target = pc + 1u;
             size_t origin;
-            if (state_generation[pc] != active_epoch) {
+            if (active_generation[pc] != active_epoch) {
                 result = REG_ESPACE;
                 goto regex_exec_done;
             }
