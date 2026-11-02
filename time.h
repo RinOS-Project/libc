@@ -403,31 +403,16 @@ static inline int _rin_time_clock_timespec_user(
 }
 
 static inline int _rin_time_gettimeofday(struct timeval* output) {
-#if defined(RIN_TIME_ABI64) && \
-    defined(RIN_FREESTANDING) && !defined(RIN_KERNEL)
-    RinClockGettimeV1 request = { 0u, 0u, 0u, 0, 0, 0, 0 };
-    intptr_t result;
-    if (!output) {
-        errno = EFAULT;
-        return -1;
-    }
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && !defined(RIN_KERNEL)
+    RinClockTimespecUserV1 request = {0};
     request.struct_size = (uint32_t)sizeof(request);
-    request.version = RIN_CLOCK_GETTIME_ABI_VERSION;
-    request.clock_id = 0;
-    result = _rin_time_result(_RIN_TIME_CLOCK_GETTIME64(0, &request));
-    if (result < 0) return -1;
-    if (result != 0 || !rin_clock_gettime_v1_valid(&request, 0)) {
-        errno = EIO;
-        return -1;
-    }
-    if (request.tv_sec > RIN_TIME_T_MAX ||
-        request.tv_sec < RIN_TIME_T_MIN) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    output->tv_sec = (time_t)request.tv_sec;
-    output->tv_usec = (long)(request.tv_nsec / 1000);
-    return 0;
+    request.version = RIN_CLOCK_TIMESPEC_USER_ABI_VERSION;
+    request.operation = RIN_CLOCK_TIMESPEC_USER_GETTIMEOFDAY;
+    request.clock_id = RIN_CLOCK_ID_REALTIME;
+    request.time_width = (uint32_t)sizeof(output->tv_sec);
+    request.long_width = (uint32_t)sizeof(output->tv_usec);
+    request.timespec_address = (uint64_t)(uintptr_t)output;
+    return _rin_time_status(_RIN_TIME_CLOCK_TIMESPEC_USER_V1(&request));
 #else
     return _rin_time_status(_RIN_TIME_GETTIMEOFDAY(output));
 #endif
@@ -1754,12 +1739,13 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
         }
     }
 }
+#endif /* RIN_TIME_HOST_HOOK_COMPAT */
 
 /* POSIX clock_nanosleep returns an errno value directly rather than using
  * errno as its result channel.  Relative waits keep the nanosleep owner;
  * absolute waits pass their original deadline to FUTEX_WAIT_BITSET so the
  * kernel can re-evaluate realtime clock changes while the thread is blocked. */
-#if defined(RIN_TIME_TARGET_FUNCTIONS)
+#if defined(RIN_TIME_HOST_HOOK_COMPAT)
 static inline int clock_nanosleep(clockid_t clock_id, int flags,
                                   const struct timespec* request,
                                   struct timespec* remain) {
