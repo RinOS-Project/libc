@@ -1959,7 +1959,7 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_getschedparam(pthread_t thread, int* 
     RinThreadSchedParametersV3 request;
     uintptr_t priority_address;
     intptr_t result;
-    if (!policy || !param) return EINVAL;
+    if (!policy || !param) return EFAULT;
     if (thread == 0) return ESRCH;
     if ((uintptr_t)param > UINTPTR_MAX -
                                offsetof(struct sched_param, sched_priority))
@@ -1978,7 +1978,7 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_getschedparam(pthread_t thread, int* 
         return _rin_pthread_error_from_result(result);
     return result == 0 ? 0 : EIO;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    if (!policy || !param) return EINVAL;
+    if (!policy || !param) return EFAULT;
     return platform_thread_sched_get((void*)(uintptr_t)thread,
                                      policy, &param->sched_priority);
 #else
@@ -1998,7 +1998,7 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_setschedparam(pthread_t thread, int p
     RinThreadSchedParametersV2 parameters;
     uintptr_t priority_address;
     intptr_t result;
-    if (!param) return EINVAL;
+    if (!param) return EFAULT;
     if (thread == 0) return ESRCH;
     if ((uintptr_t)param > UINTPTR_MAX -
                                offsetof(struct sched_param, sched_priority))
@@ -2017,7 +2017,7 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_setschedparam(pthread_t thread, int p
     if (result < 0) return _rin_pthread_error_from_result(result);
     return result == 0 ? 0 : EIO;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    if (!param) return EINVAL;
+    if (!param) return EFAULT;
     return platform_thread_sched_set((void*)(uintptr_t)thread, policy,
                                      param->sched_priority);
 #else
