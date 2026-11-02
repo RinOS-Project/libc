@@ -89,7 +89,8 @@
 #endif
 
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE) && \
-    (defined(__x86_64__) || defined(_M_X64))
+    (defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || \
+     defined(_M_X64))
 #define RIN_POSIX_CAP_THREAD_PROCESS_SHARED RIN_POSIX_VERSION_VALUE
 #else
 #define RIN_POSIX_CAP_THREAD_PROCESS_SHARED RIN_POSIX_OPTION_UNSUPPORTED

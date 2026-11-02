@@ -130,19 +130,25 @@ static int rin_pthread_mutex_is_prio_inherit(const pthread_mutex_t* mutex) {
     return mutex && (mutex->type & RIN_PTHREAD_MUTEX_PRIO_INHERIT_FLAG) != 0;
 }
 
+static int rin_pthread_mutex_uses_owner_registry(
+    const pthread_mutex_t* mutex) {
+    return rin_pthread_mutex_is_shared(mutex) ||
+           rin_pthread_mutex_is_robust(mutex) ||
+           rin_pthread_mutex_is_prio_inherit(mutex);
+}
+
 static pthread_t rin_pthread_mutex_owner_token(const pthread_mutex_t* mutex,
                                                pthread_t self) {
-    uintptr_t pid;
     if (!rin_pthread_mutex_is_shared(mutex)) return self;
-    pid = (uintptr_t)(uint32_t)getpid();
-    if (pid == 0u) return self;
 #if UINTPTR_MAX > UINT32_MAX
+    uintptr_t pid = (uintptr_t)(uint32_t)getpid();
+    if (pid == 0u) return self;
     return (pthread_t)((pid << 32) | ((uintptr_t)self & UINT32_MAX));
 #else
-    /* The compat ABI has a 32-bit owner word.  Mix both identities so equal
-     * TIDs in different processes do not look recursively owned. */
-    return (pthread_t)((uint32_t)self ^
-                       ((uint32_t)pid * UINT32_C(0x9e3779b9)));
+    /* This ABI-sized word is an expected-value witness, not the shared
+     * owner identity.  The kernel registry keys that identity by generation
+     * bound process and thread handles. */
+    return self;
 #endif
 }
 
@@ -234,7 +240,13 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
             if (try_only || timed_out)
                 return timed_out ? ETIMEDOUT : EBUSY;
         }
-        if (current_owner == 0u) {
+        /* A non-robust process-shared mutex remains unavailable after its
+         * owner exits.  Keep the owner-died marker so a recycled task ID
+         * cannot turn that stale lock into recursive ownership. */
+        if (current_owner == 0u &&
+            !((state & RIN_PTHREAD_ROBUST_OWNER_DIED) != 0u &&
+              rin_pthread_mutex_is_shared(mutex) &&
+              !rin_pthread_mutex_is_robust(mutex))) {
             uint32_t desired = (state & (RIN_PTHREAD_ROBUST_OWNER_DIED |
                                          RIN_PTHREAD_ROBUST_WAITERS)) |
                                owner_id;
@@ -1191,8 +1203,7 @@ int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexattr_t* attr) 
 
 int pthread_mutex_destroy(pthread_mutex_t* mutex) {
     if (!mutex) return EINVAL;
-    if (rin_pthread_mutex_is_robust(mutex) ||
-        rin_pthread_mutex_is_prio_inherit(mutex)) {
+    if (rin_pthread_mutex_uses_owner_registry(mutex)) {
         uint32_t state = __atomic_load_n((uint32_t*)&mutex->locked,
                                          __ATOMIC_ACQUIRE);
         if ((state & (RIN_PTHREAD_ROBUST_OWNER_MASK |
@@ -1212,8 +1223,7 @@ static int rin_pthread_mutex_lock_impl(pthread_mutex_t* mutex) {
     pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
     int type = rin_pthread_mutex_type(mutex);
 
-    if (rin_pthread_mutex_is_robust(mutex) ||
-        rin_pthread_mutex_is_prio_inherit(mutex)) {
+    if (rin_pthread_mutex_uses_owner_registry(mutex)) {
         return rin_pthread_mutex_robust_lock(mutex, owner, type, 0, NULL,
                                              CLOCK_REALTIME);
     }
@@ -1279,8 +1289,7 @@ static int rin_pthread_mutex_timedlock_impl(
     pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
     int type = rin_pthread_mutex_type(mutex);
 
-    if (rin_pthread_mutex_is_robust(mutex) ||
-        rin_pthread_mutex_is_prio_inherit(mutex)) {
+    if (rin_pthread_mutex_uses_owner_registry(mutex)) {
         return rin_pthread_mutex_robust_lock(mutex, owner, type, 0, abstime,
                                              clock_id);
     }
@@ -1378,8 +1387,7 @@ static int rin_pthread_mutex_trylock_impl(pthread_mutex_t* mutex) {
     pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
     int type = rin_pthread_mutex_type(mutex);
 
-    if (rin_pthread_mutex_is_robust(mutex) ||
-        rin_pthread_mutex_is_prio_inherit(mutex)) {
+    if (rin_pthread_mutex_uses_owner_registry(mutex)) {
         return rin_pthread_mutex_robust_lock(mutex, owner, type, 1, NULL,
                                              CLOCK_REALTIME);
     }
@@ -1418,13 +1426,13 @@ static int rin_pthread_mutex_unlock_impl(pthread_mutex_t* mutex) {
     pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
     int type = rin_pthread_mutex_type(mutex);
 
-    if (rin_pthread_mutex_is_robust(mutex) ||
-        rin_pthread_mutex_is_prio_inherit(mutex)) {
+    if (rin_pthread_mutex_uses_owner_registry(mutex)) {
         uint32_t state;
         uint32_t previous;
         uint32_t owner_id;
         int wake_error = 0;
-        if (__rin_pthread_mutex_owner_load(mutex) != owner)
+        if (!rin_pthread_mutex_is_shared(mutex) &&
+            __rin_pthread_mutex_owner_load(mutex) != owner)
             return EPERM;
         wake_error = rin_pthread_mutex_robust_owner_id(mutex, owner,
                                                        &owner_id);
@@ -1465,7 +1473,7 @@ static int rin_pthread_mutex_unlock_impl(pthread_mutex_t* mutex) {
                                             __ATOMIC_ACQUIRE))
                 break;
         }
-        {
+        if (!rin_pthread_mutex_is_shared(mutex)) {
             pthread_t expected_owner = owner;
             (void)__atomic_compare_exchange_n(&mutex->owner, &expected_owner,
                                               (pthread_t)0, 0,
@@ -1535,7 +1543,8 @@ static int rin_pthread_mutex_consistent_impl(pthread_mutex_t* mutex) {
         return EINVAL;
     self = _RIN_PTHREAD_RUNTIME_SELF();
     owner = rin_pthread_mutex_owner_token(mutex, self);
-    if (__rin_pthread_mutex_owner_load(mutex) != owner)
+    if (!rin_pthread_mutex_is_shared(mutex) &&
+        __rin_pthread_mutex_owner_load(mutex) != owner)
         return EPERM;
     result = rin_pthread_mutex_robust_owner_id(mutex, owner, &owner_id);
     if (result != 0) return result;
