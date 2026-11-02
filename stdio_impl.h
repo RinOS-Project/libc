@@ -5407,6 +5407,11 @@ _RIN_STDIO_API int renameat(int olddirfd, const char* oldpath, int newdirfd,
     return rin_renameat_inline(olddirfd, oldpath, newdirfd, newpath);
 }
 
+_RIN_STDIO_API int renameat2(int olddirfd, const char* oldpath, int newdirfd,
+                             const char* newpath, unsigned int flags) {
+    return rin_renameat2_inline(olddirfd, oldpath, newdirfd, newpath, flags);
+}
+
 /* ctermid - 制御端末名 */
 _RIN_STDIO_API char* ctermid(char* s) {
     static char name[] = "/dev/tty";

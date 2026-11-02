@@ -8,6 +8,7 @@
 #define _STDIO_H
 #define __STDC_VERSION_STDIO_H__ 202311L
 
+
 #include "stddef.h"
 #include "stdint.h"
 #include "stdarg.h"
@@ -131,6 +132,10 @@ int fileno(FILE* stream);
 void perror(const char* s);
 int remove(const char* pathname);
 int rename(const char* oldpath, const char* newpath);
+int renameat(int olddirfd, const char* oldpath, int newdirfd,
+             const char* newpath);
+int renameat2(int olddirfd, const char* oldpath, int newdirfd,
+              const char* newpath, unsigned int flags);
 FILE* tmpfile(void);
 char* ctermid(char* s);
 #if defined(RIN_ENABLE_UNSAFE_LEGACY_STDIO)
@@ -143,7 +148,7 @@ char* ctermid(char* s);
 #else
 #define RIN_STDIO_UNSAFE_LEGACY_API
 #endif
-/* Explicit source-compatibility escape hatch. gets() can never be safe
+/* Explicit source-compatibility escape hatch. gets() can never be made safe
  * because it has no capacity argument; tmpnam() returns an unreserved path. */
 RIN_STDIO_UNSAFE_LEGACY_API char* gets(char* s);
 RIN_STDIO_UNSAFE_LEGACY_API char* tmpnam(char* s);

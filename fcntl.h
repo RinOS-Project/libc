@@ -42,6 +42,15 @@
 #ifndef AT_EACCESS
 #define AT_EACCESS          0x200  /* 実効IDでアクセスチェック */
 #endif
+#ifndef RENAME_NOREPLACE
+#define RENAME_NOREPLACE  (1u << 0)
+#endif
+#ifndef RENAME_EXCHANGE
+#define RENAME_EXCHANGE   (1u << 1)
+#endif
+#ifndef RENAME_WHITEOUT
+#define RENAME_WHITEOUT   (1u << 2)
+#endif
 
 #include "stddef.h"
 #include "stdarg.h"
@@ -997,6 +1006,40 @@ static inline int rin_renameat_noreplace(int olddirfd, const char* oldpath,
     }
     _fcntl_path_at_init(&call, RIN_PATH_AT_RENAME);
     call.flags = RIN_PATH_AT_RENAME_NOREPLACE;
+    call.dirfd = olddirfd;
+    call.secondary_dirfd = newdirfd;
+    call.path1 = (uint64_t)(uintptr_t)oldpath;
+    call.path2 = (uint64_t)(uintptr_t)newpath;
+    return _fcntl_path_at_zero(&call);
+}
+
+/* Linux-compatible renameat2 flags are translated to path-at's stable ABI
+ * bits. The private expected-source bit remains internal to RinOS callers. */
+static inline int rin_renameat2_inline(int olddirfd, const char* oldpath,
+                                       int newdirfd, const char* newpath,
+                                       unsigned int flags) {
+    RinPathAtCallV1 call;
+    const unsigned int known_flags =
+        RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT;
+    if (!oldpath || !newpath) {
+        errno = EFAULT;
+        return -1;
+    }
+    if ((flags & ~known_flags) != 0u ||
+        ((flags & RENAME_NOREPLACE) != 0u &&
+         (flags & (RENAME_EXCHANGE | RENAME_WHITEOUT)) != 0u) ||
+        ((flags & RENAME_EXCHANGE) != 0u &&
+         (flags & RENAME_WHITEOUT) != 0u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    _fcntl_path_at_init(&call, RIN_PATH_AT_RENAME);
+    if ((flags & RENAME_NOREPLACE) != 0u)
+        call.flags |= RIN_PATH_AT_RENAME_NOREPLACE;
+    if ((flags & RENAME_EXCHANGE) != 0u)
+        call.flags |= RIN_PATH_AT_RENAME_EXCHANGE;
+    if ((flags & RENAME_WHITEOUT) != 0u)
+        call.flags |= RIN_PATH_AT_RENAME_WHITEOUT;
     call.dirfd = olddirfd;
     call.secondary_dirfd = newdirfd;
     call.path1 = (uint64_t)(uintptr_t)oldpath;
