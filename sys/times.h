@@ -16,6 +16,7 @@
     !defined(_RIN_TIME_TIMER_GETOVERRUN) && \
     !defined(_RIN_TIME_TIMER_POLL) && !defined(_RIN_TIME_CLOCK_SETTIME) && \
     !defined(_RIN_TIME_CLOCK_GETTIME64) && !defined(_RIN_TIME_FUTEX_WAIT) && \
+    !defined(_RIN_TIMES_SYSCALL1) && \
     !defined(RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL) && \
     !defined(RIN_PROCESS_PRIORITY_PRODUCT_SYSCALL) && \
     !defined(_RIN_RESOURCE_LIMIT_SYSCALL2) && \
@@ -27,9 +28,8 @@
 #define _SYS_TIMES_H
 
 #include "../errno.h"
-#include "../internal/posix_clock.h"
 #include "../limits.h"
-#include "../sys/resource.h"
+#include "syscall.h"
 #include "../time.h"
 #include "../unistd.h"
 
@@ -47,85 +47,38 @@ struct tms {
 };
 #endif
 
-/* 秒と小数部を公開tickへ変換し、clock_tの上限を越える場合は失敗する。 */
-static inline int __rin_times_to_ticks(uint64_t seconds,
-                                       uint64_t fraction,
-                                       uint64_t fraction_base,
-                                       clock_t* ticks_out)
-{
-    const uint64_t maximum = (uint64_t)LONG_MAX;
-    uint64_t whole_ticks;
-    uint64_t fractional_ticks;
-    if (ticks_out == NULL || fraction_base == 0u ||
-        fraction >= fraction_base) {
-        errno = EIO;
-        return -1;
-    }
-    if (seconds > maximum / (uint64_t)RIN_POSIX_CLK_TCK) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    whole_ticks = seconds * (uint64_t)RIN_POSIX_CLK_TCK;
-    fractional_ticks = (fraction * (uint64_t)RIN_POSIX_CLK_TCK) /
-                       fraction_base;
-    if (whole_ticks > maximum - fractional_ticks) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    *ticks_out = (clock_t)(whole_ticks + fractional_ticks);
-    return 0;
-}
-
-static inline int __rin_times_timeval_to_ticks(const struct timeval* value,
-                                               clock_t* ticks_out)
-{
-    if (value == NULL || value->tv_sec < 0 || value->tv_usec < 0 ||
-        value->tv_usec >= 1000000L) {
-        errno = EIO;
-        return -1;
-    }
-    return __rin_times_to_ticks((uint64_t)value->tv_sec,
-                                (uint64_t)value->tv_usec,
-                                UINT64_C(1000000), ticks_out);
-}
+#ifndef _RIN_TIMES_SYSCALL1
+#if defined(_WIN32) && defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING))
+#define _RIN_TIMES_SYSCALL1(number, argument1) \
+    ((void)(number), (void)(argument1), -(intptr_t)ENOSYS)
+#else
+#define _RIN_TIMES_SYSCALL1(number, argument1) \
+    _syscall1((uintptr_t)(number), (uintptr_t)(argument1))
+#endif
+#endif
 
 static inline clock_t times(struct tms* buffer)
 {
-    struct rusage self_usage;
-    struct rusage child_usage;
-    struct timespec elapsed;
-    struct tms result;
-    clock_t elapsed_ticks;
+    intptr_t result;
 
     if (buffer == NULL) {
         errno = EFAULT;
         return (clock_t)-1;
     }
-    if (getrusage(RUSAGE_SELF, &self_usage) != 0 ||
-        getrusage(RUSAGE_CHILDREN, &child_usage) != 0 ||
-        clock_gettime(CLOCK_MONOTONIC, &elapsed) != 0)
+    result = __rin_syscall_posixize(_RIN_TIMES_SYSCALL1(
+        SYS_TIMES_V1, (uintptr_t)buffer));
+    if (result == -1)
         return (clock_t)-1;
-    if (__rin_times_timeval_to_ticks(&self_usage.ru_utime,
-                                     &result.tms_utime) != 0 ||
-        __rin_times_timeval_to_ticks(&self_usage.ru_stime,
-                                     &result.tms_stime) != 0 ||
-        __rin_times_timeval_to_ticks(&child_usage.ru_utime,
-                                     &result.tms_cutime) != 0 ||
-        __rin_times_timeval_to_ticks(&child_usage.ru_stime,
-                                     &result.tms_cstime) != 0)
-        return (clock_t)-1;
-    if (elapsed.tv_sec < 0 || elapsed.tv_nsec < 0 ||
-        elapsed.tv_nsec >= 1000000000L) {
+    if (result < 0) {
         errno = EIO;
         return (clock_t)-1;
     }
-    if (__rin_times_to_ticks((uint64_t)elapsed.tv_sec,
-                             (uint64_t)elapsed.tv_nsec,
-                             UINT64_C(1000000000), &elapsed_ticks) != 0)
+    if ((uint64_t)result > (uint64_t)LONG_MAX) {
+        errno = EOVERFLOW;
         return (clock_t)-1;
-
-    *buffer = result;
-    return elapsed_ticks;
+    }
+    return (clock_t)result;
 }
 
 #ifdef __cplusplus
