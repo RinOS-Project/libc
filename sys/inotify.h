@@ -95,7 +95,11 @@ static inline int inotify_add_watch(int fd, const char* pathname,
 static inline int inotify_rm_watch(int fd, int wd)
 {
     intptr_t result;
-    if (fd < 0 || wd <= 0) {
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    if (wd <= 0) {
         errno = EINVAL;
         return -1;
     }
