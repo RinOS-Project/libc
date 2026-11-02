@@ -494,7 +494,7 @@ _RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addclose(posix_spawn_fi
     _rin_posix_spawn_file_action_t* action;
     int error;
     if (fd < 0)
-        return EINVAL;
+        return EBADF;
     error = _rin_posix_spawn_reserve_action(actions, &action);
     if (error != 0)
         return error;
@@ -513,8 +513,9 @@ extern int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t* actions,
 _RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t* actions, int oldfd, int newfd) {
     _rin_posix_spawn_file_action_t* action;
     int error;
-    if (oldfd < 0 || newfd < 0)
-        return EINVAL;
+    if (oldfd < 0 || oldfd >= OPEN_MAX ||
+        newfd < 0 || newfd >= OPEN_MAX)
+        return EBADF;
     error = _rin_posix_spawn_reserve_action(actions, &action);
     if (error != 0)
         return error;
