@@ -3119,7 +3119,11 @@ _RIN_STDIO_API FILE* fdopen(int fd, const char* mode) {
     unsigned int flags = 0;
     intptr_t descriptor_flags;
     int descriptor_mode;
-    if (fd < 0 || !mode || !mode[0]) {
+    if (fd < 0) {
+        errno = EBADF;
+        return NULL;
+    }
+    if (!mode || !mode[0]) {
         errno = EINVAL;
         return NULL;
     }
