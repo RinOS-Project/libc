@@ -25,39 +25,74 @@
 #include <rin/process/madvise_abi.h>
 #include <stdarg.h>
 
+#if defined(_WIN32) && !defined(RIN_FREESTANDING)
+/* Hosted Windows has no RinOS syscall provider.  An application may supply
+ * an arity-specific _RIN_MMAN_SYSCALL* hook; otherwise these wrappers must
+ * not send RinOS syscall numbers to the Windows host. */
+#define __RIN_MMAN_HOSTED_WINDOWS 1
+#endif
+
 #ifndef _RIN_MMAN_SYSCALL0
+#if defined(__RIN_MMAN_HOSTED_WINDOWS)
+#define _RIN_MMAN_SYSCALL0(number) ((intptr_t)-ENOSYS)
+#else
 #define _RIN_MMAN_SYSCALL0(number) \
     _syscall0((uintptr_t)(number))
 #endif
+#endif
 
 #ifndef _RIN_MMAN_SYSCALL1
+#if defined(__RIN_MMAN_HOSTED_WINDOWS)
+#define _RIN_MMAN_SYSCALL1(number, arg1) ((intptr_t)-ENOSYS)
+#else
 #define _RIN_MMAN_SYSCALL1(number, arg1) \
     _syscall1((uintptr_t)(number), (uintptr_t)(arg1))
 #endif
+#endif
 
 #ifndef _RIN_MMAN_SYSCALL2
+#if defined(__RIN_MMAN_HOSTED_WINDOWS)
+#define _RIN_MMAN_SYSCALL2(number, arg1, arg2) ((intptr_t)-ENOSYS)
+#else
 #define _RIN_MMAN_SYSCALL2(number, arg1, arg2) \
     _syscall2((uintptr_t)(number), (uintptr_t)(arg1), (uintptr_t)(arg2))
 #endif
+#endif
 
 #ifndef _RIN_MMAN_SYSCALL3
+#if defined(__RIN_MMAN_HOSTED_WINDOWS)
+#define _RIN_MMAN_SYSCALL3(number, arg1, arg2, arg3) ((intptr_t)-ENOSYS)
+#else
 #define _RIN_MMAN_SYSCALL3(number, arg1, arg2, arg3) \
     _syscall3((uintptr_t)(number), (uintptr_t)(arg1), (uintptr_t)(arg2), \
               (uintptr_t)(arg3))
 #endif
+#endif
 
 #ifndef _RIN_MMAN_SYSCALL5
+#if defined(__RIN_MMAN_HOSTED_WINDOWS)
+#define _RIN_MMAN_SYSCALL5(number, arg1, arg2, arg3, arg4, arg5) \
+    ((intptr_t)-ENOSYS)
+#else
 #define _RIN_MMAN_SYSCALL5(number, arg1, arg2, arg3, arg4, arg5) \
     _syscall5((uintptr_t)(number), (uintptr_t)(arg1), (uintptr_t)(arg2), \
               (uintptr_t)(arg3), (uintptr_t)(arg4), (uintptr_t)(arg5))
 #endif
+#endif
 
 #ifndef _RIN_MMAN_SYSCALL6
+#if defined(__RIN_MMAN_HOSTED_WINDOWS)
+#define _RIN_MMAN_SYSCALL6(number, arg1, arg2, arg3, arg4, arg5, arg6) \
+    ((intptr_t)-ENOSYS)
+#else
 #define _RIN_MMAN_SYSCALL6(number, arg1, arg2, arg3, arg4, arg5, arg6) \
     _syscall6((uintptr_t)(number), (uintptr_t)(arg1), (uintptr_t)(arg2), \
               (uintptr_t)(arg3), (uintptr_t)(arg4), (uintptr_t)(arg5), \
               (uintptr_t)(arg6))
 #endif
+#endif
+
+#undef __RIN_MMAN_HOSTED_WINDOWS
 
 #ifdef __cplusplus
 extern "C" {
