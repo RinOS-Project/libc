@@ -742,6 +742,11 @@ static inline int chdir(const char* path) {
     return _rin_unistd_status(_RIN_UNISTD_SYSCALL1(SYS_CHDIR, (uintptr_t)path));
 }
 
+static inline int chroot(const char* path) {
+    return _rin_unistd_status(
+        _RIN_UNISTD_SYSCALL1(SYS_CHROOT, (uintptr_t)path));
+}
+
 static inline int fchdir(int fd) {
     return _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
         SYS_FCHDIR, (uintptr_t)(intptr_t)fd));
