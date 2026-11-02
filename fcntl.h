@@ -1027,7 +1027,7 @@ static inline int rin_renameat2_inline(int olddirfd, const char* oldpath,
     }
     if ((flags & ~known_flags) != 0u ||
         ((flags & RENAME_NOREPLACE) != 0u &&
-         (flags & (RENAME_EXCHANGE | RENAME_WHITEOUT)) != 0u) ||
+         (flags & RENAME_EXCHANGE) != 0u) ||
         ((flags & RENAME_EXCHANGE) != 0u &&
          (flags & RENAME_WHITEOUT) != 0u)) {
         errno = EINVAL;
