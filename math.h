@@ -73,12 +73,22 @@ typedef long double double_t;
 #endif
 #ifndef math_errhandling
 #define math_errhandling (MATH_ERRNO | MATH_ERREXCEPT)
+#endif
 
 /* C23 fromfp rounding-mode codes (values match glibc). */
+#ifndef FP_INT_UPWARD
 #define FP_INT_UPWARD 0
+#endif
+#ifndef FP_INT_DOWNWARD
 #define FP_INT_DOWNWARD 1
+#endif
+#ifndef FP_INT_TOWARDZERO
 #define FP_INT_TOWARDZERO 2
+#endif
+#ifndef FP_INT_TONEARESTFROMZERO
 #define FP_INT_TONEARESTFROMZERO 3
+#endif
+#ifndef FP_INT_TONEAREST
 #define FP_INT_TONEAREST 4
 #endif
 
