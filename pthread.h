@@ -1115,11 +1115,11 @@ static inline int pthread_mutex_trylock(pthread_mutex_t* mutex) {
 
 static inline int pthread_mutex_timedlock(
     pthread_mutex_t* mutex, const struct timespec* abstime) {
+    struct timespec checked_abstime;
     pthread_t self;
     int type;
     int result;
-    if (!mutex || !abstime || abstime->tv_nsec < 0 ||
-        abstime->tv_nsec >= 1000000000L)
+    if (!mutex || !abstime)
         return EINVAL;
     self = pthread_self();
     if (self == 0) return ESRCH;
@@ -1134,9 +1134,15 @@ static inline int pthread_mutex_timedlock(
         __rin_pthread_mutex_owner_load(mutex) == self)
         return EDEADLK;
     if (!mutex->kernel_mutex) return EINVAL;
+    result = pthread_mutex_trylock(mutex);
+    if (result == 0 || result == EOWNERDEAD) return result;
+    if (result != EBUSY) return result;
+    result = _rin_time_snapshot_user_timespec(
+        CLOCK_REALTIME, abstime, &checked_abstime);
+    if (result != 0) return result;
     result = platform_mutex_timedlock(
-        mutex->kernel_mutex, (int64_t)abstime->tv_sec,
-        (int64_t)abstime->tv_nsec);
+        mutex->kernel_mutex, (int64_t)checked_abstime.tv_sec,
+        (int64_t)checked_abstime.tv_nsec);
     if (result == RIN_PLATFORM_MUTEX_TIMEDLOCK_TIMEOUT)
         return ETIMEDOUT;
     if (result == RIN_PLATFORM_MUTEX_TIMEDLOCK_NOT_RECOVERABLE)
@@ -1357,10 +1363,16 @@ static inline int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex
 static inline int __rin_pthread_cond_timedwait_clock(
     pthread_cond_t* cond, pthread_mutex_t* mutex,
     const struct timespec* abstime, clockid_t clock_id) {
+    struct timespec checked_abstime;
     if (!cond || !mutex || !abstime) return EINVAL;
-    if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L ||
-        (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC))
+    if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
         return EINVAL;
+    {
+        int snapshot_result = _rin_time_snapshot_user_timespec(
+            clock_id, abstime, &checked_abstime);
+        if (snapshot_result != 0) return snapshot_result;
+    }
+    abstime = &checked_abstime;
 
     unsigned int gen = __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE);
     __atomic_fetch_add(&cond->waiting, 1, __ATOMIC_SEQ_CST);

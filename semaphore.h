@@ -235,6 +235,9 @@ static inline int sem_trywait(sem_t* sem) {
  * this futex path; the waiter state selects a private or shared futex key. */
 static inline int __rin_sem_clockwait_impl(
     sem_t* sem, clockid_t clock_id, const struct timespec* abstime) {
+    struct timespec checked_abstime;
+    const struct timespec* wait_deadline = abstime;
+    int deadline_checked = 0;
     __rin_pthread_cancel_point_if_linked();
     if (!sem || (clock_id != CLOCK_REALTIME &&
                  clock_id != CLOCK_MONOTONIC)) {
@@ -277,11 +280,23 @@ static inline int __rin_sem_clockwait_impl(
             continue;
         }
 
+        if (!deadline_checked) {
+            int deadline_error = _rin_time_snapshot_user_timespec(
+                clock_id, abstime, &checked_abstime);
+            if (deadline_error != 0) {
+                rin_sem_waiter_remove(sem);
+                errno = deadline_error;
+                return -1;
+            }
+            wait_deadline = &checked_abstime;
+            deadline_checked = 1;
+        }
+
         int operation = rin_sem_futex_operation(sem, FUTEX_WAIT_BITSET);
         if (clock_id == CLOCK_REALTIME)
             operation |= FUTEX_CLOCK_REALTIME;
         long ret = _RIN_SEMAPHORE_FUTEX_BITSET(
-            &sem->value, operation, 0, abstime,
+            &sem->value, operation, 0, wait_deadline,
             FUTEX_BITSET_MATCH_ANY);
         __rin_pthread_cancel_point_cleanup_if_linked(
             rin_sem_cancel_waiter_cleanup, sem);

@@ -402,6 +402,32 @@ static inline int _rin_time_clock_timespec_user(
     return _rin_time_status(_RIN_TIME_CLOCK_TIMESPEC_USER_V1(&request));
 }
 
+/* Snapshot a caller's complete timespec in the kernel before a timed wait.
+ * This avoids dereferencing an untrusted pointer in libc and gives repeated
+ * waits one stable deadline even if the caller later changes its memory. */
+static inline int _rin_time_snapshot_user_timespec(
+    clockid_t clock_id, const struct timespec* value,
+    struct timespec* snapshot)
+{
+    RinClockTimespecUserV1 request = {0};
+    RinTimespecSnapshotUserV1 snapshot_wire = {0};
+    if (!value || !snapshot) return EFAULT;
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_CLOCK_TIMESPEC_USER_ABI_VERSION;
+    request.operation = RIN_CLOCK_TIMESPEC_USER_SNAPSHOT;
+    request.clock_id = (int32_t)clock_id;
+    request.time_width = (uint32_t)sizeof(value->tv_sec);
+    request.long_width = (uint32_t)sizeof(value->tv_nsec);
+    request.timespec_address = (uint64_t)(uintptr_t)value;
+    RIN_CLOCK_TIMESPEC_USER_SNAPSHOT_OUTPUT(&request) =
+        (uint64_t)(uintptr_t)&snapshot_wire;
+    if (_rin_time_status(_RIN_TIME_CLOCK_TIMESPEC_USER_V1(&request)) != 0)
+        return errno > 0 ? errno : EIO;
+    snapshot->tv_sec = (time_t)snapshot_wire.tv_sec;
+    snapshot->tv_nsec = (long)snapshot_wire.tv_nsec;
+    return 0;
+}
+
 static inline int _rin_time_gettimeofday(struct timeval* output) {
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && !defined(RIN_KERNEL)
     RinClockTimespecUserV1 request = {0};

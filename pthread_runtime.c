@@ -164,6 +164,9 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                                         int try_only,
                                         const struct timespec* abstime,
                                         clockid_t clock_id) {
+    struct timespec checked_abstime;
+    const struct timespec* wait_deadline = abstime;
+    int deadline_checked = 0;
     uint32_t owner_id;
     int timed_out = 0;
     int register_error = rin_pthread_mutex_robust_owner_id(
@@ -212,6 +215,16 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
             rin_pthread_mutex_robust_owner_release(mutex, owner);
             return timed_out ? ETIMEDOUT : EBUSY;
         }
+        if (abstime && !deadline_checked) {
+            int deadline_error = _rin_time_snapshot_user_timespec(
+                clock_id, abstime, &checked_abstime);
+            if (deadline_error != 0) {
+                rin_pthread_mutex_robust_owner_release(mutex, owner);
+                return deadline_error;
+            }
+            wait_deadline = &checked_abstime;
+            deadline_checked = 1;
+        }
         if ((state & RIN_PTHREAD_ROBUST_WAITERS) == 0u) {
             uint32_t expected = state;
             uint32_t desired = state | RIN_PTHREAD_ROBUST_WAITERS;
@@ -224,14 +237,14 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
         }
         {
             long wait_result;
-            if (abstime) {
+            if (wait_deadline) {
                 wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
                     &mutex->locked,
                     rin_pthread_mutex_futex_operation(
                         mutex, FUTEX_WAIT_BITSET |
                             (clock_id == CLOCK_REALTIME
                                  ? FUTEX_CLOCK_REALTIME : 0)),
-                    (int)state, abstime, FUTEX_BITSET_MATCH_ANY);
+                    (int)state, wait_deadline, FUTEX_BITSET_MATCH_ANY);
             } else {
                 wait_result = _RIN_PTHREAD_RUNTIME_FUTEX(
                     &mutex->locked,
@@ -240,13 +253,13 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
             }
             int wait_error = rin_pthread_futex_wait_error(wait_result,
                                                            errno);
-            if (wait_error == ETIMEDOUT && abstime) {
+            if (wait_error == ETIMEDOUT && wait_deadline) {
                 /* An unlock can race with the deadline; retry acquisition
                  * before deciding that the timed operation has failed. */
                 timed_out = 1;
                 continue;
             }
-            if (abstime && (wait_error == 0 || wait_error == EINTR)) {
+            if (wait_deadline && (wait_error == 0 || wait_error == EINTR)) {
                 /* Re-enter the checked-copy futex with the same expected
                  * state before retrying acquisition. It waits if the state
                  * is unchanged, returns EAGAIN if it changed before the
@@ -259,7 +272,8 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                             mutex, FUTEX_WAIT_BITSET |
                                 (clock_id == CLOCK_REALTIME
                                      ? FUTEX_CLOCK_REALTIME : 0)),
-                        (int)state, abstime, FUTEX_BITSET_MATCH_ANY);
+                        (int)state, wait_deadline,
+                        FUTEX_BITSET_MATCH_ANY);
                     wait_error = rin_pthread_futex_wait_error(
                         wait_result, errno);
                 } while (wait_error == 0 || wait_error == EINTR);
@@ -1211,6 +1225,8 @@ int pthread_mutex_lock(pthread_mutex_t* mutex) {
 static int rin_pthread_mutex_timedlock_impl(
     pthread_mutex_t* mutex, const struct timespec* abstime,
     clockid_t clock_id) {
+    struct timespec checked_abstime;
+    const struct timespec* wait_deadline = abstime;
     if (!mutex || !abstime) return EINVAL;
     if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
         return EINVAL;
@@ -1239,6 +1255,10 @@ static int rin_pthread_mutex_timedlock_impl(
         if (!__atomic_compare_exchange_n(&mutex->locked, &c, 1, 0,
                                          __ATOMIC_ACQUIRE,
                                          __ATOMIC_RELAXED)) {
+            int deadline_error = _rin_time_snapshot_user_timespec(
+                clock_id, abstime, &checked_abstime);
+            if (deadline_error != 0) return deadline_error;
+            wait_deadline = &checked_abstime;
             if (c != 2)
                 c = __atomic_exchange_n(&mutex->locked, 2, __ATOMIC_ACQUIRE);
             while (c != 0) {
@@ -1248,7 +1268,7 @@ static int rin_pthread_mutex_timedlock_impl(
                         mutex, FUTEX_WAIT_BITSET |
                             (clock_id == CLOCK_REALTIME
                                  ? FUTEX_CLOCK_REALTIME : 0)),
-                    2, abstime, FUTEX_BITSET_MATCH_ANY);
+                    2, wait_deadline, FUTEX_BITSET_MATCH_ANY);
                 int wait_error = rin_pthread_futex_wait_error(wait_result,
                                                                errno);
                 if (wait_error == 0 || wait_error == EINTR) {
@@ -1262,7 +1282,7 @@ static int rin_pthread_mutex_timedlock_impl(
                                 mutex, FUTEX_WAIT_BITSET |
                                     (clock_id == CLOCK_REALTIME
                                          ? FUTEX_CLOCK_REALTIME : 0)),
-                            2, abstime, FUTEX_BITSET_MATCH_ANY);
+                            2, wait_deadline, FUTEX_BITSET_MATCH_ANY);
                         wait_error = rin_pthread_futex_wait_error(
                             wait_result, errno);
                     } while (wait_error == 0 || wait_error == EINTR);
@@ -1578,13 +1598,19 @@ int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex) {
 static int rin_pthread_cond_timedwait_impl(
     pthread_cond_t* cond, pthread_mutex_t* mutex,
     const struct timespec* abstime, clockid_t clock_id) {
+    struct timespec checked_abstime;
     int mutex_result;
+    int result;
     int cancel_wait_registered = 0;
 
     if (!cond || !mutex || !abstime) return EINVAL;
     pthread_testcancel();
     if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
         return EINVAL;
+    result = _rin_time_snapshot_user_timespec(
+        clock_id, abstime, &checked_abstime);
+    if (result != 0) return result;
+    abstime = &checked_abstime;
 
     unsigned int gen = __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE);
     __atomic_fetch_add(&cond->waiting, 1, __ATOMIC_SEQ_CST);
@@ -1594,7 +1620,7 @@ static int rin_pthread_cond_timedwait_impl(
         return mutex_result;
     }
 
-    int result = __rin_pthread_cancel_wait_register(
+    result = __rin_pthread_cancel_wait_register(
         &cond->generation,
         rin_pthread_cond_futex_operation(cond, FUTEX_WAKE));
     if (result == 0) cancel_wait_registered = 1;
@@ -1958,6 +1984,7 @@ int pthread_rwlock_wrlock(pthread_rwlock_t* rwlock) {
 static int rin_pthread_rwlock_timedlock_impl(
     pthread_rwlock_t* rwlock, const struct timespec* abstime,
     clockid_t clock_id, int writer) {
+    struct timespec checked_abstime;
     int result;
     int acquired = 0;
     int waiter_registered = 0;
@@ -1973,6 +2000,19 @@ static int rin_pthread_rwlock_timedlock_impl(
     if (result != 0) return result;
     cleanup.rwlock = rwlock;
     cleanup.writer = writer;
+
+    if ((writer && (rin_pthread_rwlock_writer_active(rwlock) ||
+                    rwlock->readers > 0)) ||
+        (!writer && (rin_pthread_rwlock_writer_active(rwlock) ||
+                     rwlock->waiting_writers > 0))) {
+        result = _rin_time_snapshot_user_timespec(
+            clock_id, abstime, &checked_abstime);
+        if (result != 0) {
+            int unlock_result = pthread_mutex_unlock(&rwlock->mutex);
+            return unlock_result != 0 ? unlock_result : result;
+        }
+        abstime = &checked_abstime;
+    }
 
     if (writer) {
         rwlock->waiting_writers++;
