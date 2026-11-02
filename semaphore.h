@@ -252,22 +252,11 @@ static inline int __rin_sem_clockwait_impl(
             continue;
         }
 
-        /* As with sem_timedwait(), an available token succeeds without
-         * inspecting the caller's timeout object. */
-        if (!abstime || abstime->tv_nsec < 0 ||
-            abstime->tv_nsec >= 1000000000L) {
-            errno = EINVAL;
-            return -1;
-        }
-#if !defined(RIN_TIME_ABI64)
-        if (clock_id == CLOCK_REALTIME && abstime->tv_sec < 0) {
-            errno = EINVAL;
-            return -1;
-        }
-#endif
-        if (clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
-            if (sem_trywait(sem) == 0) return 0;
-            errno = ETIMEDOUT;
+        /* Keep the timeout in user memory until the futex syscall.  The
+         * kernel checked-copies and validates it, so bad pointers return
+         * EFAULT instead of faulting in libc. */
+        if (!abstime) {
+            errno = EFAULT;
             return -1;
         }
 
@@ -278,7 +267,9 @@ static inline int __rin_sem_clockwait_impl(
 
         val = __atomic_load_n(&sem->value, __ATOMIC_RELAXED);
         if (val > 0) {
-            if (__atomic_compare_exchange_n(&sem->value, &val, val - 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            if (__atomic_compare_exchange_n(&sem->value, &val, val - 1, 0,
+                                            __ATOMIC_ACQUIRE,
+                                            __ATOMIC_RELAXED)) {
                 rin_sem_waiter_remove(sem);
                 return 0;
             }
@@ -286,11 +277,12 @@ static inline int __rin_sem_clockwait_impl(
             continue;
         }
 
+        int operation = rin_sem_futex_operation(sem, FUTEX_WAIT_BITSET);
+        if (clock_id == CLOCK_REALTIME)
+            operation |= FUTEX_CLOCK_REALTIME;
         long ret = _RIN_SEMAPHORE_FUTEX_BITSET(
-            &sem->value,
-            rin_sem_futex_operation(
-                sem, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME),
-            0, abstime, FUTEX_BITSET_MATCH_ANY);
+            &sem->value, operation, 0, abstime,
+            FUTEX_BITSET_MATCH_ANY);
         __rin_pthread_cancel_point_cleanup_if_linked(
             rin_sem_cancel_waiter_cleanup, sem);
         rin_sem_waiter_remove(sem);
@@ -298,8 +290,6 @@ static inline int __rin_sem_clockwait_impl(
         if (ret < 0) {
             int err = errno;
             if (err == ETIMEDOUT) {
-                /* A post can race with the timeout wake; take a token if it
-                 * is already available before reporting the deadline. */
                 if (sem_trywait(sem) == 0) return 0;
                 errno = ETIMEDOUT;
                 return -1;
@@ -314,6 +304,11 @@ static inline int __rin_sem_clockwait_impl(
         }
     }
 }
+
+/* Out-of-line public entry points are exported by semaphore_runtime.c. */
+int sem_clockwait(sem_t* sem, clockid_t clock_id,
+                  const struct timespec* abstime);
+int sem_timedwait(sem_t* sem, const struct timespec* abstime);
 
 /* セマフォのインクリメント (V操作/post) */
 static inline int sem_post(sem_t* sem) {
@@ -373,8 +368,9 @@ static inline int sem_getvalue(sem_t* sem, int* sval) {
 /*
  * 名前付きセマフォはkernelのshared-memory objectが所有し、プロセス間で
  * 同じsem_t stateを共有する。sem_open()のvarargsはO_CREATのときmode_tと
- * 初期値をこの順で受け取る。mode_tのpermissionはcurrent-session namespace
- * 内では適用されない。
+ * 初期値をこの順で受け取り、新規作成時はmode_tとprocess umaskで権限を
+ * 決める。既存名を開くときはkernelがowner/group/otherのread/write権限を
+ * 検査する。
  */
 sem_t* sem_open(const char* name, int oflag, ...);
 int sem_close(sem_t* sem);
