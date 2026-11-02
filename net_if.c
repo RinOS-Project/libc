@@ -172,6 +172,125 @@ int rin_net_get_interface_ifaddrs_snapshot(
     return netif_snapshot(output);
 }
 
+int rin_net_get_interface_ifaddrs_snapshot_v3(
+    RinNetIfaddrsSnapshotListV3* output)
+{
+    RinNetIfaddrsSnapshotListV2 base;
+    RinNetworkInterfaceSnapshotListV3 addresses;
+    uint32_t index;
+    uint32_t matched = 0u;
+    int result = -1;
+    if (output == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    memset(output, 0, sizeof(*output));
+    memset(&base, 0, sizeof(base));
+    memset(&addresses, 0, sizeof(addresses));
+    if (rin_net_get_interface_ifaddrs_snapshot(&base) != 0)
+        goto done;
+    if (syscall(RIN_SYS_NETWORK_INTERFACE_SNAPSHOTS_V3, &addresses) != 0)
+        goto done;
+    if (!rin_network_interface_snapshot_list_v3_valid(&addresses)) {
+        errno = EPROTO;
+        goto done;
+    }
+    if (addresses.inventory_generation != base.inventory_generation ||
+        base.count != addresses.count + 1u) {
+        errno = EAGAIN;
+        goto done;
+    }
+    output->version = RIN_NET_IFADDRS_SNAPSHOT_LIST_V3_VERSION;
+    output->struct_size = sizeof(*output);
+    output->count = base.count;
+    output->inventory_generation = base.inventory_generation;
+    for (index = 0u; index < base.count; ++index) {
+        const RinNetIfaddrsInterfaceV2* source = &base.interfaces[index];
+        RinNetIfaddrsInterfaceV3* destination =
+            &output->interfaces[index];
+        const RinNetworkInterfaceSnapshotV3* match = NULL;
+        uint32_t address_index;
+        uint32_t candidate_index;
+        destination->addresses = source->addresses;
+        destination->interface_type = source->interface_type;
+        destination->link_type = source->link_type;
+        destination->flags = source->flags;
+        destination->capabilities = source->capabilities;
+        memcpy(destination->ipv4_peer, source->ipv4_peer,
+               sizeof(destination->ipv4_peer));
+        destination->link_mtu = source->link_mtu;
+        if (source->interface_type == RIN_NET_IFADDRS_V2_INTERFACE_LOOPBACK)
+            continue;
+        for (candidate_index = 0u; candidate_index < addresses.count;
+             ++candidate_index) {
+            if (addresses.interfaces[candidate_index].interface_id ==
+                source->addresses.interface_id) {
+                match = &addresses.interfaces[candidate_index];
+                break;
+            }
+        }
+        if (match == NULL ||
+            match->interface_generation !=
+                source->addresses.interface_generation ||
+            match->device_generation != source->addresses.device_generation ||
+            match->ndp_generation != source->addresses.ndp_generation ||
+            memcmp(match->ifname, source->addresses.ifname,
+                   sizeof(match->ifname)) != 0 ||
+            memcmp(match->mac, source->addresses.mac,
+                   sizeof(match->mac)) != 0 ||
+            (((match->flags & RIN_NETWORK_INTERFACE_FLAG_PRIMARY) != 0u) !=
+             ((source->addresses.flags &
+               RIN_NET_IFADDRS_INTERFACE_FLAG_PRIMARY) != 0u)) ||
+            source->addresses.address_count !=
+                (match->address_count <
+                         RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES
+                     ? match->address_count
+                     : RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES)) {
+            errno = EAGAIN;
+            goto done;
+        }
+        for (address_index = 0u;
+             address_index < source->addresses.address_count;
+             ++address_index) {
+            if (memcmp(match->addresses[address_index],
+                       source->addresses.addresses6[address_index], 16u) != 0 ||
+                match->prefix_lengths[address_index] !=
+                    source->addresses.prefix_lengths6[address_index] ||
+                match->address_flags[address_index] !=
+                    source->addresses.address_flags6[address_index]) {
+                errno = EAGAIN;
+                goto done;
+            }
+        }
+        destination->addresses.address_count = match->address_count;
+        for (address_index = RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES;
+             address_index < match->address_count;
+             ++address_index) {
+            const uint32_t extra_index = address_index -
+                RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES;
+            memcpy(destination->extra_addresses6[extra_index],
+                   match->addresses[address_index], 16u);
+            destination->extra_prefix_lengths6[extra_index] =
+                match->prefix_lengths[address_index];
+            destination->extra_address_flags6[extra_index] =
+                match->address_flags[address_index];
+        }
+        ++matched;
+    }
+    if (matched != addresses.count ||
+        !rin_net_ifaddrs_snapshot_list_v3_valid(output)) {
+        errno = EAGAIN;
+        goto done;
+    }
+    result = 0;
+done:
+    if (result != 0)
+        memset(output, 0, sizeof(*output));
+    memset(&base, 0, sizeof(base));
+    memset(&addresses, 0, sizeof(addresses));
+    return result;
+}
+
 unsigned int if_nametoindex(const char* ifname)
 {
     RinNetIfaddrsSnapshotListV2 snapshot;
