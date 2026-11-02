@@ -2439,10 +2439,11 @@ static int rin_fscanf_validate_format(
     return 0;
 }
 
-/* Direct byte-stream subset: literals, whitespace, %%, %c, %s, %n,
- * and integer/pointer conversions.  Width-omitted fields are unbounded
- * on every path (B56: growable heap candidates); explicit widths are
- * honored.  A delimiter is put back before caller output is published. */
+/* Direct byte-stream path: literals, whitespace, %%, narrow and wide
+ * character/string/scanset conversions, %n, integer/pointer conversions,
+ * and floating-point conversions.  Width-omitted fields use growable heap
+ * candidates; explicit widths are honored.  A delimiter is put back before
+ * caller output is published. */
 static inline int _rin_vfscanf_unlocked(FILE* stream, const char* format, va_list ap) {
     struct RinFscanfStreamInput input;
     struct RinSscanfArgumentPlan argument_plan;
