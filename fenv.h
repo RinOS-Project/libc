@@ -286,7 +286,12 @@ static inline void __rin_fenv_raise_sse(unsigned int requested) {
 
 #undef __RIN_FENV_SSE_BINARY
 
-/* Raise the requested exceptions and preserve the prior status in each unit.
+/* RinOS contract: fesetexcept() only updates status. feraiseexcept() also
+ * executes real operations in invalid, divide-by-zero, overflow, underflow,
+ * inexact, then denormal order. A masked return leaves exactly the entry
+ * flags union the requested flags; incidental inexact from overflow or
+ * underflow is discarded unless requested. If several requested exceptions
+ * are unmasked, the target x87/SSE priority determines which trap is delivered.
  * The initial direct status update makes all requested flags visible even if
  * an enabled exception traps before control reaches the second arithmetic
  * unit. */
