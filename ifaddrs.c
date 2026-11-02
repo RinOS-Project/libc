@@ -11,23 +11,23 @@
 
 #define RIN_IFADDRS_MAX_ENTRIES \
     (RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2 * \
-     (RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES_V3 + 1u))
+     (RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES + 1u))
 
 typedef struct RinIfaddrsStorage {
     struct ifaddrs entries[RIN_IFADDRS_MAX_ENTRIES];
-    char names[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V3][IF_NAMESIZE];
-    struct sockaddr_in addresses4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V3];
-    struct sockaddr_in netmasks4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V3];
-    struct sockaddr_in broadcast4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V3];
-    struct sockaddr_in peer4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V3];
-    struct sockaddr_in6 addresses6[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V3]
-                                  [RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES_V3];
-    struct sockaddr_in6 netmasks6[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V3]
-                                  [RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES_V3];
+    char names[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2][IF_NAMESIZE];
+    struct sockaddr_in addresses4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2];
+    struct sockaddr_in netmasks4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2];
+    struct sockaddr_in broadcast4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2];
+    struct sockaddr_in peer4[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2];
+    struct sockaddr_in6 addresses6[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2]
+                                  [RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES];
+    struct sockaddr_in6 netmasks6[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2]
+                                  [RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES];
 } RinIfaddrsStorage;
 
 static unsigned int rin_ifaddrs_interface_flags(
-    const RinNetIfaddrsInterfaceV3* interface)
+    const RinNetIfaddrsInterfaceV2* interface)
 {
     unsigned int flags = 0u;
     const int type_known =
@@ -97,7 +97,7 @@ static void rin_ifaddrs_set_netmask6(struct sockaddr_in6* mask,
 
 int getifaddrs(struct ifaddrs** ifap)
 {
-    RinNetIfaddrsSnapshotListV3 snapshot;
+    RinNetIfaddrsSnapshotListV2 snapshot;
     RinIfaddrsStorage* storage;
     unsigned int count = 0u;
     unsigned int interface_index;
@@ -107,7 +107,7 @@ int getifaddrs(struct ifaddrs** ifap)
         return -1;
     }
     *ifap = (struct ifaddrs*)0;
-    if (rin_net_get_interface_ifaddrs_snapshot_v3(&snapshot) != 0)
+    if (rin_net_get_interface_ifaddrs_snapshot(&snapshot) != 0)
         return -1;
     if (snapshot.count == 0u)
         return 0;
@@ -119,7 +119,7 @@ int getifaddrs(struct ifaddrs** ifap)
     }
     for (interface_index = 0u; interface_index < snapshot.count;
          ++interface_index) {
-        const RinNetIfaddrsInterfaceV3* source =
+        const RinNetIfaddrsInterfaceV2* source =
             &snapshot.interfaces[interface_index];
         const RinNetIfaddrsInterfaceV1* addresses = &source->addresses;
         const unsigned int flags = rin_ifaddrs_interface_flags(source);
@@ -168,8 +168,7 @@ int getifaddrs(struct ifaddrs** ifap)
         for (address_index = 0u; address_index < addresses->address_count;
              ++address_index) {
             const uint8_t* source_address =
-                rin_net_ifaddrs_interface_v3_address(
-                    source, address_index);
+                addresses->addresses6[address_index];
             struct ifaddrs* entry = &storage->entries[count++];
             struct sockaddr_in6* address =
                 &storage->addresses6[interface_index][address_index];
@@ -180,15 +179,13 @@ int getifaddrs(struct ifaddrs** ifap)
             entry->ifa_addr = (struct sockaddr*)address;
             entry->ifa_netmask = (struct sockaddr*)netmask;
             address->sin6_family = AF_INET6;
-            if (rin_net_ifaddrs_interface_v3_address_flags(
-                    source, address_index) ==
+            if (addresses->address_flags6[address_index] ==
                 RIN_NET_IFADDRS_ADDRESS_FLAG_LINK_LOCAL)
                 address->sin6_scope_id =
                     (uint32_t)addresses->interface_id;
             memcpy(address->sin6_addr.s6_addr, source_address, 16u);
             rin_ifaddrs_set_netmask6(
-                netmask, rin_net_ifaddrs_interface_v3_prefix_length(
-                    source, address_index));
+                netmask, addresses->prefix_lengths6[address_index]);
             ++interface_entries;
         }
         if (interface_entries == 0u) {
