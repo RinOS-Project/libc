@@ -55,6 +55,10 @@ typedef unsigned int fexcept_t;
 #define FE_DOWNWARD     0x0400  /* 負の無限大への丸め */
 #define FE_UPWARD       0x0800  /* 正の無限大への丸め */
 #define FE_TOWARDZERO   0x0C00  /* ゼロへの丸め */
+/* C23: select the dynamic rounding direction in FENV_ROUND pragmas. */
+#ifndef FE_DYNAMIC
+#define FE_DYNAMIC      0x7FFFFFFF
+#endif
 
 #ifndef MIDL_PASS
 /* ═══════════════════════════════════════════════════════════════
