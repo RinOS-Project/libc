@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 /* RinOSのeventfd公開API。 */
+#include "../features.h"
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
     defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
 #include_next <sys/eventfd.h>
 #else
-#include "../features.h"
 #ifndef _SYS_EVENTFD_H
 #define _SYS_EVENTFD_H
 

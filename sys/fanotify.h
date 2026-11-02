@@ -43,11 +43,6 @@ extern "C" {
 #define FAN_CLASS_PRE_CONTENT  0x00000008u
 #define FAN_REPORT_FID         0x00000200u
 
-/* RinOS-only permission-token extension. With this flag permission-event
- * metadata.fd is an opaque response token and the event also carries a FID.
- * Linux permission classes cannot be combined with FAN_REPORT_FID. */
-#define FAN_RIN_PERMISSION_TOKEN UINT32_C(0x80000000)
-
 #define FAN_MARK_ADD           0x00000001u
 #define FAN_MARK_REMOVE        0x00000002u
 #define FAN_MARK_DONT_FOLLOW   0x00000004u
@@ -69,7 +64,7 @@ struct fanotify_event_metadata {
     uint8_t reserved;
     uint16_t metadata_len;
     uint64_t mask;
-    int32_t fd;  /* event fd; FAN_NOFD for FID reports; token in RinOS extension mode */
+    int32_t fd;  /* permission-event response token in RinOS */
     int32_t pid;
 };
 
@@ -88,7 +83,7 @@ struct fanotify_event_info_fid {
 };
 
 struct fanotify_response {
-    int32_t fd; /* event fd, or RinOS extension token */
+    int32_t fd; /* fanotify_event_metadata.fdの応答token */
     uint32_t response;
 };
 
@@ -106,19 +101,11 @@ static inline int __rin_fanotify_result(intptr_t result)
 static inline int fanotify_init(unsigned int flags,
                                 unsigned int event_f_flags)
 {
-    unsigned int class_bits =
-        flags & (FAN_CLASS_CONTENT | FAN_CLASS_PRE_CONTENT);
-    int rin_permission_token = (flags & FAN_RIN_PERMISSION_TOKEN) != 0u;
     if ((flags & ~(FAN_CLOEXEC | FAN_NONBLOCK | FAN_CLASS_CONTENT |
-                   FAN_CLASS_PRE_CONTENT | FAN_REPORT_FID |
-                   FAN_RIN_PERMISSION_TOKEN)) != 0u ||
+                   FAN_CLASS_PRE_CONTENT | FAN_REPORT_FID)) != 0u ||
+        (flags & FAN_REPORT_FID) == 0u ||
         (flags & (FAN_CLASS_CONTENT | FAN_CLASS_PRE_CONTENT)) ==
-            (FAN_CLASS_CONTENT | FAN_CLASS_PRE_CONTENT) ||
-        (rin_permission_token &&
-         (class_bits == FAN_CLASS_NOTIF ||
-          (flags & FAN_REPORT_FID) == 0u)) ||
-        (!rin_permission_token && class_bits != FAN_CLASS_NOTIF &&
-         (flags & FAN_REPORT_FID) != 0u)) {
+            (FAN_CLASS_CONTENT | FAN_CLASS_PRE_CONTENT)) {
         errno = EINVAL;
         return -1;
     }

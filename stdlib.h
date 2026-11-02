@@ -470,10 +470,6 @@ static inline int putenv(char* string) {
  * serialize mutations and reclaim retired tables across translation units. */
 char* getenv(const char* name);
 char* secure_getenv(const char* name);
-/* getenv()／secure_getenv()の戻り値は借用ポインターであり、並行する環境
- * 変更をまたいで参照しないこと。この拡張はfree()可能な所有コピーを返す。
- * NULLの場合はerrnoがEINVAL、ENOENT、ENOMEM、EOVERFLOWのいずれかになる。 */
-char* rin_getenv_copy(const char* name);
 int setenv(const char* name, const char* value, int overwrite);
 int unsetenv(const char* name);
 int putenv(char* string);
@@ -548,9 +544,7 @@ static inline int clearenv(void) {
     char*** environment_address = __p__environ();
     char** names = NULL;
     size_t name_count = 0u;
-    size_t name_bytes = 0u;
-    size_t pointer_bytes;
-    size_t total_bytes;
+    size_t name_capacity = 0u;
     char** environment;
     size_t entry_index = 0u;
     if (!environment_address) {
@@ -560,12 +554,13 @@ static inline int clearenv(void) {
     environment = *environment_address;
     if (!environment) return 0;
 
-    /* Measure before mutation: _putenv_s can replace both the environment
-     * table and its strings.  Empty-name entries are the Windows
-     * drive-current-directory values and must remain untouched. */
+    /* Snapshot names before the first mutation: _putenv_s can replace both
+     * the environment table and its strings.  Empty-name entries are the
+     * Windows drive-current-directory values and must remain untouched. */
     for (entry_index = 0u; entry_index < 32768u; ++entry_index) {
         const char* entry = environment[entry_index];
         size_t name_length = 0u;
+        char* name;
         if (!entry) break;
         while (name_length < 32768u && entry[name_length] != '\0' &&
                entry[name_length] != '=')
@@ -575,77 +570,62 @@ static inline int clearenv(void) {
             goto snapshot_failure;
         }
         if (entry[name_length] != '=' || name_length == 0u) continue;
-        if (name_count >= SIZE_MAX / sizeof(*names) ||
-            name_bytes > SIZE_MAX - name_length - 1u) {
-            errno = EOVERFLOW;
-            return -1;
+        if (name_count == name_capacity) {
+            size_t new_capacity = name_capacity ? name_capacity * 2u : 16u;
+            char** new_names;
+            if (new_capacity > 32768u) new_capacity = 32768u;
+            new_names = (char**)realloc(names,
+                                        new_capacity * sizeof(*new_names));
+            if (!new_names) {
+                errno = ENOMEM;
+                goto snapshot_failure;
+            }
+            names = new_names;
+            name_capacity = new_capacity;
         }
-        ++name_count;
-        name_bytes += name_length + 1u;
+        name = (char*)malloc(name_length + 1u);
+        if (!name) {
+            errno = ENOMEM;
+            goto snapshot_failure;
+        }
+        for (size_t index = 0u; index < name_length; ++index)
+            name[index] = entry[index];
+        name[name_length] = '\0';
+        names[name_count++] = name;
     }
     if (entry_index == 32768u && environment[entry_index] != NULL) {
         errno = E2BIG;
-        return -1;
-    }
-    if (name_count == 0u) return 0;
-    pointer_bytes = name_count * sizeof(*names);
-    if (name_bytes > SIZE_MAX - pointer_bytes) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    total_bytes = pointer_bytes + name_bytes;
-    names = (char**)malloc(total_bytes);
-    if (!names) {
-        errno = ENOMEM;
-        return -1;
-    }
-
-    /* Store the pointer index and all immutable names in one allocation.
-     * No pointer into the CRT-owned environment survives the first unset. */
-    {
-        char* name_storage = (char*)(names + name_count);
-        size_t copied_count = 0u;
-        size_t storage_offset = 0u;
-        for (entry_index = 0u; entry_index < 32768u; ++entry_index) {
-            const char* entry = environment[entry_index];
-            size_t name_length = 0u;
-            if (!entry) break;
-            while (name_length < 32768u && entry[name_length] != '\0' &&
-                   entry[name_length] != '=')
-                ++name_length;
-            if (name_length == 32768u || entry[name_length] != '=' ||
-                name_length == 0u)
-                continue;
-            if (copied_count >= name_count ||
-                name_length + 1u > name_bytes - storage_offset) {
-                free(names);
-                errno = EAGAIN;
-                return -1;
-            }
-            names[copied_count] = name_storage + storage_offset;
-            for (size_t index = 0u; index < name_length; ++index)
-                name_storage[storage_offset + index] = entry[index];
-            name_storage[storage_offset + name_length] = '\0';
-            ++copied_count;
-            storage_offset += name_length + 1u;
-        }
-        if (copied_count != name_count || storage_offset != name_bytes) {
-            free(names);
-            errno = EAGAIN;
-            return -1;
-        }
+        goto snapshot_failure;
     }
 
     for (size_t index = 0u; index < name_count; ++index) {
         const int result = _putenv_s(names[index], "");
         if (result != 0) {
             errno = result;
-            free(names);
-            return -1;
+            goto mutation_failure;
         }
     }
+    for (size_t index = 0u; index < name_count; ++index) free(names[index]);
     free(names);
     return 0;
+
+snapshot_failure:
+    {
+        const int saved_errno = errno;
+        for (size_t index = 0u; index < name_count; ++index) free(names[index]);
+        free(names);
+        errno = saved_errno;
+    }
+    return -1;
+
+mutation_failure:
+    {
+        const int saved_errno = errno;
+        for (size_t index = 0u; index < name_count; ++index) free(names[index]);
+        free(names);
+        errno = saved_errno;
+    }
+    return -1;
 }
 
 #elif defined(_RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER)

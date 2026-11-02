@@ -313,53 +313,6 @@ static size_t rin_catalog_name_length(const char* text, size_t maximum) {
     return length;
 }
 
-static int rin_catalog_environment_copy(const char* name, char* output,
-                                        size_t capacity) {
-    const int saved_errno = errno;
-    char* owned;
-    size_t length;
-    if (!output || capacity == 0u) {
-        errno = EINVAL;
-        return -1;
-    }
-#if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
-    owned = rin_getenv_copy(name);
-    if (!owned) {
-        if (errno == ENOENT) {
-            errno = saved_errno;
-            return 0;
-        }
-        return -1;
-    }
-#else
-    {
-        const char* borrowed = getenv(name);
-        if (!borrowed) return 0;
-        length = rin_catalog_name_length(borrowed, capacity);
-        if (length == capacity) {
-            errno = ENAMETOOLONG;
-            return -1;
-        }
-        owned = (char*)malloc(length + 1u);
-        if (!owned) {
-            errno = ENOMEM;
-            return -1;
-        }
-        memcpy(owned, borrowed, length + 1u);
-    }
-#endif
-    length = rin_catalog_name_length(owned, capacity);
-    if (length == capacity) {
-        free(owned);
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    memcpy(output, owned, length + 1u);
-    free(owned);
-    errno = saved_errno;
-    return 1;
-}
-
 static int rin_catalog_append(char* output, size_t* length,
                               const char* text, size_t count) {
     if (count > RIN_CAT_PATH_BYTES - 1u - *length) return 0;
@@ -492,8 +445,6 @@ static uintptr_t rin_catalog_make_handle(size_t slot, uintptr_t generation) {
 nl_catd catopen(const char* name, int oflag) {
     const char* locale;
     const char* nlspath;
-    char locale_storage[RIN_CAT_PATH_BYTES];
-    char nlspath_storage[RIN_CAT_PATH_BYTES];
     size_t name_length;
     int last_error = 0;
     RinCatalog* catalog = NULL;
@@ -516,12 +467,8 @@ nl_catd catopen(const char* name, int oflag) {
             return (nl_catd)-1;
         }
     } else {
-        int environment_result = rin_catalog_environment_copy(
-            "LANG", locale_storage, sizeof(locale_storage));
-        if (environment_result < 0) return (nl_catd)-1;
-        locale = environment_result > 0 && locale_storage[0] != '\0'
-                     ? locale_storage
-                     : "C";
+        locale = getenv("LANG");
+        if (!locale || locale[0] == '\0') locale = "C";
     }
     if (strchr(name, '/') != NULL) {
         if (!rin_catalog_try_path(name, &catalog, &last_error)) {
@@ -529,10 +476,7 @@ nl_catd catopen(const char* name, int oflag) {
             return (nl_catd)-1;
         }
     } else {
-        int environment_result = rin_catalog_environment_copy(
-            "NLSPATH", nlspath_storage, sizeof(nlspath_storage));
-        if (environment_result < 0) return (nl_catd)-1;
-        nlspath = environment_result > 0 ? nlspath_storage : NULL;
+        nlspath = getenv("NLSPATH");
         if (nlspath && nlspath[0] != '\0') {
             size_t nlspath_length = rin_catalog_name_length(
                 nlspath, RIN_CAT_PATH_BYTES);

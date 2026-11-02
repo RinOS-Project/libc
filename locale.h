@@ -269,9 +269,6 @@ enum {
 };
 /* LC_MESSAGES catalog。無効なlocale/itemはNULL、有効だが未提供なら空文字。 */
 const char* rin_locale_l_message(locale_t locobj, int item);
-/* errno本文または未知errnoの接頭辞。未翻訳時はNULL。 */
-const char* rin_locale_l_error_message(locale_t locobj, int errnum);
-const char* rin_locale_l_error_unknown_prefix(locale_t locobj);
 
 /* ═══════════════════════════════════════════════════════════════
  * RinOS拡張関数

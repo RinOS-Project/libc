@@ -24,6 +24,7 @@
 #include "signal.h"
 #include "stdlib.h"
 #include "internal/pthread_cancel_point.h"
+#include <rin/poll/ppoll_timeout_abi.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -87,6 +88,11 @@ typedef uint64_t sigset_t;
               (uintptr_t)(argument4), (uintptr_t)(argument5))
 #endif
 
+#ifndef _RIN_POLL_SYSCALL1
+#define _RIN_POLL_SYSCALL1(number, argument1) \
+    _syscall1((uintptr_t)(number), (uintptr_t)(argument1))
+#endif
+
 static inline intptr_t __rin_poll_result(intptr_t result) {
     result = __rin_syscall_posixize(result);
     if (result < 0) {
@@ -94,13 +100,6 @@ static inline intptr_t __rin_poll_result(intptr_t result) {
         return -1;
     }
     return result;
-}
-
-static inline void __rin_poll_clear_revents(struct pollfd* fds,
-                                             nfds_t nfds) {
-    if (!fds) return;
-    for (nfds_t index = 0u; index < nfds; ++index)
-        fds[index].revents = 0;
 }
 
 static inline void __rin_select_clear_sets(fd_set* readfds,
@@ -226,37 +225,40 @@ static inline int __rin_select_unpack_pollfds(
 }
 
 static inline int __rin_ppoll_syscall_once(
-    struct pollfd* fds, nfds_t nfds, int timeout_ms,
+    struct pollfd* fds, nfds_t nfds, int64_t timeout_ns,
     const sigset_t* sigmask) {
-    intptr_t result = __rin_poll_result(_RIN_POLL_SYSCALL5(
-        SYS_PPOLL, fds, nfds, timeout_ms, sigmask, sizeof(sigset_t)));
-    if (result < 0) {
-        __rin_poll_clear_revents(fds, nfds);
-        return -1;
-    }
+    RinPpollTimeout64UserV1 request = {0};
+    intptr_t result;
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_PPOLL_TIMEOUT64_USER_ABI_VERSION;
+    request.nfds = nfds;
+    request.sigset_size = RIN_PPOLL_TIMEOUT64_USER_SIGSET_SIZE;
+    request.timeout_ns = timeout_ns;
+    request.fds_address = (uint64_t)(uintptr_t)fds;
+    request.sigmask_address = (uint64_t)(uintptr_t)sigmask;
+    result = __rin_poll_result(_RIN_POLL_SYSCALL1(
+        SYS_PPOLL_TIMEOUT64_V1, &request));
+    if (result < 0) return -1;
     if (result > (intptr_t)INT_MAX) {
         errno = EOVERFLOW;
-        __rin_poll_clear_revents(fds, nfds);
         return -1;
     }
     return (int)result;
 }
 
 static inline int __rin_poll_syscall_without_mask_change(
-    struct pollfd* fds, nfds_t nfds, int timeout_ms) {
-    return __rin_ppoll_syscall_once(fds, nfds, timeout_ms, NULL);
+    struct pollfd* fds, nfds_t nfds, int64_t timeout_ns) {
+    return __rin_ppoll_syscall_once(fds, nfds, timeout_ns, NULL);
 }
 
-static inline int __rin_poll_timespec_to_ms(const struct timespec* timeout,
-                                             int* timeout_ms) {
-    long long milliseconds;
-
-    if (!timeout_ms) {
+static inline int __rin_poll_timespec_to_ns(
+    const struct timespec* timeout, int64_t* timeout_ns) {
+    if (!timeout_ns) {
         errno = EINVAL;
         return -1;
     }
     if (!timeout) {
-        *timeout_ms = -1;
+        *timeout_ns = -1;
         return 0;
     }
     if (timeout->tv_sec < 0 || timeout->tv_nsec < 0 ||
@@ -264,31 +266,35 @@ static inline int __rin_poll_timespec_to_ms(const struct timespec* timeout,
         errno = EINVAL;
         return -1;
     }
-    if (timeout->tv_sec > (time_t)(INT_MAX / 1000)) {
+    if ((uint64_t)timeout->tv_sec >
+        (uint64_t)INT64_MAX / UINT64_C(1000000000)) {
         errno = EOVERFLOW;
         return -1;
     }
-
-    milliseconds = (long long)timeout->tv_sec * 1000LL;
-    milliseconds += ((long long)timeout->tv_nsec + 999999LL) / 1000000LL;
-    if (milliseconds > INT_MAX) {
+    {
+        const int64_t seconds_ns =
+            (int64_t)timeout->tv_sec * INT64_C(1000000000);
+        if ((int64_t)timeout->tv_nsec > INT64_MAX - seconds_ns) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        *timeout_ns = seconds_ns + (int64_t)timeout->tv_nsec;
+    }
+    if (*timeout_ns < 0) {
         errno = EOVERFLOW;
         return -1;
     }
-    *timeout_ms = (int)milliseconds;
     return 0;
 }
 
-static inline int __rin_poll_timeval_to_ms(const struct timeval* timeout,
-                                            int* timeout_ms) {
-    long long milliseconds;
-
-    if (!timeout_ms) {
+static inline int __rin_poll_timeval_to_ns(
+    const struct timeval* timeout, int64_t* timeout_ns) {
+    if (!timeout_ns) {
         errno = EINVAL;
         return -1;
     }
     if (!timeout) {
-        *timeout_ms = -1;
+        *timeout_ns = -1;
         return 0;
     }
     if (timeout->tv_sec < 0 || timeout->tv_usec < 0 ||
@@ -296,19 +302,63 @@ static inline int __rin_poll_timeval_to_ms(const struct timeval* timeout,
         errno = EINVAL;
         return -1;
     }
-    if (timeout->tv_sec > (time_t)(INT_MAX / 1000)) {
+    if ((uint64_t)timeout->tv_sec >
+        (uint64_t)INT64_MAX / UINT64_C(1000000000)) {
         errno = EOVERFLOW;
         return -1;
     }
-
-    milliseconds = (long long)timeout->tv_sec * 1000LL;
-    milliseconds += ((long long)timeout->tv_usec + 999LL) / 1000LL;
-    if (milliseconds > INT_MAX) {
+    {
+        const int64_t seconds_ns =
+            (int64_t)timeout->tv_sec * INT64_C(1000000000);
+        const int64_t microseconds_ns =
+            (int64_t)timeout->tv_usec * INT64_C(1000);
+        if (microseconds_ns > INT64_MAX - seconds_ns) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        *timeout_ns = seconds_ns + microseconds_ns;
+    }
+    if (*timeout_ns < 0) {
         errno = EOVERFLOW;
         return -1;
     }
-    *timeout_ms = (int)milliseconds;
     return 0;
+}
+
+static inline int __rin_poll_snapshot_timespec(
+    const struct timespec* timeout, struct timespec* snapshot,
+    int64_t* timeout_ns) {
+    int result;
+    if (!timeout) return __rin_poll_timespec_to_ns(NULL, timeout_ns);
+    result = _rin_time_snapshot_user_timespec(
+        CLOCK_MONOTONIC, timeout, snapshot);
+    if (result != 0) {
+        errno = result;
+        return -1;
+    }
+    return __rin_poll_timespec_to_ns(snapshot, timeout_ns);
+}
+
+static inline int __rin_poll_snapshot_timeval(
+    const struct timeval* timeout, struct timeval* snapshot,
+    int64_t* timeout_ns) {
+    struct timespec wire_snapshot;
+    int result;
+    if (!timeout) return __rin_poll_timeval_to_ns(NULL, timeout_ns);
+    result = _rin_time_snapshot_user_timespec(
+        CLOCK_MONOTONIC, (const struct timespec*)(const void*)timeout,
+        &wire_snapshot);
+    if (result != 0) {
+        errno = result;
+        return -1;
+    }
+    if (wire_snapshot.tv_nsec >= 1000000L) {
+        errno = EINVAL;
+        return -1;
+    }
+    snapshot->tv_sec = (time_t)wire_snapshot.tv_sec;
+    snapshot->tv_usec = (long)wire_snapshot.tv_nsec;
+    return __rin_poll_timeval_to_ns(snapshot, timeout_ns);
 }
 
 /* Linux updates select()'s timeval with the unspent portion of the original
@@ -373,15 +423,16 @@ static inline int __rin_select_update_timeval(
  * 戻り値: イベントが発生したfdの数、0=タイムアウト、-1=エラー
  */
 static inline int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
+    int64_t timeout_ns;
     __rin_pthread_cancel_point_if_linked();
     if (nfds > RIN_POLL_MAX_FDS || (fds == NULL && nfds != 0u)) {
         errno = fds == NULL && nfds != 0u ? EFAULT : EINVAL;
         return -1;
     }
-    if (timeout < 0) timeout = -1;
+    timeout_ns = timeout < 0 ? -1 : (int64_t)timeout * INT64_C(1000000);
     {
         int result = __rin_poll_syscall_without_mask_change(
-            fds, nfds, timeout);
+            fds, nfds, timeout_ns);
         __rin_pthread_cancel_point_if_linked();
         return result;
     }
@@ -391,7 +442,8 @@ static inline int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
 static inline int ppoll(struct pollfd* fds, nfds_t nfds,
                         const struct timespec* timeout_ts,
                         const sigset_t* sigmask) {
-    int timeout;
+    int64_t timeout_ns;
+    struct timespec timeout_snapshot;
     int result;
     __rin_pthread_cancel_point_if_linked();
 
@@ -399,10 +451,10 @@ static inline int ppoll(struct pollfd* fds, nfds_t nfds,
         errno = fds == NULL && nfds != 0u ? EFAULT : EINVAL;
         return -1;
     }
-    if (__rin_poll_timespec_to_ms(timeout_ts, &timeout) != 0) return -1;
-    result = !sigmask
-        ? __rin_poll_syscall_without_mask_change(fds, nfds, timeout)
-        : __rin_ppoll_syscall_once(fds, nfds, timeout, sigmask);
+    if (__rin_poll_snapshot_timespec(
+            timeout_ts, &timeout_snapshot, &timeout_ns) != 0)
+        return -1;
+    result = __rin_ppoll_syscall_once(fds, nfds, timeout_ns, sigmask);
     __rin_pthread_cancel_point_if_linked();
     return result;
 }
@@ -416,7 +468,7 @@ static inline int ppoll(struct pollfd* fds, nfds_t nfds,
  * and never writes it back. */
 static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
                          fd_set* exceptfds, struct timeval* timeout) {
-    int timeout_ms;
+    int64_t timeout_ns;
     struct pollfd local_pollfds[RIN_SELECT_LOCAL_POLLFD_COUNT];
     struct pollfd* pfds = NULL;
     nfds_t npfds = 0u;
@@ -430,10 +482,15 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
     }
 
     if (timeout) {
-        timeout_snapshot = *timeout;
+        if (__rin_poll_snapshot_timeval(
+                timeout, &timeout_snapshot, &timeout_ns) != 0)
+            return -1;
         original_timeout = &timeout_snapshot;
+    } else {
+        timeout_ns = -1;
     }
-    if (__rin_poll_timeval_to_ms(original_timeout, &timeout_ms) != 0)
+    if (original_timeout &&
+        __rin_poll_timeval_to_ns(original_timeout, &timeout_ns) != 0)
         return -1;
 
     if (__rin_select_build_pollfds(nfds, readfds, writefds, exceptfds,
@@ -449,8 +506,10 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
             __rin_select_release_pollfds(pfds, local_pollfds);
             return -1;
         }
-        ret = poll(NULL, 0, timeout_ms);
+        __rin_pthread_cancel_point_if_linked();
+        ret = __rin_poll_syscall_without_mask_change(NULL, 0u, timeout_ns);
         poll_errno = errno;
+        __rin_pthread_cancel_point_if_linked();
         if (timeout && __rin_select_update_timeval(
                 timeout, original_timeout, &timeout_start) != 0) {
             __rin_select_release_pollfds(pfds, local_pollfds);
@@ -471,8 +530,11 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
         __rin_select_release_pollfds(pfds, local_pollfds);
         return -1;
     }
-    int ret = poll(pfds, npfds, timeout_ms);
+    __rin_pthread_cancel_point_if_linked();
+    int ret = __rin_poll_syscall_without_mask_change(
+        pfds, npfds, timeout_ns);
     int poll_errno = errno;
+    __rin_pthread_cancel_point_if_linked();
     if (timeout && __rin_select_update_timeval(
             timeout, original_timeout, &timeout_start) != 0) {
         __rin_select_release_pollfds(pfds, local_pollfds);
@@ -498,14 +560,11 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
 static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
                           fd_set* exceptfds, const struct timespec* timeout,
                           const sigset_t* sigmask) {
-    int timeout_ms;
-
     if (nfds < 0 || nfds > FD_SETSIZE) {
         errno = EINVAL;
         return -1;
     }
-    if (__rin_poll_timespec_to_ms(timeout, &timeout_ms) != 0) return -1;
-    if (sigmask) {
+    {
         struct pollfd local_pollfds[RIN_SELECT_LOCAL_POLLFD_COUNT];
         struct pollfd* pfds = NULL;
         nfds_t npfds = 0u;
@@ -529,17 +588,6 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
         __rin_select_release_pollfds(pfds, local_pollfds);
         return ready_count;
     }
-
-    struct timeval tv;
-    struct timeval* tvp = NULL;
-
-    if (timeout) {
-        tv.tv_sec = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
-        tvp = &tv;
-    }
-
-    return select(nfds, readfds, writefds, exceptfds, tvp);
 }
 
 #ifdef __cplusplus
