@@ -71,7 +71,6 @@ struct RinAioRequest {
     struct aiocb* control;
     int state;
     int operation;
-    int original_fd;
     int held_fd;
     RinAioFileIdentity file_identity;
     uint32_t file_identity_valid;
@@ -575,7 +574,6 @@ static int rin_aio_submit_prepared(struct aiocb* control, int operation,
         request->control = control;
         request->state = RIN_AIO_QUEUED;
         request->operation = operation;
-        request->original_fd = control->aio_fildes;
         request->held_fd = held_fd;
         request->file_identity = *file_identity;
         request->file_identity_valid = 1u;
@@ -1215,7 +1213,6 @@ int lio_listio(int mode, struct aiocb* const requests[], int count,
                     request->control = controls[index];
                     request->state = RIN_AIO_QUEUED;
                     request->operation = operations[index];
-                    request->original_fd = controls[index]->aio_fildes;
                     request->held_fd = held_fds[index];
                     request->file_identity = file_identities[index];
                     request->file_identity_valid = 1u;

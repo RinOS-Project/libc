@@ -50,6 +50,15 @@
 #include <rin/thread/name_abi.h>
 #include <rin/thread/sched_abi.h>
 
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || \
+    defined(_M_X64)
+#define RIN_PTHREAD_LEGACY_STACKADDR_SUPPORTED 1
+#define RIN_PTHREAD_STACK_GROWS_DOWN 1
+#else
+#define RIN_PTHREAD_LEGACY_STACKADDR_SUPPORTED 0
+#define RIN_PTHREAD_STACK_GROWS_DOWN 0
+#endif
+
 #ifndef _RIN_PTHREAD_SYSCALL0
 #define _RIN_PTHREAD_SYSCALL0(number) _syscall0((uintptr_t)(number))
 #endif
@@ -474,6 +483,58 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getstack(const pthread_attr_t* a
     if (!attr || !stackaddr || !stacksize) return EINVAL;
     *stackaddr = attr->stackaddr;
     *stacksize = attr->stacksize;
+    return 0;
+}
+#endif
+
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_getstackaddr(const pthread_attr_t* attr,
+                                    void** stackaddr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getstackaddr(
+    const pthread_attr_t* attr, void** stackaddr) {
+    if (!attr || !stackaddr) return EINVAL;
+#if RIN_PTHREAD_LEGACY_STACKADDR_SUPPORTED && \
+    RIN_PTHREAD_STACK_GROWS_DOWN
+    if (attr->stackaddr &&
+        attr->stacksize > UINTPTR_MAX - (uintptr_t)attr->stackaddr)
+        return EINVAL;
+    *stackaddr = attr->stackaddr
+        ? (void*)((uintptr_t)attr->stackaddr + attr->stacksize)
+        : NULL;
+#elif RIN_PTHREAD_LEGACY_STACKADDR_SUPPORTED
+    *stackaddr = attr->stackaddr;
+#else
+    return ENOTSUP;
+#endif
+    return 0;
+}
+#endif
+
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+extern int pthread_attr_setstackaddr(pthread_attr_t* attr, void* stackaddr);
+#else
+_RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_setstackaddr(
+    pthread_attr_t* attr, void* stackaddr) {
+    if (!attr || !stackaddr) return EINVAL;
+#if RIN_PTHREAD_LEGACY_STACKADDR_SUPPORTED
+    {
+        const uintptr_t address = (uintptr_t)stackaddr;
+        uintptr_t base;
+        if (attr->stacksize < PTHREAD_STACK_MIN) return EINVAL;
+#if RIN_PTHREAD_STACK_GROWS_DOWN
+        if (address < attr->stacksize) return EINVAL;
+        base = address - attr->stacksize;
+#else
+        if (attr->stacksize > UINTPTR_MAX - address) return EINVAL;
+        base = address;
+#endif
+        if (base == 0u) return EINVAL;
+        attr->stackaddr = (void*)base;
+    }
+#else
+    return ENOTSUP;
+#endif
     return 0;
 }
 #endif
