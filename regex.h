@@ -6,7 +6,9 @@
 
 #include "stddef.h"
 #include "stdint.h"
+#include "locale.h"
 #include "stdlib.h"
+#include "wctype.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -62,6 +64,7 @@ typedef struct { regoff_t rm_so; regoff_t rm_eo; } regmatch_t;
 #define _REGEX_OP_SAVE_START 9u
 #define _REGEX_OP_SAVE_END 10u
 #define _REGEX_OP_BACKREF 11u
+#define _REGEX_OP_CHAR 12u
 
 /* Compile-only flag.  It is never stored in regex_t; it requests capture
  * markers even for REG_NOSUB programs so that a backreference can still be
@@ -78,12 +81,51 @@ typedef struct {
 } _regex_instruction_t;
 
 typedef struct {
+    uint32_t kind;
+    uint32_t first_offset;
+    uint32_t first_count;
+    uint32_t second_offset;
+    uint32_t second_count;
+    wctype_t descriptor;
+} _regex_class_element_t;
+
+typedef struct {
+    uint32_t source_offset;
+    uint32_t source_size;
+    uint32_t element_begin;
+    uint32_t element_count;
+    uint8_t negated;
+    uint8_t reserved[3];
+} _regex_class_t;
+
+#define _REGEX_CLASS_CHARACTER 1u
+#define _REGEX_CLASS_RANGE 2u
+#define _REGEX_CLASS_PROPERTY 3u
+#define _REGEX_CLASS_COLLATING 4u
+#define _REGEX_CLASS_EQUIVALENCE 5u
+#define _REGEX_MAX_COLLATION_CHARS 32u
+
+typedef struct {
     uint32_t magic;
     uint32_t instruction_count;
     uint32_t group_count;
     size_t allocation_size;
     int cflags;
     _regex_instruction_t* instructions;
+    char* pattern;
+    size_t pattern_size;
+    locale_t locale;
+    _regex_class_t* classes;
+    uint32_t class_count;
+    uint32_t class_capacity;
+    _regex_class_element_t* class_elements;
+    uint32_t class_element_count;
+    uint32_t class_element_capacity;
+    uint32_t* class_characters;
+    uint32_t class_character_count;
+    uint32_t class_character_capacity;
+    uint8_t has_variable_class;
+    uint8_t reserved[7];
 } _regex_internal_t;
 
 static inline void _regex_zero(void* pointer, size_t size) {
@@ -98,17 +140,90 @@ static inline int _regex_all_zero(const void* pointer, size_t size) {
     return combined == 0u;
 }
 
-static inline char _regex_ascii_fold(char value) {
-    if (value >= 'A' && value <= 'Z') return (char)(value + ('a' - 'A'));
-    return value;
+static inline int _regex_name_equal(const char* begin, size_t size,
+                                    const char* expected);
+
+/* Invalid multibyte input is retained as a private one-byte character so the
+ * bounded engine can still match binary data without splitting valid UTF-8. */
+static inline int _regex_decode_one(const char* input, size_t available,
+                                    uint32_t* character, size_t* width) {
+    rin_unicode_mbstate_t state = {0};
+    uint32_t decoded = 0u;
+    size_t consumed;
+    if (!input || available == 0u || !character || !width) return 0;
+#if defined(RIN_USERSPACE)
+    consumed = rin_locale_current_mbrtowc32(
+        &decoded, input, available,
+        (struct rin_unicode_mbstate*)(void*)&state);
+#else
+    consumed = rin_unicode_mbrtowc32(&decoded, input, available, &state);
+#endif
+    if (consumed == (size_t)-1 || consumed == (size_t)-2 ||
+        consumed > available) {
+        *character = UINT32_C(0x110000) + (uint8_t)input[0];
+        *width = 1u;
+        return 1;
+    }
+    if (consumed == 0u) consumed = 1u;
+    *character = (uint32_t)decoded;
+    *width = consumed;
+    return 1;
 }
 
-static inline void _regex_bitmap_add(uint8_t bitmap[32], uint8_t value) {
-    bitmap[value >> 3u] |= (uint8_t)(1u << (value & 7u));
+static inline uint32_t _regex_class_property(const char* name,
+                                             size_t length) {
+    if (_regex_name_equal(name, length, "alnum"))
+        return RIN_LOCALE_CTYPE_ALNUM;
+    if (_regex_name_equal(name, length, "alpha"))
+        return RIN_LOCALE_CTYPE_ALPHA;
+    if (_regex_name_equal(name, length, "blank"))
+        return RIN_LOCALE_CTYPE_BLANK;
+    if (_regex_name_equal(name, length, "cntrl"))
+        return RIN_LOCALE_CTYPE_CNTRL;
+    if (_regex_name_equal(name, length, "digit"))
+        return RIN_LOCALE_CTYPE_DIGIT;
+    if (_regex_name_equal(name, length, "graph"))
+        return RIN_LOCALE_CTYPE_GRAPH;
+    if (_regex_name_equal(name, length, "lower"))
+        return RIN_LOCALE_CTYPE_LOWER;
+    if (_regex_name_equal(name, length, "print"))
+        return RIN_LOCALE_CTYPE_PRINT;
+    if (_regex_name_equal(name, length, "punct"))
+        return RIN_LOCALE_CTYPE_PUNCT;
+    if (_regex_name_equal(name, length, "space"))
+        return RIN_LOCALE_CTYPE_SPACE;
+    if (_regex_name_equal(name, length, "upper"))
+        return RIN_LOCALE_CTYPE_UPPER;
+    if (_regex_name_equal(name, length, "xdigit"))
+        return RIN_LOCALE_CTYPE_XDIGIT;
+    return 0u;
 }
 
-static inline int _regex_bitmap_has(const uint8_t bitmap[32], uint8_t value) {
-    return (bitmap[value >> 3u] & (uint8_t)(1u << (value & 7u))) != 0u;
+static inline uint32_t _regex_fold(uint32_t character) {
+#if defined(RIN_USERSPACE)
+    return rin_locale_current_wide_ctype_map(
+        character, RIN_LOCALE_CTYPE_TOLOWER);
+#else
+    return rin_unicode_tolower(character);
+#endif
+}
+
+static inline int _regex_iswctype(uint32_t character, wctype_t descriptor) {
+#if defined(RIN_USERSPACE)
+    return rin_locale_current_wide_ctype_iswctype(
+        character, (unsigned long)descriptor);
+#else
+    return rin_unicode_iswctype(character, (unsigned long)descriptor);
+#endif
+}
+
+static inline int _regex_collate(const uint32_t* left,
+                                 const uint32_t* right) {
+#if defined(RIN_USERSPACE)
+    return rin_locale_current_wcscoll32(left, right);
+#else
+    return rin_unicode_wcscoll32(left, right);
+#endif
 }
 
 static inline int _regex_name_equal(const char* begin, size_t size,
@@ -121,55 +236,11 @@ static inline int _regex_name_equal(const char* begin, size_t size,
     return index == size && expected[index] == '\0';
 }
 
-static inline int _regex_ascii_class(uint8_t bitmap[32],
-                                     const char* name, size_t size) {
-    uint32_t value;
-    int recognized = 1;
-    for (value = 0u; value < 256u; ++value) {
-        int selected = 0;
-        unsigned char c = (unsigned char)value;
-        if (_regex_name_equal(name, size, "alnum"))
-            selected = (c >= '0' && c <= '9') ||
-                       (c >= 'A' && c <= 'Z') ||
-                       (c >= 'a' && c <= 'z');
-        else if (_regex_name_equal(name, size, "alpha"))
-            selected = (c >= 'A' && c <= 'Z') ||
-                       (c >= 'a' && c <= 'z');
-        else if (_regex_name_equal(name, size, "blank"))
-            selected = c == ' ' || c == '\t';
-        else if (_regex_name_equal(name, size, "cntrl"))
-            selected = c < 0x20u || c == 0x7fu;
-        else if (_regex_name_equal(name, size, "digit"))
-            selected = c >= '0' && c <= '9';
-        else if (_regex_name_equal(name, size, "graph"))
-            selected = c >= 0x21u && c <= 0x7eu;
-        else if (_regex_name_equal(name, size, "lower"))
-            selected = c >= 'a' && c <= 'z';
-        else if (_regex_name_equal(name, size, "print"))
-            selected = c >= 0x20u && c <= 0x7eu;
-        else if (_regex_name_equal(name, size, "punct"))
-            selected = c >= 0x21u && c <= 0x7eu &&
-                       !((c >= '0' && c <= '9') ||
-                         (c >= 'A' && c <= 'Z') ||
-                         (c >= 'a' && c <= 'z'));
-        else if (_regex_name_equal(name, size, "space"))
-            selected = c == ' ' || (c >= '\t' && c <= '\r');
-        else if (_regex_name_equal(name, size, "upper"))
-            selected = c >= 'A' && c <= 'Z';
-        else if (_regex_name_equal(name, size, "xdigit"))
-            selected = (c >= '0' && c <= '9') ||
-                       (c >= 'A' && c <= 'F') ||
-                       (c >= 'a' && c <= 'f');
-        else { recognized = 0; break; }
-        if (selected) _regex_bitmap_add(bitmap, c);
-    }
-    return recognized;
-}
-
 static inline int _regex_parse_class(const char* pattern,
                                      size_t pattern_size, size_t* offset,
                                      _regex_instruction_t* atom,
-                                     int cflags);
+                                     int cflags,
+                                     const char* root_pattern);
 
 static inline int _regex_pattern_has_backref(const char* pattern,
                                              size_t pattern_size,
@@ -180,7 +251,7 @@ static inline int _regex_pattern_has_backref(const char* pattern,
             _regex_instruction_t ignored;
             size_t next = offset;
             if (_regex_parse_class(pattern, pattern_size, &next, &ignored,
-                                   cflags) == 0) {
+                                   cflags, pattern) == 0) {
                 offset = next;
                 continue;
             }
@@ -196,45 +267,13 @@ static inline int _regex_pattern_has_backref(const char* pattern,
     return 0;
 }
 
-#define _REGEX_BRACKET_BYTE 0
-#define _REGEX_BRACKET_COLLATING 1
-#define _REGEX_BRACKET_EQUIVALENCE 2
-
-static inline int _regex_parse_bracket_element(
-        const char* pattern, size_t pattern_size, size_t* offset,
-        uint8_t* value_out, int* kind_out) {
-    size_t current = *offset;
-    if (current < pattern_size && pattern[current] == '[' &&
-        current + 1u < pattern_size &&
-        (pattern[current + 1u] == '.' || pattern[current + 1u] == '=')) {
-        char delimiter = pattern[current + 1u];
-        size_t element_begin = current + 2u;
-        size_t element_end = element_begin;
-        while (element_end + 1u < pattern_size &&
-               !(pattern[element_end] == delimiter &&
-                 pattern[element_end + 1u] == ']'))
-            ++element_end;
-        if (element_end + 1u >= pattern_size ||
-            element_end != element_begin + 1u)
-            return REG_ECOLLATE;
-        *value_out = (uint8_t)pattern[element_begin];
-        *kind_out = delimiter == '.' ? _REGEX_BRACKET_COLLATING :
-                                       _REGEX_BRACKET_EQUIVALENCE;
-        *offset = element_end + 2u;
-        return 0;
-    }
-    if (current >= pattern_size) return REG_EBRACK;
-    *value_out = (uint8_t)pattern[current];
-    *kind_out = _REGEX_BRACKET_BYTE;
-    *offset = current + 1u;
-    return 0;
-}
-
 static inline int _regex_parse_class(const char* pattern,
                                      size_t pattern_size, size_t* offset,
                                      _regex_instruction_t* atom,
-                                     int cflags) {
-    size_t current = *offset + 1u;
+                                     int cflags,
+                                     const char* root_pattern) {
+    size_t class_begin = *offset;
+    size_t current = class_begin + 1u;
     int have_item = 0;
     int negated = 0;
     if (current >= pattern_size) return REG_EBRACK;
@@ -242,67 +281,282 @@ static inline int _regex_parse_class(const char* pattern,
     atom->operation = _REGEX_OP_CLASS;
     if (pattern[current] == '^') { negated = 1; ++current; }
     if (current < pattern_size && pattern[current] == ']') {
-        _regex_bitmap_add(atom->bitmap, (uint8_t)']');
         have_item = 1;
         ++current;
     }
     while (current < pattern_size && pattern[current] != ']') {
-        uint8_t first;
-        int first_kind;
-        int result;
         if (pattern[current] == '[' && current + 1u < pattern_size &&
-            pattern[current + 1u] == ':') {
-            size_t name_begin = current + 2u;
-            size_t end = name_begin;
+            (pattern[current + 1u] == ':' ||
+             pattern[current + 1u] == '.' ||
+             pattern[current + 1u] == '=')) {
+            char delimiter = pattern[current + 1u];
+            size_t content_begin = current + 2u;
+            size_t end = content_begin;
             while (end + 1u < pattern_size &&
-                   !(pattern[end] == ':' && pattern[end + 1u] == ']')) ++end;
+                   !(pattern[end] == delimiter && pattern[end + 1u] == ']'))
+                ++end;
             if (end + 1u >= pattern_size) return REG_EBRACK;
-            if (end == name_begin || !_regex_ascii_class(
-                    atom->bitmap, pattern + name_begin, end - name_begin))
+            if (end == content_begin) return REG_ECOLLATE;
+            if (delimiter == ':' &&
+                _regex_class_property(pattern + content_begin,
+                                      end - content_begin) == 0u)
                 return REG_ECTYPE;
             current = end + 2u;
-            have_item = 1;
-            continue;
-        }
-        result = _regex_parse_bracket_element(
-            pattern, pattern_size, &current, &first, &first_kind);
-        if (result != 0) return result;
-        if (current < pattern_size && pattern[current] == '-' &&
-            current + 1u < pattern_size && pattern[current + 1u] != ']') {
-            uint8_t last;
-            int last_kind;
-            uint32_t value;
-            ++current;
-            result = _regex_parse_bracket_element(
-                pattern, pattern_size, &current, &last, &last_kind);
-            if (result != 0) return result;
-            if (first_kind == _REGEX_BRACKET_EQUIVALENCE ||
-                last_kind == _REGEX_BRACKET_EQUIVALENCE || last == '[' ||
-                first > last)
-                return REG_ERANGE;
-            for (value = first; value <= last; ++value)
-                _regex_bitmap_add(atom->bitmap, (uint8_t)value);
         } else {
-            _regex_bitmap_add(atom->bitmap, first);
+            /* Delimiters are ASCII and cannot occur in a UTF-8 continuation
+             * byte, so advancing by bytes remains safe while finding ']'. */
+            ++current;
         }
         have_item = 1;
     }
     if (current >= pattern_size || pattern[current] != ']' || !have_item)
         return REG_EBRACK;
     ++current;
-    if ((cflags & REG_ICASE) != 0) {
-        uint32_t value;
-        for (value = 'A'; value <= 'Z'; ++value) {
-            uint8_t lower = (uint8_t)(value + ('a' - 'A'));
-            if (_regex_bitmap_has(atom->bitmap, (uint8_t)value) ||
-                _regex_bitmap_has(atom->bitmap, lower)) {
-                _regex_bitmap_add(atom->bitmap, (uint8_t)value);
-                _regex_bitmap_add(atom->bitmap, lower);
-            }
-        }
-    }
+    if (!root_pattern || pattern + class_begin < root_pattern ||
+        (size_t)(pattern + class_begin - root_pattern) > UINT32_MAX ||
+        current - class_begin > UINT32_MAX)
+        return REG_ESPACE;
     atom->value = (uint8_t)negated;
+    atom->first = (uint32_t)(pattern + class_begin - root_pattern);
+    atom->second = (uint32_t)(current - class_begin);
+    (void)cflags;
     *offset = current;
+    return 0;
+}
+
+static inline int _regex_class_add_element(
+        _regex_internal_t* internal, _regex_class_t* expression,
+        uint32_t kind, const uint32_t* first, size_t first_count,
+        const uint32_t* second, size_t second_count, wctype_t descriptor) {
+    _regex_class_element_t* element;
+    if (!internal || !expression ||
+        internal->class_element_count >= internal->class_element_capacity)
+        return REG_ESPACE;
+    if ((first_count != 0u &&
+         (!first || first_count > _REGEX_MAX_COLLATION_CHARS ||
+          first_count > internal->class_character_capacity -
+                            internal->class_character_count)) ||
+        (second_count != 0u &&
+         (!second || second_count > _REGEX_MAX_COLLATION_CHARS ||
+          second_count > internal->class_character_capacity -
+                             internal->class_character_count - first_count)))
+        return REG_ESPACE;
+    element = &internal->class_elements[internal->class_element_count++];
+    element->first_offset = internal->class_character_count;
+    element->first_count = (uint32_t)first_count;
+    for (size_t index = 0u; index < first_count; ++index)
+        internal->class_characters[internal->class_character_count++] =
+            first[index];
+    element->second_offset = internal->class_character_count;
+    element->second_count = (uint32_t)second_count;
+    for (size_t index = 0u; index < second_count; ++index)
+        internal->class_characters[internal->class_character_count++] =
+            second[index];
+    element->kind = kind;
+    element->descriptor = descriptor;
+    if ((kind == _REGEX_CLASS_RANGE &&
+         (first_count > 1u || second_count > 1u)) ||
+        kind == _REGEX_CLASS_COLLATING || kind == _REGEX_CLASS_EQUIVALENCE)
+        internal->has_variable_class = 1u;
+    ++expression->element_count;
+    return 0;
+}
+
+/* Parse one literal or collating/equivalence element from a bracket class.
+ * Collating and equivalence elements may contain multiple locale characters. */
+static inline int _regex_class_parse_element(
+        const char* pattern, size_t end, size_t* offset,
+        uint32_t* kind, uint32_t characters[_REGEX_MAX_COLLATION_CHARS],
+        size_t* character_count) {
+    size_t current = *offset;
+    if (current >= end || !kind || !characters || !character_count)
+        return REG_EBRACK;
+    *kind = _REGEX_CLASS_CHARACTER;
+    if (pattern[current] == '[' && current + 1u < end &&
+        (pattern[current + 1u] == '.' || pattern[current + 1u] == '=')) {
+        char delimiter = pattern[current + 1u];
+        size_t content_begin = current + 2u;
+        size_t content_end = content_begin;
+        while (content_end + 1u < end &&
+               !(pattern[content_end] == delimiter &&
+                 pattern[content_end + 1u] == ']'))
+            ++content_end;
+        if (content_end + 1u >= end || content_end == content_begin)
+            return REG_ECOLLATE;
+        current = content_begin;
+        *character_count = 0u;
+        while (current < content_end) {
+            size_t width;
+            uint32_t character;
+            if (*character_count >= _REGEX_MAX_COLLATION_CHARS)
+                return REG_ESPACE;
+            if (!_regex_decode_one(pattern + current, content_end - current,
+                                   &character, &width) ||
+                width == 0u || character > UINT32_C(0x10ffff))
+                return REG_ECOLLATE;
+            characters[(*character_count)++] = character;
+            current += width;
+        }
+        if (*character_count > 1u && rin_locale_current_mb_cur_max() <= 1)
+            return REG_ECOLLATE;
+        *kind = delimiter == '.' ? _REGEX_CLASS_COLLATING
+                                 : _REGEX_CLASS_EQUIVALENCE;
+        *offset = content_end + 2u;
+        return 0;
+    }
+    {
+        size_t width;
+        if (!_regex_decode_one(pattern + current, end - current,
+                               &characters[0], &width))
+            return REG_ECTYPE;
+        *character_count = 1u;
+        *offset = current + width;
+    }
+    if (*character_count == 0u)
+        return REG_ECTYPE;
+    return 0;
+}
+
+static inline int _regex_compile_class_record(
+        _regex_internal_t* internal, uint32_t source_offset,
+        uint32_t source_size, _regex_class_t* expression) {
+    size_t current = (size_t)source_offset + 1u;
+    size_t end = (size_t)source_offset + source_size - 1u;
+    int have_item = 0;
+    int result;
+    if (!internal || !expression || source_size < 2u ||
+        end > internal->pattern_size ||
+        internal->pattern[source_offset] != '[' ||
+        internal->pattern[end] != ']')
+        return REG_EBRACK;
+    _regex_zero(expression, sizeof(*expression));
+    expression->source_offset = source_offset;
+    expression->source_size = source_size;
+    expression->element_begin = internal->class_element_count;
+    if (current < end && internal->pattern[current] == '^') {
+        expression->negated = 1u;
+        ++current;
+    }
+    if (current < end && internal->pattern[current] == ']') {
+        const uint32_t close_bracket[] = {']'};
+        result = _regex_class_add_element(
+            internal, expression, _REGEX_CLASS_CHARACTER,
+            close_bracket, 1u, NULL, 0u, 0ul);
+        if (result != 0) return result;
+        have_item = 1;
+        ++current;
+    }
+    while (current < end) {
+        uint32_t first_kind;
+        uint32_t first[_REGEX_MAX_COLLATION_CHARS];
+        size_t first_count;
+        uint32_t second_kind;
+        uint32_t second[_REGEX_MAX_COLLATION_CHARS];
+        size_t second_count;
+        if (internal->pattern[current] == '[' && current + 1u < end &&
+            internal->pattern[current + 1u] == ':') {
+            size_t name_begin = current + 2u;
+            size_t name_end = name_begin;
+            uint32_t property;
+            wctype_t descriptor;
+            char name[32];
+            size_t length;
+            while (name_end + 1u < end &&
+                   !(internal->pattern[name_end] == ':' &&
+                     internal->pattern[name_end + 1u] == ']'))
+                ++name_end;
+            if (name_end + 1u >= end) return REG_EBRACK;
+            length = name_end - name_begin;
+            property = _regex_class_property(
+                internal->pattern + name_begin, length);
+            if (property == 0u || length == 0u || length >= sizeof(name))
+                return REG_ECTYPE;
+            for (size_t index = 0u; index < length; ++index)
+                name[index] = internal->pattern[name_begin + index];
+            name[length] = '\0';
+            descriptor = wctype(name);
+            if (descriptor == (wctype_t)0u) return REG_ECTYPE;
+            result = _regex_class_add_element(
+                internal, expression, _REGEX_CLASS_PROPERTY,
+                NULL, 0u, NULL, 0u, descriptor);
+            if (result != 0) return result;
+            current = name_end + 2u;
+            have_item = 1;
+            continue;
+        }
+        result = _regex_class_parse_element(
+            internal->pattern, end, &current, &first_kind, first,
+            &first_count);
+        if (result != 0) return result;
+        if (current < end && internal->pattern[current] == '-' &&
+            current + 1u < end && internal->pattern[current + 1u] != ']') {
+            uint32_t first_text[_REGEX_MAX_COLLATION_CHARS + 1u];
+            uint32_t second_text[_REGEX_MAX_COLLATION_CHARS + 1u];
+            ++current;
+            result = _regex_class_parse_element(
+                internal->pattern, end, &current, &second_kind, second,
+                &second_count);
+            if (result != 0) return result;
+            if (first_kind == _REGEX_CLASS_EQUIVALENCE ||
+                second_kind == _REGEX_CLASS_EQUIVALENCE ||
+                first_kind == _REGEX_CLASS_PROPERTY ||
+                second_kind == _REGEX_CLASS_PROPERTY)
+                return REG_ERANGE;
+            for (size_t index = 0u; index < first_count; ++index)
+                first_text[index] = first[index];
+            first_text[first_count] = 0u;
+            for (size_t index = 0u; index < second_count; ++index)
+                second_text[index] = second[index];
+            second_text[second_count] = 0u;
+            if (_regex_collate(first_text, second_text) > 0)
+                return REG_ERANGE;
+            result = _regex_class_add_element(
+                internal, expression, _REGEX_CLASS_RANGE,
+                first, first_count, second, second_count, 0ul);
+        } else {
+            result = _regex_class_add_element(
+                internal, expression, first_kind, first, first_count,
+                NULL, 0u, 0ul);
+        }
+        if (result != 0) return result;
+        have_item = 1;
+    }
+    if (!have_item) return REG_EBRACK;
+    return 0;
+}
+
+static inline int _regex_compile_class_table(_regex_internal_t* internal) {
+    uint32_t instruction_index;
+    for (instruction_index = 0u;
+         instruction_index < internal->instruction_count;
+         ++instruction_index) {
+        _regex_instruction_t* instruction =
+            &internal->instructions[instruction_index];
+        uint32_t class_index;
+        uint32_t source_offset;
+        uint32_t source_size;
+        if (instruction->operation != _REGEX_OP_CLASS) continue;
+        source_offset = instruction->first;
+        source_size = instruction->second;
+        for (class_index = 0u; class_index < internal->class_count;
+             ++class_index) {
+            if (internal->classes[class_index].source_offset == source_offset &&
+                internal->classes[class_index].source_size == source_size)
+                break;
+        }
+        if (class_index == internal->class_count) {
+            int result;
+            if (internal->class_count >= internal->class_capacity)
+                return REG_ESPACE;
+            result = _regex_compile_class_record(
+                internal, source_offset, source_size,
+                &internal->classes[class_index]);
+            if (result != 0) return result;
+            ++internal->class_count;
+        }
+        instruction->first = class_index;
+        instruction->second = 0u;
+    }
     return 0;
 }
 
@@ -387,6 +641,7 @@ static inline int _regex_emit_repeat(_regex_instruction_t* instructions,
 
 static inline int _regex_compile_expression(
         const char* pattern, size_t pattern_size, int cflags,
+        const char* root_pattern,
         _regex_instruction_t* instructions, uint32_t capacity,
         uint32_t* count, uint32_t* group_cursor, uint32_t depth);
 
@@ -492,7 +747,7 @@ static inline int _regex_parse_postfix_repeat(
 
 static inline int _regex_find_group_end(
         const char* pattern, size_t pattern_size, size_t group_begin,
-        int cflags, size_t* group_end) {
+        int cflags, const char* root_pattern, size_t* group_end) {
     size_t current = group_begin;
     uint32_t nesting = 0u;
     int extended = (cflags & REG_EXTENDED) != 0;
@@ -520,7 +775,8 @@ static inline int _regex_find_group_end(
         if (pattern[current] == '[') {
             _regex_instruction_t ignored;
             int result = _regex_parse_class(
-                pattern, pattern_size, &current, &ignored, cflags);
+                pattern, pattern_size, &current, &ignored, cflags,
+                root_pattern);
             if (result != 0) return result;
             continue;
         }
@@ -541,6 +797,7 @@ static inline int _regex_find_group_end(
 
 static inline int _regex_emit_expression_repeat(
         const char* pattern, size_t pattern_size, int cflags,
+        const char* root_pattern,
         _regex_instruction_t* instructions, uint32_t capacity,
         uint32_t* count, uint32_t minimum, uint32_t maximum,
         uint32_t* group_cursor, uint32_t depth, int capture,
@@ -561,7 +818,8 @@ static inline int _regex_emit_expression_repeat(
             if (result != 0) return result;
         }
         result = _regex_compile_expression(
-            pattern, pattern_size, cflags, instructions, capacity, count,
+            pattern, pattern_size, cflags, root_pattern,
+            instructions, capacity, count,
             &iteration_group_cursor, depth);
         if (result != 0) return result;
         if (!body_compiled) {
@@ -599,7 +857,8 @@ static inline int _regex_emit_expression_repeat(
                 if (result != 0) return result;
             }
             result = _regex_compile_expression(
-                pattern, pattern_size, cflags, instructions, capacity, count,
+                pattern, pattern_size, cflags, root_pattern,
+                instructions, capacity, count,
                 &iteration_group_cursor, depth);
             if (!body_compiled) {
                 body_group_end = iteration_group_cursor;
@@ -643,7 +902,8 @@ static inline int _regex_emit_expression_repeat(
             if (result != 0) return result;
         }
         result = _regex_compile_expression(
-            pattern, pattern_size, cflags, instructions, capacity, count,
+            pattern, pattern_size, cflags, root_pattern,
+            instructions, capacity, count,
             &iteration_group_cursor, depth);
         if (result != 0) return result;
         if (!body_compiled) {
@@ -666,6 +926,7 @@ static inline int _regex_emit_expression_repeat(
 
 static inline int _regex_compile_sequence(
         const char* pattern, size_t pattern_size, int cflags,
+        const char* root_pattern,
         _regex_instruction_t* instructions, uint32_t capacity,
         uint32_t* count, uint32_t* group_cursor, uint32_t depth) {
     size_t current = 0u;
@@ -704,7 +965,8 @@ static inline int _regex_compile_sequence(
             int capture = (cflags & REG_NOSUB) == 0 ||
                           (cflags & _REGEX_COMPILE_CAPTURE) != 0;
             result = _regex_find_group_end(
-                pattern, pattern_size, current, cflags, &group_end);
+                pattern, pattern_size, current, cflags, root_pattern,
+                &group_end);
             if (result != 0) return result;
             if (group_end == group_start) return REG_BADPAT;
             if (capture) {
@@ -720,7 +982,8 @@ static inline int _regex_compile_sequence(
             if (result != 0) return result;
             result = _regex_emit_expression_repeat(
                 pattern + group_start, group_end - group_start, cflags,
-                instructions, capacity, count, minimum, maximum, group_cursor,
+                root_pattern, instructions, capacity, count,
+                minimum, maximum, group_cursor,
                 depth + 1u, capture, group_index);
             if (result != 0) return result;
             continue;
@@ -735,7 +998,7 @@ static inline int _regex_compile_sequence(
             ++current;
         } else if (value == '[') {
             result = _regex_parse_class(pattern, pattern_size, &current,
-                                        &atom, cflags);
+                                        &atom, cflags, root_pattern);
             if (result != 0) return result;
         } else if (value == '.') {
             atom.operation = _REGEX_OP_ANY;
@@ -743,6 +1006,8 @@ static inline int _regex_compile_sequence(
         } else if (value == '\\') {
             size_t reference_begin;
             uint32_t reference = 0u;
+            uint32_t literal;
+            size_t literal_width;
             ++current;
             if (current == pattern_size) return REG_EESCAPE;
             value = pattern[current];
@@ -762,16 +1027,34 @@ static inline int _regex_compile_sequence(
                 atom.operation = _REGEX_OP_BACKREF;
                 atom.first = reference - 1u;
             } else {
-                ++current;
+                if (!_regex_decode_one(pattern + current,
+                        pattern_size - current, &literal, &literal_width))
+                    return REG_ECTYPE;
+                current += literal_width;
             }
             if (atom.operation == 0u) {
-                atom.operation = _REGEX_OP_BYTE;
-                atom.value = (uint8_t)value;
+                if (literal <= UINT8_MAX) {
+                    atom.operation = _REGEX_OP_BYTE;
+                    atom.value = (uint8_t)literal;
+                } else {
+                    atom.operation = _REGEX_OP_CHAR;
+                    atom.first = literal;
+                }
             }
         } else {
-            atom.operation = _REGEX_OP_BYTE;
-            atom.value = (uint8_t)value;
-            ++current;
+            uint32_t literal;
+            size_t literal_width;
+            if (!_regex_decode_one(pattern + current,
+                    pattern_size - current, &literal, &literal_width))
+                return REG_ECTYPE;
+            if (literal <= UINT8_MAX) {
+                atom.operation = _REGEX_OP_BYTE;
+                atom.value = (uint8_t)literal;
+            } else {
+                atom.operation = _REGEX_OP_CHAR;
+                atom.first = literal;
+            }
+            current += literal_width;
         }
         if (!assertion) {
             result = _regex_parse_postfix_repeat(
@@ -789,7 +1072,8 @@ static inline int _regex_compile_sequence(
 
 static inline int _regex_find_branch_end(
         const char* pattern, size_t pattern_size, size_t branch_begin,
-        int cflags, size_t* branch_end, int* has_separator,
+        int cflags, const char* root_pattern,
+        size_t* branch_end, int* has_separator,
         size_t* separator_size) {
     size_t current = branch_begin;
     uint32_t nesting = 0u;
@@ -815,7 +1099,8 @@ static inline int _regex_find_branch_end(
         if (pattern[current] == '[') {
             _regex_instruction_t ignored;
             int result = _regex_parse_class(
-                pattern, pattern_size, &current, &ignored, cflags);
+                pattern, pattern_size, &current, &ignored, cflags,
+                root_pattern);
             if (result != 0) return result;
             continue;
         }
@@ -841,6 +1126,7 @@ static inline int _regex_find_branch_end(
 
 static inline int _regex_compile_expression(
         const char* pattern, size_t pattern_size, int cflags,
+        const char* root_pattern,
         _regex_instruction_t* instructions, uint32_t capacity,
         uint32_t* count, uint32_t* group_cursor, uint32_t depth) {
     size_t branch_begin = 0u;
@@ -853,7 +1139,7 @@ static inline int _regex_compile_expression(
         size_t separator_size;
         int has_separator;
         result = _regex_find_branch_end(
-            pattern, pattern_size, branch_begin, cflags,
+            pattern, pattern_size, branch_begin, cflags, root_pattern,
             &branch_end, &has_separator, &separator_size);
         if (result != 0) return result;
         if ((has_separator || have_alternation) && branch_end == branch_begin)
@@ -870,7 +1156,8 @@ static inline int _regex_compile_expression(
             if (result != 0) return result;
             result = _regex_compile_sequence(
                 pattern + branch_begin, branch_end - branch_begin,
-                cflags, instructions, capacity, count, group_cursor, depth);
+                cflags, root_pattern, instructions, capacity, count,
+                group_cursor, depth);
             if (result != 0) return result;
             _regex_zero(&jump, sizeof(jump));
             jump.operation = _REGEX_OP_JUMP;
@@ -883,7 +1170,8 @@ static inline int _regex_compile_expression(
         }
         result = _regex_compile_sequence(
             pattern + branch_begin, branch_end - branch_begin,
-            cflags, instructions, capacity, count, group_cursor, depth);
+            cflags, root_pattern, instructions, capacity, count,
+            group_cursor, depth);
         if (result != 0) return result;
         break;
     }
@@ -908,7 +1196,8 @@ static inline int _regex_compile_pass(const char* pattern,
     uint32_t group_cursor = 0u;
     _regex_instruction_t match;
     int result = _regex_compile_expression(
-        pattern, pattern_size, cflags, instructions, capacity, &count,
+        pattern, pattern_size, cflags, pattern,
+        instructions, capacity, &count,
         &group_cursor, 0u);
     if (result != 0) return result;
     _regex_zero(&match, sizeof(match));
@@ -923,13 +1212,30 @@ static inline int _regex_compile_pass(const char* pattern,
 static inline int _regex_program_valid(const _regex_internal_t* internal) {
     const int known_flags = REG_EXTENDED | REG_ICASE | REG_NOSUB | REG_NEWLINE;
     uint32_t index;
+    uint32_t has_variable_class = 0u;
     size_t expected_size;
     uint64_t size_max = (uint64_t)(size_t)-1;
     if (!internal || internal->magic != _REGEX_MAGIC ||
         internal->instruction_count == 0u ||
         internal->instruction_count > _REGEX_MAX_INSTRUCTIONS ||
         internal->group_count > _REGEX_MAX_GROUPS ||
-        (internal->cflags & ~known_flags) != 0 || !internal->instructions)
+        (internal->cflags & ~known_flags) != 0 || !internal->instructions ||
+        internal->pattern_size > _REGEX_MAX_PATTERN || !internal->pattern ||
+        !internal->locale ||
+        internal->class_count > internal->class_capacity ||
+        internal->class_capacity > _REGEX_MAX_PATTERN + 1u ||
+        internal->class_element_count > internal->class_element_capacity ||
+        internal->class_element_capacity > _REGEX_MAX_PATTERN + 1u ||
+        internal->class_character_count >
+            internal->class_character_capacity ||
+        internal->class_character_capacity > _REGEX_MAX_PATTERN + 1u ||
+        internal->has_variable_class > 1u ||
+        (internal->class_count != 0u && !internal->classes) ||
+        (internal->class_element_count != 0u && !internal->class_elements) ||
+        (internal->class_character_count != 0u &&
+         !internal->class_characters) ||
+        !_regex_all_zero(internal->reserved, sizeof(internal->reserved)) ||
+        internal->pattern[internal->pattern_size] != '\0')
         return 0;
     if ((uint64_t)internal->instruction_count >
         (size_max - sizeof(*internal)) / sizeof(_regex_instruction_t))
@@ -940,23 +1246,91 @@ static inline int _regex_program_valid(const _regex_internal_t* internal) {
     if (internal->allocation_size != expected_size ||
         internal->instructions[internal->instruction_count - 1u].operation !=
             _REGEX_OP_MATCH) return 0;
+    for (index = 0u; index < internal->class_count; ++index) {
+        const _regex_class_t* expression = &internal->classes[index];
+        if (expression->source_size < 2u ||
+            expression->source_offset > internal->pattern_size ||
+            expression->source_size > internal->pattern_size -
+                                      expression->source_offset ||
+            expression->element_begin > internal->class_element_count ||
+            expression->element_count > internal->class_element_count -
+                                       expression->element_begin ||
+            expression->negated > 1u ||
+            expression->reserved[0] != 0u ||
+            expression->reserved[1] != 0u ||
+            expression->reserved[2] != 0u)
+            return 0;
+    }
+    for (index = 0u; index < internal->class_element_count; ++index) {
+        const _regex_class_element_t* element =
+            &internal->class_elements[index];
+        if ((element->kind == _REGEX_CLASS_RANGE &&
+             (element->first_count > 1u || element->second_count > 1u)) ||
+            element->kind == _REGEX_CLASS_COLLATING ||
+            element->kind == _REGEX_CLASS_EQUIVALENCE)
+            has_variable_class = 1u;
+        if (element->kind < _REGEX_CLASS_CHARACTER ||
+            element->kind > _REGEX_CLASS_EQUIVALENCE ||
+            element->first_offset > internal->class_character_count ||
+            element->second_offset > internal->class_character_count ||
+            (element->kind == _REGEX_CLASS_PROPERTY &&
+             element->descriptor == (wctype_t)0u) ||
+            (element->kind != _REGEX_CLASS_PROPERTY &&
+             element->descriptor != (wctype_t)0u) ||
+            (element->kind == _REGEX_CLASS_PROPERTY &&
+             (element->first_count != 0u || element->second_count != 0u)) ||
+            (element->kind == _REGEX_CLASS_CHARACTER &&
+             element->first_count != 1u) ||
+            (element->kind != _REGEX_CLASS_PROPERTY &&
+             (element->first_count == 0u ||
+              element->first_count > _REGEX_MAX_COLLATION_CHARS ||
+              element->first_offset > internal->class_character_count ||
+              element->first_count > internal->class_character_count -
+                                     element->first_offset)) ||
+            (element->kind == _REGEX_CLASS_RANGE
+                 ? (element->second_count == 0u ||
+                    element->second_count > _REGEX_MAX_COLLATION_CHARS ||
+                    element->second_offset > internal->class_character_count ||
+                    element->second_count > internal->class_character_count -
+                                            element->second_offset)
+                 : element->second_count != 0u))
+            return 0;
+    }
+    if (has_variable_class != internal->has_variable_class) return 0;
+    for (index = 0u; index < internal->class_character_count; ++index)
+        if (internal->class_characters[index] > UINT32_C(0x1100ff))
+            return 0;
     for (index = 0u; index < internal->instruction_count; ++index) {
         const _regex_instruction_t* instruction = &internal->instructions[index];
         if (instruction->reserved != 0u) return 0;
         switch (instruction->operation) {
             case _REGEX_OP_BYTE:
             case _REGEX_OP_ANY:
-            case _REGEX_OP_CLASS:
                 if (index + 1u >= internal->instruction_count ||
                     instruction->first != 0u || instruction->second != 0u)
                     return 0;
-                if (instruction->operation != _REGEX_OP_CLASS &&
-                    !_regex_all_zero(instruction->bitmap,
+                if (!_regex_all_zero(instruction->bitmap,
                                      sizeof(instruction->bitmap))) return 0;
-                if (instruction->operation == _REGEX_OP_CLASS &&
-                    instruction->value > 1u) return 0;
                 if (instruction->operation == _REGEX_OP_ANY &&
                     instruction->value != 0u) return 0;
+                break;
+            case _REGEX_OP_CHAR:
+                if (index + 1u >= internal->instruction_count ||
+                    instruction->value != 0u || instruction->second != 0u ||
+                    instruction->first > UINT32_C(0x1100FF) ||
+                    !_regex_all_zero(instruction->bitmap,
+                                     sizeof(instruction->bitmap)))
+                    return 0;
+                break;
+            case _REGEX_OP_CLASS:
+                if (index + 1u >= internal->instruction_count ||
+                    instruction->first >= internal->class_count ||
+                    instruction->second != 0u || instruction->value > 1u ||
+                    internal->classes[instruction->first].negated !=
+                        instruction->value ||
+                    !_regex_all_zero(instruction->bitmap,
+                                     sizeof(instruction->bitmap)))
+                    return 0;
                 break;
             case _REGEX_OP_SPLIT:
                 if (instruction->value != 0u ||
@@ -1013,6 +1387,7 @@ static inline int _regex_program_valid(const _regex_internal_t* internal) {
 
 static inline int _regex_count_groups(const char* pattern,
                                       size_t pattern_size, int cflags,
+                                      const char* root_pattern,
                                       size_t* count_out) {
     size_t current = 0u;
     size_t count = 0u;
@@ -1035,7 +1410,8 @@ static inline int _regex_count_groups(const char* pattern,
         if (pattern[current] == '[') {
             _regex_instruction_t ignored;
             int result = _regex_parse_class(
-                pattern, pattern_size, &current, &ignored, cflags);
+                pattern, pattern_size, &current, &ignored, cflags,
+                root_pattern);
             if (result != 0) return result;
             continue;
         }
@@ -1054,46 +1430,100 @@ static inline int _regex_count_groups(const char* pattern,
     return 0;
 }
 
+static inline void _regex_internal_destroy(_regex_internal_t* internal) {
+    if (!internal) return;
+    if (internal->locale) freelocale(internal->locale);
+    free(internal->class_elements);
+    free(internal->class_characters);
+    free(internal->classes);
+    free(internal->pattern);
+    free(internal->instructions);
+    _regex_zero(internal, sizeof(*internal));
+    free(internal);
+}
+
 static inline int regcomp(regex_t* preg, const char* pattern, int cflags) {
     const int known_flags = REG_EXTENDED | REG_ICASE | REG_NOSUB | REG_NEWLINE;
-    _regex_internal_t* internal;
+    _regex_internal_t* internal = NULL;
     uint32_t instruction_count = 0u;
     size_t pattern_size = 0u;
     size_t group_count = 0u;
     uint32_t compiled_group_count = 0u;
     int compile_flags;
     size_t allocation_size;
+    uint32_t class_capacity;
     uint64_t size_max = (uint64_t)(size_t)-1;
+    locale_t compile_locale = (locale_t)0;
+    locale_t previous_locale = (locale_t)0;
+    int locale_switched = 0;
+    int final_result = REG_ESPACE;
     int result;
     if (!preg || !pattern) return REG_INVARG;
     preg->_internal = NULL;
     preg->re_nsub = 0u;
     if ((cflags & ~known_flags) != 0) return REG_INVARG;
+    compile_locale = duplocale(uselocale((locale_t)0));
+    if (!compile_locale) return REG_ESPACE;
+    previous_locale = uselocale(compile_locale);
+    if (!previous_locale) {
+        freelocale(compile_locale);
+        return REG_ESPACE;
+    }
+    locale_switched = 1;
     while (pattern_size <= _REGEX_MAX_PATTERN && pattern[pattern_size] != '\0')
         ++pattern_size;
-    if (pattern_size > _REGEX_MAX_PATTERN) return REG_ESPACE;
+    if (pattern_size > _REGEX_MAX_PATTERN) goto regcomp_done;
     compile_flags = cflags;
     if (_regex_pattern_has_backref(pattern, pattern_size, cflags))
         compile_flags |= _REGEX_COMPILE_CAPTURE;
-    result = _regex_count_groups(pattern, pattern_size, cflags, &group_count);
-    if (result != 0) return result;
-    if (group_count > _REGEX_MAX_GROUPS) return REG_ESPACE;
+    result = _regex_count_groups(
+        pattern, pattern_size, cflags, pattern, &group_count);
+    if (result != 0) {
+        final_result = result;
+        goto regcomp_done;
+    }
+    if (group_count > _REGEX_MAX_GROUPS) goto regcomp_done;
     result = _regex_compile_pass(pattern, pattern_size, compile_flags, NULL, 0u,
                                  &instruction_count, &compiled_group_count);
-    if (result != 0) return result;
+    if (result != 0) {
+        final_result = result;
+        goto regcomp_done;
+    }
     if ((cflags & REG_NOSUB) == 0 && compiled_group_count != group_count)
-        return REG_BADPAT;
+        { final_result = REG_BADPAT; goto regcomp_done; }
     if ((uint64_t)instruction_count >
         (size_max - sizeof(*internal)) / sizeof(_regex_instruction_t))
-        return REG_ESPACE;
+        goto regcomp_done;
     allocation_size = sizeof(*internal) +
                       (size_t)instruction_count * sizeof(_regex_instruction_t);
     internal = (_regex_internal_t*)malloc(sizeof(*internal));
-    if (!internal) return REG_ESPACE;
+    if (!internal) goto regcomp_done;
     _regex_zero(internal, sizeof(*internal));
+    internal->locale = compile_locale;
+    compile_locale = (locale_t)0;
+    class_capacity = (uint32_t)pattern_size + 1u;
+    internal->class_capacity = class_capacity;
+    internal->class_element_capacity = class_capacity;
+    internal->class_character_capacity = class_capacity;
+    internal->pattern_size = pattern_size;
+    internal->pattern = (char*)malloc(pattern_size + 1u);
+    internal->classes = (_regex_class_t*)malloc(
+        (size_t)class_capacity * sizeof(*internal->classes));
+    internal->class_elements = (_regex_class_element_t*)malloc(
+        (size_t)class_capacity * sizeof(*internal->class_elements));
+    internal->class_characters = (uint32_t*)malloc(
+        (size_t)class_capacity * sizeof(*internal->class_characters));
     internal->instructions = (_regex_instruction_t*)malloc(
         (size_t)instruction_count * sizeof(_regex_instruction_t));
-    if (!internal->instructions) { free(internal); return REG_ESPACE; }
+    if (!internal->pattern || !internal->classes ||
+        !internal->class_elements || !internal->class_characters ||
+        !internal->instructions) {
+        goto regcomp_done;
+    }
+    for (size_t pattern_index = 0u; pattern_index < pattern_size;
+         ++pattern_index)
+        internal->pattern[pattern_index] = pattern[pattern_index];
+    internal->pattern[pattern_size] = '\0';
     _regex_zero(internal->instructions,
                 (size_t)instruction_count * sizeof(_regex_instruction_t));
     result = _regex_compile_pass(pattern, pattern_size, compile_flags,
@@ -1102,38 +1532,47 @@ static inline int regcomp(regex_t* preg, const char* pattern, int cflags) {
                                  &compiled_group_count);
     if (result != 0 || internal->instruction_count != instruction_count ||
         ((cflags & REG_NOSUB) == 0 && compiled_group_count != group_count)) {
-        free(internal->instructions);
-        free(internal);
-        return result != 0 ? result : REG_BADPAT;
+        final_result = result != 0 ? result : REG_BADPAT;
+        goto regcomp_done;
+    }
+    result = _regex_compile_class_table(internal);
+    if (result != 0) {
+        final_result = result;
+        goto regcomp_done;
     }
     internal->allocation_size = allocation_size;
     internal->group_count = (uint32_t)group_count;
     internal->cflags = cflags;
     internal->magic = _REGEX_MAGIC;
     if (!_regex_program_valid(internal)) {
-        free(internal->instructions);
-        free(internal);
-        return REG_BADPAT;
+        final_result = REG_BADPAT;
+        goto regcomp_done;
     }
     preg->_internal = internal;
     preg->re_nsub = group_count;
-    return 0;
+    internal = NULL;
+    final_result = 0;
+regcomp_done:
+    if (locale_switched) (void)uselocale(previous_locale);
+    if (internal) _regex_internal_destroy(internal);
+    if (compile_locale) freelocale(compile_locale);
+    return final_result;
 }
 
 static inline int _regex_bol(const _regex_internal_t* internal,
-                             const unsigned char* input, size_t position,
+                             const uint32_t* input, size_t position,
                              int eflags) {
     if (position == 0u && (eflags & REG_NOTBOL) == 0) return 1;
     return (internal->cflags & REG_NEWLINE) != 0 && position != 0u &&
-           input[position - 1u] == (unsigned char)'\n';
+           input[position - 1u] == (uint32_t)'\n';
 }
 
 static inline int _regex_eol(const _regex_internal_t* internal,
-                             const unsigned char* input, size_t input_size,
+                             const uint32_t* input, size_t input_size,
                              size_t position, int eflags) {
     if (position == input_size && (eflags & REG_NOTEOL) == 0) return 1;
     return (internal->cflags & REG_NEWLINE) != 0 && position < input_size &&
-           input[position] == (unsigned char)'\n';
+           input[position] == (uint32_t)'\n';
 }
 
 static inline void _regex_copy_captures(size_t* destination,
@@ -1145,7 +1584,7 @@ static inline void _regex_copy_captures(size_t* destination,
 }
 
 static inline int _regex_closure(const _regex_internal_t* internal,
-                                 const unsigned char* input,
+                                 const uint32_t* input,
                                  size_t input_size, size_t position,
                                  int eflags, size_t* states,
                                  uint32_t* state_generation,
@@ -1243,26 +1682,224 @@ static inline int _regex_closure(const _regex_internal_t* internal,
     return 1;
 }
 
+static inline int _regex_collate_sequences(
+        const _regex_internal_t* internal, const uint32_t* left,
+        size_t left_count, const uint32_t* right, size_t right_count);
+
 static inline int _regex_instruction_matches(
         const _regex_internal_t* internal,
-        const _regex_instruction_t* instruction, unsigned char value) {
+        const _regex_instruction_t* instruction, uint32_t value) {
     if (instruction->operation == _REGEX_OP_BYTE) {
-        unsigned char expected = instruction->value;
         if ((internal->cflags & REG_ICASE) != 0) {
-            expected = (unsigned char)_regex_ascii_fold((char)expected);
-            value = (unsigned char)_regex_ascii_fold((char)value);
+            return _regex_fold(instruction->value) == _regex_fold(value);
+        }
+        return (uint32_t)instruction->value == value;
+    }
+    if (instruction->operation == _REGEX_OP_CHAR) {
+        uint32_t expected = instruction->first;
+        if ((internal->cflags & REG_ICASE) != 0) {
+            expected = _regex_fold(expected);
+            value = _regex_fold(value);
         }
         return expected == value;
     }
     if (instruction->operation == _REGEX_OP_ANY)
         return (internal->cflags & REG_NEWLINE) == 0 || value != '\n';
     if (instruction->operation == _REGEX_OP_CLASS) {
-        int member = _regex_bitmap_has(instruction->bitmap, value);
-        if (instruction->value != 0u &&
-            (internal->cflags & REG_NEWLINE) != 0 && value == '\n') return 0;
-        return instruction->value != 0u ? !member : member;
+        const _regex_class_t* expression =
+            &internal->classes[instruction->first];
+        uint32_t index;
+        int member = 0;
+        if (expression->negated &&
+            (internal->cflags & REG_NEWLINE) != 0 && value == '\n')
+            return 0;
+        for (index = expression->element_begin;
+             index < expression->element_begin + expression->element_count;
+             ++index) {
+            const _regex_class_element_t* element =
+                &internal->class_elements[index];
+            if (element->kind == _REGEX_CLASS_PROPERTY) {
+                member = _regex_iswctype(value, element->descriptor) != 0;
+            } else if (element->kind == _REGEX_CLASS_RANGE) {
+                const uint32_t* first = internal->class_characters +
+                                        element->first_offset;
+                const uint32_t* second = internal->class_characters +
+                                         element->second_offset;
+                uint32_t candidate_text[2] = {value, 0u};
+                uint32_t first_text[2] = {first[0], 0u};
+                uint32_t second_text[2] = {second[0], 0u};
+                if (element->first_count != 1u ||
+                    element->second_count != 1u)
+                    return 0;
+                if ((internal->cflags & REG_ICASE) != 0) {
+                    candidate_text[0] = _regex_fold(candidate_text[0]);
+                    first_text[0] = _regex_fold(first_text[0]);
+                    second_text[0] = _regex_fold(second_text[0]);
+                }
+                member = _regex_collate(first_text, candidate_text) <= 0 &&
+                         _regex_collate(candidate_text, second_text) <= 0;
+            } else {
+                uint32_t candidate = value;
+                uint32_t expected = internal->class_characters[
+                    element->first_offset];
+                if (element->kind != _REGEX_CLASS_CHARACTER ||
+                    element->first_count != 1u)
+                    return 0;
+                if ((internal->cflags & REG_ICASE) != 0) {
+                    candidate = _regex_fold(candidate);
+                    expected = _regex_fold(expected);
+                }
+                member = candidate == expected;
+            }
+            if (member) break;
+        }
+        return expression->negated ? !member : member;
     }
     return 0;
+}
+
+static inline int _regex_collate_sequences(
+        const _regex_internal_t* internal, const uint32_t* left,
+        size_t left_count, const uint32_t* right, size_t right_count) {
+    uint32_t folded_left[_REGEX_MAX_COLLATION_CHARS + 1u];
+    uint32_t folded_right[_REGEX_MAX_COLLATION_CHARS + 1u];
+    size_t index;
+    if (!left || !right || left_count == 0u || right_count == 0u ||
+        left_count > _REGEX_MAX_COLLATION_CHARS ||
+        right_count > _REGEX_MAX_COLLATION_CHARS)
+        return 0;
+    for (index = 0u; index < left_count; ++index) {
+        if (left[index] > UINT32_C(0x10ffff)) break;
+        folded_left[index] = (internal->cflags & REG_ICASE) != 0
+            ? _regex_fold(left[index]) : left[index];
+    }
+    if (index != left_count) {
+        for (index = 0u; index < left_count && index < right_count; ++index) {
+            uint32_t left_value = (internal->cflags & REG_ICASE) != 0
+                ? _regex_fold(left[index]) : left[index];
+            uint32_t right_value = (internal->cflags & REG_ICASE) != 0
+                ? _regex_fold(right[index]) : right[index];
+            if (left_value != right_value)
+                return left_value < right_value ? -1 : 1;
+        }
+        return left_count < right_count ? -1 :
+               (left_count > right_count ? 1 : 0);
+    }
+    for (index = 0u; index < right_count; ++index) {
+        if (right[index] > UINT32_C(0x10ffff)) break;
+        folded_right[index] = (internal->cflags & REG_ICASE) != 0
+            ? _regex_fold(right[index]) : right[index];
+    }
+    if (index != right_count) {
+        for (index = 0u; index < left_count && index < right_count; ++index) {
+            uint32_t left_value = (internal->cflags & REG_ICASE) != 0
+                ? _regex_fold(left[index]) : left[index];
+            uint32_t right_value = (internal->cflags & REG_ICASE) != 0
+                ? _regex_fold(right[index]) : right[index];
+            if (left_value != right_value)
+                return left_value < right_value ? -1 : 1;
+        }
+        return left_count < right_count ? -1 :
+               (left_count > right_count ? 1 : 0);
+    }
+    folded_left[left_count] = 0u;
+    folded_right[right_count] = 0u;
+    return _regex_collate(folded_left, folded_right);
+}
+
+static inline void _regex_class_add_end(size_t ends[_REGEX_MAX_COLLATION_CHARS],
+                                        size_t* end_count, size_t end) {
+    size_t index;
+    for (index = 0u; index < *end_count; ++index)
+        if (ends[index] == end) return;
+    if (*end_count < _REGEX_MAX_COLLATION_CHARS)
+        ends[(*end_count)++] = end;
+}
+
+/* Return all input boundaries a bracket expression can consume. POSIX
+ * collating/equivalence members can span several decoded characters, so the
+ * backtracking engine explores each bounded candidate length. */
+static inline int _regex_class_match_ends(
+        const _regex_internal_t* internal,
+        const _regex_instruction_t* instruction, const uint32_t* input,
+        size_t input_size, size_t position, size_t ends[_REGEX_MAX_COLLATION_CHARS],
+        size_t* end_count, uint64_t* steps) {
+    const _regex_class_t* expression;
+    uint32_t index;
+    size_t available;
+    if (!internal || !instruction || !input || !ends || !end_count ||
+        instruction->first >= internal->class_count ||
+        position >= input_size)
+        return 0;
+    *end_count = 0u;
+    expression = &internal->classes[instruction->first];
+    available = input_size - position;
+    if (available > _REGEX_MAX_COLLATION_CHARS)
+        available = _REGEX_MAX_COLLATION_CHARS;
+    for (index = expression->element_begin;
+         index < expression->element_begin + expression->element_count;
+         ++index) {
+        const _regex_class_element_t* element =
+            &internal->class_elements[index];
+        size_t length;
+        size_t candidate_limit = available;
+        if (steps && ++*steps > _REGEX_MAX_STEPS) return -1;
+        if (element->kind == _REGEX_CLASS_PROPERTY) {
+            if (_regex_iswctype(input[position], element->descriptor))
+                _regex_class_add_end(ends, end_count, position + 1u);
+            continue;
+        }
+        if (element->kind == _REGEX_CLASS_CHARACTER) {
+            if (element->first_count == 1u &&
+                ((internal->cflags & REG_ICASE) != 0
+                    ? _regex_fold(input[position]) == _regex_fold(
+                          internal->class_characters[element->first_offset])
+                    : input[position] ==
+                          internal->class_characters[element->first_offset]))
+                _regex_class_add_end(ends, end_count, position + 1u);
+            continue;
+        }
+        if (element->kind == _REGEX_CLASS_RANGE) {
+            candidate_limit = element->first_count > element->second_count
+                ? element->first_count : element->second_count;
+            if (candidate_limit > available) candidate_limit = available;
+        }
+        for (length = 1u; length <= candidate_limit; ++length) {
+            int matches = 0;
+            if (steps && ++*steps > _REGEX_MAX_STEPS) return -1;
+            if (element->kind == _REGEX_CLASS_RANGE) {
+                const uint32_t* first = internal->class_characters +
+                                        element->first_offset;
+                const uint32_t* second = internal->class_characters +
+                                         element->second_offset;
+                matches = _regex_collate_sequences(
+                              internal, first, element->first_count,
+                              input + position, length) <= 0 &&
+                          _regex_collate_sequences(
+                              internal, input + position, length,
+                              second, element->second_count) <= 0;
+            } else if (element->kind == _REGEX_CLASS_COLLATING ||
+                       element->kind == _REGEX_CLASS_EQUIVALENCE) {
+                matches = _regex_collate_sequences(
+                    internal, input + position, length,
+                    internal->class_characters + element->first_offset,
+                    element->first_count) == 0;
+            }
+            if (matches) _regex_class_add_end(ends, end_count,
+                                               position + length);
+        }
+    }
+    if (expression->negated) {
+        int newline_excluded = (internal->cflags & REG_NEWLINE) != 0 &&
+                               input[position] == (uint32_t)'\n';
+        if (*end_count != 0u || newline_excluded) {
+            *end_count = 0u;
+            return 0;
+        }
+        ends[0] = position + 1u;
+        *end_count = 1u;
+    }
+    return (int)*end_count;
 }
 
 typedef struct {
@@ -1271,6 +1908,9 @@ typedef struct {
     size_t first_end;
     size_t saved_slot;
     size_t saved_value;
+    size_t alternative_count;
+    size_t alternative_index;
+    size_t alternatives[_REGEX_MAX_COLLATION_CHARS];
     int first_result;
     uint8_t stage;
     size_t* original;
@@ -1279,7 +1919,8 @@ typedef struct {
 
 typedef struct {
     const _regex_internal_t* internal;
-    const unsigned char* input;
+    const uint32_t* input;
+    const size_t* byte_offsets;
     size_t input_size;
     int eflags;
     size_t capture_slots;
@@ -1400,6 +2041,53 @@ static inline int _regex_backref_match(
                 }
                 continue;
             }
+            if (frame->stage == 5u) {
+                size_t index;
+                if (returned_result < 0) {
+                    returned_result = -1;
+                    returned_end = none;
+                    --frame_count;
+                } else {
+                    if (returned_result > 0 &&
+                        (frame->first_result == 0 ||
+                         returned_end > frame->first_end)) {
+                        frame->first_result = 1;
+                        frame->first_end = returned_end;
+                        for (index = 0u; index < slots; ++index)
+                            frame->first_captures[index] = captures[index];
+                    }
+                    if (++frame->alternative_index <
+                        frame->alternative_count) {
+                        for (index = 0u; index < slots; ++index)
+                            captures[index] = frame->original[index];
+                        if (frame_count >= _REGEX_MAX_BACKREF_DEPTH) {
+                            returned_result = -1;
+                            returned_end = none;
+                            --frame_count;
+                        } else {
+                            _regex_backref_frame_init(
+                                context, frame_count, frame->pc + 1u,
+                                frame->alternatives[
+                                    frame->alternative_index]);
+                            ++frame_count;
+                            returning = 0;
+                            continue;
+                        }
+                    } else {
+                        returned_result = frame->first_result;
+                        returned_end = frame->first_end;
+                        if (returned_result > 0)
+                            for (index = 0u; index < slots; ++index)
+                                captures[index] = frame->first_captures[index];
+                        --frame_count;
+                    }
+                }
+                if (frame_count == 0u) {
+                    if (returned_result > 0) *end_out = returned_end;
+                    return returned_result;
+                }
+                continue;
+            }
             returned_result = -1;
             returned_end = none;
             --frame_count;
@@ -1428,8 +2116,8 @@ static inline int _regex_backref_match(
                     returning = 1;
                     continue;
                 case _REGEX_OP_BYTE:
+                case _REGEX_OP_CHAR:
                 case _REGEX_OP_ANY:
-                case _REGEX_OP_CLASS:
                     if (frame->position >= context->input_size ||
                         !_regex_instruction_matches(
                             context->internal, instruction,
@@ -1442,6 +2130,45 @@ static inline int _regex_backref_match(
                     child_pc = frame->pc + 1u;
                     child_position = frame->position + 1u;
                     break;
+                case _REGEX_OP_CLASS: {
+                    size_t ends[_REGEX_MAX_COLLATION_CHARS];
+                    size_t end_count = 0u;
+                    int matched = _regex_class_match_ends(
+                        context->internal, instruction, context->input,
+                        context->input_size, frame->position, ends,
+                        &end_count, &context->steps);
+                    size_t index;
+                    if (matched < 0) {
+                        returned_result = -1;
+                        returned_end = none;
+                        returning = 1;
+                        continue;
+                    }
+                    if (end_count == 0u) {
+                        returned_result = 0;
+                        returned_end = none;
+                        returning = 1;
+                        continue;
+                    }
+                    if (end_count == 1u) {
+                        child_pc = frame->pc + 1u;
+                        child_position = ends[0];
+                        break;
+                    }
+                    frame->stage = 5u;
+                    frame->alternative_count = end_count;
+                    frame->alternative_index = 0u;
+                    frame->first_result = 0;
+                    frame->first_end = none;
+                    for (index = 0u; index < end_count; ++index)
+                        frame->alternatives[index] = ends[index];
+                    for (index = 0u; index < slots; ++index)
+                        frame->original[index] = captures[index];
+                    child_pc = frame->pc + 1u;
+                    child_position = ends[0];
+                    wait_stage = 5u;
+                    break;
+                }
                 case _REGEX_OP_BACKREF: {
                     size_t slot = (size_t)instruction->first * 2u;
                     size_t begin;
@@ -1456,7 +2183,8 @@ static inline int _regex_backref_match(
                     }
                     begin = captures[slot];
                     end = captures[slot + 1u];
-                    if (begin == none || end == none || end < begin) {
+                    if (begin == none || end == none || end < begin ||
+                        end > context->input_size) {
                         returned_result = 0;
                         returned_end = none;
                         returning = 1;
@@ -1464,7 +2192,9 @@ static inline int _regex_backref_match(
                     }
                     length = end - begin;
                     if (frame->position > context->input_size ||
-                        length > _REGEX_MAX_BACKREF_CAPTURE ||
+                        context->byte_offsets[end] -
+                            context->byte_offsets[begin] >
+                                _REGEX_MAX_BACKREF_CAPTURE ||
                         length > context->input_size - frame->position) {
                         returned_result = 0;
                         returned_end = none;
@@ -1472,14 +2202,12 @@ static inline int _regex_backref_match(
                         continue;
                     }
                     for (index = 0u; index < length; ++index) {
-                        unsigned char expected = context->input[begin + index];
-                        unsigned char actual =
+                        uint32_t expected = context->input[begin + index];
+                        uint32_t actual =
                             context->input[frame->position + index];
                         if ((context->internal->cflags & REG_ICASE) != 0) {
-                            expected = (unsigned char)_regex_ascii_fold(
-                                (char)expected);
-                            actual = (unsigned char)_regex_ascii_fold(
-                                (char)actual);
+                            expected = _regex_fold(expected);
+                            actual = _regex_fold(actual);
                         }
                         if (expected != actual) break;
                     }
@@ -1572,8 +2300,12 @@ static inline int regexec(const regex_t* preg, const char* string,
     const int known_flags = REG_NOTBOL | REG_NOTEOL | REG_STARTEND;
     const size_t none = (size_t)-1;
     const _regex_internal_t* internal;
-    const unsigned char* input;
-    size_t region_begin = 0u, region_end = 0u, input_size;
+    const unsigned char* input_bytes = NULL;
+    uint32_t* input = NULL;
+    size_t* byte_offsets = NULL;
+    locale_t previous_locale = (locale_t)0;
+    size_t region_begin = 0u, region_end = 0u;
+    size_t input_byte_size = 0u, input_size = 0u;
     size_t *active = NULL, *next = NULL, *queue = NULL;
     uint32_t *active_generation = NULL, *next_generation = NULL;
     uint32_t *active_indices = NULL, *next_indices = NULL;
@@ -1590,6 +2322,7 @@ static inline int regexec(const regex_t* preg, const char* string,
     uint32_t state_epoch = 2u, queue_epoch = 0u;
     size_t capture_slots;
     int has_backref = 0;
+    int locale_switched = 0;
     int result = REG_NOMATCH;
     if (!preg || !preg->_internal || !string) return REG_INVARG;
     if ((eflags & ~known_flags) != 0) return REG_INVARG;
@@ -1608,15 +2341,42 @@ static inline int regexec(const regex_t* preg, const char* string,
         begin_address = base + (uintptr_t)region_begin;
         end_address = base + (uintptr_t)region_end;
         if (begin_address > end_address) return REG_INVARG;
-        input = (const unsigned char*)(const void*)begin_address;
-        input_size = region_end - region_begin;
+        input_bytes = (const unsigned char*)(const void*)begin_address;
+        input_byte_size = region_end - region_begin;
     } else {
-        input = (const unsigned char*)(const void*)string;
-        while (region_end < _REGEX_MAX_INPUT && input[region_end] != 0u)
+        input_bytes = (const unsigned char*)(const void*)string;
+        while (region_end < _REGEX_MAX_INPUT &&
+               input_bytes[region_end] != 0u)
             ++region_end;
-        if (region_end == _REGEX_MAX_INPUT && input[region_end] != 0u)
+        if (region_end == _REGEX_MAX_INPUT &&
+            input_bytes[region_end] != 0u)
             return REG_ESPACE;
-        input_size = region_end;
+        input_byte_size = region_end;
+    }
+    previous_locale = uselocale(internal->locale);
+    if (!previous_locale) return REG_ESPACE;
+    locale_switched = 1;
+    input = (uint32_t*)malloc((input_byte_size + 1u) * sizeof(*input));
+    byte_offsets = (size_t*)malloc(
+        (input_byte_size + 1u) * sizeof(*byte_offsets));
+    if (!input || !byte_offsets) {
+        result = REG_ESPACE;
+        goto regex_exec_done;
+    }
+    {
+        size_t byte_position = 0u;
+        while (byte_position < input_byte_size) {
+            size_t character_width;
+            if (!_regex_decode_one((const char*)input_bytes + byte_position,
+                    input_byte_size - byte_position, &input[input_size],
+                    &character_width) || character_width == 0u) {
+                result = REG_ESPACE;
+                goto regex_exec_done;
+            }
+            byte_offsets[input_size++] = byte_position;
+            byte_position += character_width;
+        }
+        byte_offsets[input_size] = input_byte_size;
     }
     count = internal->instruction_count;
     for (position = 0u; position < (size_t)count; ++position) {
@@ -1625,6 +2385,7 @@ static inline int regexec(const regex_t* preg, const char* string,
             break;
         }
     }
+    if (internal->has_variable_class) has_backref = 1;
     capture_slots = (size_t)internal->group_count * 2u;
     active = (size_t*)malloc((size_t)count * sizeof(*active));
     next = (size_t*)malloc((size_t)count * sizeof(*next));
@@ -1712,6 +2473,7 @@ static inline int regexec(const regex_t* preg, const char* string,
         size_t candidate_end = none;
         context.internal = internal;
         context.input = input;
+        context.byte_offsets = byte_offsets;
         context.input_size = input_size;
         context.eflags = eflags;
         context.capture_slots = capture_slots;
@@ -1741,17 +2503,21 @@ static inline int regexec(const regex_t* preg, const char* string,
         if (best_begin != none) {
             if ((internal->cflags & REG_NOSUB) == 0 && pmatch && nmatch != 0u) {
                 size_t index;
-                pmatch[0].rm_so = (regoff_t)(region_begin + best_begin);
-                pmatch[0].rm_eo = (regoff_t)(region_begin + best_end);
+                pmatch[0].rm_so = (regoff_t)(
+                    region_begin + byte_offsets[best_begin]);
+                pmatch[0].rm_eo = (regoff_t)(
+                    region_begin + byte_offsets[best_end]);
                 for (index = 1u; index < nmatch; ++index) {
                     size_t slot = (index - 1u) * 2u;
                     if (index <= internal->group_count &&
                         best_captures[slot] != none &&
                         best_captures[slot + 1u] != none) {
                         pmatch[index].rm_so =
-                            (regoff_t)(region_begin + best_captures[slot]);
+                            (regoff_t)(region_begin +
+                                byte_offsets[best_captures[slot]]);
                         pmatch[index].rm_eo =
-                            (regoff_t)(region_begin + best_captures[slot + 1u]);
+                            (regoff_t)(region_begin +
+                                byte_offsets[best_captures[slot + 1u]]);
                     } else {
                         pmatch[index].rm_so = (regoff_t)-1;
                         pmatch[index].rm_eo = (regoff_t)-1;
@@ -1897,17 +2663,21 @@ static inline int regexec(const regex_t* preg, const char* string,
     if (best_begin != none) {
         if ((internal->cflags & REG_NOSUB) == 0 && pmatch && nmatch != 0u) {
             size_t index;
-            pmatch[0].rm_so = (regoff_t)(region_begin + best_begin);
-            pmatch[0].rm_eo = (regoff_t)(region_begin + best_end);
+            pmatch[0].rm_so = (regoff_t)(
+                region_begin + byte_offsets[best_begin]);
+            pmatch[0].rm_eo = (regoff_t)(
+                region_begin + byte_offsets[best_end]);
             for (index = 1u; index < nmatch; ++index) {
                 size_t slot = (index - 1u) * 2u;
                 if (index <= internal->group_count &&
                     best_captures[slot] != none &&
                     best_captures[slot + 1u] != none) {
                     pmatch[index].rm_so =
-                        (regoff_t)(region_begin + best_captures[slot]);
+                        (regoff_t)(region_begin +
+                            byte_offsets[best_captures[slot]]);
                     pmatch[index].rm_eo =
-                        (regoff_t)(region_begin + best_captures[slot + 1u]);
+                        (regoff_t)(region_begin +
+                            byte_offsets[best_captures[slot + 1u]]);
                 } else {
                     pmatch[index].rm_so = (regoff_t)-1;
                     pmatch[index].rm_eo = (regoff_t)-1;
@@ -1917,6 +2687,8 @@ static inline int regexec(const regex_t* preg, const char* string,
         result = 0;
     }
 regex_exec_done:
+    free(byte_offsets);
+    free(input);
     free(backref_frames);
     free(backref_snapshots);
     free(queued_generation);
@@ -1930,6 +2702,7 @@ regex_exec_done:
     free(active_captures);
     free(next);
     free(active);
+    if (locale_switched) (void)uselocale(previous_locale);
     return result;
 }
 
@@ -1938,9 +2711,7 @@ static inline void regfree(regex_t* preg) {
         _regex_internal_t* internal = (_regex_internal_t*)preg->_internal;
         if (internal && internal->magic == _REGEX_MAGIC) {
             internal->magic = 0u;
-            free(internal->instructions);
-            internal->instructions = NULL;
-            free(internal);
+            _regex_internal_destroy(internal);
         }
         preg->_internal = NULL;
         preg->re_nsub = 0u;
