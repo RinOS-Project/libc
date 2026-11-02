@@ -5,13 +5,17 @@
 #include "errno.h"
 #include "net/if.h"
 #include "netinet/in.h"
+#include "stdint.h"
 #include "stdlib.h"
 #include "string.h"
+#include "rin/net/netdev_link.h"
 #include "rin_net_interface_snapshot.h"
 
 #define RIN_IFADDRS_MAX_ENTRIES \
     (RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V2 * \
-     (RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES_V3 + 1u))
+     (RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES_V3 + 2u))
+
+#define RIN_IFADDRS_ARPHRD_ETHER UINT16_C(1)
 
 typedef struct RinIfaddrsStorage {
     struct ifaddrs entries[RIN_IFADDRS_MAX_ENTRIES];
@@ -24,7 +28,34 @@ typedef struct RinIfaddrsStorage {
                                   [RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES_V3];
     struct sockaddr_in6 netmasks6[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V3]
                                   [RIN_NET_IFADDRS_SNAPSHOT_MAX_IPV6_ADDRESSES_V3];
+    struct sockaddr_ll
+        link_addresses[RIN_NET_IFADDRS_SNAPSHOT_MAX_INTERFACES_V3];
 } RinIfaddrsStorage;
+
+static int rin_ifaddrs_has_link_address(const uint8_t address[6])
+{
+    uint8_t any = 0u;
+    unsigned int index;
+    for (index = 0u; index < 6u; ++index) any |= address[index];
+    return any != 0u;
+}
+
+static int rin_ifaddrs_link_hardware_type(
+    const RinNetIfaddrsInterfaceV3* interface, uint16_t* hardware_type)
+{
+    if (interface == NULL || hardware_type == NULL ||
+        ((interface->flags & RIN_NET_IFADDRS_V2_FLAG_TYPE_KNOWN) != 0u &&
+         interface->interface_type == RIN_NET_IFADDRS_V2_INTERFACE_LOOPBACK))
+        return 0;
+    switch (interface->link_type) {
+    case RIN_NET_LINK_TYPE_ETHERNET:
+    case RIN_NET_LINK_TYPE_WIFI:
+        *hardware_type = RIN_IFADDRS_ARPHRD_ETHER;
+        return 1;
+    default:
+        return 0;
+    }
+}
 
 static unsigned int rin_ifaddrs_interface_flags(
     const RinNetIfaddrsInterfaceV3* interface)
@@ -190,6 +221,30 @@ int getifaddrs(struct ifaddrs** ifap)
                 netmask, rin_net_ifaddrs_interface_v3_prefix_length(
                     source, address_index));
             ++interface_entries;
+        }
+        {
+            uint16_t hardware_type = 0u;
+            if (rin_ifaddrs_link_hardware_type(source, &hardware_type) &&
+                addresses->interface_id != 0u &&
+                rin_ifaddrs_has_link_address(addresses->mac)) {
+                if (addresses->interface_id > (uint64_t)INT32_MAX) {
+                    free(storage);
+                    errno = EOVERFLOW;
+                    return -1;
+                }
+                struct ifaddrs* entry = &storage->entries[count++];
+                struct sockaddr_ll* address =
+                    &storage->link_addresses[interface_index];
+                entry->ifa_name = storage->names[interface_index];
+                entry->ifa_flags = flags;
+                entry->ifa_addr = (struct sockaddr*)address;
+                address->sll_family = AF_PACKET;
+                address->sll_ifindex = (int32_t)addresses->interface_id;
+                address->sll_hatype = hardware_type;
+                address->sll_halen = 6u;
+                memcpy(address->sll_addr, addresses->mac, 6u);
+                ++interface_entries;
+            }
         }
         if (interface_entries == 0u) {
             struct ifaddrs* entry = &storage->entries[count++];
