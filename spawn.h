@@ -392,7 +392,7 @@ static inline int _rin_posix_spawn_action_is_valid(
             return EINVAL;
         error = _rin_posix_spawn_bounded_path_length(
             action->path, &path_length);
-        if (error != 0 || path_length == 0u ||
+        if (error != 0 ||
             !_rin_posix_spawn_action_tail_is_zero(action, path_length))
             return EINVAL;
         return 0;
@@ -472,8 +472,6 @@ _RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addopen(posix_spawn_fil
     error = _rin_posix_spawn_bounded_path_length(path, &path_length);
     if (error != 0)
         return error;
-    if (path_length == 0u)
-        return EINVAL;
     error = _rin_posix_spawn_reserve_action(actions, &action);
     if (error != 0)
         return error;
