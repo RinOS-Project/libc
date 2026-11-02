@@ -23,7 +23,11 @@ static inline pid_t rin_child_fork_pidfd(int* pidfd_out) {
 static inline int rin_child_pidfd_wait_status(int pidfd, int* status_out) {
     siginfo_t information = {0};
     int status;
-    if (pidfd < 0 || status_out == NULL) {
+    if (pidfd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    if (status_out == NULL) {
         errno = EINVAL;
         return -1;
     }
