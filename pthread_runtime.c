@@ -159,22 +159,6 @@ static void rin_pthread_mutex_robust_owner_release(pthread_mutex_t* mutex,
                   NULL, 0);
 }
 
-/* True when the absolute deadline has already passed on clock_id. Timed
- * waits re-check this after a wakeup whose scheduling may have crossed
- * the deadline (the EINTR/resume race): without the check, a mutex
- * released only after the deadline turns into a successful
- * post-deadline acquire. A clock read failure cannot prove expiry, so
- * it preserves the historical retry behavior. */
-static int rin_pthread_mutex_abs_deadline_expired(
-    clockid_t clock_id, const struct timespec* abstime) {
-    struct timespec now;
-    if (!abstime) return 0;
-    if (clock_gettime(clock_id, &now) != 0) return 0;
-    return now.tv_sec > abstime->tv_sec ||
-           (now.tv_sec == abstime->tv_sec &&
-            now.tv_nsec >= abstime->tv_nsec);
-}
-
 static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                                         pthread_t owner, int type,
                                         int try_only,
@@ -240,14 +224,6 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
         }
         {
             long wait_result;
-            /* A negative absolute clock deadline is already expired. Retry
-             * the atomic acquisition check once before returning timeout,
-             * and never pass an invalid absolute time to the futex ABI. */
-            if (abstime && clock_id == CLOCK_MONOTONIC &&
-                abstime->tv_sec < 0) {
-                timed_out = 1;
-                continue;
-            }
             if (abstime) {
                 wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
                     &mutex->locked,
@@ -270,15 +246,34 @@ static int rin_pthread_mutex_robust_lock(pthread_mutex_t* mutex,
                 timed_out = 1;
                 continue;
             }
-            if (abstime && (wait_error == 0 || wait_error == EINTR) &&
-                rin_pthread_mutex_abs_deadline_expired(clock_id,
-                                                       abstime)) {
-                /* Resumed (EINTR/spurious wake) past the deadline: same
-                 * single acquisition retry as an ETIMEDOUT wake. */
-                timed_out = 1;
+            if (abstime && (wait_error == 0 || wait_error == EINTR)) {
+                /* Re-enter the checked-copy futex with the same expected
+                 * state before retrying acquisition. It waits if the state
+                 * is unchanged, returns EAGAIN if it changed before the
+                 * deadline, and returns ETIMEDOUT if scheduling crossed the
+                 * deadline. */
+                do {
+                    wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
+                        &mutex->locked,
+                        rin_pthread_mutex_futex_operation(
+                            mutex, FUTEX_WAIT_BITSET |
+                                (clock_id == CLOCK_REALTIME
+                                     ? FUTEX_CLOCK_REALTIME : 0)),
+                        (int)state, abstime, FUTEX_BITSET_MATCH_ANY);
+                    wait_error = rin_pthread_futex_wait_error(
+                        wait_result, errno);
+                } while (wait_error == 0 || wait_error == EINTR);
+                if (wait_error == ETIMEDOUT) {
+                    timed_out = 1;
+                    continue;
+                }
+                if (wait_error != EAGAIN) {
+                    rin_pthread_mutex_robust_owner_release(mutex, owner);
+                    return wait_error != 0 ? wait_error : EIO;
+                }
                 continue;
             }
-            if (wait_error == EINTR) continue;
+            if (wait_error == EINTR || wait_error == EAGAIN) continue;
             if (wait_error != 0) {
                 rin_pthread_mutex_robust_owner_release(mutex, owner);
                 return wait_error;
@@ -1219,9 +1214,6 @@ static int rin_pthread_mutex_timedlock_impl(
     if (!mutex || !abstime) return EINVAL;
     if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
         return EINVAL;
-    if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
-        return EINVAL;
-
     pthread_t self = _RIN_PTHREAD_RUNTIME_SELF();
     pthread_t owner = rin_pthread_mutex_owner_token(mutex, self);
     int type = rin_pthread_mutex_type(mutex);
@@ -1250,14 +1242,6 @@ static int rin_pthread_mutex_timedlock_impl(
             if (c != 2)
                 c = __atomic_exchange_n(&mutex->locked, 2, __ATOMIC_ACQUIRE);
             while (c != 0) {
-                if (clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
-                    int unlocked = 0;
-                    if (__atomic_compare_exchange_n(
-                            &mutex->locked, &unlocked, 2, 0,
-                            __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
-                        break;
-                    return ETIMEDOUT;
-                }
                 long wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
                     &mutex->locked,
                     rin_pthread_mutex_futex_operation(
@@ -1267,11 +1251,24 @@ static int rin_pthread_mutex_timedlock_impl(
                     2, abstime, FUTEX_BITSET_MATCH_ANY);
                 int wait_error = rin_pthread_futex_wait_error(wait_result,
                                                                errno);
-                if ((wait_error == 0 || wait_error == EINTR) &&
-                    rin_pthread_mutex_abs_deadline_expired(clock_id,
-                                                           abstime))
-                    return ETIMEDOUT;
-                if (wait_error == EINTR) {
+                if (wait_error == 0 || wait_error == EINTR) {
+                    /* Recheck the deadline in the kernel before trying to
+                     * acquire after a wake. A changed futex word yields
+                     * EAGAIN while an expired deadline yields ETIMEDOUT. */
+                    do {
+                        wait_result = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
+                            &mutex->locked,
+                            rin_pthread_mutex_futex_operation(
+                                mutex, FUTEX_WAIT_BITSET |
+                                    (clock_id == CLOCK_REALTIME
+                                         ? FUTEX_CLOCK_REALTIME : 0)),
+                            2, abstime, FUTEX_BITSET_MATCH_ANY);
+                        wait_error = rin_pthread_futex_wait_error(
+                            wait_result, errno);
+                    } while (wait_error == 0 || wait_error == EINTR);
+                    if (wait_error == ETIMEDOUT) return ETIMEDOUT;
+                    if (wait_error != EAGAIN)
+                        return wait_error != 0 ? wait_error : EIO;
                     c = __atomic_exchange_n(&mutex->locked, 2,
                                             __ATOMIC_ACQUIRE);
                     continue;
@@ -1586,8 +1583,6 @@ static int rin_pthread_cond_timedwait_impl(
 
     if (!cond || !mutex || !abstime) return EINVAL;
     pthread_testcancel();
-    if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
-        return EINVAL;
     if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
         return EINVAL;
 
@@ -1605,12 +1600,6 @@ static int rin_pthread_cond_timedwait_impl(
     if (result == 0) cancel_wait_registered = 1;
     while (result == 0 &&
            __atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-        /* FUTEX_WAIT_BITSET rejects negative monotonic deadlines as EINVAL,
-         * but an absolute deadline before monotonic time zero has expired. */
-        if (clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
-            result = ETIMEDOUT;
-            break;
-        }
         int operation = FUTEX_WAIT_BITSET |
             (clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
         long ret = _RIN_PTHREAD_RUNTIME_FUTEX_BITSET(
@@ -1973,9 +1962,7 @@ static int rin_pthread_rwlock_timedlock_impl(
     int acquired = 0;
     int waiter_registered = 0;
     RinPthreadRwlockWaitCleanup cleanup;
-    if (!rwlock || !abstime || abstime->tv_nsec < 0 ||
-        abstime->tv_nsec >= 1000000000L)
-        return EINVAL;
+    if (!rwlock || !abstime) return EINVAL;
 
     if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
         return EINVAL;
