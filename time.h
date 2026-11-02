@@ -1458,7 +1458,7 @@ static inline int timer_create(clockid_t clock_id,
 static inline int timer_settime(timer_t timer_id, int flags,
                                 const struct itimerspec* value,
                                 struct itimerspec* old_value) {
-    RinTimerSpecV1 request;
+    RinTimerSetSpecV2 request;
 #if !defined(RIN_TIME_TIMER_SETTIME_DEFAULT_HOOK)
     RinTimerSpecV1 previous = {0};
     struct itimerspec converted;
@@ -1485,11 +1485,32 @@ static inline int timer_settime(timer_t timer_id, int flags,
         return -1;
     effective_value = &value_snapshot;
 #endif
-    error = _rin_time_timer_value_to_ns(
-        &effective_value->it_value, flags, &value_ns);
-    if (error != 0) {
-        errno = error;
-        return -1;
+    value_ns = 0u;
+    request.absolute_value_sec = 0;
+    request.absolute_value_nsec = 0;
+    if ((flags & TIMER_ABSTIME) != 0) {
+        int64_t absolute_seconds =
+            (int64_t)effective_value->it_value.tv_sec;
+        int64_t absolute_nanoseconds =
+            (int64_t)effective_value->it_value.tv_nsec;
+        if ((time_t)absolute_seconds != effective_value->it_value.tv_sec) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        if (absolute_nanoseconds < 0 ||
+            absolute_nanoseconds >= INT64_C(1000000000)) {
+            errno = EINVAL;
+            return -1;
+        }
+        request.absolute_value_sec = absolute_seconds;
+        request.absolute_value_nsec = absolute_nanoseconds;
+    } else {
+        error = _rin_time_timespec_to_ns(&effective_value->it_value,
+                                         &value_ns);
+        if (error != 0) {
+            errno = error;
+            return -1;
+        }
     }
     error = _rin_time_timespec_to_ns(&effective_value->it_interval,
                                      &interval_ns);
@@ -1498,12 +1519,11 @@ static inline int timer_settime(timer_t timer_id, int flags,
         return -1;
     }
     request.struct_size = (uint32_t)sizeof(request);
-    request.version = (uint16_t)RIN_TIMER_ABI_VERSION;
+    request.version = (uint16_t)RIN_TIMER_SET_ABI_VERSION;
     request.flags = 0u;
     request.value_ns = value_ns;
     request.interval_ns = interval_ns;
     request.reserved0 = 0u;
-    request.reserved1 = 0u;
 #if defined(RIN_TIME_TARGET_FUNCTIONS)
 #if defined(RIN_TIME_TIMER_SETTIME_DEFAULT_HOOK)
     result = _rin_time_result(_RIN_TIME_TIMER_SETTIME(
