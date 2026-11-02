@@ -235,7 +235,6 @@ struct io_uring_restriction {
 #define IORING_FSYNC_DATASYNC             (1U << 0)
 #define IORING_CQE_F_MORE                 (1U << 1)
 #define IORING_CQE_F_BUFFER               (1U << 0)
-#define IORING_CQE_F_MSG                  (1U << 5)
 #define IORING_MSG_DATA                   0U
 #define IORING_MSG_RING_CQE_SKIP          (1U << 0)
 
