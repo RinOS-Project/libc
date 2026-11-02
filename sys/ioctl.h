@@ -21,6 +21,7 @@
 #include "types.h"
 #include "../stdarg.h"
 #include "../errno.h"
+#include "../fcntl.h"
 #include "socket.h"
 #include "syscall.h"
 #include <rin/tty/abi.h>
@@ -255,9 +256,28 @@ static inline int _rin_ioctl_result_status_zero(intptr_t raw_result) {
     return 0;
 }
 
+/* FIOGETOWN and SIOCGPGRP return a process or process-group identifier as
+ * their ioctl result. Query F_GETOWN_EX so negative process-group IDs never
+ * collide with the syscall ABI's negative errno values. */
+static inline int _rin_ioctl_get_owner_result(int fd) {
+    struct f_owner_ex owner = {0};
+    intptr_t raw_result = _RIN_IOCTL_SYSCALL3(
+        SYS_FCNTL, (uintptr_t)fd, (uintptr_t)F_GETOWN_EX,
+        (uintptr_t)&owner);
+    if (_rin_ioctl_result_status_zero(raw_result) != 0) return -1;
+    if (owner.type == F_OWNER_PGRP && owner.pid > 0)
+        return -owner.pid;
+    if ((owner.type == F_OWNER_TID || owner.type == F_OWNER_PID) &&
+        owner.pid >= 0)
+        return owner.pid;
+    errno = EIO;
+    return -1;
+}
+
 /*
- * ioctl 実装: すべて kernel SYS_IOCTL に委譲する。
- * userspace 側の no-op/スタブは禁止 (feedback_no_stubs.md)。
+ * ioctl実装はkernel SYS_IOCTLへ委譲する。FIOGETOWN／SIOCGPGRPは
+ * F_GETOWN_EX経由で所有者IDを取得し、値とerrnoを区別して返す。
+ * userspace側のno-op/スタブは禁止 (feedback_no_stubs.md)。
  * kernel 側 (platform_bare64.c case 49) が以下を処理する:
  *   FIONREAD   : socket / pipe → 残量を *arg に書き戻す。その他は ENOTTY。
  *   FIONBIO    : socket → SO_NONBLOCK、pipe → pipe_set_nonblock、
@@ -356,6 +376,9 @@ static inline int ioctl(int fd, unsigned long request, ...) {
     intptr_t raw_result;
     _rin_ioctl_argument_kind argument_kind =
         _rin_ioctl_get_argument_kind(request);
+
+    if (request == FIOGETOWN || request == SIOCGPGRP)
+        return _rin_ioctl_get_owner_result(fd);
 
     if (argument_kind != _RIN_IOCTL_ARGUMENT_NONE) {
         va_start(ap, request);
