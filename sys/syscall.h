@@ -82,9 +82,11 @@ typedef struct rin_thread_stack_info_v1 {
 #error "RIN_HOST_LINUX_FUTEX_TEST requires a Linux host"
 #elif defined(__x86_64__)
 #define RIN_HOST_LINUX_SYS_FUTEX       202u
+#define RIN_HOST_LINUX_SYS_FUTEX_WAITV 449u
 #define RIN_HOST_LINUX_SYS_SCHED_YIELD 24u
 #elif defined(__i386__)
 #define RIN_HOST_LINUX_SYS_FUTEX       240u
+#define RIN_HOST_LINUX_SYS_FUTEX_WAITV 449u
 #define RIN_HOST_LINUX_SYS_SCHED_YIELD 158u
 #else
 #error "RIN_HOST_LINUX_FUTEX_TEST supports only x86 Linux targets"
@@ -173,6 +175,7 @@ typedef struct rin_thread_stack_info_v1 {
 #if defined(RIN_HOST_LINUX_FUTEX_TEST)
 #define SYS_sched_yield     RIN_HOST_LINUX_SYS_SCHED_YIELD
 #define SYS_futex           RIN_HOST_LINUX_SYS_FUTEX
+#define SYS_futex_waitv     RIN_HOST_LINUX_SYS_FUTEX_WAITV
 #else
 #define SYS_sched_yield     SYS_SCHED_YIELD
 #if defined(RIN_TIME_BITS) && RIN_TIME_BITS == 32
@@ -180,6 +183,7 @@ typedef struct rin_thread_stack_info_v1 {
 #else
 #define SYS_futex           RIN_SYS_FUTEX_TIME64
 #endif
+#define SYS_futex_waitv     RIN_SYS_FUTEX_WAITV
 #endif
 #define SYS_clone           SYS_CLONE
 #define SYS_getcpu          SYS_GETCPU
@@ -251,9 +255,11 @@ typedef struct rin_thread_stack_info_v1 {
 #if defined(RIN_HOST_LINUX_FUTEX_TEST)
 #define __NR_futex          RIN_HOST_LINUX_SYS_FUTEX
 #define __NR_sched_yield    RIN_HOST_LINUX_SYS_SCHED_YIELD
+#define __NR_futex_waitv    RIN_HOST_LINUX_SYS_FUTEX_WAITV
 #else
 #define __NR_futex          SYS_futex
 #define __NR_sched_yield    SYS_SCHED_YIELD
+#define __NR_futex_waitv    SYS_futex_waitv
 #endif
 #define __NR_clone          SYS_CLONE
 #define __NR_getcpu         SYS_GETCPU

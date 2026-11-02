@@ -339,6 +339,7 @@
 #define LINUX_NR_io_uring_enter    426
 #define LINUX_NR_io_uring_register 427
 #define LINUX_NR_clone3            435
+#define LINUX_NR_futex_waitv       449
 
 #if defined(__x86_64__) && defined(__SIZEOF_POINTER__) && \
     __SIZEOF_POINTER__ == 8

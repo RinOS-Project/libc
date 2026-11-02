@@ -54,6 +54,8 @@ _Static_assert(sizeof(struct epoll_event) == 12u,
 #define EPOLLWRBAND   0x00000200u
 #define EPOLLMSG      0x00000400u
 #define EPOLLRDHUP    0x00002000u
+#define EPOLLWAKEUP   0x20000000u
+#define EPOLLEXCLUSIVE 0x10000000u
 #define EPOLLONESHOT  0x40000000u
 #define EPOLLET       0x80000000u
 

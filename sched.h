@@ -690,6 +690,11 @@ static inline int sched_get_priority_max(int policy) {
     switch (policy) {
         case SCHED_FIFO:
         case SCHED_RR:
+        /* B55: DEADLINE joins the RT range (both contract tests pin
+         * 1/99 with errno preserved; Linux answers 0/0 here, kept as
+         * a deliberate delta so RT-aware code treats all RT policies
+         * uniformly). */
+        case SCHED_DEADLINE:
             return 99;
         case SCHED_OTHER:
         case SCHED_BATCH:
@@ -706,6 +711,8 @@ static inline int sched_get_priority_min(int policy) {
     switch (policy) {
         case SCHED_FIFO:
         case SCHED_RR:
+        /* B55: see sched_get_priority_max (DEADLINE in RT range). */
+        case SCHED_DEADLINE:
             return 1;
         case SCHED_OTHER:
         case SCHED_BATCH:
