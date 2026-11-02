@@ -338,7 +338,6 @@ int setenv(const char* name, const char* value, int overwrite) {
         }
         matches = environment_matching_count(snapshot, count, name);
         if (matches != 0u && !overwrite) {
-            environment_reclaim_current();
             environment_unlock();
             return 0;
         }
@@ -400,7 +399,6 @@ int unsetenv(const char* name) {
         }
         matches = environment_matching_count(snapshot, count, name);
         if (matches == 0u) {
-            environment_reclaim_current();
             environment_unlock();
             return 0;
         }
