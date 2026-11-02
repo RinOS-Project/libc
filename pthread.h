@@ -27,7 +27,7 @@
  * both headers use the conventional `_PTHREAD_H` include guard. */
 #define RIN_LIBC_PTHREAD_HEADER 1
 #if defined(RIN_FREESTANDING) && \
-    (!defined(RIN_USERSPACE))
+    (!defined(RIN_USERSPACE) || defined(__i386__) || defined(_M_IX86))
 #define RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED 1
 #endif
 #if defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
