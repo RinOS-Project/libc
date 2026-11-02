@@ -1,4 +1,5 @@
 # libc TODO
+- [ ] **LIBC-PTHREAD-PROCESS-SHARED-IA32-01 / P2 / M** — **source確認 (2026-11-02):** IA-32 freestandingでは `RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED` によりmutex／condition variable／rwlock／barrier／spinlockのprocess-shared設定が `ENOTSUP` になる。kernel futexには共有mappingを物理word keyで結ぶ経路がある一方、libcの32-bit mutex owner tokenはPIDとTIDを32-bitへXOR圧縮しており、衝突し得るためmacroを外すだけでは安全でない。**受入:** pthread object ABIを保ちながらgeneration付きで衝突しないowner identityとrobust owner登録を実現し、別process・別virtual mapping間でmutex／condition variable／rwlock／barrier／spinlock、owner exit・PID再利用を検証する。IA-32のfeature macroと`sysconf()` capabilityも実装に合わせる。未実装のためunchecked。
 
 - [ ] **LIBC-HOSTED-WINDOWS-SYSCALL-FRONTEND-01 / P1 / M** — hosted Windowsでは`unistd.h`と`sys/mman.h`がhost CRTへ委譲されず、`_syscall*`経由のRinOS syscall IDを使う。Windows向けbackendがないため、`setuid`／job control／`fsync`／`mmap`／`mprotect`／`clock_gettime`等を直接呼ぶconsumerはWindows syscall ABIと一致しない。POSIX capabilityは未対応へ修正したが、API自体のproviderは未実装。**受入:** Windows providerを実装するか各headerを利用可能なhost APIへ委譲し、hosted C/C++実行からRinOS syscall selectorが発行されないことを確認する。`_POSIX_*` macroと`sysconf()`をproviderの実装範囲へ合わせ、RinOS freestanding IA-32／x86_64のsyscall ABIを維持する。
 
