@@ -123,7 +123,9 @@ int shm_open(const char* name, int oflag, mode_t mode) {
         return -1;
     }
     if (rin_shm_name_path(name, path) != 0) return -1;
-    return openat(AT_FDCWD, path, oflag | O_CLOEXEC, mode);
+    /* A shared-memory name identifies one object; it must not alias a path
+     * outside the namespace through a final symlink in /dev/shm. */
+    return openat(AT_FDCWD, path, oflag | O_CLOEXEC | O_NOFOLLOW, mode);
 }
 
 int shm_unlink(const char* name) {
