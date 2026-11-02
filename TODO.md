@@ -1,5 +1,7 @@
 # libc TODO
 
+- [ ] **LIBC-PTHREAD-STACKADDR-LEGACY-API-01 / P3 / S** — `pthread_attr_setstack()`／`pthread_attr_getstack()`は実装済みだが、POSIX互換の旧`pthread_attr_setstackaddr()`／`pthread_attr_getstackaddr()`がなく、`_POSIX_THREAD_ATTR_STACKADDR`も未公開で、`sysconf(_SC_THREAD_ATTR_STACKADDR)`は未対応を返す。**受入:** 旧APIを既存stack属性へ正しく対応付け、stack sizeとaddressのgetter/setter間で値・エラーが一貫することを確認し、compile-time macroと`sysconf()`のcapabilityを実装状態に一致させる。
+
 - [ ] **LIBC-PTHREAD-PRIO-PROTECT-01 / P2 / M** — `PTHREAD_PRIO_PROTECT`は定義済みだが、`pthread_mutexattr_setprotocol()`は常に`ENOTSUP`を返し、mutex属性／mutex本体のpriority-ceiling取得・設定APIもない。**受入:** ceiling値の設定・範囲検証と、mutex取得時の優先度昇格および解放時の復元をスケジューラの所有権・待機処理へ統合し、priority inheritance、timeout、cancel、異常終了との相互作用を確認する。
 
 - [ ] **LIBC-FERAISEEXCEPT-TRAP-DELIVERY-01 / P2 / M** — `feraiseexcept()`はx87 statusとMXCSRのsticky bitを直接書き換えるため、対応例外のtrapがunmaskedでも`#MF`／`#XM`を発生させず、フラグ設定だけで成功を返す。WG14の規定はenabled trapも取る意図を示す。**受入:** 対象例外を実際に発生させるx87／SSE操作を安全に選び、overflow／underflow時の追加`FE_INEXACT`や複数例外の順序を含むC実装契約を定義する。x86／x86_64でunmasked trapが`SIGFPE`として配送され、masked時のflag union、既存フラグ、rounding mode、`feraiseexcept()`の戻り値を保つことをruntime確認する。
