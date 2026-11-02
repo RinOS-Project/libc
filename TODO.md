@@ -1,5 +1,7 @@
 # libc TODO
 
+- [ ] **LIBC-HOSTED-WINDOWS-SYSCALL-FRONTEND-01 / P1 / M** — hosted Windowsでは`unistd.h`と`sys/mman.h`がhost CRTへ委譲されず、`_syscall*`経由のRinOS syscall IDを使う。Windows向けbackendがないため、`setuid`／job control／`fsync`／`mmap`／`mprotect`／`clock_gettime`等を直接呼ぶconsumerはWindows syscall ABIと一致しない。POSIX capabilityは未対応へ修正したが、API自体のproviderは未実装。**受入:** Windows providerを実装するか各headerを利用可能なhost APIへ委譲し、hosted C/C++実行からRinOS syscall selectorが発行されないことを確認する。`_POSIX_*` macroと`sysconf()`をproviderの実装範囲へ合わせ、RinOS freestanding IA-32／x86_64のsyscall ABIを維持する。
+
 - [ ] **LIBC-PTHREAD-STACKADDR-LEGACY-API-01 / P3 / S** — `pthread_attr_setstack()`／`pthread_attr_getstack()`は実装済みだが、POSIX互換の旧`pthread_attr_setstackaddr()`／`pthread_attr_getstackaddr()`がなく、`_POSIX_THREAD_ATTR_STACKADDR`も未公開で、`sysconf(_SC_THREAD_ATTR_STACKADDR)`は未対応を返す。**受入:** 旧APIを既存stack属性へ正しく対応付け、stack sizeとaddressのgetter/setter間で値・エラーが一貫することを確認し、compile-time macroと`sysconf()`のcapabilityを実装状態に一致させる。
 
 - [ ] **LIBC-PTHREAD-PRIO-PROTECT-01 / P2 / M** — `PTHREAD_PRIO_PROTECT`は定義済みだが、`pthread_mutexattr_setprotocol()`は常に`ENOTSUP`を返し、mutex属性／mutex本体のpriority-ceiling取得・設定APIもない。**受入:** ceiling値の設定・範囲検証と、mutex取得時の優先度昇格および解放時の復元をスケジューラの所有権・待機処理へ統合し、priority inheritance、timeout、cancel、異常終了との相互作用を確認する。
