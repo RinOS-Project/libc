@@ -679,17 +679,13 @@ static inline int sigsuspend(const sigset_t* mask) {
 }
 
 static inline int sigwait(const sigset_t* set, int* signal_number_out) {
-    int saved_errno = errno;
     intptr_t result;
     RinSignalWaitRequestV1 request;
     sigset_t set_snapshot;
     if (!set) return EINVAL;
     if (!signal_number_out) return EFAULT;
-    if (__rin_signal_mask_snapshot(set, &set_snapshot) != 0) {
-        const int wait_error = errno != 0 ? errno : EFAULT;
-        errno = saved_errno;
-        return wait_error;
-    }
+    if (__rin_signal_mask_snapshot(set, &set_snapshot) != 0)
+        return errno != 0 ? errno : EFAULT;
     request.struct_size = (uint32_t)sizeof(request);
     request.version = RIN_CONTRACT_STRUCT_VERSION_1;
     request.reserved = 0u;
@@ -703,16 +699,10 @@ static inline int sigwait(const sigset_t* set, int* signal_number_out) {
     } while (result == -(intptr_t)EINTR);
     if (result < 0) {
         uintptr_t magnitude = (uintptr_t)0 - (uintptr_t)result;
-        const int wait_error = magnitude != 0u && magnitude <= 4095u
-                                   ? (int)magnitude : EIO;
-        errno = saved_errno;
-        return wait_error;
+        return magnitude != 0u && magnitude <= 4095u
+                   ? (int)magnitude : EIO;
     }
-    if (result <= 0 || result >= NSIG) {
-        errno = saved_errno;
-        return EIO;
-    }
-    errno = saved_errno;
+    if (result <= 0 || result >= NSIG) return EIO;
     return 0;
 }
 
