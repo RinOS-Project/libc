@@ -265,23 +265,9 @@ static inline int _fcntl_result_status_zero(intptr_t raw_result) {
     return 0;
 }
 
-static inline int _fcntl_lock64_wire(
-    int fd, int command, RinNativeFlockAbi* wire) {
-    return _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL3(
-        SYS_FCNTL_LOCK64, (uintptr_t)fd, (uintptr_t)command,
-        (uintptr_t)wire));
-}
-
-static inline int _fcntl_lock64_get_command(int command) {
-    return command == F_GETLK || command == F_OFD_GETLK ||
-           command == F_GETLK64 || command == F_OFD_GETLK64;
-}
-
 static inline int _fcntl_lock64_flock(int fd, int command,
                                       struct flock* lock) {
-    RinNativeFlockAbi wire = {0};
     int kernel_command = command;
-    int result;
     if (!lock) {
         errno = EFAULT;
         return -1;
@@ -292,35 +278,14 @@ static inline int _fcntl_lock64_flock(int fd, int command,
     else if (command == F_OFD_GETLK64) kernel_command = F_OFD_GETLK;
     else if (command == F_OFD_SETLK64) kernel_command = F_OFD_SETLK;
     else if (command == F_OFD_SETLKW64) kernel_command = F_OFD_SETLKW;
-    wire.type = (int16_t)lock->l_type;
-    wire.whence = (int16_t)lock->l_whence;
-    wire.start = (int64_t)lock->l_start;
-    wire.length = (int64_t)lock->l_len;
-    wire.pid = (int32_t)lock->l_pid;
-    result = _fcntl_lock64_wire(fd, kernel_command, &wire);
-    if (result == 0 && _fcntl_lock64_get_command(command)) {
-        if (sizeof(off_t) < sizeof(int64_t) &&
-            (wire.start < (int64_t)INT_MIN ||
-             wire.start > (int64_t)INT_MAX ||
-             wire.length < (int64_t)INT_MIN ||
-             wire.length > (int64_t)INT_MAX)) {
-            errno = EOVERFLOW;
-            return -1;
-        }
-        lock->l_type = wire.type;
-        lock->l_whence = wire.whence;
-        lock->l_start = (off_t)wire.start;
-        lock->l_len = (off_t)wire.length;
-        lock->l_pid = wire.pid;
-    }
-    return result;
+    return _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL3(
+        SYS_FCNTL_LOCK_USER64_V1, (uintptr_t)fd,
+        (uintptr_t)kernel_command, (uintptr_t)lock));
 }
 
 static inline int _fcntl_lock64_flock64(int fd, int command,
                                         struct flock64* lock) {
-    RinNativeFlockAbi wire = {0};
     int kernel_command = command;
-    int result;
     if (!lock) {
         errno = EFAULT;
         return -1;
@@ -331,20 +296,9 @@ static inline int _fcntl_lock64_flock64(int fd, int command,
     else if (command == F_OFD_GETLK64) kernel_command = F_OFD_GETLK;
     else if (command == F_OFD_SETLK64) kernel_command = F_OFD_SETLK;
     else if (command == F_OFD_SETLKW64) kernel_command = F_OFD_SETLKW;
-    wire.type = (int16_t)lock->l_type;
-    wire.whence = (int16_t)lock->l_whence;
-    wire.start = (int64_t)lock->l_start;
-    wire.length = (int64_t)lock->l_len;
-    wire.pid = (int32_t)lock->l_pid;
-    result = _fcntl_lock64_wire(fd, kernel_command, &wire);
-    if (result == 0 && _fcntl_lock64_get_command(command)) {
-        lock->l_type = wire.type;
-        lock->l_whence = wire.whence;
-        lock->l_start = (off64_t)wire.start;
-        lock->l_len = (off64_t)wire.length;
-        lock->l_pid = wire.pid;
-    }
-    return result;
+    return _fcntl_result_status_zero(_RIN_FCNTL_SYSCALL3(
+        SYS_FCNTL_LOCK_USER64_V1, (uintptr_t)fd,
+        (uintptr_t)kernel_command, (uintptr_t)lock));
 }
 
 static inline int _fcntl_dupfd_at_least(int fd, int minfd, int command) {
