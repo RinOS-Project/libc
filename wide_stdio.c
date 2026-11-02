@@ -2281,9 +2281,7 @@ enum {
 };
 
 static int rin_wscanf_space(uint32_t value) {
-    return value == (uint32_t)' ' || value == (uint32_t)'\t' ||
-           value == (uint32_t)'\n' || value == (uint32_t)'\r' ||
-           value == (uint32_t)'\f' || value == (uint32_t)'\v';
+    return iswspace((wint_t)value);
 }
 
 static int rin_wscanf_string_read(void* context, uint32_t* value) {
