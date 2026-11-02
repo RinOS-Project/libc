@@ -470,6 +470,10 @@ static inline int putenv(char* string) {
  * serialize mutations and reclaim retired tables across translation units. */
 char* getenv(const char* name);
 char* secure_getenv(const char* name);
+/* getenv()／secure_getenv()の戻り値は借用ポインターであり、並行する環境
+ * 変更をまたいで参照しないこと。この拡張はfree()可能な所有コピーを返す。
+ * NULLの場合はerrnoがEINVAL、ENOENT、ENOMEMのいずれかになる。 */
+char* rin_getenv_copy(const char* name);
 int setenv(const char* name, const char* value, int overwrite);
 int unsetenv(const char* name);
 int putenv(char* string);

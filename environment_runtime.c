@@ -353,6 +353,44 @@ char* getenv(const char* name) {
     return result;
 }
 
+char* rin_getenv_copy(const char* name) {
+    const int saved_errno = errno;
+    unsigned int epoch;
+    char** snapshot;
+    const char* value;
+    size_t length;
+    char* copy;
+
+    if (!environment_name_valid(name)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    snapshot = __rin_env_read_begin(&epoch);
+    value = __rin_env_get_from_snapshot(snapshot, name);
+    if (!value) {
+        __rin_env_read_end(epoch);
+        errno = ENOENT;
+        return NULL;
+    }
+    length = environment_length(value);
+    if (length == SIZE_MAX) {
+        __rin_env_read_end(epoch);
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    copy = (char*)malloc(length + 1u);
+    if (!copy) {
+        __rin_env_read_end(epoch);
+        errno = ENOMEM;
+        return NULL;
+    }
+    for (size_t index = 0u; index <= length; ++index)
+        copy[index] = value[index];
+    __rin_env_read_end(epoch);
+    errno = saved_errno;
+    return copy;
+}
+
 int __rin_env_is_secure(void) {
     __rin_credentials_v1 credentials;
     int saved_errno = errno;
