@@ -850,6 +850,55 @@ static uint64_t _rin_stdio_next_stream_generation;
 static volatile uint32_t _rin_stdio_stream_registry_state;
 #endif
 
+/* Test-gated (RIN_STDIO_REGISTRY_INSTRUMENT) registry measurements:
+ * lookup chain lengths and global
+ * guard traffic for the few-to-max scaling legs. Zero cost and zero
+ * surface when undefined. IDs: 0 owner_calls, 1 owner_steps,
+ * 2 owner_max_chain, 3 mfind_calls, 4 mfind_steps, 5 mfind_max_chain,
+ * 6 guard_acquires, 7 guard_spins. */
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+#if defined(RIN_STDIO_OWNER_BUILD)
+uint64_t _rin_stdio_reg_owner_calls;
+uint64_t _rin_stdio_reg_owner_steps;
+uint64_t _rin_stdio_reg_owner_max_chain;
+uint64_t _rin_stdio_reg_mfind_calls;
+uint64_t _rin_stdio_reg_mfind_steps;
+uint64_t _rin_stdio_reg_mfind_max_chain;
+uint64_t _rin_stdio_reg_guard_acquires;
+uint64_t _rin_stdio_reg_guard_spins;
+#elif defined(RIN_USERSPACE)
+extern uint64_t _rin_stdio_reg_owner_calls;
+extern uint64_t _rin_stdio_reg_owner_steps;
+extern uint64_t _rin_stdio_reg_owner_max_chain;
+extern uint64_t _rin_stdio_reg_mfind_calls;
+extern uint64_t _rin_stdio_reg_mfind_steps;
+extern uint64_t _rin_stdio_reg_mfind_max_chain;
+extern uint64_t _rin_stdio_reg_guard_acquires;
+extern uint64_t _rin_stdio_reg_guard_spins;
+#else
+static uint64_t _rin_stdio_reg_owner_calls;
+static uint64_t _rin_stdio_reg_owner_steps;
+static uint64_t _rin_stdio_reg_owner_max_chain;
+static uint64_t _rin_stdio_reg_mfind_calls;
+static uint64_t _rin_stdio_reg_mfind_steps;
+static uint64_t _rin_stdio_reg_mfind_max_chain;
+static uint64_t _rin_stdio_reg_guard_acquires;
+static uint64_t _rin_stdio_reg_guard_spins;
+#endif
+#endif
+
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+static inline void _rin_stdio_registry_update_max(uint64_t* maximum,
+                                                 uint64_t value) {
+    uint64_t observed = __atomic_load_n(maximum, __ATOMIC_RELAXED);
+    while (observed < value &&
+           !__atomic_compare_exchange_n(maximum, &observed, value, 0,
+                                        __ATOMIC_RELAXED,
+                                        __ATOMIC_RELAXED)) {
+    }
+}
+#endif
+
 #ifndef MIDL_PASS
 typedef struct _RinStdioStreamSnapshot {
     FILE* stream;
@@ -967,15 +1016,34 @@ static inline void _rin_stdio_stream_registry_initialize(void) {
 static inline _RinStdioStreamOwner* _rin_stdio_stream_owner(FILE* stream) {
     _RinStdioStreamOwner* owner;
     size_t bucket;
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+    uint64_t chain = 0u;
+#endif
     if (!stream) return NULL;
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+    __atomic_add_fetch(&_rin_stdio_reg_owner_calls, 1u, __ATOMIC_RELAXED);
+#endif
     _rin_stdio_stream_registry_initialize();
     bucket = _rin_stdio_stream_index_bucket(stream);
     owner = __atomic_load_n(
         &_rin_stdio_stream_index_buckets[bucket], __ATOMIC_ACQUIRE);
     while (owner != NULL) {
-        if (owner->stream == stream) return owner;
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+        __atomic_add_fetch(&_rin_stdio_reg_owner_steps, 1u, __ATOMIC_RELAXED);
+        ++chain;
+#endif
+        if (owner->stream == stream) {
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+            _rin_stdio_registry_update_max(
+                &_rin_stdio_reg_owner_max_chain, chain);
+#endif
+            return owner;
+        }
         owner = __atomic_load_n(&owner->index_next, __ATOMIC_ACQUIRE);
     }
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+    _rin_stdio_registry_update_max(&_rin_stdio_reg_owner_max_chain, chain);
+#endif
     return NULL;
 }
 
@@ -1028,10 +1096,20 @@ static inline int _rin_stdio_stream_generation_advance_locked(
 #endif
 
 static inline void _rin_stdio_lock_table_enter(void) {
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+    __atomic_add_fetch(&_rin_stdio_reg_guard_acquires, 1u, __ATOMIC_RELAXED);
+#endif
     while (__atomic_exchange_n(&_rin_stdio_lock_table_guard, 1u,
                                __ATOMIC_ACQUIRE) != 0u) {
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+        __atomic_add_fetch(&_rin_stdio_reg_guard_spins, 1u, __ATOMIC_RELAXED);
+#endif
         while (__atomic_load_n(&_rin_stdio_lock_table_guard,
                                __ATOMIC_RELAXED) != 0u) {
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+            __atomic_add_fetch(&_rin_stdio_reg_guard_spins, 1u,
+                               __ATOMIC_RELAXED);
+#endif
         }
     }
 }
@@ -2800,6 +2878,14 @@ _RIN_STDIO_API FILE* fopen(const char* path, const char* mode) {
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)fd);
         errno = saved_errno;
     }
+    /* Pure-append ("a") starts at end-of-file (glibc parity;
+     * pipes ignore ESPIPE inside the helper). Update-append ("a+")
+     * starts at 0 like glibc; its writes still append per call. A
+     * genuine seek failure only marks the stream: fopen still
+     * succeeds. */
+    if (stream && (flags & O_APPEND) != 0u &&
+        (flags & O_ACCMODE) != O_RDWR)
+        (void)_rin_stdio_seek_backend_to_end(stream);
     return stream;
 }
 
@@ -3000,6 +3086,10 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     }
     _rin_stdio_install_default_buffer(
         stream, _rin_stdio_default_buffer_mode(stream));
+    /* Pure-append ("a") starts at end-of-file (see fopen). */
+    if ((stream->mode & O_APPEND) != 0u &&
+        (stream->mode & O_ACCMODE) != O_RDWR)
+        (void)_rin_stdio_seek_backend_to_end(stream);
     return stream;
 }
 
@@ -3050,7 +3140,12 @@ _RIN_STDIO_API FILE* fdopen(int fd, const char* mode) {
         }
     }
 
-    return _rin_stdio_stream_allocate(fd, flags, 0, 1);
+    /* Pure-append ("a") starts at end-of-file (see fopen). */
+    FILE* stream = _rin_stdio_stream_allocate(fd, flags, 0, 1);
+    if (stream && (flags & O_APPEND) != 0u &&
+        (flags & O_ACCMODE) != O_RDWR)
+        (void)_rin_stdio_seek_backend_to_end(stream);
+    return stream;
 }
 
 _RIN_STDIO_API int fseek(FILE* stream, long offset, int whence);
@@ -5314,8 +5409,19 @@ _RIN_STDIO_API char* ctermid(char* s) {
     return s;
 }
 
-/* gets - 標準入力から1行読む (POSIX.1-2008ではobsolescentだが必須) */
-_RIN_STDIO_API char* gets(char* s) {
+#if defined(RIN_ENABLE_UNSAFE_LEGACY_STDIO)
+/* Unsafe legacy APIs are available only when explicitly enabled in both the
+ * consumer and runtime build. The public declarations carry deprecation. */
+#if defined(__GNUC__) || defined(__clang__)
+#define _RIN_STDIO_UNSAFE_LEGACY_API \
+    __attribute__((deprecated("unsafe legacy stdio API; use fgets/tmpfile/mkstemp")))
+#elif defined(_MSC_VER)
+#define _RIN_STDIO_UNSAFE_LEGACY_API \
+    __declspec(deprecated("unsafe legacy stdio API; use fgets/tmpfile/mkstemp"))
+#else
+#define _RIN_STDIO_UNSAFE_LEGACY_API
+#endif
+_RIN_STDIO_API _RIN_STDIO_UNSAFE_LEGACY_API char* gets(char* s) {
     char* p = s;
     int c;
     if (!s) {
@@ -5334,6 +5440,7 @@ _RIN_STDIO_API char* gets(char* s) {
     *p = '\0';
     return s;
 }
+#endif
 
 static inline int _rin_stdio_vdprintf_write(int fd, const char* data,
                                             size_t length) {
@@ -5434,8 +5541,9 @@ _RIN_STDIO_API FILE* tmpfile(void) {
     return stream;
 }
 
-/* tmpnam - 一時ファイル名を生成 */
-_RIN_STDIO_API char* tmpnam(char* s) {
+#if defined(RIN_ENABLE_UNSAFE_LEGACY_STDIO)
+/* tmpnam returns an unreserved path and is unsafe for file creation. */
+_RIN_STDIO_API _RIN_STDIO_UNSAFE_LEGACY_API char* tmpnam(char* s) {
 #if defined(__cplusplus)
     static thread_local char fallback[L_tmpnam];
 #else
@@ -5518,6 +5626,8 @@ _RIN_STDIO_API char* tmpnam(char* s) {
         destination[index] = generated[index];
     return destination;
 }
+#undef _RIN_STDIO_UNSAFE_LEGACY_API
+#endif
 
 #endif /* !MIDL_PASS */
 

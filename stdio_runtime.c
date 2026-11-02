@@ -59,20 +59,70 @@ static size_t _rin_stdio_memstream_bucket(FILE* stream) {
 
 static RinStdioMemstreamOwner* _rin_stdio_memstream_find(FILE* stream) {
     RinStdioMemstreamOwner* found = NULL;
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+    uint64_t chain = 0u;
+#endif
     if (!stream) return NULL;
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+    __atomic_add_fetch(&_rin_stdio_reg_mfind_calls, 1u, __ATOMIC_RELAXED);
+#endif
     _rin_stdio_lock_table_enter();
     for (RinStdioMemstreamOwner* owner =
              _rin_stdio_memstream_buckets[
                  _rin_stdio_memstream_bucket(stream)];
          owner; owner = owner->next) {
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+        __atomic_add_fetch(&_rin_stdio_reg_mfind_steps, 1u, __ATOMIC_RELAXED);
+        ++chain;
+#endif
         if (owner->stream == stream) {
             found = owner;
             break;
         }
     }
     _rin_stdio_lock_table_leave();
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+    _rin_stdio_registry_update_max(&_rin_stdio_reg_mfind_max_chain, chain);
+#endif
     return found;
 }
+
+#if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
+/* Test accessors for the registry counters (index ids match the
+ * storage comment in stdio_impl.h). */
+uint64_t rin_stdio_reg_counter(int id) {
+    switch (id) {
+    case 0: return __atomic_load_n(&_rin_stdio_reg_owner_calls,
+                                   __ATOMIC_RELAXED);
+    case 1: return __atomic_load_n(&_rin_stdio_reg_owner_steps,
+                                   __ATOMIC_RELAXED);
+    case 2: return __atomic_load_n(&_rin_stdio_reg_owner_max_chain,
+                                   __ATOMIC_RELAXED);
+    case 3: return __atomic_load_n(&_rin_stdio_reg_mfind_calls,
+                                   __ATOMIC_RELAXED);
+    case 4: return __atomic_load_n(&_rin_stdio_reg_mfind_steps,
+                                   __ATOMIC_RELAXED);
+    case 5: return __atomic_load_n(&_rin_stdio_reg_mfind_max_chain,
+                                   __ATOMIC_RELAXED);
+    case 6: return __atomic_load_n(&_rin_stdio_reg_guard_acquires,
+                                   __ATOMIC_RELAXED);
+    case 7: return __atomic_load_n(&_rin_stdio_reg_guard_spins,
+                                   __ATOMIC_RELAXED);
+    default: return 0u;
+    }
+}
+
+void rin_stdio_reg_counters_reset(void) {
+    __atomic_store_n(&_rin_stdio_reg_owner_calls, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&_rin_stdio_reg_owner_steps, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&_rin_stdio_reg_owner_max_chain, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&_rin_stdio_reg_mfind_calls, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&_rin_stdio_reg_mfind_steps, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&_rin_stdio_reg_mfind_max_chain, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&_rin_stdio_reg_guard_acquires, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&_rin_stdio_reg_guard_spins, 0u, __ATOMIC_RELAXED);
+}
+#endif
 
 int rin_stdio_memstream_kind(FILE* stream) {
     RinStdioMemstreamOwner* owner = _rin_stdio_memstream_find(stream);
