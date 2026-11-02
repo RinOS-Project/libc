@@ -62,6 +62,7 @@ extern "C" {
 #define FAN_EVENT_INFO_TYPE_FID 1u
 
 #define RIN_FANOTIFY_HANDLE_RINFS UINT32_C(0x52534631)
+#define RIN_FANOTIFY_HANDLE_TMPFS UINT32_C(0x544d5031)
 
 struct fanotify_event_metadata {
     uint32_t event_len;
