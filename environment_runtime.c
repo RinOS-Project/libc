@@ -43,10 +43,12 @@ static void environment_yield_after_futex_error(void) {
 
 static void environment_futex_wait(volatile unsigned int* address,
                                   unsigned int expected) {
+    const int saved_errno = errno;
     const long result = syscall(SYS_futex, address, FUTEX_WAIT_PRIVATE,
                                 expected, NULL, NULL, 0);
     if (result == -1 && errno != EAGAIN && errno != EINTR)
         environment_yield_after_futex_error();
+    errno = saved_errno;
 }
 
 static void environment_futex_wake(volatile unsigned int* address,
@@ -83,7 +85,7 @@ static void environment_reader_leave(unsigned int epoch) {
         !__atomic_load_n(&g_environment_reader_waiters[slot],
                          __ATOMIC_SEQ_CST))
         return;
-    environment_futex_wake(&g_environment_readers[slot], 0x7fffffff);
+    environment_futex_wake(&g_environment_readers[slot], 1);
 }
 
 static void environment_wait_for_readers(unsigned int epoch) {
