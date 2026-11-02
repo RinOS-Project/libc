@@ -84,13 +84,13 @@ static void (*volatile _pthread_tls_destructors[PTHREAD_KEYS_MAX])(void*);
 
 static unsigned int pthread_key_state_load(unsigned int key)
 {
-    return __sync_fetch_and_add(&_pthread_tls_key_state[key], 0u) &
+    return __atomic_load_n(&_pthread_tls_key_state[key], __ATOMIC_ACQUIRE) &
            RIN_PTHREAD_KEY_STATE_MASK;
 }
 
 static unsigned int pthread_key_generation_load(unsigned int key)
 {
-    return __sync_fetch_and_add(&_pthread_tls_generation[key], 0u);
+    return __atomic_load_n(&_pthread_tls_generation[key], __ATOMIC_ACQUIRE);
 }
 
 static unsigned int pthread_key_generation_next(unsigned int key)
@@ -107,7 +107,7 @@ static unsigned int pthread_key_generation_next(unsigned int key)
 
 static unsigned int pthread_key_state_word_load(unsigned int key)
 {
-    return __sync_fetch_and_add(&_pthread_tls_key_state[key], 0u);
+    return __atomic_load_n(&_pthread_tls_key_state[key], __ATOMIC_ACQUIRE);
 }
 
 static unsigned int pthread_key_dispatch_local_depth(unsigned int key)
