@@ -1347,12 +1347,16 @@ _RIN_STDIO_API FILE* rin_stdio_get_stderr(void) {
 #define _RIN_STDIO_UNGETC_CAPACITY 4096u
 /* Wide scanners need to restore a complete rejected numeric token, not just
  * the two scalars required by the basic ungetwc contract.  Keep the common
- * case inline in FILE and allocate this bounded spill only on demand. */
+ * case inline in FILE and spill to the heap on demand, growing
+ * geometrically past the legacy 4096 so unbounded fields restore fully
+ * (B58: fwscanf float paths unread whole rejected runs). Growth failure
+ * fails the push exactly like the old capacity cap did. */
 #define _RIN_STDIO_WIDE_UNGETWC_CAPACITY 4096u
 struct _RinStdioWideUngetwcOwner {
     FILE* stream;
     uint32_t* spill;
     size_t count;
+    size_t capacity;
     struct _RinStdioWideUngetwcOwner* next;
 };
 static struct _RinStdioWideUngetwcOwner*
@@ -1535,7 +1539,20 @@ _RIN_STDIO_INTERNAL int _rin_stdio_wide_pushback_push(FILE* stream,
     while (owner && owner->stream != stream) owner = owner->next;
     if (owner && owner->spill) {
         count = owner->count;
-        if (count >= _RIN_STDIO_WIDE_UNGETWC_CAPACITY) return 0;
+        if (count >= owner->capacity) {
+            size_t grown;
+            uint32_t* replacement;
+            if (owner->capacity > (SIZE_MAX - 1u) / 2u) return 0;
+            grown = owner->capacity * 2u;
+            if (grown == 0u) grown = _RIN_STDIO_WIDE_UNGETWC_CAPACITY;
+            if (grown > SIZE_MAX / sizeof(uint32_t)) return 0;
+            replacement = (uint32_t*)malloc(grown * sizeof(uint32_t));
+            if (!replacement) return 0;
+            memcpy(replacement, owner->spill, count * sizeof(uint32_t));
+            free(owner->spill);
+            owner->spill = replacement;
+            owner->capacity = grown;
+        }
         owner->spill[count] = value;
         owner->count = count + 1u;
         return 1;
@@ -1567,6 +1584,7 @@ _RIN_STDIO_INTERNAL int _rin_stdio_wide_pushback_push(FILE* stream,
     owner->stream = stream;
     owner->spill = spill;
     owner->count = 3u;
+    owner->capacity = _RIN_STDIO_WIDE_UNGETWC_CAPACITY;
     owner->next = _rin_stdio_wide_ungetwc_owners;
     _rin_stdio_wide_ungetwc_owners = owner;
     stream->wide_pushback = 0u;
