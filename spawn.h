@@ -825,7 +825,7 @@ static inline int _rin_posix_spawn_direct(
     if (validation != 0)
         return validation;
     if (path_length == 0u)
-        return EINVAL;
+        return ENOENT;
     validation = _rin_posix_spawn_validate(file_actions, attr);
     if (validation != 0)
         return validation;
