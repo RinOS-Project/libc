@@ -820,6 +820,7 @@ typedef struct _RinStdioStreamOwner {
     uint32_t lock_closing;
     struct _RinStdioStreamOwner* next;
     struct _RinStdioStreamOwner* index_next;
+    struct _RinStdioStreamOwner* free_next;
 } _RinStdioStreamOwner;
 
 #define _RIN_STDIO_STREAM_INDEX_BUCKET_COUNT ((size_t)STREAM_MAX * 2u)
@@ -828,6 +829,8 @@ typedef struct _RinStdioStreamOwner {
 _RinStdioStreamOwner _rin_stdio_standard_owners[3];
 _RinStdioStreamOwner* _rin_stdio_stream_owners;
 _RinStdioStreamOwner* _rin_stdio_stream_owners_tail;
+_RinStdioStreamOwner* _rin_stdio_free_stream_owners;
+size_t _rin_stdio_active_stream_count;
 _RinStdioStreamOwner* _rin_stdio_stream_index_buckets[
     _RIN_STDIO_STREAM_INDEX_BUCKET_COUNT];
 uint64_t _rin_stdio_next_stream_generation;
@@ -836,6 +839,8 @@ volatile uint32_t _rin_stdio_stream_registry_state;
 extern _RinStdioStreamOwner _rin_stdio_standard_owners[3];
 extern _RinStdioStreamOwner* _rin_stdio_stream_owners;
 extern _RinStdioStreamOwner* _rin_stdio_stream_owners_tail;
+extern _RinStdioStreamOwner* _rin_stdio_free_stream_owners;
+extern size_t _rin_stdio_active_stream_count;
 extern _RinStdioStreamOwner* _rin_stdio_stream_index_buckets[
     _RIN_STDIO_STREAM_INDEX_BUCKET_COUNT];
 extern uint64_t _rin_stdio_next_stream_generation;
@@ -844,6 +849,8 @@ extern volatile uint32_t _rin_stdio_stream_registry_state;
 static _RinStdioStreamOwner _rin_stdio_standard_owners[3];
 static _RinStdioStreamOwner* _rin_stdio_stream_owners;
 static _RinStdioStreamOwner* _rin_stdio_stream_owners_tail;
+static _RinStdioStreamOwner* _rin_stdio_free_stream_owners;
+static size_t _rin_stdio_active_stream_count;
 static _RinStdioStreamOwner* _rin_stdio_stream_index_buckets[
     _RIN_STDIO_STREAM_INDEX_BUCKET_COUNT];
 static uint64_t _rin_stdio_next_stream_generation;
@@ -1003,6 +1010,8 @@ static inline void _rin_stdio_stream_registry_initialize(void) {
             &_rin_stdio_standard_owners[2]);
         _rin_stdio_stream_owners = &_rin_stdio_standard_owners[0];
         _rin_stdio_stream_owners_tail = &_rin_stdio_standard_owners[2];
+        _rin_stdio_free_stream_owners = NULL;
+        _rin_stdio_active_stream_count = 3u;
         _rin_stdio_next_stream_generation = 4u;
         __atomic_store_n(&_rin_stdio_stream_registry_state, 2u,
                          __ATOMIC_RELEASE);
@@ -1307,6 +1316,14 @@ static inline void _rin_stdio_stream_lock_reset_closed(FILE* stream) {
         entry->active = 0u;
         entry->lock_closing = 0u;
         entry->lock_depth = 0u;
+        if (_rin_stdio_active_stream_count != 0u)
+            --_rin_stdio_active_stream_count;
+        if (entry != &_rin_stdio_standard_owners[0] &&
+            entry != &_rin_stdio_standard_owners[1] &&
+            entry != &_rin_stdio_standard_owners[2]) {
+            entry->free_next = _rin_stdio_free_stream_owners;
+            _rin_stdio_free_stream_owners = entry;
+        }
     }
     _rin_stdio_lock_table_leave();
 }
@@ -2001,38 +2018,28 @@ static inline FILE* _rin_stdio_stream_allocate(int fd, unsigned int flags,
                                                 int install_buffer) {
     _RinStdioStreamOwner* owner;
     _RinStdioStreamOwner* fresh = NULL;
-    size_t active_count;
     int is_new_owner;
     _rin_stdio_stream_registry_initialize();
     for (;;) {
-        active_count = 0u;
         owner = NULL;
         is_new_owner = 0;
         _rin_stdio_lock_table_enter();
-        for (_RinStdioStreamOwner* current = _rin_stdio_stream_owners;
-             current; current = __atomic_load_n(&current->next,
-                                                __ATOMIC_ACQUIRE)) {
-            if (current->active != 0u) {
-                ++active_count;
-            } else if (!owner &&
-                       current != &_rin_stdio_standard_owners[0] &&
-                       current != &_rin_stdio_standard_owners[1] &&
-                       current != &_rin_stdio_standard_owners[2] &&
-                       current->lock_owner == 0u &&
-                       current->lock_waiters == 0u &&
-                       current->lock_closing == 0u) {
-                owner = current;
-            }
-        }
-        if (owner) {
+        if (_rin_stdio_free_stream_owners != NULL) {
+            owner = _rin_stdio_free_stream_owners;
+            _rin_stdio_free_stream_owners = owner->free_next;
+            owner->free_next = NULL;
             if (!_rin_stdio_stream_generation_advance_locked(owner)) {
+                owner->free_next = _rin_stdio_free_stream_owners;
+                _rin_stdio_free_stream_owners = owner;
                 _rin_stdio_lock_table_leave();
                 if (fresh) RIN_STDIO_STREAM_OWNER_FREE(fresh);
                 errno = EOVERFLOW;
                 return NULL;
             }
             owner->active = 1u;
-        } else if (active_count >= (size_t)STREAM_MAX) {
+            ++_rin_stdio_active_stream_count;
+        } else if (_rin_stdio_active_stream_count >=
+                   (size_t)STREAM_MAX) {
             _rin_stdio_lock_table_leave();
             if (fresh) RIN_STDIO_STREAM_OWNER_FREE(fresh);
             errno = EMFILE;
@@ -2049,6 +2056,7 @@ static inline FILE* _rin_stdio_stream_allocate(int fd, unsigned int flags,
                 return NULL;
             }
             owner->active = 1u;
+            ++_rin_stdio_active_stream_count;
             __atomic_store_n(&_rin_stdio_stream_owners_tail->next, owner,
                              __ATOMIC_RELEASE);
             _rin_stdio_stream_owners_tail = owner;
