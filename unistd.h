@@ -2148,10 +2148,14 @@ static inline long sysconf(int name) {
             return SEM_NSEMS_MAX;
         case _SC_SEM_VALUE_MAX:
             return (long)SEM_VALUE_MAX;
+        case _SC_SEMAPHORES:
+            return RIN_POSIX_CAP_SEMAPHORES;
         case _SC_DELAYTIMER_MAX:
             return DELAYTIMER_MAX;
         case _SC_TIMER_MAX:
             return TIMER_MAX;
+        case _SC_TIMERS:
+            return RIN_POSIX_CAP_TIMERS;
         case _SC_RE_DUP_MAX:
             return RE_DUP_MAX;
         case _SC_SYMLOOP_MAX:
@@ -2203,8 +2207,6 @@ static inline long sysconf(int name) {
         case _SC_PRIORITY_SCHEDULING:
         case _SC_REALTIME_SIGNALS:
         case _SC_REGEXP:
-        case _SC_SEMAPHORES:
-        case _SC_TIMERS:
         case _SC_BC_BASE_MAX:
         case _SC_BC_DIM_MAX:
         case _SC_BC_SCALE_MAX:
