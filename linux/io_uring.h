@@ -216,6 +216,7 @@ struct io_uring_restriction {
 #define IORING_REGISTER_EVENTFD           4
 #define IORING_UNREGISTER_EVENTFD         5
 #define IORING_REGISTER_FILES_UPDATE      6
+#define IORING_REGISTER_EVENTFD_ASYNC     7
 #define IORING_REGISTER_PROBE             8
 #define IORING_REGISTER_RESTRICTIONS      11
 #define IORING_REGISTER_ENABLE_RINGS      12
