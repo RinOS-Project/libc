@@ -162,7 +162,7 @@ extern char** environ;
  * when the caller requests the default/GNU extensions, or for XSI 500+. */
 #if (!defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE) && \
      !defined(_XOPEN_SOURCE)) || defined(_DEFAULT_SOURCE) || \
-    defined(_GNU_SOURCE) || \
+    defined(_GNU_SOURCE) || defined(_RIN_USE_XSI_NICE) || \
     (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500)
 int nice(int incr);
 #endif
