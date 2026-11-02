@@ -78,7 +78,11 @@ static inline int inotify_add_watch(int fd, const char* pathname,
                                     uint32_t mask)
 {
     intptr_t result;
-    if (fd < 0 || pathname == (const char*)0 || mask == 0u) {
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    if (pathname == (const char*)0 || mask == 0u) {
         errno = EINVAL;
         return -1;
     }
