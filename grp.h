@@ -243,8 +243,7 @@ static inline int getgroups(int size, gid_t list[]) {
 static inline int setgroups(size_t size, const gid_t* list) {
 #if defined(__RIN_SYS_TYPES_HOST_OWNER) && !defined(RIN_USERSPACE)
     __rin_credentials_v1 credentials;
-    __rin_supplementary_groups_v1 request;
-    size_t index;
+    RinSupplementaryGroupsUserV3 request;
     int error;
     if (size > __RIN_CREDENTIALS_MAX_GROUPS) {
         errno = EINVAL;
@@ -261,19 +260,15 @@ static inline int setgroups(size_t size, const gid_t* list) {
         return -1;
     }
     request.struct_size = sizeof(request);
-    request.version = __RIN_SUPPLEMENTARY_GROUPS_VERSION;
+    request.version = RIN_SUPPLEMENTARY_GROUPS_USER_VERSION_3;
     request.operation = __RIN_SUPPLEMENTARY_GROUPS_OPERATION_SET;
     request.target_uid = credentials.effective_uid;
     request.group_count = (uint32_t)size;
-    for (index = 0u; index < size; ++index) {
+    request.groups_address = (uint64_t)(uintptr_t)list;
+    request.group_element_size = (uint32_t)sizeof(gid_t);
 #if !defined(RIN_SYS_TYPES_UNSIGNED_ID)
-        if (list[index] < 0) {
-            errno = EINVAL;
-            return -1;
-        }
+    request.group_flags = RIN_SUPPLEMENTARY_GROUPS_USER_V3_FLAG_SIGNED_GID;
 #endif
-        request.groups[index] = (uint32_t)list[index];
-    }
     error = __rin_account_errno(_RIN_CREDENTIAL_SYSCALL1(
         RIN_SYS_CREDENTIAL_GROUPS_SET, &request));
     if (error != 0) {
