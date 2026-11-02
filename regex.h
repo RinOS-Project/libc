@@ -1583,6 +1583,39 @@ static inline void _regex_copy_captures(size_t* destination,
         destination[index] = source[index];
 }
 
+/* Capture vectors exist only for states present in the active frontier. */
+static inline int _regex_capture_state_reserve(
+        size_t** storage_io, size_t capture_slots, size_t used_states,
+        size_t required_states, size_t state_limit, size_t* capacity_io) {
+    size_t capacity;
+    size_t elements;
+    size_t bytes;
+    size_t* replacement;
+    if (!storage_io || !capacity_io || capture_slots == 0u ||
+        required_states > state_limit || used_states > *capacity_io)
+        return 0;
+    if (required_states <= *capacity_io) return 1;
+    if (required_states > (size_t)-1 / capture_slots) return 0;
+    capacity = *capacity_io != 0u ? *capacity_io : 1u;
+    while (capacity < required_states) {
+        if (capacity > state_limit / 2u) capacity = state_limit;
+        else capacity *= 2u;
+    }
+    if (capacity > (size_t)-1 / capture_slots) return 0;
+    elements = capacity * capture_slots;
+    if (elements > (size_t)-1 / sizeof(*replacement)) return 0;
+    bytes = elements * sizeof(*replacement);
+    replacement = (size_t*)malloc(bytes);
+    if (!replacement) return 0;
+    if (*storage_io && used_states != 0u)
+        _regex_copy_captures(replacement, *storage_io,
+                             used_states * capture_slots);
+    free(*storage_io);
+    *storage_io = replacement;
+    *capacity_io = capacity;
+    return 1;
+}
+
 static inline int _regex_closure(const _regex_internal_t* internal,
                                  const uint32_t* input,
                                  size_t input_size, size_t position,
@@ -1593,11 +1626,14 @@ static inline int _regex_closure(const _regex_internal_t* internal,
                                  uint32_t* active_count, size_t* queue,
                                  uint32_t* queued_generation,
                                  uint32_t queue_epoch,
-                                 size_t* capture_state,
+                                 uint32_t* capture_index_by_pc,
+                                 size_t** capture_state_io,
+                                 size_t* capture_capacity_io,
                                  size_t capture_slots, uint64_t* steps) {
     const size_t none = (size_t)-1;
     uint32_t count = internal->instruction_count;
     uint32_t head = 0u, tail = 0u, queued_count = 0u, seed;
+    size_t* capture_state = capture_state_io ? *capture_state_io : NULL;
     for (seed = 0u; seed < *active_count; ++seed) {
         uint32_t pc = active_indices[seed];
         if (pc >= count || state_generation[pc] != state_epoch) return 0;
@@ -1628,30 +1664,44 @@ static inline int _regex_closure(const _regex_internal_t* internal,
          instruction->operation == _REGEX_OP_SAVE_END)) {                  \
         size_t _slot = (size_t)instruction->first * 2u +                   \
                        (instruction->operation == _REGEX_OP_SAVE_END);     \
-        if (capture_state[(size_t)_target * capture_slots + _slot] !=       \
+        size_t _target_state =                                               \
+            (size_t)capture_index_by_pc[_target] * capture_slots;            \
+        if (capture_state[_target_state + _slot] !=                          \
                 (size_t)-1 &&                                               \
-            position > capture_state[(size_t)_target * capture_slots +      \
-                                     _slot])                                 \
+            position > capture_state[_target_state + _slot])                \
             _replace = 1;                                                   \
     }                                                                        \
     if (_replace) {                                                          \
         if (state_generation[_target] != state_epoch) {                     \
             if (*active_count >= count) return 0;                           \
+            if (capture_slots != 0u &&                                     \
+                !_regex_capture_state_reserve(                              \
+                    capture_state_io, capture_slots, *active_count,          \
+                    (size_t)*active_count + 1u, count,                      \
+                    capture_capacity_io)) return 0;                         \
+            capture_state = capture_state_io                                \
+                ? *capture_state_io : NULL;                                  \
             state_generation[_target] = state_epoch;                       \
             active_indices[(*active_count)++] = _target;                    \
+            if (capture_slots != 0u)                                        \
+                capture_index_by_pc[_target] = *active_count - 1u;          \
         }                                                                    \
         states[_target] = origin;                                          \
         if (capture_slots != 0u) {                                         \
+            size_t _source_state =                                          \
+                (size_t)capture_index_by_pc[pc] * capture_slots;            \
+            size_t _target_state =                                          \
+                (size_t)capture_index_by_pc[_target] * capture_slots;      \
             _regex_copy_captures(                                          \
-                capture_state + (size_t)_target * capture_slots,          \
-                capture_state + (size_t)pc * capture_slots, capture_slots);\
+                capture_state + _target_state,                              \
+                capture_state + _source_state, capture_slots);              \
             if (instruction->operation == _REGEX_OP_SAVE_START)            \
-                capture_state[(size_t)_target * capture_slots +            \
-                              (size_t)instruction->first * 2u] = position;\
+                capture_state[_target_state +                               \
+                              (size_t)instruction->first * 2u] = position; \
             else if (instruction->operation == _REGEX_OP_SAVE_END)         \
-                capture_state[(size_t)_target * capture_slots +            \
-                              (size_t)instruction->first * 2u + 1u] =     \
-                    position;                                               \
+                capture_state[_target_state +                               \
+                              (size_t)instruction->first * 2u + 1u] =      \
+                    position;                                              \
         }                                                                    \
         if (queued_generation[_target] != queue_epoch) {                   \
             if (queued_count >= count) return 0;                           \
@@ -2310,7 +2360,10 @@ static inline int regexec(const regex_t* preg, const char* string,
     uint32_t *active_generation = NULL, *next_generation = NULL;
     uint32_t *active_indices = NULL, *next_indices = NULL;
     size_t *active_captures = NULL, *next_captures = NULL;
+    uint32_t *active_capture_index_by_pc = NULL;
+    uint32_t *next_capture_index_by_pc = NULL;
     size_t *best_captures = NULL;
+    size_t active_capture_capacity = 0u, next_capture_capacity = 0u;
     _regex_backref_frame_t* backref_frames = NULL;
     size_t* backref_snapshots = NULL;
     uint32_t* queued_generation = NULL;
@@ -2322,6 +2375,7 @@ static inline int regexec(const regex_t* preg, const char* string,
     uint32_t state_epoch = 2u, queue_epoch = 0u;
     size_t capture_slots;
     int has_backref = 0;
+    int needs_captures = 0;
     int locale_switched = 0;
     int result = REG_NOMATCH;
     if (!preg || !preg->_internal || !string) return REG_INVARG;
@@ -2382,11 +2436,13 @@ static inline int regexec(const regex_t* preg, const char* string,
     for (position = 0u; position < (size_t)count; ++position) {
         if (internal->instructions[position].operation == _REGEX_OP_BACKREF) {
             has_backref = 1;
+            needs_captures = 1;
             break;
         }
     }
     if (internal->has_variable_class) has_backref = 1;
-    capture_slots = (size_t)internal->group_count * 2u;
+    capture_slots = ((internal->cflags & REG_NOSUB) == 0 || needs_captures)
+        ? (size_t)internal->group_count * 2u : 0u;
     active = (size_t*)malloc((size_t)count * sizeof(*active));
     next = (size_t*)malloc((size_t)count * sizeof(*next));
     queue = (size_t*)malloc((size_t)count * sizeof(*queue));
@@ -2401,15 +2457,15 @@ static inline int regexec(const regex_t* preg, const char* string,
     queued_generation = (uint32_t*)malloc(
         (size_t)count * sizeof(*queued_generation));
     if (capture_slots != 0u) {
-        if ((size_t)count > (size_t)-1 / capture_slots ||
-            (size_t)count * capture_slots > (size_t)-1 / sizeof(*active_captures)) {
+        if ((size_t)count > (size_t)-1 /
+                sizeof(*active_capture_index_by_pc)) {
             result = REG_ESPACE;
             goto regex_exec_done;
         }
-        active_captures = (size_t*)malloc(
-            (size_t)count * capture_slots * sizeof(*active_captures));
-        next_captures = (size_t*)malloc(
-            (size_t)count * capture_slots * sizeof(*next_captures));
+        active_capture_index_by_pc = (uint32_t*)malloc(
+            (size_t)count * sizeof(*active_capture_index_by_pc));
+        next_capture_index_by_pc = (uint32_t*)malloc(
+            (size_t)count * sizeof(*next_capture_index_by_pc));
         best_captures = (size_t*)malloc(capture_slots * sizeof(*best_captures));
     }
     if (has_backref) {
@@ -2446,7 +2502,8 @@ static inline int regexec(const regex_t* preg, const char* string,
         !next_generation || !active_indices || !next_indices ||
         !queued_generation ||
         (capture_slots != 0u &&
-         (!active_captures || !next_captures || !best_captures)) ||
+         (!active_capture_index_by_pc || !next_capture_index_by_pc ||
+          !best_captures)) ||
         (has_backref &&
          (!backref_frames ||
           (capture_slots != 0u && !backref_snapshots)))) {
@@ -2461,9 +2518,6 @@ static inline int regexec(const regex_t* preg, const char* string,
                 (size_t)count * sizeof(*queued_generation));
     if (capture_slots != 0u) {
         size_t capture_index;
-        for (capture_index = 0u;
-             capture_index < (size_t)count * capture_slots; ++capture_index)
-            active_captures[capture_index] = none;
         for (capture_index = 0u; capture_index < capture_slots; ++capture_index)
             best_captures[capture_index] = none;
     }
@@ -2539,15 +2593,27 @@ static inline int regexec(const regex_t* preg, const char* string,
                     result = REG_ESPACE;
                     goto regex_exec_done;
                 }
+                if (capture_slots != 0u &&
+                    !_regex_capture_state_reserve(
+                        &active_captures, capture_slots, active_count,
+                        (size_t)active_count + 1u, count,
+                        &active_capture_capacity)) {
+                    result = REG_ESPACE;
+                    goto regex_exec_done;
+                }
                 active_generation[0] = active_epoch;
                 active_indices[active_count++] = 0u;
+                if (capture_slots != 0u)
+                    active_capture_index_by_pc[0] = active_count - 1u;
             }
             active[0] = position;
             if (capture_slots != 0u) {
+                size_t state_index =
+                    (size_t)active_capture_index_by_pc[0] * capture_slots;
                 size_t capture_index;
                 for (capture_index = 0u; capture_index < capture_slots;
                      ++capture_index)
-                    active_captures[capture_index] = none;
+                    active_captures[state_index + capture_index] = none;
             }
         }
         if (queue_epoch == UINT32_MAX) {
@@ -2560,8 +2626,9 @@ static inline int regexec(const regex_t* preg, const char* string,
         if (!_regex_closure(internal, input, input_size, position, eflags,
                             active, active_generation, active_epoch,
                             active_indices, &active_count, queue,
-                            queued_generation, queue_epoch, active_captures,
-                            capture_slots, &steps)) {
+                            queued_generation, queue_epoch,
+                            active_capture_index_by_pc, &active_captures,
+                            &active_capture_capacity, capture_slots, &steps)) {
             result = REG_ESPACE;
             goto regex_exec_done;
         }
@@ -2573,14 +2640,16 @@ static inline int regexec(const regex_t* preg, const char* string,
                 if (capture_slots != 0u)
                     _regex_copy_captures(best_captures,
                                          active_captures +
-                                             (size_t)(count - 1u) * capture_slots,
+                                             (size_t)active_capture_index_by_pc[
+                                                 count - 1u] * capture_slots,
                                          capture_slots);
             } else if (candidate == best_begin && position > best_end) {
                 best_end = position;
                 if (capture_slots != 0u)
                     _regex_copy_captures(best_captures,
                                          active_captures +
-                                             (size_t)(count - 1u) * capture_slots,
+                                             (size_t)active_capture_index_by_pc[
+                                                 count - 1u] * capture_slots,
                                          capture_slots);
             }
         }
@@ -2620,20 +2689,33 @@ static inline int regexec(const regex_t* preg, const char* string,
                     result = REG_ESPACE;
                     goto regex_exec_done;
                 }
+                if (capture_slots != 0u &&
+                    !_regex_capture_state_reserve(
+                        &next_captures, capture_slots, next_count,
+                        (size_t)next_count + 1u, count,
+                        &next_capture_capacity)) {
+                    result = REG_ESPACE;
+                    goto regex_exec_done;
+                }
+                if (capture_slots != 0u) {
+                    next_capture_index_by_pc[target] = next_count;
+                    _regex_copy_captures(
+                        next_captures + (size_t)next_count * capture_slots,
+                        active_captures + (size_t)
+                            active_capture_index_by_pc[pc] * capture_slots,
+                        capture_slots);
+                }
                 next_generation[target] = next_epoch;
                 next_indices[next_count++] = target;
                 next[target] = origin;
-                if (capture_slots != 0u)
-                    _regex_copy_captures(
-                        next_captures + (size_t)target * capture_slots,
-                        active_captures + (size_t)pc * capture_slots,
-                        capture_slots);
             } else if (origin < next[target]) {
                 next[target] = origin;
                 if (capture_slots != 0u)
                     _regex_copy_captures(
-                        next_captures + (size_t)target * capture_slots,
-                        active_captures + (size_t)pc * capture_slots,
+                        next_captures + (size_t)
+                            next_capture_index_by_pc[target] * capture_slots,
+                        active_captures + (size_t)
+                            active_capture_index_by_pc[pc] * capture_slots,
                         capture_slots);
             }
         }
@@ -2644,6 +2726,12 @@ static inline int regexec(const regex_t* preg, const char* string,
           active_indices = next_indices; next_indices = swap; }
         { size_t* swap = active_captures;
           active_captures = next_captures; next_captures = swap; }
+        { uint32_t* swap = active_capture_index_by_pc;
+          active_capture_index_by_pc = next_capture_index_by_pc;
+          next_capture_index_by_pc = swap; }
+        { size_t swap = active_capture_capacity;
+          active_capture_capacity = next_capture_capacity;
+          next_capture_capacity = swap; }
         active_count = next_count;
         next_count = 0u;
         active_epoch = next_epoch;
@@ -2700,6 +2788,8 @@ regex_exec_done:
     free(best_captures);
     free(next_captures);
     free(active_captures);
+    free(next_capture_index_by_pc);
+    free(active_capture_index_by_pc);
     free(next);
     free(active);
     if (locale_switched) (void)uselocale(previous_locale);
