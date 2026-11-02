@@ -94,7 +94,8 @@ typedef struct {
  * アトミック操作 (GCC built-in使用)
  * ═══════════════════════════════════════════════════════════════*/
 
-#define __RIN_ATOMIC_VALUE_TYPE(obj) __typeof__((*(obj)) + 0)
+#define __RIN_ATOMIC_VALUE_TYPE(obj) \
+    __typeof__(__atomic_load_n((obj), __ATOMIC_RELAXED))
 #define __RIN_ATOMIC_VALUE_PTR(obj) ((__RIN_ATOMIC_VALUE_TYPE(obj)*)(obj))
 
 #define atomic_init(obj, value) \
