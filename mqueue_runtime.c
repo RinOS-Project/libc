@@ -922,7 +922,15 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
             errno = thread_result;
             return -1;
         }
-        (void)pthread_detach(thread);
+        thread_result = pthread_detach(thread);
+        if (thread_result != 0) {
+            __atomic_store_n(&slot->state, 3u, __ATOMIC_RELEASE);
+            if (mq_event_signal(event, 1u) != RIN_SUCCESS)
+                (void)mq_close_handle(event);
+            (void)pthread_join(thread, NULL);
+            errno = thread_result;
+            return -1;
+        }
     }
     /* Start the worker before publishing the kernel registration.  The
      * kernel may signal the event before mq_notify returns, so a worker must
