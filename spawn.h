@@ -925,7 +925,7 @@ _RIN_POSIX_SPAWN_API_INLINE int posix_spawnp(
     if (validation != 0)
         return validation;
     if (file_len == 0u)
-        return EINVAL;
+        return ENOENT;
     validation = _rin_posix_spawn_validate(file_actions, attr);
     if (validation != 0)
         return validation;
