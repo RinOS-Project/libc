@@ -278,6 +278,10 @@ static inline void* mmap64(void* addr, size_t length, int prot, int flags,
     flags &= ~MAP_DENYWRITE;
     flags = __rin_mman_syscall_flags(flags);
     if ((flags & MAP_ANONYMOUS) != 0) {
+        if (offset != 0) {
+            errno = EINVAL;
+            return MAP_FAILED;
+        }
         return mmap(addr, length, prot, flags, fd, (off_t)0);
     }
     if (offset < 0) {
