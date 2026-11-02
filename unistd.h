@@ -2170,6 +2170,8 @@ static inline long sysconf(int name) {
             return PTHREAD_STACK_MIN;
         case _SC_THREAD_ATTR_STACKSIZE:
             return RIN_POSIX_CAP_THREAD_ATTR_STACKSIZE;
+        case _SC_THREAD_PRIORITY_SCHEDULING:
+            return RIN_POSIX_CAP_THREAD_PRIORITY_SCHEDULING;
         case _SC_THREAD_PROCESS_SHARED:
             return RIN_POSIX_CAP_THREAD_PROCESS_SHARED;
         case _SC_THREAD_SAFE_FUNCTIONS:
@@ -2239,7 +2241,6 @@ static inline long sysconf(int name) {
         case _SC_THREAD_ATTR_STACKADDR:
         case _SC_THREAD_CPUTIME:
         case _SC_THREAD_PRIO_PROTECT:
-        case _SC_THREAD_PRIORITY_SCHEDULING:
         case _SC_THREAD_ROBUST_PRIO_PROTECT:
         case _SC_THREAD_SPORADIC_SERVER:
         case _SC_TYPED_MEMORY_OBJECTS:
