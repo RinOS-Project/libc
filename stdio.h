@@ -34,6 +34,7 @@ extern "C" {
 #define FOPEN_MAX STREAM_MAX
 #define TMP_MAX 238328
 #define L_tmpnam 20
+#define L_ctermid 9
 
 #ifndef _FILE_DECLARED
 #define _FILE_DECLARED
@@ -131,6 +132,7 @@ void perror(const char* s);
 int remove(const char* pathname);
 int rename(const char* oldpath, const char* newpath);
 FILE* tmpfile(void);
+char* ctermid(char* s);
 #if defined(RIN_ENABLE_UNSAFE_LEGACY_STDIO)
 #if defined(__GNUC__) || defined(__clang__)
 #define RIN_STDIO_UNSAFE_LEGACY_API \
@@ -147,6 +149,8 @@ RIN_STDIO_UNSAFE_LEGACY_API char* gets(char* s);
 RIN_STDIO_UNSAFE_LEGACY_API char* tmpnam(char* s);
 #undef RIN_STDIO_UNSAFE_LEGACY_API
 #endif
+FILE* popen(const char* command, const char* type);
+int pclose(FILE* stream);
 FILE* fmemopen(void* buffer, size_t size, const char* mode);
 FILE* open_memstream(char** buffer, size_t* size);
 
