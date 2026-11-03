@@ -35,6 +35,7 @@
 #define _RIN_USE_GNU_SEARCH 1
 #define _RIN_USE_GNU_STRVERSCMP 1
 #define _RIN_USE_GNU_PTHREAD 1
+#define _RIN_USE_GNU_GETTEXT 1
 #define _RIN_USE_GNU_GETCPU 1
 #define _RIN_USE_GNU_REALLOCARRAY 1
 #define _RIN_USE_GNU_SECURE_GETENV 1
@@ -53,6 +54,7 @@
 #endif
 #if defined(_DEFAULT_SOURCE) || defined(_BSD_SOURCE)
 #define _RIN_USE_BSD_RANDOM 1
+#define _RIN_USE_BSD_GETTEXT 1
 #define _RIN_USE_BSD_GETENTROPY 1
 #define _RIN_USE_BSD_FNMATCH 1
 #define _RIN_USE_BSD_SIGNAL 1
@@ -64,6 +66,7 @@
 #if !defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE) && \
     !defined(_XOPEN_SOURCE)
 #define _RIN_USE_XSI_KILLPG 1
+#define _RIN_USE_BSD_GETTEXT 1
 #define _RIN_USE_BSD_FNMATCH 1
 #define _RIN_USE_BSD_SIGNAL 1
 #endif
