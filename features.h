@@ -42,6 +42,7 @@
 #if defined(_GNU_SOURCE)
 #define _RIN_USE_GNU_CLOSE_RANGE 1
 #define _RIN_USE_GNU_GETTID 1
+#define _RIN_USE_GNU_RESID 1
 #define _RIN_USE_GNU_EXECVPE 1
 #define _RIN_USE_GNU_SYNCFS 1
 #define _RIN_USE_GNU_ARGP 1
@@ -71,12 +72,28 @@
 #define _RIN_USE_XSI_KILLPG 1
 #define _RIN_USE_BSD_RANDOM 1
 #endif
+#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU)
+#define _RIN_USE_VFORK 1
+#define _RIN_USE_GETHOSTNAME 1
+#define _RIN_USE_BSD_UTSNAME 1
+#elif defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500
+#define _RIN_USE_GETHOSTNAME 1
+#if _XOPEN_SOURCE < 700 && \
+    (!defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 200809L)
+#define _RIN_USE_VFORK 1
+#endif
+#elif defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200112L
+#define _RIN_USE_GETHOSTNAME 1
+#endif
 #if defined(_DEFAULT_SOURCE) || defined(_BSD_SOURCE)
 #define _RIN_USE_BSD_RANDOM 1
 #define _RIN_USE_BSD_GETTEXT 1
 #define _RIN_USE_BSD_GETENTROPY 1
 #define _RIN_USE_BSD_FNMATCH 1
 #define _RIN_USE_BSD_SIGNAL 1
+#define _RIN_USE_VFORK 1
+#define _RIN_USE_GETHOSTNAME 1
+#define _RIN_USE_BSD_UTSNAME 1
 #define _RIN_USE_XSI_KILLPG 1
 #endif
 #if defined(_SVID_SOURCE)
@@ -105,6 +122,7 @@
 #if defined(_GNU_SOURCE) || defined(__USE_GNU)
 #define _RIN_USE_GNU_CLOSE_RANGE 1
 #define _RIN_USE_GNU_GETTID 1
+#define _RIN_USE_GNU_RESID 1
 #define _RIN_USE_GNU_EXECVPE 1
 #define _RIN_USE_GNU_SYNCFS 1
 #endif
@@ -120,6 +138,23 @@
     (!defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE) && \
      !defined(_XOPEN_SOURCE))
 #define __RIN_FEATURES_DEFAULT 1
+#endif
+#if defined(__USE_MISC) || defined(__USE_GNU) || \
+    (!defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE) && \
+     !defined(_XOPEN_SOURCE))
+#define _RIN_USE_VFORK 1
+#define _RIN_USE_BSD_UTSNAME 1
+#endif
+#if defined(__USE_XOPEN_EXTENDED) && !defined(__USE_XOPEN2K8)
+#define _RIN_USE_VFORK 1
+#endif
+#if defined(__USE_XOPEN_EXTENDED) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200112L)
+#define _RIN_USE_GETHOSTNAME 1
+#elif defined(__USE_MISC) || defined(__USE_GNU) || \
+      (!defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE) && \
+       !defined(_XOPEN_SOURCE))
+#define _RIN_USE_GETHOSTNAME 1
 #endif
 #endif
 

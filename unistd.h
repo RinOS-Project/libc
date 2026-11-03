@@ -1404,6 +1404,7 @@ static inline pid_t _Fork(void) {
 /* The kernel uses copy-on-write plus a generation-bound parent wait for
  * vfork().  Keep this wrapper free of fork/atfork hooks: the child may only
  * execute or exit before the original parent resumes. */
+#if defined(_RIN_USE_VFORK)
 static inline pid_t vfork(void) {
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_VFORK));
     if (result < 0) return (pid_t)-1;
@@ -1413,6 +1414,7 @@ static inline pid_t vfork(void) {
     }
     return (pid_t)result;
 }
+#endif /* _RIN_USE_VFORK */
 
 /* Return the generation-stable identity cookie for a process visible in the
  * caller's process namespace.  CoreCLR uses this as its transport/semaphore
@@ -1758,6 +1760,7 @@ static inline int setegid(gid_t egid) {
     return __rin_set_credential(__RIN_CREDENTIAL_SET_EGID, (uint32_t)egid);
 }
 
+#if defined(_RIN_USE_GNU_RESID)
 static inline int __rin_setres_id_value(uint64_t value, uint32_t* output)
 {
     if (!output) {
@@ -1820,6 +1823,7 @@ static inline int setresgid(gid_t real_gid, gid_t effective_gid,
     return __rin_setres_credential(RIN_CREDENTIAL_SETRES_GID, real_value,
                                    effective_value, saved_value);
 }
+#endif /* _RIN_USE_GNU_RESID */
 #endif /* !RIN_LIBC_NO_ACCOUNT_COMPAT */
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2712,6 +2716,7 @@ static inline size_t confstr(int name, char* buf, size_t len) {
     return required;
 }
 
+#if defined(_RIN_USE_GETHOSTNAME)
 /* gethostname - ホスト名取得 */
 static inline int gethostname(char* name, size_t len) {
     RinUtsnameAbiV2 identity;
@@ -2740,7 +2745,9 @@ static inline int gethostname(char* name, size_t len) {
     name[size] = '\0';
     return 0;
 }
+#endif /* _RIN_USE_GETHOSTNAME */
 
+#if defined(_RIN_USE_BSD_UTSNAME)
 static inline int sethostname(const char* name, size_t len) {
     if (len > (size_t)(RIN_UTSNAME_ABI_V2_FIELD_SIZE - 1u) ||
         (len != 0u && name == NULL)) {
@@ -2787,6 +2794,7 @@ static inline int getdomainname(char* name, size_t len) {
         name[index] = identity.domainname[index];
     return 0;
 }
+#endif /* _RIN_USE_BSD_UTSNAME */
 
 /* ttyname - TTY名取得
  *
