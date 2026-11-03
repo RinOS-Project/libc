@@ -23,6 +23,8 @@
 #ifndef _PTHREAD_H
 #define _PTHREAD_H
 
+#include "features.h"
+
 /* Let C++ wrappers distinguish this ABI from a hosted provider even when
  * both headers use the conventional `_PTHREAD_H` include guard. */
 #define RIN_LIBC_PTHREAD_HEADER 1
@@ -761,6 +763,8 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getschedparam(const pthread_attr
 #endif
 
 /* GNU extension: get attributes of running thread */
+#if defined(_RIN_USE_GNU_PTHREAD) || \
+    defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
 #if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
 extern int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr);
 #else
@@ -815,7 +819,10 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_getattr_np(pthread_t thread, pthread_
     return 0;
 }
 #endif
+#endif
 
+#if defined(_RIN_USE_GNU_PTHREAD) || \
+    defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
 #if defined(RIN_USERSPACE) || defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
 int pthread_setname_np(pthread_t thread, const char* name);
 #else
@@ -846,6 +853,7 @@ static inline int pthread_setname_np(pthread_t thread, const char* name) {
     return _rin_pthread_error_from_result(result);
 #endif
 }
+#endif
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -943,6 +951,8 @@ static inline pthread_t pthread_self(void) {
 #endif
 }
 
+#if defined(_RIN_USE_GNU_PTHREAD) || \
+    defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
 #if defined(RIN_USERSPACE) || defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
 int pthread_getname_np(pthread_t thread, char* name, size_t len);
 #else
@@ -991,6 +1001,7 @@ static inline int pthread_getname_np(pthread_t thread, char* name, size_t len) {
     return 0;
 #endif
 }
+#endif
 #endif
 
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
