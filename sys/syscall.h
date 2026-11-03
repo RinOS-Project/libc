@@ -143,6 +143,21 @@ typedef struct rin_thread_stack_info_v1 {
 #endif
 #define SYS_seccomp         SYS_SECCOMP
 #define __NR_seccomp        SYS_SECCOMP
+#ifndef SYS_LANDLOCK_CREATE_RULESET
+#define SYS_LANDLOCK_CREATE_RULESET RIN_SYS_LANDLOCK_CREATE_RULESET
+#endif
+#ifndef SYS_LANDLOCK_ADD_RULE
+#define SYS_LANDLOCK_ADD_RULE RIN_SYS_LANDLOCK_ADD_RULE
+#endif
+#ifndef SYS_LANDLOCK_RESTRICT_SELF
+#define SYS_LANDLOCK_RESTRICT_SELF RIN_SYS_LANDLOCK_RESTRICT_SELF
+#endif
+#define SYS_landlock_create_ruleset SYS_LANDLOCK_CREATE_RULESET
+#define SYS_landlock_add_rule SYS_LANDLOCK_ADD_RULE
+#define SYS_landlock_restrict_self SYS_LANDLOCK_RESTRICT_SELF
+#define __NR_landlock_create_ruleset SYS_LANDLOCK_CREATE_RULESET
+#define __NR_landlock_add_rule SYS_LANDLOCK_ADD_RULE
+#define __NR_landlock_restrict_self SYS_LANDLOCK_RESTRICT_SELF
 
 /* Signal-related RinPort syscalls. */
 #define SYS_rt_sigprocmask  SYS_RT_SIGPROCMASK
