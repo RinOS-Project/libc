@@ -212,6 +212,8 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 #define MADV_NOHUGEPAGE  15  /* disable transparent huge pages for range */
 #define MADV_DONTDUMP    16  /* exclude this mapping from core dumps */
 #define MADV_DODUMP      17  /* include this mapping in core dumps */
+#define MADV_WIPEONFORK  18  /* zero private anonymous pages in fork children */
+#define MADV_KEEPONFORK  19  /* retain private anonymous contents on fork */
 #define MADV_HWPOISON   100  /* isolate an owned anonymous page as poisoned */
 #define RIN_MADV_HWPOISON_SUPPORTED_IA32 1
 #define RIN_MADV_HWPOISON_SUPPORTED_X86_64 1
