@@ -63,6 +63,9 @@ size_t wcsnlen(const wchar_t* string, size_t maxlen);
 wchar_t* wcsdup(const wchar_t* string);
 size_t wcslcpy(wchar_t* destination, const wchar_t* source, size_t size);
 size_t wcslcat(wchar_t* destination, const wchar_t* source, size_t size);
+#if defined(RIN_WCHAR_IMPLEMENTATION) || defined(__RIN_FEATURES_GNU)
+wchar_t* wcschrnul(const wchar_t* string, wchar_t character);
+#endif
 #else
 static inline size_t wcsnlen(const wchar_t* string, size_t maxlen) {
     size_t length = 0u;
@@ -147,6 +150,13 @@ static inline wchar_t* wcschr(const wchar_t* s, wchar_t c) {
     }
     return (c == L'\0') ? (wchar_t*)s : NULL;
 }
+
+#if defined(__RIN_FEATURES_GNU)
+static inline wchar_t* wcschrnul(const wchar_t* string, wchar_t character) {
+    while (*string != L'\0' && *string != character) ++string;
+    return (wchar_t*)string;
+}
+#endif
 
 static inline wchar_t* wcsrchr(const wchar_t* s, wchar_t c) {
     const wchar_t* last = NULL;
@@ -265,6 +275,18 @@ static inline wchar_t* wmemcpy(wchar_t* dest, const wchar_t* src, size_t n) {
     for (size_t i = 0; i < n; i++) dest[i] = src[i];
     return dest;
 }
+
+#if defined(RIN_WCHAR_IMPLEMENTATION)
+wchar_t* wmempcpy(wchar_t* destination, const wchar_t* source, size_t count);
+#elif defined(__RIN_FEATURES_GNU)
+static inline wchar_t* wmempcpy(wchar_t* destination,
+                                const wchar_t* source, size_t count) {
+    size_t index;
+    for (index = 0u; index < count; ++index)
+        destination[index] = source[index];
+    return destination + count;
+}
+#endif
 
 static inline wchar_t* wmemmove(wchar_t* dest, const wchar_t* src, size_t n) {
     uintptr_t dest_address = (uintptr_t)dest;
