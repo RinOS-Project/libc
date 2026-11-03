@@ -809,7 +809,7 @@ static inline int posix_fallocate(int fd, off_t offset, off_t len) {
 }
 #endif
 
-#if defined(__RINOS__) || defined(__USE_GNU)
+#if defined(__USE_GNU)
 static inline ssize_t readahead(int fd, off64_t offset, size_t count) {
     int error = _rin_readahead_result(fd, offset, count);
     if (error == 0) return 0;
