@@ -191,6 +191,8 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_gettid          SYS_GETTID
 #define SYS_getrandom       SYS_GETRANDOM
 #define SYS_set_tid_address SYS_SET_TID_ADDRESS
+#define SYS_set_robust_list SYS_SET_ROBUST_LIST
+#define SYS_get_robust_list SYS_GET_ROBUST_LIST
 #if defined(RIN_HOST_LINUX_FUTEX_TEST)
 #define SYS_sched_yield     RIN_HOST_LINUX_SYS_SCHED_YIELD
 #define SYS_futex           RIN_HOST_LINUX_SYS_FUTEX
@@ -300,6 +302,8 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_exit_group     SYS_exit_group  /* RinOS process-exit operation */
 #define __NR_getrandom      SYS_GETRANDOM   /* bounded kernel CSPRNG */
 #define __NR_set_tid_address SYS_SET_TID_ADDRESS /* clear_child_tid handler */
+#define __NR_set_robust_list SYS_SET_ROBUST_LIST
+#define __NR_get_robust_list SYS_GET_ROBUST_LIST
 #define __NR_ptrace          SYS_PTRACE
 
 /* ═══════════════════════════════════════════════════════════════
