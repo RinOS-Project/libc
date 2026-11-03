@@ -18,11 +18,20 @@
 #ifndef _SYS_RESOURCE_H
 #define _SYS_RESOURCE_H
 
+#include "../features.h"
 #include "types.h"
 #include "syscall.h"
 #include "../time.h"
 #include "../errno.h"
 #include "../limits.h"
+
+#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU)
+#define __RIN_RESOURCE_LIMIT_EXTENSIONS 1
+#endif
+#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU) || \
+    defined(_LARGEFILE64_SOURCE)
+#define __RIN_RESOURCE_LIMIT64_EXTENSIONS 1
+#endif
 #if defined(RIN_FREESTANDING) || defined(RIN_USERSPACE) || \
     defined(RIN_RESOURCE_LIMIT_PRODUCT_SYSCALL)
 #include <rin/resource/limit_abi.h>
@@ -118,12 +127,14 @@ struct rlimit {
     rlim_t rlim_max;  /* ハードリミット */
 };
 
+#if defined(__RIN_RESOURCE_LIMIT64_EXTENSIONS)
 struct rlimit64 {
     unsigned long long rlim_cur;
     unsigned long long rlim_max;
 };
-
 #define RLIM64_INFINITY (~0ULL)
+#endif
+
 /* A freestanding product may bind these hooks to the kernel's
  * generation-bound resource-limit owner.  They use POSIX return values
  * (0/-1) and must set errno on failure.  Weak lookup keeps hosted libc
@@ -308,9 +319,14 @@ struct rusage {
 
 #define RUSAGE_SELF     0
 #define RUSAGE_CHILDREN (-1)
+#if defined(__RIN_RESOURCE_LIMIT_EXTENSIONS)
 #define RUSAGE_THREAD   1
+#endif
 
 #endif /* _RUSAGE_DEFINED */
+
+/* Kept available internally when the public GNU selector is hidden. */
+#define __RIN_RUSAGE_THREAD_VALUE 1
 
 /* ═══════════════════════════════════════════════════════════════
  * 優先度定数
@@ -377,6 +393,7 @@ static inline int setrlimit(int resource, const struct rlimit* rlim) {
 #endif
 }
 
+#if defined(__RIN_RESOURCE_LIMIT_EXTENSIONS)
 /* prlimit - プロセスのリソース制限を取得/設定 */
 static inline int prlimit(pid_t pid, int resource,
                           const struct rlimit* new_limit,
@@ -404,7 +421,9 @@ static inline int prlimit(pid_t pid, int resource,
     return getrlimit(resource, old_limit);
 #endif
 }
+#endif
 
+#if defined(__RIN_RESOURCE_LIMIT64_EXTENSIONS)
 /* 64-bit limit APIs retain finite IA-32 limits above 4 GiB. */
 static inline int getrlimit64(int resource, struct rlimit64* rlim)
 {
@@ -444,7 +463,10 @@ static inline int setrlimit64(int resource, const struct rlimit64* rlim)
     return -1;
 #endif
 }
+#endif
 
+#if defined(__RIN_RESOURCE_LIMIT_EXTENSIONS) && \
+    defined(__RIN_RESOURCE_LIMIT64_EXTENSIONS)
 static inline int prlimit64(pid_t pid, int resource,
                             const struct rlimit64* new_limit,
                             struct rlimit64* old_limit)
@@ -465,6 +487,7 @@ static inline int prlimit64(pid_t pid, int resource,
     return -1;
 #endif
 }
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * リソース使用量関数
@@ -507,7 +530,7 @@ static inline int __rin_getrusage_status_result(intptr_t result) {
 static inline int getrusage(int who, struct rusage* usage) {
     int status;
     if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN &&
-        who != RUSAGE_THREAD) {
+        who != __RIN_RUSAGE_THREAD_VALUE) {
         errno = EINVAL;
         return -1;
     }
@@ -583,5 +606,9 @@ static inline int setpriority(int which, id_t who, int prio) {
 #endif
 
 #endif /* _SYS_RESOURCE_H */
+
+#undef __RIN_RESOURCE_LIMIT_EXTENSIONS
+#undef __RIN_RESOURCE_LIMIT64_EXTENSIONS
+#undef __RIN_RUSAGE_THREAD_VALUE
 
 #endif /* hosted POSIX resource delegation */

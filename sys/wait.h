@@ -15,6 +15,7 @@
 #ifndef _SYS_WAIT_H
 #define _SYS_WAIT_H
 
+#include "../features.h"
 #include "types.h"
 #include "syscall.h"
 #include "../time.h"
@@ -276,7 +277,9 @@ struct rusage {
 /* rusageの定数 */
 #define RUSAGE_SELF     0
 #define RUSAGE_CHILDREN (-1)
+#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU)
 #define RUSAGE_THREAD   1
+#endif
 
 static inline int __rin_wait_bsd_options_valid(int options) {
     return (options & ~(WNOHANG | WUNTRACED | WCONTINUED)) == 0;
