@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* Classic BPF instruction ABI used by seccomp filters. */
+/* Classic BPF instruction ABI used by seccomp and socket filters. */
 #ifndef RIN_LIBC_LINUX_FILTER_H
 #define RIN_LIBC_LINUX_FILTER_H
 
@@ -50,6 +50,39 @@
 #define BPF_JSET 0x40
 #define BPF_TAX  0x00
 #define BPF_TXA  0x80
+
+/* Socket-filter ancillary load offsets (BPF_ABS + BPF_W). */
+#define SKF_AD_OFF             (-0x1000)
+#define SKF_AD_PROTOCOL        0
+#define SKF_AD_PKTTYPE         4
+#define SKF_AD_IFINDEX         8
+#define SKF_AD_NLATTR          12
+#define SKF_AD_NLATTR_NEST     16
+#define SKF_AD_MARK            20
+#define SKF_AD_QUEUE           24
+#define SKF_AD_HATYPE          28
+#define SKF_AD_RXHASH          32
+#define SKF_AD_CPU             36
+#define SKF_AD_ALU_XOR_X       40
+#define SKF_AD_VLAN_TAG        44
+#define SKF_AD_VLAN_TAG_PRESENT 48
+#define SKF_AD_PAY_OFFSET      52
+#define SKF_AD_RANDOM          56
+#define SKF_AD_VLAN_TPID       60
+#define SKF_AD_MAX             64
+#define SKF_NET_OFF            (-0x100000)
+#define SKF_LL_OFF             (-0x200000)
+
+#define SKF_AD_PROTOCOL_LOAD \
+    ((uint32_t)(SKF_AD_OFF + SKF_AD_PROTOCOL))
+#define SKF_AD_PKTTYPE_LOAD \
+    ((uint32_t)(SKF_AD_OFF + SKF_AD_PKTTYPE))
+#define SKF_AD_IFINDEX_LOAD \
+    ((uint32_t)(SKF_AD_OFF + SKF_AD_IFINDEX))
+#define SKF_AD_HATYPE_LOAD \
+    ((uint32_t)(SKF_AD_OFF + SKF_AD_HATYPE))
+#define SKF_AD_ALU_XOR_X_LOAD \
+    ((uint32_t)(SKF_AD_OFF + SKF_AD_ALU_XOR_X))
 
 #define BPF_STMT(code, k) { (uint16_t)(code), 0u, 0u, (uint32_t)(k) }
 #define BPF_JUMP(code, k, jt, jf) \
