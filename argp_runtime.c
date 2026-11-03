@@ -43,6 +43,8 @@ typedef struct rin_argp_run {
     rin_argp_node *nodes;
     size_t node_count;
     size_t node_capacity;
+    int input_argc;
+    char **input_argv;
     int saw_nonoption;
     int early_success;
 } rin_argp_run;
@@ -161,6 +163,16 @@ static error_t rin_argp_call(rin_argp_run *run, size_t node_index,
     node->input = run->state.input;
     node->child_inputs = run->state.child_inputs;
     node->hook = run->state.hook;
+    if (run->state.argc < 0 || run->state.argc > run->input_argc ||
+        (run->state.argc > 0 && !run->state.argv) ||
+        run->state.next < 0 || run->state.next > run->state.argc) {
+        run->state.argc = run->input_argc;
+        run->state.argv = run->input_argv;
+        if (run->state.next < 0) run->state.next = 0;
+        if (run->state.next > run->state.argc)
+            run->state.next = run->state.argc;
+        return EINVAL;
+    }
     if (key == ARGP_KEY_ARG && result == 0)
         node->args_processed = run->state.arg_num + 1u;
     else if (key == ARGP_KEY_ARG)
@@ -880,7 +892,8 @@ static error_t rin_argp_reorder(rin_argp_run *run, unsigned char *kind,
         if (kind[index] == 5u)
             ordered[output++] = run->state.argv[index];
     if (output != count) return EINVAL;
-    memcpy(run->state.argv, ordered, (size_t)count * sizeof(char *));
+    if (count)
+        memcpy(run->state.argv, ordered, (size_t)count * sizeof(char *));
     if (marker >= 0) {
         int prequoted_operands = 0;
         for (int index = first; index < marker; ++index)
@@ -1042,9 +1055,12 @@ error_t argp_parse(const struct argp *argp, int argc, char **argv,
     if (flags & ARGP_NO_ERRS) flags |= ARGP_NO_EXIT;
     run.state.root_argp = argp;
     run.state.argc = argc;
+    run.input_argc = argc;
     run.state.argv = argv;
+    run.input_argv = argv;
     run.state.flags = flags;
     run.state.next = (flags & ARGP_PARSE_ARGV0) ? 0 : 1;
+    if (run.state.next > argc) run.state.next = argc;
     run.state.input = input;
     run.state.err_stream = stderr;
     run.state.out_stream = stdout;
