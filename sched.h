@@ -910,6 +910,12 @@ static inline int sched_getcpu(void) {
     }
     return (int)cpu;
 }
+#if defined(__USE_GNU)
+static inline int getcpu(unsigned int* cpu, unsigned int* node) {
+    return _rin_sched_status(_RIN_SCHED_SYSCALL2(
+        SYS_GETCPU_V1, (uintptr_t)cpu, (uintptr_t)node));
+}
+#endif
 #endif /* RIN_SCHED_TARGET_FUNCTIONS */
 
 #ifdef __cplusplus
