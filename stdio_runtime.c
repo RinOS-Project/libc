@@ -767,11 +767,11 @@ int rin_stdio_cookie_seek(FILE* stream, int64_t offset, int whence,
             callback_errno != 0 ? callback_errno : EIO);
         return -1;
     }
+    if (callback_offset < 0) {
+        _rin_stdio_cookie_callback_error(stream, EIO);
+        return -1;
+    }
     if (position) {
-        if (callback_offset < 0) {
-            _rin_stdio_cookie_callback_error(stream, EIO);
-            return -1;
-        }
         *position = (int64_t)callback_offset;
     }
     errno = saved_errno;
