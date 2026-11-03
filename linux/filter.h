@@ -72,6 +72,8 @@
 #define SKF_AD_MAX             64
 #define SKF_NET_OFF            (-0x100000)
 #define SKF_LL_OFF             (-0x200000)
+#define BPF_NET_OFF             SKF_NET_OFF
+#define BPF_LL_OFF              SKF_LL_OFF
 
 #define SKF_AD_PROTOCOL_LOAD \
     ((uint32_t)(SKF_AD_OFF + SKF_AD_PROTOCOL))
