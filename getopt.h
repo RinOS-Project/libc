@@ -1,80 +1,65 @@
 /*
  * RinOS libc - getopt.h
- * コマンドライン引数解析
+ * GNU command-line option API.
  */
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
-    defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
+    (defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || \
+     defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)) && \
+    (defined(__GNUC__) || defined(__clang__))
+#define _RIN_LIBC_GETOPT_HOSTED_FORWARD 1
 #include_next <getopt.h>
 #else
 
 #ifndef _GETOPT_H
 #define _GETOPT_H
 
-#include "stddef.h"
-#include "stdio.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ═══════════════════════════════════════════════════════════════
- * グローバル変数
- * ═══════════════════════════════════════════════════════════════*/
-
-/* POSIX getopt state is process-owned.  Keep one libc definition instead of
- * a header-local copy that gives every translation unit a different cursor. */
+/* The POSIX getopt state is also declared from <unistd.h>. */
 extern char* optarg;
 extern int optind;
 extern int opterr;
 extern int optopt;
+/* BSD reset extension; <getopt.h> is the explicit extension boundary. */
 extern int optreset;
 
-/* ═══════════════════════════════════════════════════════════════
- * getopt_long用構造体
- * ═══════════════════════════════════════════════════════════════*/
-
 struct option {
-    const char* name;     /* 長いオプション名 */
-    int         has_arg;  /* 引数要求 */
-    int*        flag;     /* フラグへのポインタ (NULL = 値を返す) */
-    int         val;      /* flagがNULLの時の戻り値、またはflagに設定する値 */
+    const char* name;
+    int has_arg;
+    int* flag;
+    int val;
 };
 
-static inline int _rin_getopt_match_long_option(
-    const struct option* longopts, const char* name, int name_len,
-    int* ambiguous_out) {
-    int prefix_index = -1;
-    int prefix_count = 0;
-    if (ambiguous_out) *ambiguous_out = 0;
-    if (!longopts || !name || !ambiguous_out || name_len <= 0) return -1;
-    for (int index = 0; longopts[index].name; ++index) {
-        const char* option_name = longopts[index].name;
-        int matched = 0;
-        while (matched < name_len && option_name[matched] != '\0' &&
-               option_name[matched] == name[matched]) {
-            ++matched;
-        }
-        if (matched != name_len) continue;
-        if (option_name[matched] == '\0') return index;
-        prefix_index = index;
-        ++prefix_count;
-    }
-    if (prefix_count == 1) return prefix_index;
-    if (prefix_count > 1) *ambiguous_out = 1;
-    return -1;
-}
-
-/* has_argの値 */
 #define no_argument       0
 #define required_argument 1
 #define optional_argument 2
 
-/* ═══════════════════════════════════════════════════════════════
- * 内部状態
- * ═══════════════════════════════════════════════════════════════*/
+int getopt(int argc, char* const argv[], const char* optstring);
+int getopt_long(int argc, char* const argv[], const char* optstring,
+                const struct option* longopts, int* longindex);
+int getopt_long_only(int argc, char* const argv[], const char* optstring,
+                     const struct option* longopts, int* longindex);
 
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _GETOPT_H */
+
+/* The parser is emitted once by getopt.c; ordinary consumers see only the
+ * stable API declarations above. */
+#if defined(RIN_LIBC_GETOPT_IMPLEMENTATION) && \
+    !defined(_RIN_LIBC_GETOPT_IMPLEMENTATION_INCLUDED)
+#define _RIN_LIBC_GETOPT_IMPLEMENTATION_INCLUDED 1
+#ifdef __cplusplus
+extern "C" {
+#endif
+#include "stddef.h"
+#include "stdio.h"
 extern int _rin_getopt_pos;  /* 現在のargv[optind]内の位置 */
 extern int _rin_getopt_first_nonopt;
 extern int _rin_getopt_last_nonopt;
@@ -252,7 +237,7 @@ static inline int _rin_getopt_return_nonoption(char* const argv[],
  * getopt関数
  * ═══════════════════════════════════════════════════════════════*/
 
-static inline int getopt(int argc, char* const argv[], const char* optstring) {
+int getopt(int argc, char* const argv[], const char* optstring) {
     optarg = NULL;
     int prepared = _rin_getopt_prepare(argc, argv, optstring);
     if (prepared == 0) return -1;
@@ -326,7 +311,7 @@ static inline int getopt(int argc, char* const argv[], const char* optstring) {
  * getopt_long関数
  * ═══════════════════════════════════════════════════════════════*/
 
-static inline int getopt_long(int argc, char* const argv[],
+int getopt_long(int argc, char* const argv[],
                               const char* optstring,
                               const struct option* longopts,
                               int* longindex) {
@@ -419,7 +404,7 @@ static inline int getopt_long(int argc, char* const argv[],
  * -xxxを長いオプションとして解釈
  * ═══════════════════════════════════════════════════════════════*/
 
-static inline int getopt_long_only(int argc, char* const argv[],
+int getopt_long_only(int argc, char* const argv[],
                                    const char* optstring,
                                    const struct option* longopts,
                                    int* longindex) {
@@ -502,10 +487,10 @@ static inline int getopt_long_only(int argc, char* const argv[],
     return getopt_long(argc, argv, optstring, longopts, longindex);
 }
 
+#endif /* RIN_LIBC_GETOPT_IMPLEMENTATION */
+
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* _GETOPT_H */
-
-#endif /* hosted Linux delegates to its native option parser */
+#endif /* hosted builds use the host getopt API */

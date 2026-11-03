@@ -1386,10 +1386,9 @@ static inline pid_t fork(void) {
     return __rin_fork_with_pidfd(NULL);
 }
 
-/* POSIX.1-2024 _Fork. Keep it out of older strict POSIX namespaces while
- * retaining GNU/default extension visibility. */
-#if defined(_RIN_UNISTD_POSIX_2024_VISIBLE) || \
-    defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+/* POSIX.1-2024 _Fork。通常のforkと同じgeneration付きkernel処理を使い、
+ * runtime lock、allocator、RinFS hook、atfork handlerは実行しない。子processは
+ * async-signal-safeでない関数を呼ぶ前にexecまたは_exitを実行する。 */
 static inline pid_t _Fork(void) {
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_FORK));
     if (result < 0) return (pid_t)-1;
@@ -1399,7 +1398,6 @@ static inline pid_t _Fork(void) {
     }
     return (pid_t)result;
 }
-#endif
 
 /* The kernel uses copy-on-write plus a generation-bound parent wait for
  * vfork().  Keep this wrapper free of fork/atfork hooks: the child may only
@@ -3339,9 +3337,13 @@ static inline int execvp(const char* file, char* const argv[]) {
 }
 #endif /* RIN_UNISTD_TARGET_PROCESS_FRONTEND */
 
-/* POSIX declares getopt() and its state in <unistd.h>.  The implementation
- * is shared with the optional getopt_long() API in getopt.h. */
-#include "getopt.h"
+/* POSIX getopt belongs to <unistd.h>. GNU long-option declarations and
+ * struct option are kept behind the explicit <getopt.h> extension header. */
+extern char* optarg;
+extern int optind;
+extern int opterr;
+extern int optopt;
+int getopt(int argc, char* const argv[], const char* optstring);
 
 /* sbrk - ヒープポインタ操作
  * NOTE: noinline to prevent compiler optimization issues with syscalls */
