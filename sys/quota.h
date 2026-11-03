@@ -45,7 +45,9 @@ static inline int quotactl_fd(int fd, RinQuotaCtlFdRequestV1* request) {
         request->version != RIN_QUOTACTL_FD_ABI_VERSION ||
         (request->command != RIN_QUOTACTL_FD_COMMAND_SET &&
          request->command != RIN_QUOTACTL_FD_COMMAND_GET &&
-         request->command != RIN_QUOTACTL_FD_COMMAND_SET_PROJECT_ID)) {
+         request->command != RIN_QUOTACTL_FD_COMMAND_SET_PROJECT_ID &&
+         request->command != RIN_QUOTACTL_FD_COMMAND_WATCH &&
+         request->command != RIN_QUOTACTL_FD_COMMAND_UNWATCH)) {
         errno = EINVAL;
         return -1;
     }
