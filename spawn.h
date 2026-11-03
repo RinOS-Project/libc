@@ -641,7 +641,11 @@ _RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_adddup2(posix_spawn_fil
 #endif
 
 #ifndef _RIN_POSIX_SPAWN_GETENV
+#if defined(_WIN32)
+#define _RIN_POSIX_SPAWN_GETENV(name) getenv(name)
+#else
 #define _RIN_POSIX_SPAWN_GETENV(name) secure_getenv(name)
+#endif
 #endif
 
 static inline int _rin_posix_spawn_capture_search_path(

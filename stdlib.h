@@ -58,6 +58,14 @@
 #include "../libunicode/rin_unicode.h"
 #endif /* !MIDL_PASS */
 
+#if defined(_RIN_USE_GNU_SECURE_GETENV) || defined(_GNU_SOURCE) || \
+    defined(__USE_GNU) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI)
+#define _RIN_STDLIB_SECURE_GETENV_VISIBLE 1
+#endif
+
 #ifndef _RIN_STDLIB_SYSCALL1
 #define _RIN_STDLIB_SYSCALL1(number, arg1) \
     _syscall1((uintptr_t)(number), (uintptr_t)(arg1))
@@ -480,7 +488,10 @@ static inline int putenv(char* string) {
 /* The process-wide environment owner is implemented once in libc so it can
  * serialize mutations and reclaim retired tables across translation units. */
 char* getenv(const char* name);
+#if defined(_RIN_STDLIB_SECURE_GETENV_VISIBLE) || \
+    defined(RIN_STDLIB_SECURE_GETENV_IMPLEMENTATION)
 char* secure_getenv(const char* name);
+#endif
 /* getenv()／secure_getenv()の戻り値は借用ポインターであり、並行する環境
  * 変更をまたいで参照しないこと。この拡張はfree()可能な所有コピーを返す。
  * NULLの場合はerrnoがEINVAL、ENOENT、ENOMEM、EOVERFLOWのいずれかになる。 */
@@ -499,9 +510,11 @@ extern int __cdecl _putenv(const char* string);
 extern int __cdecl _putenv_s(const char* name, const char* value);
 extern char*** __cdecl __p__environ(void);
 
+#if defined(_RIN_STDLIB_SECURE_GETENV_VISIBLE)
 static inline char* secure_getenv(const char* name) {
     return getenv(name);
 }
+#endif
 
 static inline int _rin_hosted_environment_valid_name(const char* name) {
     size_t index;
@@ -663,7 +676,9 @@ static inline int clearenv(void) {
 /* Hosted POSIX C programs use the native CRT's environment implementation.
  * In particular, secure_getenv must retain the host's secure-execution check. */
 char* getenv(const char* name);
+#if defined(_RIN_STDLIB_SECURE_GETENV_VISIBLE)
 char* secure_getenv(const char* name);
+#endif
 int setenv(const char* name, const char* value, int overwrite);
 int unsetenv(const char* name);
 int putenv(char* string);
@@ -699,9 +714,11 @@ static inline int putenv(char* string) {
 #if !defined(_MSVCRT_COMPAT) && !defined(_RIN_STDLIB_HOSTED_CXX_OWNER) && \
     !(defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)) && \
     !defined(_RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER)
+#if defined(_RIN_STDLIB_SECURE_GETENV_VISIBLE)
 static inline char* secure_getenv(const char* name) {
     return getenv(name);
 }
+#endif
 
 static inline int clearenv(void) {
 #if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
@@ -1807,6 +1824,7 @@ static inline size_t wcstombs(char* dest, const wchar_t* src, size_t n) {
 #undef _RIN_STDLIB_HOSTED_C_OWNER
 #undef _RIN_STDLIB_HOSTED_CXX_OWNER
 #undef _RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER
+#undef _RIN_STDLIB_SECURE_GETENV_VISIBLE
 
 #ifdef __cplusplus
 }

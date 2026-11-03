@@ -1,9 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 /* Process-wide ownership and reclamation for the freestanding environment. */
 
+#define RIN_STDLIB_SECURE_GETENV_IMPLEMENTATION 1
 #include "stdlib.h"
 #include "internal/rin_environment_runtime.h"
 #include "rin_account_compat.h"
+#include "linux/futex.h"
+#include "sys/syscall.h"
 
 typedef struct RinEnvironmentAllocation {
     void* pointer;
@@ -11,9 +14,10 @@ typedef struct RinEnvironmentAllocation {
     struct RinEnvironmentAllocation* next;
 } RinEnvironmentAllocation;
 
-static volatile int g_environment_writer_lock;
+static volatile unsigned int g_environment_writer_lock;
 static volatile unsigned int g_environment_epoch;
 static volatile unsigned int g_environment_readers[2];
+static volatile unsigned int g_environment_reader_waiters[2];
 static RinEnvironmentAllocation* g_environment_allocations;
 
 #if defined(RIN_ENVIRONMENT_RUNTIME_TESTING)
@@ -32,15 +36,76 @@ size_t __rin_env_test_reclaim_comparisons(void) {
 #define ENVIRONMENT_RECLAIM_COUNT_COMPARISON() ((void)0)
 #endif
 
+static void environment_yield_after_futex_error(void) {
+    const int saved_errno = errno;
+    (void)syscall(SYS_sched_yield);
+    errno = saved_errno;
+}
+
+static void environment_futex_wait(volatile unsigned int* address,
+                                  unsigned int expected) {
+    const int saved_errno = errno;
+    const long result = syscall(SYS_futex, address, FUTEX_WAIT_PRIVATE,
+                                expected, NULL, NULL, 0);
+    if (result == -1 && errno != EAGAIN && errno != EINTR)
+        environment_yield_after_futex_error();
+    errno = saved_errno;
+}
+
+static void environment_futex_wake(volatile unsigned int* address,
+                                   int count) {
+    const int saved_errno = errno;
+    (void)syscall(SYS_futex, address, FUTEX_WAKE_PRIVATE, count,
+                  NULL, NULL, 0);
+    errno = saved_errno;
+}
+
 static void environment_lock(void) {
-    while (__sync_lock_test_and_set(&g_environment_writer_lock, 1)) {
-        while (__atomic_load_n(&g_environment_writer_lock, __ATOMIC_RELAXED))
-            __asm__ volatile("pause" ::: "memory");
+    if (__atomic_exchange_n(&g_environment_writer_lock, 1u,
+                            __ATOMIC_ACQUIRE) == 0u)
+        return;
+    for (;;) {
+        if (__atomic_exchange_n(&g_environment_writer_lock, 2u,
+                                __ATOMIC_ACQUIRE) == 0u)
+            return;
+        environment_futex_wait(&g_environment_writer_lock, 2u);
     }
 }
 
 static void environment_unlock(void) {
-    __sync_lock_release(&g_environment_writer_lock);
+    if (__atomic_exchange_n(&g_environment_writer_lock, 0u,
+                            __ATOMIC_RELEASE) == 2u)
+        environment_futex_wake(&g_environment_writer_lock, 1);
+}
+
+static void environment_reader_leave(unsigned int epoch) {
+    const unsigned int slot = epoch & 1u;
+    const unsigned int previous = __atomic_fetch_sub(
+        &g_environment_readers[slot], 1u, __ATOMIC_RELEASE);
+    if (previous != 1u ||
+        !__atomic_load_n(&g_environment_reader_waiters[slot],
+                         __ATOMIC_SEQ_CST))
+        return;
+    environment_futex_wake(&g_environment_readers[slot], 1);
+}
+
+static void environment_wait_for_readers(unsigned int epoch) {
+    const unsigned int slot = epoch & 1u;
+    for (;;) {
+        unsigned int readers = __atomic_load_n(&g_environment_readers[slot],
+                                               __ATOMIC_ACQUIRE);
+        if (readers == 0u) break;
+        __atomic_store_n(&g_environment_reader_waiters[slot], 1u,
+                         __ATOMIC_SEQ_CST);
+        readers = __atomic_load_n(&g_environment_readers[slot],
+                                  __ATOMIC_ACQUIRE);
+        if (readers == 0u) break;
+        /* FUTEX_WAIT compares the count while enqueueing, so a last-reader
+         * wake between this load and the syscall cannot be lost. */
+        environment_futex_wait(&g_environment_readers[slot], readers);
+    }
+    __atomic_store_n(&g_environment_reader_waiters[slot], 0u,
+                     __ATOMIC_SEQ_CST);
 }
 
 char** __rin_env_read_begin(unsigned int* epoch_out) {
@@ -54,14 +119,12 @@ char** __rin_env_read_begin(unsigned int* epoch_out) {
             *epoch_out = epoch;
             return __atomic_load_n(&environ, __ATOMIC_ACQUIRE);
         }
-        __atomic_fetch_sub(&g_environment_readers[epoch & 1u], 1u,
-                           __ATOMIC_RELEASE);
+        environment_reader_leave(epoch);
     }
 }
 
 void __rin_env_read_end(unsigned int epoch) {
-    __atomic_fetch_sub(&g_environment_readers[epoch & 1u], 1u,
-                       __ATOMIC_RELEASE);
+    environment_reader_leave(epoch);
 }
 
 unsigned int __rin_env_generation(void) {
@@ -222,9 +285,7 @@ static void environment_synchronize_and_reclaim(char** survivor) {
         __atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE);
     __atomic_store_n(&g_environment_epoch, old_epoch + 1u,
                      __ATOMIC_RELEASE);
-    while (__atomic_load_n(&g_environment_readers[old_epoch & 1u],
-                           __ATOMIC_ACQUIRE) != 0u)
-        __asm__ volatile("pause" ::: "memory");
+    environment_wait_for_readers(old_epoch);
     environment_reclaim(survivor);
 }
 
@@ -236,9 +297,7 @@ static int environment_publish(char** expected, char** replacement) {
     old_epoch = __atomic_load_n(&g_environment_epoch, __ATOMIC_ACQUIRE);
     __atomic_store_n(&g_environment_epoch, old_epoch + 1u,
                      __ATOMIC_RELEASE);
-    while (__atomic_load_n(&g_environment_readers[old_epoch & 1u],
-                           __ATOMIC_ACQUIRE) != 0u)
-        __asm__ volatile("pause" ::: "memory");
+    environment_wait_for_readers(old_epoch);
     environment_reclaim(replacement);
     return 1;
 }
@@ -293,6 +352,44 @@ char* getenv(const char* name) {
     char* result = __rin_env_get_from_snapshot(snapshot, name);
     __rin_env_read_end(epoch);
     return result;
+}
+
+char* rin_getenv_copy(const char* name) {
+    const int saved_errno = errno;
+    unsigned int epoch;
+    char** snapshot;
+    const char* value;
+    size_t length;
+    char* copy;
+
+    if (!environment_name_valid(name)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    snapshot = __rin_env_read_begin(&epoch);
+    value = __rin_env_get_from_snapshot(snapshot, name);
+    if (!value) {
+        __rin_env_read_end(epoch);
+        errno = ENOENT;
+        return NULL;
+    }
+    length = environment_length(value);
+    if (length == SIZE_MAX) {
+        __rin_env_read_end(epoch);
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    copy = (char*)malloc(length + 1u);
+    if (!copy) {
+        __rin_env_read_end(epoch);
+        errno = ENOMEM;
+        return NULL;
+    }
+    for (size_t index = 0u; index <= length; ++index)
+        copy[index] = value[index];
+    __rin_env_read_end(epoch);
+    errno = saved_errno;
+    return copy;
 }
 
 int __rin_env_is_secure(void) {
