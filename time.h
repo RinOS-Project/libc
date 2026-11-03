@@ -29,6 +29,15 @@
 #define RIN_TIME_HOST_HOOK_COMPAT 1
 #endif
 
+/* Windows hosted builds have no RinOS clock or timer provider unless a
+ * caller supplies an explicit hook.  Keep the public API available, but do
+ * not send target syscall numbers to the host process. */
+#if defined(_WIN32) && defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    !defined(RIN_TIME_CUSTOM_SYSCALL_HOOK)
+#define RIN_TIME_HOSTED_WINDOWS_NO_PROVIDER 1
+#endif
+
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
     defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
@@ -44,6 +53,7 @@
 
 #include "stddef.h"
 #include "stdint.h"
+#include "errno.h"
 #include "signal.h"
 #include "limits.h"
 #include "internal/time_type.h"
@@ -114,14 +124,24 @@ typedef void* RinStrptimeLocale;
 #endif
 
 #ifndef _RIN_TIME_SYSCALL1
+#if defined(RIN_TIME_HOSTED_WINDOWS_NO_PROVIDER)
+#define _RIN_TIME_SYSCALL1(number, argument1) \
+    ((void)(number), (void)(argument1), -(intptr_t)ENOSYS)
+#else
 #define _RIN_TIME_SYSCALL1(number, argument1) \
     _syscall1((uintptr_t)(number), (uintptr_t)(argument1))
 #endif
+#endif
 
 #ifndef _RIN_TIME_SYSCALL2
+#if defined(RIN_TIME_HOSTED_WINDOWS_NO_PROVIDER)
+#define _RIN_TIME_SYSCALL2(number, argument1, argument2) \
+    ((void)(number), (void)(argument1), (void)(argument2), -(intptr_t)ENOSYS)
+#else
 #define _RIN_TIME_SYSCALL2(number, argument1, argument2) \
     _syscall2((uintptr_t)(number), (uintptr_t)(argument1), \
               (uintptr_t)(argument2))
+#endif
 #endif
 
 #ifndef _RIN_TIME_SLEEP
@@ -130,9 +150,15 @@ typedef void* RinStrptimeLocale;
 #endif
 
 #ifndef _RIN_TIME_FUTEX_WAIT
+#if defined(RIN_TIME_HOSTED_WINDOWS_NO_PROVIDER)
+#define _RIN_TIME_FUTEX_WAIT(address, operation, expected, timeout, bitset) \
+    ((void)(address), (void)(operation), (void)(expected), (void)(timeout), \
+     (void)(bitset), (errno = ENOSYS), (intptr_t)-1)
+#else
 #define _RIN_TIME_FUTEX_WAIT(address, operation, expected, timeout, bitset) \
     _rin_time_futex_wait_call((address), (operation), (expected), \
                               (timeout), (bitset))
+#endif
 #endif
 
 #ifndef _RIN_TIME_GETTIMEOFDAY
@@ -176,10 +202,16 @@ typedef void* RinStrptimeLocale;
 #endif
 
 #ifndef _RIN_TIME_TIMER_SETTIME
+#if defined(RIN_TIME_HOSTED_WINDOWS_NO_PROVIDER)
+#define _RIN_TIME_TIMER_SETTIME(timer_id, flags, new_value, old_value) \
+    ((void)(timer_id), (void)(flags), (void)(new_value), (void)(old_value), \
+     -(intptr_t)ENOSYS)
+#else
 #define _RIN_TIME_TIMER_SETTIME(timer_id, flags, new_value, old_value) \
     _syscall4((uintptr_t)SYS_TIMER_SETTIME, (uintptr_t)(timer_id), \
               (uintptr_t)(flags), (uintptr_t)(new_value), \
               (uintptr_t)(old_value))
+#endif
 #define RIN_TIME_TIMER_SETTIME_DEFAULT_HOOK 1
 #endif
 
@@ -1042,6 +1074,19 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
     return _rin_time_clock_timespec_user(
         RIN_CLOCK_TIMESPEC_USER_GETTIME, clk_id, tp);
 #else
+#if defined(RIN_TIME_HOSTED_WINDOWS_NO_PROVIDER)
+    switch (clk_id) {
+        case CLOCK_REALTIME:
+        case CLOCK_MONOTONIC:
+        case CLOCK_PROCESS_CPUTIME_ID:
+        case CLOCK_THREAD_CPUTIME_ID:
+            errno = ENOSYS;
+            return -1;
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+#else
     switch (clk_id) {
         case CLOCK_MONOTONIC:
         {
@@ -1122,6 +1167,7 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
             return -1;
     }
 #endif
+#endif
 }
 
 /* The current futex ABI represents absolute deadlines as unsigned
@@ -1190,6 +1236,16 @@ static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
     return _rin_time_clock_timespec_user(
         RIN_CLOCK_TIMESPEC_USER_GETRES, clk_id, res);
 #else
+#if defined(RIN_TIME_HOSTED_WINDOWS_NO_PROVIDER)
+    if (clk_id != CLOCK_REALTIME && clk_id != CLOCK_MONOTONIC &&
+        clk_id != CLOCK_PROCESS_CPUTIME_ID &&
+        clk_id != CLOCK_THREAD_CPUTIME_ID) {
+        errno = EINVAL;
+        return -1;
+    }
+    errno = ENOSYS;
+    return -1;
+#else
     if (clk_id == CLOCK_PROCESS_CPUTIME_ID ||
         clk_id == CLOCK_THREAD_CPUTIME_ID) {
 #if (defined(RIN_FREESTANDING) && defined(RIN_KERNEL)) || \
@@ -1238,6 +1294,7 @@ static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
         res->tv_nsec = 1000000;  /* 1ms resolution */
     }
     return 0;
+#endif
 #endif
 #endif
 }
