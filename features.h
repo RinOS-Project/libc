@@ -25,6 +25,7 @@
 /* Keep the explicit GNU request for the individual extension owners that
  * implement a GNU ABI, while leaving the broader GNU namespace disabled. */
 #if defined(_GNU_SOURCE)
+#define _RIN_USE_GNU_ARGP 1
 #define _RIN_USE_GNU_EVENTFD 1
 #define _RIN_USE_GNU_CPU_SET 1
 #define _RIN_USE_GNU_SYSINFO 1
