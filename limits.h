@@ -223,7 +223,7 @@
 #define _POSIX_SIGQUEUE_MAX 32
 #endif
 #ifndef RTSIG_MAX
-#define RTSIG_MAX 31
+#define RTSIG_MAX 30
 #endif
 #ifndef _POSIX2_LINE_MAX
 #define _POSIX2_LINE_MAX 2048
