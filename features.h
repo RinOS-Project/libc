@@ -46,6 +46,7 @@
 #define _RIN_USE_BSD_GETENTROPY 1
 #define _RIN_USE_GNU_FNMATCH 1
 #define _RIN_USE_BSD_FNMATCH 1
+#define _RIN_USE_BSD_SIGNAL 1
 #define _RIN_USE_XSI_NICE 1
 #define _RIN_USE_XSI_KILLPG 1
 #define _RIN_USE_BSD_RANDOM 1
@@ -54,12 +55,17 @@
 #define _RIN_USE_BSD_RANDOM 1
 #define _RIN_USE_BSD_GETENTROPY 1
 #define _RIN_USE_BSD_FNMATCH 1
+#define _RIN_USE_BSD_SIGNAL 1
 #define _RIN_USE_XSI_KILLPG 1
+#endif
+#if defined(_SVID_SOURCE)
+#define _RIN_USE_BSD_SIGNAL 1
 #endif
 #if !defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE) && \
     !defined(_XOPEN_SOURCE)
 #define _RIN_USE_XSI_KILLPG 1
 #define _RIN_USE_BSD_FNMATCH 1
+#define _RIN_USE_BSD_SIGNAL 1
 #endif
 #if defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500
 #define _RIN_USE_XSI_KILLPG 1

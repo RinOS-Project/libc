@@ -112,7 +112,14 @@ struct timespec;
 #define SIGXFSZ     25  /* ファイルサイズ超過 */
 #define SIGVTALRM   26  /* 仮想アラーム */
 #define SIGPROF     27  /* プロファイルアラーム */
+#if defined(_RIN_USE_BSD_SIGNAL) || defined(__USE_MISC) || \
+    defined(__USE_XOPEN_EXTENDED) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI)
 #define SIGWINCH    28  /* ウィンドウサイズ変更 */
+#endif
 #define SIGIO       29  /* I/O可能 */
 #define SIGPOLL     SIGIO
 #define SIGPWR      30  /* 電源異常 */

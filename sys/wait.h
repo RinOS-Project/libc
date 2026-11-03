@@ -4,6 +4,14 @@
  * プロセス終了情報
  */
 
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_WAIT_SYSCALL3) && !defined(_RIN_WAIT_SYSCALL4) && \
+    !defined(_RIN_WAITID_SYSCALL4)
+#include_next <sys/wait.h>
+#else
+
 #ifndef _SYS_WAIT_H
 #define _SYS_WAIT_H
 
@@ -128,7 +136,14 @@ typedef int idtype_t;
 #define WIFCONTINUED(status) ((status) == 0xFFFF)
 
 /* コアダンプが生成されたか */
+#if defined(_RIN_USE_BSD_SIGNAL) || defined(__USE_MISC) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI)
+#ifndef WCOREDUMP
 #define WCOREDUMP(status)    ((status) & 0x80)
+#endif
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * wait関数
@@ -308,3 +323,5 @@ static inline pid_t wait4(pid_t pid, int* wstatus, int options, struct rusage* r
 #endif
 
 #endif /* _SYS_WAIT_H */
+
+#endif /* hosted Linux delegates to its native wait provider */

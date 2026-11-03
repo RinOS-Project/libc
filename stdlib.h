@@ -6,6 +6,7 @@
 
 #ifndef _STDLIB_H
 #define _STDLIB_H
+#include "features.h"
 #if !defined(__cplusplus) && !defined(RIN_FREESTANDING) && \
     defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     defined(__MINGW32__) && !defined(_INC_ERRNO)
@@ -336,6 +337,15 @@ char* realpath(const char* path, char* resolved_path);
 
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
+
+#if defined(_RIN_USE_BSD_SIGNAL) || defined(__USE_MISC) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI)
+#ifndef WCOREDUMP
+#define WCOREDUMP(status) ((status) & 0x80)
+#endif
+#endif
 
 /* In C++, these are provided by cstdlib.h to avoid conflicts */
 #if (!defined(__cplusplus) || !defined(RINCXX_CSTDLIB_H)) && \
