@@ -47,7 +47,10 @@ extern "C" {
 #define AT_BASE_PLATFORM 24     /* String identifying real platform */
 #define AT_RANDOM       25      /* Address of 16 random bytes */
 #define AT_HWCAP2       26      /* Extension of AT_HWCAP */
-/* 27-30 reserved */
+#define AT_RSEQ_FEATURE_SIZE 27  /* rseq supported feature size */
+#define AT_RSEQ_ALIGN        28  /* rseq allocation alignment */
+#define AT_HWCAP3            29  /* Extension of AT_HWCAP */
+#define AT_HWCAP4            30  /* Extension of AT_HWCAP */
 #define AT_EXECFN       31      /* File name of executed program */
 #define AT_SYSINFO      32      /* Entry point of system call in vDSO */
 #define AT_SYSINFO_EHDR 33      /* ELF header of vDSO */
