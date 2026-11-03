@@ -36,6 +36,8 @@
 #define BPF_FUNC_map_lookup_elem 1
 #define BPF_FUNC_map_update_elem 2
 #define BPF_FUNC_map_delete_elem 3
+#define BPF_FUNC_ktime_get_ns 5
+#define BPF_FUNC_get_smp_processor_id 8
 #define BPF_FUNC_get_current_pid_tgid 14
 #define BPF_FUNC_get_current_uid_gid 15
 #define BPF_FEATURE_MAPS RIN_BPF_FEATURE_MAPS
@@ -45,6 +47,7 @@
 #define BPF_FEATURE_MAP_HELPERS RIN_BPF_FEATURE_MAP_HELPERS
 #define BPF_FEATURE_PID_UID_HELPERS RIN_BPF_FEATURE_PID_UID_HELPERS
 #define BPF_FEATURE_PROGRAM_TEST_RUN RIN_BPF_FEATURE_PROGRAM_TEST_RUN
+#define BPF_FEATURE_TIME_CPU_HELPERS RIN_BPF_FEATURE_TIME_CPU_HELPERS
 
 #define BPF_CLASS(code) ((code) & 0x07u)
 #define BPF_SIZE(code) ((code) & 0x18u)
