@@ -690,6 +690,11 @@ static inline int sched_get_priority_max(int policy) {
     switch (policy) {
         case SCHED_FIFO:
         case SCHED_RR:
+        /* B55: DEADLINE joins the RT range (both contract tests pin
+         * 1/99 with errno preserved; Linux answers 0/0 here, kept as
+         * a deliberate delta so RT-aware code treats all RT policies
+         * uniformly). */
+        case SCHED_DEADLINE:
             return 99;
         case SCHED_OTHER:
         case SCHED_BATCH:
@@ -706,6 +711,8 @@ static inline int sched_get_priority_min(int policy) {
     switch (policy) {
         case SCHED_FIFO:
         case SCHED_RR:
+        /* B55: see sched_get_priority_max (DEADLINE in RT range). */
+        case SCHED_DEADLINE:
             return 1;
         case SCHED_OTHER:
         case SCHED_BATCH:
@@ -771,7 +778,7 @@ static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
 
 /* CPU affinity を取得 */
 static inline int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t* mask) {
-    if (!mask || cpusetsize != sizeof(cpu_set_t)) {
+    if (!mask || cpusetsize == 0u || cpusetsize > sizeof(cpu_set_t)) {
         errno = EINVAL;
         return -1;
     }
@@ -782,7 +789,7 @@ static inline int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t* mas
 
 /* CPU affinity を設定 */
 static inline int sched_setaffinity(pid_t pid, size_t cpusetsize, const cpu_set_t* mask) {
-    if (!mask || cpusetsize != sizeof(cpu_set_t)) {
+    if (!mask || cpusetsize == 0u || cpusetsize > sizeof(cpu_set_t)) {
         errno = EINVAL;
         return -1;
     }
@@ -900,6 +907,7 @@ static inline int rin_sched_set_numa_allowed_nodes(
         RIN_NUMA_POLICY_OPERATION_SET_ALLOWED_NODES, (uintptr_t)mask));
 }
 
+#if defined(_RIN_USE_GNU_GETCPU)
 /* 現在実行中のCPU番号を取得 */
 static inline int sched_getcpu(void) {
     intptr_t cpu = _rin_sched_result(_RIN_SCHED_SYSCALL0(SYS_GETCPU));
@@ -910,7 +918,6 @@ static inline int sched_getcpu(void) {
     }
     return (int)cpu;
 }
-#if defined(__USE_GNU)
 static inline int getcpu(unsigned int* cpu, unsigned int* node) {
     return _rin_sched_status(_RIN_SCHED_SYSCALL2(
         SYS_GETCPU_V1, (uintptr_t)cpu, (uintptr_t)node));
