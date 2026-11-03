@@ -6,11 +6,20 @@
 /* signal.h first: see the include-order contract in unistd.h.  This unit
  * must compile standalone for the libc build as well as host tests. */
 #include "signal.h"
+/* Compiler-generated C++ cleanup paths call the standard abort symbol when
+ * destructor registration fails. Preserve the freestanding implementation
+ * below while exporting that implementation from the runtime object too. */
+#define abort rin_stdlib_abort_inline
 #include "stdlib.h"
+#undef abort
 #include "rin_stdlib_runtime.h"
 
 #include "fcntl.h"
 #include "unistd.h"
+
+__attribute__((noreturn)) void abort(void) {
+    rin_stdlib_abort_inline();
+}
 
 int getsubopt(char** optionp, char* const* keylistp, char** valuep) {
     return _rin_stdlib_getsubopt_parse(optionp, keylistp, valuep);
