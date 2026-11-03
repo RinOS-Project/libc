@@ -731,14 +731,11 @@ static inline int sched_get_priority_min(int policy) {
 /* タイムスライスを取得 */
 static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
     if (!interval) {
-        errno = EINVAL;
+        errno = EFAULT;
         return -1;
     }
-    /* The interval is caller-owned output and must be empty on failure. */
-    interval->tv_sec = 0;
-    interval->tv_nsec = 0;
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
-    uint32_t milliseconds = 0u;
+    RinThreadSchedRrIntervalUserV1 request = {0};
     intptr_t result;
     uint32_t thread_id = pid == 0 ? 0u : (uint32_t)pid;
     if (pid < 0) { errno = EINVAL; return -1; }
@@ -751,12 +748,17 @@ static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
         }
         thread_id = (uint32_t)result;
     }
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_THREAD_SCHED_RR_INTERVAL_USER_ABI_VERSION;
+    request.request_magic =
+        RIN_THREAD_SCHED_RR_INTERVAL_USER_REQUEST_MAGIC;
+    request.time_width = (uint32_t)sizeof(time_t);
+    request.long_width = (uint32_t)sizeof(long);
+    request.timespec_address = (uint64_t)(uintptr_t)interval;
     result = _rin_sched_result(_RIN_SCHED_SYSCALL2(
-        SYS_THREAD_SCHED_RR_INTERVAL, thread_id, &milliseconds));
+        SYS_THREAD_SCHED_RR_INTERVAL_USER_V1, thread_id, &request));
     if (result < 0) return -1;
-    if (result != 0 || milliseconds == 0u) { errno = EIO; return -1; }
-    interval->tv_sec = (time_t)(milliseconds / 1000u);
-    interval->tv_nsec = (long)(milliseconds % 1000u) * 1000000L;
+    if (result != 0) { errno = EIO; return -1; }
     return 0;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
     uint32_t milliseconds = 0u;
