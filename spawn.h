@@ -67,6 +67,8 @@ enum {
     _RIN_POSIX_SPAWN_ACTION_CLOSE = RIN_POSIX_SPAWN_ACTION_CLOSE,
     _RIN_POSIX_SPAWN_ACTION_DUP2 = RIN_POSIX_SPAWN_ACTION_DUP2,
     _RIN_POSIX_SPAWN_ACTION_ATTRIBUTES = RIN_POSIX_SPAWN_ACTION_ATTRIBUTES,
+    _RIN_POSIX_SPAWN_ACTION_CHDIR = RIN_POSIX_SPAWN_ACTION_CHDIR,
+    _RIN_POSIX_SPAWN_ACTION_FCHDIR = RIN_POSIX_SPAWN_ACTION_FCHDIR,
 };
 
 typedef struct {
@@ -481,6 +483,51 @@ _RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addopen(posix_spawn_fil
     action->oflag = oflag;
     action->mode = mode;
     memcpy(action->path, path, path_length + 1u);
+    return 0;
+}
+#endif
+
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawn_file_actions_addchdir(posix_spawn_file_actions_t* actions,
+                                             const char* path);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addchdir(
+    posix_spawn_file_actions_t* actions, const char* path) {
+    _rin_posix_spawn_file_action_t* action;
+    size_t path_length;
+    int error;
+    if (!actions || !path) return EINVAL;
+    error = _rin_posix_spawn_bounded_path_length(path, &path_length);
+    if (error != 0) return error;
+    if (path_length == 0u) return ENOENT;
+    error = _rin_posix_spawn_reserve_action(actions, &action);
+    if (error != 0) return error;
+    action->type = _RIN_POSIX_SPAWN_ACTION_CHDIR;
+    action->fd = 0;
+    action->src_fd = -1;
+    action->oflag = 0u;
+    action->mode = 0u;
+    memcpy(action->path, path, path_length + 1u);
+    return 0;
+}
+#endif
+
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawn_file_actions_addfchdir(posix_spawn_file_actions_t* actions,
+                                              int fd);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addfchdir(
+    posix_spawn_file_actions_t* actions, int fd) {
+    _rin_posix_spawn_file_action_t* action;
+    int error;
+    if (fd < 0 || fd >= OPEN_MAX) return EBADF;
+    error = _rin_posix_spawn_reserve_action(actions, &action);
+    if (error != 0) return error;
+    action->type = _RIN_POSIX_SPAWN_ACTION_FCHDIR;
+    action->fd = fd;
+    action->src_fd = -1;
+    action->oflag = 0u;
+    action->mode = 0u;
     return 0;
 }
 #endif
