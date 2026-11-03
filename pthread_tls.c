@@ -11,7 +11,16 @@
  */
 
 #include "pthread.h"
-#include "sched.h"
+#include "rin_atomic_wait.h"
+
+#ifndef RIN_PTHREAD_KEY_WAIT
+#define RIN_PTHREAD_KEY_WAIT(address, expected) \
+    rin_atomic_wait_u32((address), (uint32_t)(expected), NULL)
+#endif
+#ifndef RIN_PTHREAD_KEY_NOTIFY_ALL
+#define RIN_PTHREAD_KEY_NOTIFY_ALL(address) \
+    rin_atomic_notify_all_u32((address))
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * スレッドローカル errno
@@ -133,6 +142,8 @@ static void pthread_key_finalize_delete(unsigned int key,
     __sync_synchronize();
     __sync_lock_test_and_set(&_pthread_tls_key_state[key],
                              RIN_PTHREAD_KEY_FREE);
+    (void)RIN_PTHREAD_KEY_NOTIFY_ALL(
+        (volatile uint32_t*)&_pthread_tls_key_state[key]);
 }
 
 static void pthread_key_dispatch_release(unsigned int key)
@@ -266,7 +277,9 @@ int pthread_key_delete(pthread_key_t key) {
              * already belong to a new key, which this delete must not touch. */
             return 0;
         }
-        (void)sched_yield();
+        if (RIN_PTHREAD_KEY_WAIT(
+                (volatile uint32_t*)&_pthread_tls_key_state[key], word) != 0)
+            return errno != 0 ? errno : EIO;
     }
 
 }
