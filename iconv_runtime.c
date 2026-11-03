@@ -33,6 +33,20 @@ extern int rin_iconv_runtime_test_wake(volatile uint32_t* address,
     ((RIN_ICONV_SLOT_MAX + RIN_ICONV_SLOT_CHUNK_SIZE - 1u) / \
      RIN_ICONV_SLOT_CHUNK_SIZE)
 #define RIN_ICONV_NAME_INPUT_MAX 128u
+#define RIN_ICONV_PIN_CLOSING UINT32_C(0x80000000)
+/* Keep the generation tag in the pin word; retire a slot before it wraps. */
+#define RIN_ICONV_PIN_COUNT_BITS 19u
+#define RIN_ICONV_PIN_COUNT_MASK ((UINT32_C(1) << \
+                                   RIN_ICONV_PIN_COUNT_BITS) - 1u)
+#define RIN_ICONV_PIN_GENERATION_BITS 12u
+#define RIN_ICONV_PIN_GENERATION_SHIFT RIN_ICONV_PIN_COUNT_BITS
+#define RIN_ICONV_PIN_GENERATION_VALUE_MASK ((UINT32_C(1) << \
+                                              RIN_ICONV_PIN_GENERATION_BITS) - \
+                                             1u)
+#define RIN_ICONV_PIN_GENERATION_MASK \
+    (RIN_ICONV_PIN_GENERATION_VALUE_MASK << \
+     RIN_ICONV_PIN_GENERATION_SHIFT)
+#define RIN_ICONV_PIN_GENERATION_MAX RIN_ICONV_PIN_GENERATION_VALUE_MASK
 
 typedef enum {
     RIN_ICONV_ENCODING_INVALID = 0,
@@ -75,7 +89,6 @@ static RinIconvDescriptor* g_iconv_chunks[RIN_ICONV_SLOT_CHUNK_COUNT];
 static RinIconvDescriptor* g_iconv_free_list;
 static uint32_t g_iconv_allocated_slots;
 static uint32_t g_iconv_table_lock;
-static volatile uint32_t g_iconv_table_wait_sequence;
 
 static void rin_iconv_table_lock(void) {
     while (__sync_lock_test_and_set(&g_iconv_table_lock, 1u) != 0u) {
@@ -201,56 +214,127 @@ static uintptr_t rin_iconv_token_for(uintptr_t generation, uint32_t index) {
            ((uintptr_t)index + 1u);
 }
 
+static uint32_t rin_iconv_pin_generation_tag(uintptr_t token) {
+    return (uint32_t)((token >> RIN_ICONV_SLOT_INDEX_BITS) &
+                      RIN_ICONV_PIN_GENERATION_VALUE_MASK) <<
+           RIN_ICONV_PIN_GENERATION_SHIFT;
+}
+
 static RinIconvDescriptor* rin_iconv_lookup_locked(uintptr_t token,
                                                    int allow_closing) {
     uintptr_t slot = token & RIN_ICONV_SLOT_MASK;
     uint32_t index;
     uint32_t chunk_index;
+    RinIconvDescriptor* chunk;
     RinIconvDescriptor* descriptor;
     if (slot == 0u || slot > RIN_ICONV_SLOT_MAX || token == 0u)
         return NULL;
     index = (uint32_t)(slot - 1u);
     chunk_index = index >> RIN_ICONV_SLOT_CHUNK_SHIFT;
-    if (chunk_index >= RIN_ICONV_SLOT_CHUNK_COUNT ||
-        !g_iconv_chunks[chunk_index])
+    if (chunk_index >= RIN_ICONV_SLOT_CHUNK_COUNT)
         return NULL;
-    descriptor = &g_iconv_chunks[chunk_index][
-        index & RIN_ICONV_SLOT_CHUNK_MASK];
-    if (!descriptor->used || descriptor->token != token ||
+    chunk = __atomic_load_n(&g_iconv_chunks[chunk_index], __ATOMIC_ACQUIRE);
+    if (!chunk) return NULL;
+    descriptor = &chunk[index & RIN_ICONV_SLOT_CHUNK_MASK];
+    if (!descriptor->used ||
+        __atomic_load_n(&descriptor->token, __ATOMIC_ACQUIRE) != token ||
         (!allow_closing && descriptor->closing))
         return NULL;
     return descriptor;
 }
 
+static void rin_iconv_unpin_generation(RinIconvDescriptor* descriptor,
+                                       uint32_t generation_tag);
+static void rin_iconv_unpin(RinIconvDescriptor* descriptor);
+
 static RinIconvDescriptor* rin_iconv_pin(iconv_t opaque) {
     uintptr_t token = (uintptr_t)opaque;
+    uintptr_t slot = token & RIN_ICONV_SLOT_MASK;
+    uint32_t index;
+    uint32_t chunk_index;
+    uint32_t state;
+    uint32_t generation_tag = rin_iconv_pin_generation_tag(token);
+    RinIconvDescriptor* chunk;
     RinIconvDescriptor* descriptor;
-    rin_iconv_table_lock();
-    descriptor = rin_iconv_lookup_locked(token, 0);
-    if (!descriptor || descriptor->pins == UINT32_MAX) {
-        rin_iconv_table_unlock();
-        errno = descriptor ? EOVERFLOW : EBADF;
+    if (token == 0u || slot == 0u || slot > RIN_ICONV_SLOT_MAX) {
+        errno = EBADF;
         return NULL;
     }
-    ++descriptor->pins;
-    rin_iconv_table_unlock();
+    index = (uint32_t)(slot - 1u);
+    chunk_index = index >> RIN_ICONV_SLOT_CHUNK_SHIFT;
+    if (chunk_index >= RIN_ICONV_SLOT_CHUNK_COUNT) {
+        errno = EBADF;
+        return NULL;
+    }
+    chunk = __atomic_load_n(&g_iconv_chunks[chunk_index], __ATOMIC_ACQUIRE);
+    if (!chunk) {
+        errno = EBADF;
+        return NULL;
+    }
+    descriptor = &chunk[index & RIN_ICONV_SLOT_CHUNK_MASK];
+    if (__atomic_load_n(&descriptor->token, __ATOMIC_ACQUIRE) != token) {
+        errno = EBADF;
+        return NULL;
+    }
+    state = __atomic_load_n(&descriptor->pins, __ATOMIC_ACQUIRE);
+    for (;;) {
+        uint32_t desired;
+        if ((state & RIN_ICONV_PIN_CLOSING) != 0u) {
+            errno = EBADF;
+            return NULL;
+        }
+        if ((state & RIN_ICONV_PIN_GENERATION_MASK) != generation_tag) {
+            errno = EBADF;
+            return NULL;
+        }
+        if ((state & RIN_ICONV_PIN_COUNT_MASK) ==
+            RIN_ICONV_PIN_COUNT_MASK) {
+            errno = EOVERFLOW;
+            return NULL;
+        }
+        desired = state + 1u;
+        if (__atomic_compare_exchange_n(&descriptor->pins, &state, desired,
+                                        1, __ATOMIC_ACQUIRE,
+                                        __ATOMIC_RELAXED))
+            break;
+    }
+    /* A stale token can race slot reuse between its first token read and pin
+     * CAS. The tagged pin word prevents it from joining a later generation. */
+    if (__atomic_load_n(&descriptor->token, __ATOMIC_ACQUIRE) != token) {
+        rin_iconv_unpin_generation(descriptor, generation_tag);
+        errno = EBADF;
+        return NULL;
+    }
     return descriptor;
 }
 
-static void rin_iconv_unpin(RinIconvDescriptor* descriptor) {
-    int wake_close = 0;
-    rin_iconv_table_lock();
-    if (descriptor->pins != 0u) {
-        --descriptor->pins;
-        if (descriptor->closing && descriptor->pins == 0u) {
-            __atomic_add_fetch(&g_iconv_table_wait_sequence, 1u,
-                               __ATOMIC_RELEASE);
-            wake_close = 1;
+static void rin_iconv_unpin_generation(RinIconvDescriptor* descriptor,
+                                       uint32_t generation_tag) {
+    uint32_t state = __atomic_load_n(&descriptor->pins, __ATOMIC_RELAXED);
+    for (;;) {
+        uint32_t count;
+        uint32_t desired;
+        if ((state & RIN_ICONV_PIN_GENERATION_MASK) != generation_tag)
+            return;
+        count = state & RIN_ICONV_PIN_COUNT_MASK;
+        if (count == 0u) return;
+        desired = state - 1u;
+        if (__atomic_compare_exchange_n(&descriptor->pins, &state, desired,
+                                        0, __ATOMIC_RELEASE,
+                                        __ATOMIC_RELAXED)) {
+            if ((state & RIN_ICONV_PIN_CLOSING) != 0u && count == 1u)
+                (void)rin_iconv_runtime_test_wake(&descriptor->pins, -1);
+            return;
         }
     }
-    rin_iconv_table_unlock();
-    if (wake_close)
-        (void)rin_iconv_runtime_test_wake(&g_iconv_table_wait_sequence, -1);
+}
+
+static void rin_iconv_unpin(RinIconvDescriptor* descriptor) {
+    uint32_t generation_tag =
+        ((uint32_t)descriptor->generation &
+         RIN_ICONV_PIN_GENERATION_VALUE_MASK) <<
+        RIN_ICONV_PIN_GENERATION_SHIFT;
+    rin_iconv_unpin_generation(descriptor, generation_tag);
 }
 
 iconv_t iconv_open(const char* tocode, const char* fromcode) {
@@ -274,17 +358,19 @@ iconv_t iconv_open(const char* tocode, const char* fromcode) {
         rin_iconv_table_lock();
         descriptor = g_iconv_free_list;
         if (descriptor) {
+            uintptr_t token;
             g_iconv_free_list = descriptor->free_next;
             descriptor->free_next = NULL;
-            if (descriptor->generation >= max_generation) {
+            if (descriptor->generation >= max_generation ||
+                descriptor->generation >= RIN_ICONV_PIN_GENERATION_MAX) {
                 descriptor->retired = 1u;
                 rin_iconv_table_unlock();
                 continue;
             }
             ++descriptor->generation;
-            descriptor->token = rin_iconv_token_for(
-                descriptor->generation, descriptor->slot_index - 1u);
-            if (descriptor->token == UINTPTR_MAX) {
+            token = rin_iconv_token_for(descriptor->generation,
+                                        descriptor->slot_index - 1u);
+            if (token == UINTPTR_MAX) {
                 descriptor->retired = 1u;
                 rin_iconv_table_unlock();
                 continue;
@@ -294,12 +380,17 @@ iconv_t iconv_open(const char* tocode, const char* fromcode) {
             descriptor->input_byte_order = 0u;
             descriptor->input_started = 0u;
             descriptor->output_started = 0u;
-            descriptor->pins = 0u;
+            __atomic_store_n(&descriptor->pins,
+                             ((uint32_t)descriptor->generation &
+                              RIN_ICONV_PIN_GENERATION_VALUE_MASK) <<
+                                 RIN_ICONV_PIN_GENERATION_SHIFT,
+                             __ATOMIC_RELAXED);
             descriptor->descriptor_lock = 0u;
             descriptor->closing = 0u;
             descriptor->used = 1u;
+            __atomic_store_n(&descriptor->token, token, __ATOMIC_RELEASE);
             rin_iconv_table_unlock();
-            return (iconv_t)descriptor->token;
+            return (iconv_t)token;
         }
         if (g_iconv_allocated_slots >= RIN_ICONV_SLOT_MAX) {
             rin_iconv_table_unlock();
@@ -346,7 +437,8 @@ iconv_t iconv_open(const char* tocode, const char* fromcode) {
             free(candidate_chunk);
             continue;
         }
-        g_iconv_chunks[chunk_index] = candidate_chunk;
+        __atomic_store_n(&g_iconv_chunks[chunk_index], candidate_chunk,
+                         __ATOMIC_RELEASE);
         for (uint32_t offset = 0u; offset < available; ++offset) {
             RinIconvDescriptor* added = &candidate_chunk[offset];
             added->slot_index = g_iconv_allocated_slots + offset + 1u;
@@ -887,6 +979,7 @@ size_t iconv(iconv_t opaque, char** input, size_t* input_left,
 int iconv_close(iconv_t opaque) {
     uintptr_t token = (uintptr_t)opaque;
     RinIconvDescriptor* descriptor;
+    uint32_t state;
     rin_iconv_table_lock();
     descriptor = rin_iconv_lookup_locked(token, 0);
     if (!descriptor) {
@@ -895,45 +988,62 @@ int iconv_close(iconv_t opaque) {
         return -1;
     }
     descriptor->closing = 1u;
+    (void)__atomic_fetch_or(&descriptor->pins, RIN_ICONV_PIN_CLOSING,
+                            __ATOMIC_ACQ_REL);
+    rin_iconv_table_unlock();
     for (;;) {
-        if (descriptor->pins == 0u) {
-            descriptor->used = 0u;
-            descriptor->closing = 0u;
-            descriptor->token = 0u;
-            descriptor->input_encoding = RIN_ICONV_ENCODING_INVALID;
-            descriptor->output_encoding = RIN_ICONV_ENCODING_INVALID;
-            descriptor->input_byte_order = 0u;
-            descriptor->input_started = 0u;
-            descriptor->output_started = 0u;
-            descriptor->descriptor_lock = 0u;
-            if (descriptor->generation >=
-                    (UINTPTR_MAX >> RIN_ICONV_SLOT_INDEX_BITS) ||
-                rin_iconv_token_for(descriptor->generation,
-                                    descriptor->slot_index - 1u) ==
-                    UINTPTR_MAX) {
-                descriptor->retired = 1u;
-                descriptor->free_next = NULL;
-            } else {
-                descriptor->free_next = g_iconv_free_list;
-                g_iconv_free_list = descriptor;
-            }
-            rin_iconv_table_unlock();
-            return 0;
-        }
-        uint32_t expected = __atomic_load_n(
-            &g_iconv_table_wait_sequence, __ATOMIC_RELAXED);
-        rin_iconv_table_unlock();
-        if (rin_iconv_runtime_test_wait(&g_iconv_table_wait_sequence,
-                                        expected) != 0) {
+        state = __atomic_load_n(&descriptor->pins, __ATOMIC_ACQUIRE);
+        if ((state & RIN_ICONV_PIN_COUNT_MASK) == 0u) break;
+        if (rin_iconv_runtime_test_wait(
+                (volatile uint32_t*)&descriptor->pins, state) != 0) {
             int saved_errno = errno;
             rin_iconv_table_lock();
-            if (descriptor->used && descriptor->token == token &&
-                descriptor->closing)
+            if (descriptor->used &&
+                __atomic_load_n(&descriptor->token, __ATOMIC_ACQUIRE) ==
+                    token && descriptor->closing) {
                 descriptor->closing = 0u;
+                (void)__atomic_fetch_and(&descriptor->pins,
+                                         ~RIN_ICONV_PIN_CLOSING,
+                                         __ATOMIC_RELEASE);
+            }
             rin_iconv_table_unlock();
             errno = saved_errno;
             return -1;
         }
-        rin_iconv_table_lock();
     }
+    rin_iconv_table_lock();
+    if (!descriptor->used ||
+        __atomic_load_n(&descriptor->token, __ATOMIC_ACQUIRE) != token ||
+        !descriptor->closing) {
+        rin_iconv_table_unlock();
+        errno = EBADF;
+        return -1;
+    }
+    descriptor->used = 0u;
+    descriptor->closing = 0u;
+    __atomic_store_n(&descriptor->token, 0u, __ATOMIC_RELEASE);
+    descriptor->input_encoding = RIN_ICONV_ENCODING_INVALID;
+    descriptor->output_encoding = RIN_ICONV_ENCODING_INVALID;
+    descriptor->input_byte_order = 0u;
+    descriptor->input_started = 0u;
+    descriptor->output_started = 0u;
+    descriptor->descriptor_lock = 0u;
+    __atomic_store_n(&descriptor->pins,
+                     ((uint32_t)descriptor->generation &
+                      RIN_ICONV_PIN_GENERATION_VALUE_MASK) <<
+                         RIN_ICONV_PIN_GENERATION_SHIFT,
+                     __ATOMIC_RELEASE);
+    if (descriptor->generation >=
+            (UINTPTR_MAX >> RIN_ICONV_SLOT_INDEX_BITS) ||
+        descriptor->generation >= RIN_ICONV_PIN_GENERATION_MAX ||
+        rin_iconv_token_for(descriptor->generation,
+                            descriptor->slot_index - 1u) == UINTPTR_MAX) {
+        descriptor->retired = 1u;
+        descriptor->free_next = NULL;
+    } else {
+        descriptor->free_next = g_iconv_free_list;
+        g_iconv_free_list = descriptor;
+    }
+    rin_iconv_table_unlock();
+    return 0;
 }
