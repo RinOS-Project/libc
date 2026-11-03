@@ -36,7 +36,11 @@
 /* Let C++ wrappers distinguish this ABI from a hosted provider even when
  * both headers use the conventional `_PTHREAD_H` include guard. */
 #define RIN_LIBC_PTHREAD_HEADER 1
-#if defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
+#if defined(_WIN32) && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING))
+#define RIN_PTHREAD_HOSTED_WINDOWS_NO_PROVIDER 1
+#define RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED 1
+#elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
 #define RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED 1
 #endif
 #if defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
@@ -69,31 +73,76 @@
 #endif
 
 #ifndef _RIN_PTHREAD_SYSCALL0
+#if defined(RIN_PTHREAD_HOSTED_WINDOWS_NO_PROVIDER)
+#define _RIN_PTHREAD_SYSCALL0(number) \
+    ((void)(number), -(intptr_t)ENOSYS)
+#else
 #define _RIN_PTHREAD_SYSCALL0(number) _syscall0((uintptr_t)(number))
+#endif
 #endif
 #ifndef _RIN_PTHREAD_SELF_SYSCALL0
 #define _RIN_PTHREAD_SELF_SYSCALL0(number) _RIN_PTHREAD_SYSCALL0(number)
 #endif
 #ifndef _RIN_PTHREAD_STACK_INFO_SYSCALL3
+#if defined(RIN_PTHREAD_HOSTED_WINDOWS_NO_PROVIDER)
+#define _RIN_PTHREAD_STACK_INFO_SYSCALL3(number, argument1, argument2, argument3) \
+    ((void)(number), (void)(argument1), (void)(argument2), \
+     (void)(argument3), -(intptr_t)ENOSYS)
+#else
 #define _RIN_PTHREAD_STACK_INFO_SYSCALL3(number, argument1, argument2, argument3) \
     _syscall3((uintptr_t)(number), (uintptr_t)(argument1), \
               (uintptr_t)(argument2), (uintptr_t)(argument3))
 #endif
+#endif
 #ifndef _RIN_PTHREAD_SIGMASK_SYSCALL4
+#if defined(RIN_PTHREAD_HOSTED_WINDOWS_NO_PROVIDER)
+#define _RIN_PTHREAD_SIGMASK_SYSCALL4(number, argument1, argument2, argument3, \
+                                      argument4) \
+    ((void)(number), (void)(argument1), (void)(argument2), \
+     (void)(argument3), (void)(argument4), -(intptr_t)ENOSYS)
+#else
 #define _RIN_PTHREAD_SIGMASK_SYSCALL4(number, argument1, argument2, argument3, \
                                       argument4) \
     _syscall4((uintptr_t)(number), (uintptr_t)(argument1), \
               (uintptr_t)(argument2), (uintptr_t)(argument3), \
               (uintptr_t)(argument4))
 #endif
+#endif
 #ifndef _RIN_PTHREAD_NAME_SYSCALL1
+#if defined(RIN_PTHREAD_HOSTED_WINDOWS_NO_PROVIDER)
+#define _RIN_PTHREAD_NAME_SYSCALL1(number, argument) \
+    ((void)(number), (void)(argument), -(intptr_t)ENOSYS)
+#else
 #define _RIN_PTHREAD_NAME_SYSCALL1(number, argument) \
     _syscall1((uintptr_t)(number), (uintptr_t)(argument))
 #endif
+#endif
 #ifndef _RIN_PTHREAD_SCHED_SYSCALL2
+#if defined(RIN_PTHREAD_HOSTED_WINDOWS_NO_PROVIDER)
+#define _RIN_PTHREAD_SCHED_SYSCALL2(number, argument1, argument2) \
+    ((void)(number), (void)(argument1), (void)(argument2), -(intptr_t)ENOSYS)
+#else
 #define _RIN_PTHREAD_SCHED_SYSCALL2(number, argument1, argument2) \
     _syscall2((uintptr_t)(number), (uintptr_t)(argument1), \
               (uintptr_t)(argument2))
+#endif
+#endif
+
+/* Some inline condition-variable paths use syscall() directly rather than
+ * the per-operation adapters above.  Keep hosted Windows fail-closed when no
+ * host pthread provider supplied an explicit futex hook. */
+#ifndef _RIN_PTHREAD_FUTEX_CALL
+#if defined(RIN_PTHREAD_HOSTED_WINDOWS_NO_PROVIDER)
+#define _RIN_PTHREAD_FUTEX_CALL(address, operation, value, timeout, address2, \
+                                value2) \
+    ((void)(address), (void)(operation), (void)(value), (void)(timeout), \
+     (void)(address2), (void)(value2), (errno = ENOSYS), -1L)
+#else
+#define _RIN_PTHREAD_FUTEX_CALL(address, operation, value, timeout, address2, \
+                                value2) \
+    syscall(SYS_futex, (address), (operation), (value), (timeout), \
+            (address2), (value2))
+#endif
 #endif
 
 /* Pthread entry points return either a POSIX error number directly or a
@@ -945,6 +994,7 @@ static inline pthread_t pthread_self(void) {
     return (pthread_t)platform_thread_current_tid();
 #else
 #if (defined(__x86_64__) || defined(_M_X64)) && \
+    !defined(RIN_PTHREAD_HOSTED_WINDOWS_NO_PROVIDER) && \
     !defined(RIN_PTHREAD_FORCE_SYSCALL_SELF)
     /* `unsigned long` is only 32 bits in the Win64 ABI.  The TLS slot carries
      * a target-word identity, so keep the inline-asm destination the same
@@ -1538,8 +1588,8 @@ static inline int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex
      * Returns 0 on wake, -EAGAIN if value changed, -EINTR if interrupted.
      * Loop handles spurious wakeups. */
     while (__atomic_load_n(&cond->generation, __ATOMIC_ACQUIRE) == gen) {
-        long ret = syscall(
-            SYS_futex, &cond->generation,
+        long ret = _RIN_PTHREAD_FUTEX_CALL(
+            &cond->generation,
             FUTEX_WAIT | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
                           FUTEX_PRIVATE_FLAG),
             (int)gen, NULL, NULL, 0);
@@ -1588,8 +1638,9 @@ static inline int __rin_pthread_cond_timedwait_clock(
             (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
              FUTEX_PRIVATE_FLAG) |
             (clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
-        long ret = syscall(SYS_futex, &cond->generation, operation, (int)gen,
-                           abstime, NULL, FUTEX_BITSET_MATCH_ANY);
+        long ret = _RIN_PTHREAD_FUTEX_CALL(
+            &cond->generation, operation, (int)gen, abstime, NULL,
+            FUTEX_BITSET_MATCH_ANY);
         if (ret < 0) {
             int err = errno;
             if (err == ETIMEDOUT) {
@@ -1630,8 +1681,8 @@ static inline int pthread_cond_signal(pthread_cond_t* cond) {
     if (!cond) return EINVAL;
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0) {
-        long ret = syscall(
-            SYS_futex, &cond->generation,
+        long ret = _RIN_PTHREAD_FUTEX_CALL(
+            &cond->generation,
             FUTEX_WAKE | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
                           FUTEX_PRIVATE_FLAG),
             1, NULL, NULL, 0);
@@ -1644,8 +1695,8 @@ static inline int pthread_cond_broadcast(pthread_cond_t* cond) {
     if (!cond) return EINVAL;
     __atomic_fetch_add(&cond->generation, 1, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&cond->waiting, __ATOMIC_SEQ_CST) > 0) {
-        long ret = syscall(
-            SYS_futex, &cond->generation,
+        long ret = _RIN_PTHREAD_FUTEX_CALL(
+            &cond->generation,
             FUTEX_WAKE | (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
                           FUTEX_PRIVATE_FLAG),
             0x7fffffff, NULL, NULL, 0);
