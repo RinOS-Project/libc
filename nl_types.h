@@ -4,10 +4,11 @@
 #ifndef _RIN_NL_TYPES_H
 #define _RIN_NL_TYPES_H
 
+#include "features.h"
 #include <stddef.h>
 #include <stdint.h>
 
-#if defined(__RINOS__) || defined(__USE_XOPEN_EXTENDED) || \
+#if defined(__USE_XOPEN_EXTENDED) || \
     defined(__USE_GNU) || defined(__DARWIN_C_SOURCE) || \
     (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L) || \
     (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500) || \
