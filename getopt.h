@@ -5,7 +5,10 @@
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
-    defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
+    (defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || \
+     defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)) && \
+    (defined(__GNUC__) || defined(__clang__))
+#define _RIN_LIBC_GETOPT_HOSTED_FORWARD 1
 #include_next <getopt.h>
 #else
 
