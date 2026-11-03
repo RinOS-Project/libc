@@ -106,6 +106,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define SYS_mmap            SYS_MMAP
 #define SYS_munmap          SYS_MUNMAP
 #define SYS_mprotect        SYS_MPROTECT
+#define SYS_mseal           SYS_MSEAL
 #define SYS_madvise         SYS_MADVISE
 #define SYS_mincore         SYS_MINCORE
 #define SYS_mlockall        SYS_MLOCKALL
@@ -224,6 +225,7 @@ typedef struct rin_thread_stack_info_v1 {
 #define __NR_mmap           SYS_MMAP        /* 50 */
 #define __NR_munmap         SYS_MUNMAP      /* 51 */
 #define __NR_mprotect       SYS_MPROTECT    /* 52 */
+#define __NR_mseal          SYS_MSEAL
 #define __NR_madvise        SYS_MADVISE     /* 58 */
 #define __NR_mincore        SYS_MINCORE     /* 59 */
 #define __NR_mlockall       SYS_MLOCKALL    /* 66 */

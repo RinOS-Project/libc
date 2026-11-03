@@ -319,6 +319,15 @@ static inline int mprotect(void* addr, size_t length, int prot) {
     return __rin_mman_zero_result(ret);
 }
 
+/* Linux mseal permanently prevents destructive changes to a mapped range.
+ * flags is reserved and must be zero. */
+static inline int mseal(void* addr, size_t length, unsigned long flags) {
+    intptr_t ret = _RIN_MMAN_SYSCALL3(
+        SYS_MSEAL, (uintptr_t)addr, (uintptr_t)length,
+        (uintptr_t)flags);
+    return __rin_mman_zero_result(ret);
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * 追加メモリ管理関数
  * ═══════════════════════════════════════════════════════════════*/
