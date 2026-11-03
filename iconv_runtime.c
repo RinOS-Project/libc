@@ -6,8 +6,6 @@
 #include "errno.h"
 #include "stdint.h"
 #include "stdlib.h"
-#include "iconv_cp932_table.h"
-#include "iconv_japanese_tables.h"
 #include "../libunicode/rin_unicode.h"
 #if defined(RIN_ICONV_RUNTIME_TESTING)
 extern int rin_iconv_runtime_test_wait(volatile uint32_t* address,
@@ -33,20 +31,6 @@ extern int rin_iconv_runtime_test_wake(volatile uint32_t* address,
     ((RIN_ICONV_SLOT_MAX + RIN_ICONV_SLOT_CHUNK_SIZE - 1u) / \
      RIN_ICONV_SLOT_CHUNK_SIZE)
 #define RIN_ICONV_NAME_INPUT_MAX 128u
-#define RIN_ICONV_PIN_CLOSING UINT32_C(0x80000000)
-/* Keep the generation tag in the pin word; retire a slot before it wraps. */
-#define RIN_ICONV_PIN_COUNT_BITS 19u
-#define RIN_ICONV_PIN_COUNT_MASK ((UINT32_C(1) << \
-                                   RIN_ICONV_PIN_COUNT_BITS) - 1u)
-#define RIN_ICONV_PIN_GENERATION_BITS 12u
-#define RIN_ICONV_PIN_GENERATION_SHIFT RIN_ICONV_PIN_COUNT_BITS
-#define RIN_ICONV_PIN_GENERATION_VALUE_MASK ((UINT32_C(1) << \
-                                              RIN_ICONV_PIN_GENERATION_BITS) - \
-                                             1u)
-#define RIN_ICONV_PIN_GENERATION_MASK \
-    (RIN_ICONV_PIN_GENERATION_VALUE_MASK << \
-     RIN_ICONV_PIN_GENERATION_SHIFT)
-#define RIN_ICONV_PIN_GENERATION_MAX RIN_ICONV_PIN_GENERATION_VALUE_MASK
 
 typedef enum {
     RIN_ICONV_ENCODING_INVALID = 0,
@@ -55,13 +39,7 @@ typedef enum {
     RIN_ICONV_ENCODING_LATIN1,
     RIN_ICONV_ENCODING_UTF16,
     RIN_ICONV_ENCODING_UTF16BE,
-    RIN_ICONV_ENCODING_UTF16LE,
-    RIN_ICONV_ENCODING_UTF32,
-    RIN_ICONV_ENCODING_UTF32BE,
-    RIN_ICONV_ENCODING_UTF32LE,
-    RIN_ICONV_ENCODING_SHIFT_JIS,
-    RIN_ICONV_ENCODING_CP932,
-    RIN_ICONV_ENCODING_EUC_JP
+    RIN_ICONV_ENCODING_UTF16LE
 } RinIconvEncoding;
 
 typedef struct RinIconvDescriptor {
@@ -89,6 +67,7 @@ static RinIconvDescriptor* g_iconv_chunks[RIN_ICONV_SLOT_CHUNK_COUNT];
 static RinIconvDescriptor* g_iconv_free_list;
 static uint32_t g_iconv_allocated_slots;
 static uint32_t g_iconv_table_lock;
+static volatile uint32_t g_iconv_table_wait_sequence;
 
 static void rin_iconv_table_lock(void) {
     while (__sync_lock_test_and_set(&g_iconv_table_lock, 1u) != 0u) {
@@ -179,33 +158,6 @@ static RinIconvEncoding rin_iconv_encoding_from_name(const char* name) {
         return RIN_ICONV_ENCODING_UTF16BE;
     if (rin_iconv_name_equals(normalized, "UTF16LE"))
         return RIN_ICONV_ENCODING_UTF16LE;
-    if (rin_iconv_name_equals(normalized, "UTF32") ||
-        rin_iconv_name_equals(normalized, "UNICODE32") ||
-        rin_iconv_name_equals(normalized, "UCS4"))
-        return RIN_ICONV_ENCODING_UTF32;
-    if (rin_iconv_name_equals(normalized, "UTF32BE") ||
-        rin_iconv_name_equals(normalized, "UCS4BE"))
-        return RIN_ICONV_ENCODING_UTF32BE;
-    if (rin_iconv_name_equals(normalized, "UTF32LE") ||
-        rin_iconv_name_equals(normalized, "UCS4LE"))
-        return RIN_ICONV_ENCODING_UTF32LE;
-    if (rin_iconv_name_equals(normalized, "SHIFTJIS") ||
-        rin_iconv_name_equals(normalized, "SJIS") ||
-        rin_iconv_name_equals(normalized, "SHIFTJISX0208") ||
-        rin_iconv_name_equals(normalized, "CSSHIFTJIS") ||
-        rin_iconv_name_equals(normalized, "XSHIFTJIS"))
-        return RIN_ICONV_ENCODING_SHIFT_JIS;
-    if (rin_iconv_name_equals(normalized, "CP932") ||
-        rin_iconv_name_equals(normalized, "WINDOWS932") ||
-        rin_iconv_name_equals(normalized, "WINDOWS31J") ||
-        rin_iconv_name_equals(normalized, "MSKANJI") ||
-        rin_iconv_name_equals(normalized, "MS932") ||
-        rin_iconv_name_equals(normalized, "IBM943"))
-        return RIN_ICONV_ENCODING_CP932;
-    if (rin_iconv_name_equals(normalized, "EUCJP") ||
-        rin_iconv_name_equals(normalized, "XEUCJP") ||
-        rin_iconv_name_equals(normalized, "CSEUCPKDFMTJAPANESE"))
-        return RIN_ICONV_ENCODING_EUC_JP;
     return RIN_ICONV_ENCODING_INVALID;
 }
 
@@ -214,127 +166,56 @@ static uintptr_t rin_iconv_token_for(uintptr_t generation, uint32_t index) {
            ((uintptr_t)index + 1u);
 }
 
-static uint32_t rin_iconv_pin_generation_tag(uintptr_t token) {
-    return (uint32_t)((token >> RIN_ICONV_SLOT_INDEX_BITS) &
-                      RIN_ICONV_PIN_GENERATION_VALUE_MASK) <<
-           RIN_ICONV_PIN_GENERATION_SHIFT;
-}
-
 static RinIconvDescriptor* rin_iconv_lookup_locked(uintptr_t token,
                                                    int allow_closing) {
     uintptr_t slot = token & RIN_ICONV_SLOT_MASK;
     uint32_t index;
     uint32_t chunk_index;
-    RinIconvDescriptor* chunk;
     RinIconvDescriptor* descriptor;
     if (slot == 0u || slot > RIN_ICONV_SLOT_MAX || token == 0u)
         return NULL;
     index = (uint32_t)(slot - 1u);
     chunk_index = index >> RIN_ICONV_SLOT_CHUNK_SHIFT;
-    if (chunk_index >= RIN_ICONV_SLOT_CHUNK_COUNT)
+    if (chunk_index >= RIN_ICONV_SLOT_CHUNK_COUNT ||
+        !g_iconv_chunks[chunk_index])
         return NULL;
-    chunk = __atomic_load_n(&g_iconv_chunks[chunk_index], __ATOMIC_ACQUIRE);
-    if (!chunk) return NULL;
-    descriptor = &chunk[index & RIN_ICONV_SLOT_CHUNK_MASK];
-    if (!descriptor->used ||
-        __atomic_load_n(&descriptor->token, __ATOMIC_ACQUIRE) != token ||
+    descriptor = &g_iconv_chunks[chunk_index][
+        index & RIN_ICONV_SLOT_CHUNK_MASK];
+    if (!descriptor->used || descriptor->token != token ||
         (!allow_closing && descriptor->closing))
         return NULL;
     return descriptor;
 }
 
-static void rin_iconv_unpin_generation(RinIconvDescriptor* descriptor,
-                                       uint32_t generation_tag);
-static void rin_iconv_unpin(RinIconvDescriptor* descriptor);
-
 static RinIconvDescriptor* rin_iconv_pin(iconv_t opaque) {
     uintptr_t token = (uintptr_t)opaque;
-    uintptr_t slot = token & RIN_ICONV_SLOT_MASK;
-    uint32_t index;
-    uint32_t chunk_index;
-    uint32_t state;
-    uint32_t generation_tag = rin_iconv_pin_generation_tag(token);
-    RinIconvDescriptor* chunk;
     RinIconvDescriptor* descriptor;
-    if (token == 0u || slot == 0u || slot > RIN_ICONV_SLOT_MAX) {
-        errno = EBADF;
+    rin_iconv_table_lock();
+    descriptor = rin_iconv_lookup_locked(token, 0);
+    if (!descriptor || descriptor->pins == UINT32_MAX) {
+        rin_iconv_table_unlock();
+        errno = descriptor ? EOVERFLOW : EBADF;
         return NULL;
     }
-    index = (uint32_t)(slot - 1u);
-    chunk_index = index >> RIN_ICONV_SLOT_CHUNK_SHIFT;
-    if (chunk_index >= RIN_ICONV_SLOT_CHUNK_COUNT) {
-        errno = EBADF;
-        return NULL;
-    }
-    chunk = __atomic_load_n(&g_iconv_chunks[chunk_index], __ATOMIC_ACQUIRE);
-    if (!chunk) {
-        errno = EBADF;
-        return NULL;
-    }
-    descriptor = &chunk[index & RIN_ICONV_SLOT_CHUNK_MASK];
-    if (__atomic_load_n(&descriptor->token, __ATOMIC_ACQUIRE) != token) {
-        errno = EBADF;
-        return NULL;
-    }
-    state = __atomic_load_n(&descriptor->pins, __ATOMIC_ACQUIRE);
-    for (;;) {
-        uint32_t desired;
-        if ((state & RIN_ICONV_PIN_CLOSING) != 0u) {
-            errno = EBADF;
-            return NULL;
-        }
-        if ((state & RIN_ICONV_PIN_GENERATION_MASK) != generation_tag) {
-            errno = EBADF;
-            return NULL;
-        }
-        if ((state & RIN_ICONV_PIN_COUNT_MASK) ==
-            RIN_ICONV_PIN_COUNT_MASK) {
-            errno = EOVERFLOW;
-            return NULL;
-        }
-        desired = state + 1u;
-        if (__atomic_compare_exchange_n(&descriptor->pins, &state, desired,
-                                        1, __ATOMIC_ACQUIRE,
-                                        __ATOMIC_RELAXED))
-            break;
-    }
-    /* A stale token can race slot reuse between its first token read and pin
-     * CAS. The tagged pin word prevents it from joining a later generation. */
-    if (__atomic_load_n(&descriptor->token, __ATOMIC_ACQUIRE) != token) {
-        rin_iconv_unpin_generation(descriptor, generation_tag);
-        errno = EBADF;
-        return NULL;
-    }
+    ++descriptor->pins;
+    rin_iconv_table_unlock();
     return descriptor;
 }
 
-static void rin_iconv_unpin_generation(RinIconvDescriptor* descriptor,
-                                       uint32_t generation_tag) {
-    uint32_t state = __atomic_load_n(&descriptor->pins, __ATOMIC_RELAXED);
-    for (;;) {
-        uint32_t count;
-        uint32_t desired;
-        if ((state & RIN_ICONV_PIN_GENERATION_MASK) != generation_tag)
-            return;
-        count = state & RIN_ICONV_PIN_COUNT_MASK;
-        if (count == 0u) return;
-        desired = state - 1u;
-        if (__atomic_compare_exchange_n(&descriptor->pins, &state, desired,
-                                        0, __ATOMIC_RELEASE,
-                                        __ATOMIC_RELAXED)) {
-            if ((state & RIN_ICONV_PIN_CLOSING) != 0u && count == 1u)
-                (void)rin_iconv_runtime_test_wake(&descriptor->pins, -1);
-            return;
+static void rin_iconv_unpin(RinIconvDescriptor* descriptor) {
+    int wake_close = 0;
+    rin_iconv_table_lock();
+    if (descriptor->pins != 0u) {
+        --descriptor->pins;
+        if (descriptor->closing && descriptor->pins == 0u) {
+            __atomic_add_fetch(&g_iconv_table_wait_sequence, 1u,
+                               __ATOMIC_RELEASE);
+            wake_close = 1;
         }
     }
-}
-
-static void rin_iconv_unpin(RinIconvDescriptor* descriptor) {
-    uint32_t generation_tag =
-        ((uint32_t)descriptor->generation &
-         RIN_ICONV_PIN_GENERATION_VALUE_MASK) <<
-        RIN_ICONV_PIN_GENERATION_SHIFT;
-    rin_iconv_unpin_generation(descriptor, generation_tag);
+    rin_iconv_table_unlock();
+    if (wake_close)
+        (void)rin_iconv_runtime_test_wake(&g_iconv_table_wait_sequence, -1);
 }
 
 iconv_t iconv_open(const char* tocode, const char* fromcode) {
@@ -358,19 +239,17 @@ iconv_t iconv_open(const char* tocode, const char* fromcode) {
         rin_iconv_table_lock();
         descriptor = g_iconv_free_list;
         if (descriptor) {
-            uintptr_t token;
             g_iconv_free_list = descriptor->free_next;
             descriptor->free_next = NULL;
-            if (descriptor->generation >= max_generation ||
-                descriptor->generation >= RIN_ICONV_PIN_GENERATION_MAX) {
+            if (descriptor->generation >= max_generation) {
                 descriptor->retired = 1u;
                 rin_iconv_table_unlock();
                 continue;
             }
             ++descriptor->generation;
-            token = rin_iconv_token_for(descriptor->generation,
-                                        descriptor->slot_index - 1u);
-            if (token == UINTPTR_MAX) {
+            descriptor->token = rin_iconv_token_for(
+                descriptor->generation, descriptor->slot_index - 1u);
+            if (descriptor->token == UINTPTR_MAX) {
                 descriptor->retired = 1u;
                 rin_iconv_table_unlock();
                 continue;
@@ -380,17 +259,12 @@ iconv_t iconv_open(const char* tocode, const char* fromcode) {
             descriptor->input_byte_order = 0u;
             descriptor->input_started = 0u;
             descriptor->output_started = 0u;
-            __atomic_store_n(&descriptor->pins,
-                             ((uint32_t)descriptor->generation &
-                              RIN_ICONV_PIN_GENERATION_VALUE_MASK) <<
-                                 RIN_ICONV_PIN_GENERATION_SHIFT,
-                             __ATOMIC_RELAXED);
+            descriptor->pins = 0u;
             descriptor->descriptor_lock = 0u;
             descriptor->closing = 0u;
             descriptor->used = 1u;
-            __atomic_store_n(&descriptor->token, token, __ATOMIC_RELEASE);
             rin_iconv_table_unlock();
-            return (iconv_t)token;
+            return (iconv_t)descriptor->token;
         }
         if (g_iconv_allocated_slots >= RIN_ICONV_SLOT_MAX) {
             rin_iconv_table_unlock();
@@ -437,8 +311,7 @@ iconv_t iconv_open(const char* tocode, const char* fromcode) {
             free(candidate_chunk);
             continue;
         }
-        __atomic_store_n(&g_iconv_chunks[chunk_index], candidate_chunk,
-                         __ATOMIC_RELEASE);
+        g_iconv_chunks[chunk_index] = candidate_chunk;
         for (uint32_t offset = 0u; offset < available; ++offset) {
             RinIconvDescriptor* added = &candidate_chunk[offset];
             added->slot_index = g_iconv_allocated_slots + offset + 1u;
@@ -464,202 +337,6 @@ static uint16_t rin_iconv_read_u16(const char* input, uint32_t byte_order) {
                             : (uint16_t)((uint16_t)(first << 8u) | second);
 }
 
-static uint32_t rin_iconv_read_u32(const char* input, uint32_t byte_order) {
-    uint32_t first = (uint8_t)input[0];
-    uint32_t second = (uint8_t)input[1];
-    uint32_t third = (uint8_t)input[2];
-    uint32_t fourth = (uint8_t)input[3];
-    if (byte_order == 1u)
-        return first | (second << 8u) | (third << 16u) | (fourth << 24u);
-    return (first << 24u) | (second << 16u) | (third << 8u) | fourth;
-}
-
-static int rin_iconv_jis_lead_index(uint8_t byte, uint32_t* index_out) {
-    if (!index_out) return 0;
-    if (byte >= 0x81u && byte <= 0x9fu) {
-        *index_out = (uint32_t)(byte - 0x81u);
-        return 1;
-    }
-    if (byte >= 0xe0u && byte <= 0xfcu) {
-        *index_out = 31u + (uint32_t)(byte - 0xe0u);
-        return 1;
-    }
-    return 0;
-}
-
-static int rin_iconv_jis_trail_index(uint8_t byte, uint32_t* index_out) {
-    if (!index_out) return 0;
-    if (byte >= 0x40u && byte <= 0x7eu) {
-        *index_out = (uint32_t)(byte - 0x40u);
-        return 1;
-    }
-    if (byte >= 0x80u && byte <= 0xfcu) {
-        *index_out = 63u + (uint32_t)(byte - 0x80u);
-        return 1;
-    }
-    return 0;
-}
-
-static RinIconvDecodeStatus rin_iconv_decode_japanese(
-    uint32_t encoding, const char* input, size_t input_left,
-    uint32_t* codepoint_out, size_t* consumed_out) {
-    uint8_t first = (uint8_t)input[0];
-    uint32_t codepoint;
-    if (encoding == RIN_ICONV_ENCODING_SHIFT_JIS ||
-        encoding == RIN_ICONV_ENCODING_CP932) {
-        uint32_t lead_index;
-        uint32_t trail_index;
-        const uint16_t* table;
-        if (first < 0x80u) {
-            codepoint = first;
-            *consumed_out = 1u;
-        } else if (encoding == RIN_ICONV_ENCODING_CP932 && first == 0x80u) {
-            codepoint = 0x0080u;
-            *consumed_out = 1u;
-        } else if (encoding == RIN_ICONV_ENCODING_CP932 &&
-                   (first == 0xa0u || first >= 0xfdu)) {
-            codepoint = 0xf8f0u +
-                (first == 0xa0u ? 0u : (uint32_t)first - 0xfcu);
-            *consumed_out = 1u;
-        } else if (first >= 0xa1u && first <= 0xdfu) {
-            codepoint = 0xff61u + (uint32_t)(first - 0xa1u);
-            *consumed_out = 1u;
-        } else {
-            if (!rin_iconv_jis_lead_index(first, &lead_index))
-                return RIN_ICONV_DECODE_INVALID;
-            if (input_left < 2u) return RIN_ICONV_DECODE_INCOMPLETE;
-            if (!rin_iconv_jis_trail_index((uint8_t)input[1], &trail_index))
-                return RIN_ICONV_DECODE_INVALID;
-            table = encoding == RIN_ICONV_ENCODING_CP932
-                ? g_rin_iconv_cp932_pairs : g_rin_iconv_shift_jis_pairs;
-            codepoint = table[lead_index * RIN_ICONV_JIS_TRAIL_COUNT +
-                              trail_index];
-            if (codepoint == 0u) return RIN_ICONV_DECODE_INVALID;
-            *consumed_out = 2u;
-        }
-        *codepoint_out = codepoint;
-        return RIN_ICONV_DECODE_SCALAR;
-    }
-
-    if (first < 0x80u) {
-        codepoint = first;
-        *consumed_out = 1u;
-    } else if (first == 0x8eu) {
-        uint8_t second;
-        if (input_left < 2u) return RIN_ICONV_DECODE_INCOMPLETE;
-        second = (uint8_t)input[1];
-        if (second < 0xa1u || second > 0xdfu)
-            return RIN_ICONV_DECODE_INVALID;
-        codepoint = 0xff61u + (uint32_t)(second - 0xa1u);
-        *consumed_out = 2u;
-    } else if (first == 0x8fu) {
-        uint8_t row;
-        uint8_t cell;
-        if (input_left < 2u) return RIN_ICONV_DECODE_INCOMPLETE;
-        row = (uint8_t)input[1];
-        if (row < 0xa1u || row > 0xfeu)
-            return RIN_ICONV_DECODE_INVALID;
-        if (input_left < 3u) return RIN_ICONV_DECODE_INCOMPLETE;
-        cell = (uint8_t)input[2];
-        if (cell < 0xa1u || cell > 0xfeu)
-            return RIN_ICONV_DECODE_INVALID;
-        codepoint = g_rin_iconv_euc_jp_plane2[
-            (uint32_t)(row - 0xa1u) * 94u + (uint32_t)(cell - 0xa1u)];
-        if (codepoint == 0u) return RIN_ICONV_DECODE_INVALID;
-        *consumed_out = 3u;
-    } else if (first >= 0xa1u && first <= 0xfeu) {
-        uint8_t second;
-        if (input_left < 2u) return RIN_ICONV_DECODE_INCOMPLETE;
-        second = (uint8_t)input[1];
-        if (second < 0xa1u || second > 0xfeu)
-            return RIN_ICONV_DECODE_INVALID;
-        codepoint = g_rin_iconv_euc_jp_plane1[
-            (uint32_t)(first - 0xa1u) * 94u +
-            (uint32_t)(second - 0xa1u)];
-        if (codepoint == 0u) return RIN_ICONV_DECODE_INVALID;
-        *consumed_out = 2u;
-    } else {
-        return RIN_ICONV_DECODE_INVALID;
-    }
-    *codepoint_out = codepoint;
-    return RIN_ICONV_DECODE_SCALAR;
-}
-
-static int rin_iconv_find_japanese_encoding(const uint64_t* table,
-                                             uint32_t count,
-                                             uint32_t codepoint,
-                                             char bytes[8],
-                                             size_t* length_out) {
-    uint32_t low = 0u;
-    uint32_t high = count;
-    while (low < high) {
-        uint32_t middle = low + (high - low) / 2u;
-        uint64_t entry = table[middle];
-        uint32_t scalar = (uint32_t)(entry >> 32u);
-        if (scalar < codepoint) {
-            low = middle + 1u;
-        } else if (scalar > codepoint) {
-            high = middle;
-        } else {
-            uint32_t packed = (uint32_t)entry;
-            size_t length = (packed >> 24u) & 0xffu;
-            for (size_t index = 0u; index < length; ++index)
-                bytes[index] = (char)(uint8_t)(packed >>
-                    ((length - index - 1u) * 8u));
-            *length_out = length;
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static int rin_iconv_encode_japanese(uint32_t encoding, uint32_t codepoint,
-                                     char bytes[8], size_t* length_out) {
-    if (codepoint < 0x80u) {
-        bytes[0] = (char)codepoint;
-        *length_out = 1u;
-        return 1;
-    }
-    if (encoding == RIN_ICONV_ENCODING_CP932) {
-        if (codepoint == 0x0080u) {
-            bytes[0] = (char)0x80;
-            *length_out = 1u;
-            return 1;
-        }
-        if (codepoint >= 0xf8f0u && codepoint <= 0xf8f3u) {
-            bytes[0] = (char)(codepoint == 0xf8f0u
-                ? 0xa0u : 0xfcu + (codepoint - 0xf8f0u));
-            *length_out = 1u;
-            return 1;
-        }
-    }
-    if ((encoding == RIN_ICONV_ENCODING_SHIFT_JIS ||
-         encoding == RIN_ICONV_ENCODING_CP932) &&
-        codepoint >= 0xff61u && codepoint <= 0xff9fu) {
-        bytes[0] = (char)(0xa1u + codepoint - 0xff61u);
-        *length_out = 1u;
-        return 1;
-    }
-    if (encoding == RIN_ICONV_ENCODING_EUC_JP &&
-        codepoint >= 0xff61u && codepoint <= 0xff9fu) {
-        bytes[0] = (char)0x8e;
-        bytes[1] = (char)(0xa1u + codepoint - 0xff61u);
-        *length_out = 2u;
-        return 1;
-    }
-    if (encoding == RIN_ICONV_ENCODING_CP932)
-        return rin_iconv_find_japanese_encoding(
-            g_rin_iconv_cp932_encode, RIN_ICONV_CP932_ENCODE_COUNT,
-            codepoint, bytes, length_out);
-    if (encoding == RIN_ICONV_ENCODING_SHIFT_JIS)
-        return rin_iconv_find_japanese_encoding(
-            g_rin_iconv_shift_jis_encode, RIN_ICONV_SHIFT_JIS_ENCODE_COUNT,
-            codepoint, bytes, length_out);
-    return rin_iconv_find_japanese_encoding(
-        g_rin_iconv_euc_jp_encode, RIN_ICONV_EUC_JP_ENCODE_COUNT,
-        codepoint, bytes, length_out);
-}
-
 static RinIconvDecodeStatus rin_iconv_decode(
     RinIconvDescriptor* descriptor, const char* input, size_t input_left,
     uint32_t* codepoint_out, size_t* consumed_out) {
@@ -680,50 +357,6 @@ static RinIconvDecodeStatus rin_iconv_decode(
         if (status == RIN_UNICODE_INCOMPLETE)
             return RIN_ICONV_DECODE_INCOMPLETE;
         if (status != RIN_UNICODE_OK) return RIN_ICONV_DECODE_INVALID;
-    } else if (encoding == RIN_ICONV_ENCODING_SHIFT_JIS ||
-               encoding == RIN_ICONV_ENCODING_CP932 ||
-               encoding == RIN_ICONV_ENCODING_EUC_JP) {
-        return rin_iconv_decode_japanese(encoding, input, input_left,
-                                         codepoint_out, consumed_out);
-    } else if (encoding == RIN_ICONV_ENCODING_UTF32 ||
-               encoding == RIN_ICONV_ENCODING_UTF32BE ||
-               encoding == RIN_ICONV_ENCODING_UTF32LE) {
-        uint32_t byte_order;
-        if (input_left < 4u) return RIN_ICONV_DECODE_INCOMPLETE;
-        if (encoding == RIN_ICONV_ENCODING_UTF32LE) {
-            byte_order = 1u;
-        } else if (encoding == RIN_ICONV_ENCODING_UTF32BE) {
-            byte_order = 2u;
-        } else if (!descriptor->input_started) {
-            if ((uint8_t)input[0] == 0x00u &&
-                (uint8_t)input[1] == 0x00u &&
-                (uint8_t)input[2] == 0xfeu &&
-                (uint8_t)input[3] == 0xffu) {
-                descriptor->input_byte_order = 2u;
-                descriptor->input_started = 1u;
-                *consumed_out = 4u;
-                return RIN_ICONV_DECODE_SKIP;
-            }
-            if ((uint8_t)input[0] == 0xffu &&
-                (uint8_t)input[1] == 0xfeu &&
-                (uint8_t)input[2] == 0x00u &&
-                (uint8_t)input[3] == 0x00u) {
-                descriptor->input_byte_order = 1u;
-                descriptor->input_started = 1u;
-                *consumed_out = 4u;
-                return RIN_ICONV_DECODE_SKIP;
-            }
-            byte_order = 2u;
-            descriptor->input_byte_order = byte_order;
-            descriptor->input_started = 1u;
-        } else {
-            byte_order = descriptor->input_byte_order;
-        }
-        codepoint = rin_iconv_read_u32(input, byte_order);
-        if (codepoint > 0x10ffffu ||
-            (codepoint >= 0xd800u && codepoint <= 0xdfffu))
-            return RIN_ICONV_DECODE_INVALID;
-        consumed = 4u;
     } else {
         uint32_t byte_order;
         uint16_t first;
@@ -791,31 +424,6 @@ static int rin_iconv_encode(uint32_t encoding, uint32_t codepoint,
         if (rin_unicode_encode_utf8(bytes, 8u, codepoint, &length) !=
             RIN_UNICODE_OK)
             return 0;
-    } else if (encoding == RIN_ICONV_ENCODING_SHIFT_JIS ||
-               encoding == RIN_ICONV_ENCODING_CP932 ||
-               encoding == RIN_ICONV_ENCODING_EUC_JP) {
-        return rin_iconv_encode_japanese(encoding, codepoint, bytes,
-                                         length_out);
-    } else if (encoding == RIN_ICONV_ENCODING_UTF32 ||
-               encoding == RIN_ICONV_ENCODING_UTF32BE ||
-               encoding == RIN_ICONV_ENCODING_UTF32LE) {
-        uint32_t byte_order = encoding == RIN_ICONV_ENCODING_UTF32LE
-            ? 1u : 2u;
-        if (codepoint > 0x10ffffu ||
-            (codepoint >= 0xd800u && codepoint <= 0xdfffu))
-            return 0;
-        if (byte_order == 1u) {
-            bytes[0] = (char)(uint8_t)codepoint;
-            bytes[1] = (char)(uint8_t)(codepoint >> 8u);
-            bytes[2] = (char)(uint8_t)(codepoint >> 16u);
-            bytes[3] = (char)(uint8_t)(codepoint >> 24u);
-        } else {
-            bytes[0] = (char)(uint8_t)(codepoint >> 24u);
-            bytes[1] = (char)(uint8_t)(codepoint >> 16u);
-            bytes[2] = (char)(uint8_t)(codepoint >> 8u);
-            bytes[3] = (char)(uint8_t)codepoint;
-        }
-        length = 4u;
     } else {
         uint16_t units[2];
         size_t unit_count = 0u;
@@ -907,9 +515,7 @@ size_t iconv(iconv_t opaque, char** input, size_t* input_left,
         uint32_t codepoint = 0u;
         size_t consumed = 0u;
         size_t encoded_length = 0u;
-        size_t prefix_length = 0u;
         char encoded[8];
-        char prefix[4];
         RinIconvDecodeStatus decode_status = rin_iconv_decode(
             descriptor, input_cursor, remaining_input, &codepoint, &consumed);
         if (decode_status == RIN_ICONV_DECODE_INCOMPLETE)
@@ -933,35 +539,28 @@ size_t iconv(iconv_t opaque, char** input, size_t* input_left,
                                   output, output_left, input_cursor,
                                   remaining_input, output_cursor,
                                   remaining_output);
-        if (!descriptor->output_started) {
-            if (descriptor->output_encoding == RIN_ICONV_ENCODING_UTF16) {
-                prefix[0] = (char)0xfe;
-                prefix[1] = (char)0xff;
-                prefix_length = 2u;
-            } else if (descriptor->output_encoding ==
-                       RIN_ICONV_ENCODING_UTF32) {
-                prefix[0] = 0;
-                prefix[1] = 0;
-                prefix[2] = (char)0xfe;
-                prefix[3] = (char)0xff;
-                prefix_length = 4u;
-            }
+        if (descriptor->output_encoding == RIN_ICONV_ENCODING_UTF16 &&
+            !descriptor->output_started) {
+            if (!output_cursor || remaining_output < 2u)
+                return rin_iconv_fail(descriptor, E2BIG, input, input_left,
+                                      output, output_left, input_cursor,
+                                      remaining_input, output_cursor,
+                                      remaining_output);
+            output_cursor[0] = (char)0xfe;
+            output_cursor[1] = (char)0xff;
+            output_cursor += 2u;
+            remaining_output -= 2u;
+            descriptor->output_started = 1u;
         }
-        if (!output_cursor ||
-            remaining_output < prefix_length + encoded_length)
+        if (remaining_output < encoded_length)
             return rin_iconv_fail(descriptor, E2BIG, input, input_left,
                                   output, output_left, input_cursor,
                                   remaining_input, output_cursor,
                                   remaining_output);
-        for (size_t index = 0u; index < prefix_length; ++index)
-            output_cursor[index] = prefix[index];
-        output_cursor += prefix_length;
-        remaining_output -= prefix_length;
         for (size_t index = 0u; index < encoded_length; ++index)
             output_cursor[index] = encoded[index];
         output_cursor += encoded_length;
         remaining_output -= encoded_length;
-        if (prefix_length != 0u) descriptor->output_started = 1u;
         input_cursor += consumed;
         remaining_input -= consumed;
     }
@@ -979,7 +578,6 @@ size_t iconv(iconv_t opaque, char** input, size_t* input_left,
 int iconv_close(iconv_t opaque) {
     uintptr_t token = (uintptr_t)opaque;
     RinIconvDescriptor* descriptor;
-    uint32_t state;
     rin_iconv_table_lock();
     descriptor = rin_iconv_lookup_locked(token, 0);
     if (!descriptor) {
@@ -988,62 +586,45 @@ int iconv_close(iconv_t opaque) {
         return -1;
     }
     descriptor->closing = 1u;
-    (void)__atomic_fetch_or(&descriptor->pins, RIN_ICONV_PIN_CLOSING,
-                            __ATOMIC_ACQ_REL);
-    rin_iconv_table_unlock();
     for (;;) {
-        state = __atomic_load_n(&descriptor->pins, __ATOMIC_ACQUIRE);
-        if ((state & RIN_ICONV_PIN_COUNT_MASK) == 0u) break;
-        if (rin_iconv_runtime_test_wait(
-                (volatile uint32_t*)&descriptor->pins, state) != 0) {
+        if (descriptor->pins == 0u) {
+            descriptor->used = 0u;
+            descriptor->closing = 0u;
+            descriptor->token = 0u;
+            descriptor->input_encoding = RIN_ICONV_ENCODING_INVALID;
+            descriptor->output_encoding = RIN_ICONV_ENCODING_INVALID;
+            descriptor->input_byte_order = 0u;
+            descriptor->input_started = 0u;
+            descriptor->output_started = 0u;
+            descriptor->descriptor_lock = 0u;
+            if (descriptor->generation >=
+                    (UINTPTR_MAX >> RIN_ICONV_SLOT_INDEX_BITS) ||
+                rin_iconv_token_for(descriptor->generation,
+                                    descriptor->slot_index - 1u) ==
+                    UINTPTR_MAX) {
+                descriptor->retired = 1u;
+                descriptor->free_next = NULL;
+            } else {
+                descriptor->free_next = g_iconv_free_list;
+                g_iconv_free_list = descriptor;
+            }
+            rin_iconv_table_unlock();
+            return 0;
+        }
+        uint32_t expected = __atomic_load_n(
+            &g_iconv_table_wait_sequence, __ATOMIC_RELAXED);
+        rin_iconv_table_unlock();
+        if (rin_iconv_runtime_test_wait(&g_iconv_table_wait_sequence,
+                                        expected) != 0) {
             int saved_errno = errno;
             rin_iconv_table_lock();
-            if (descriptor->used &&
-                __atomic_load_n(&descriptor->token, __ATOMIC_ACQUIRE) ==
-                    token && descriptor->closing) {
+            if (descriptor->used && descriptor->token == token &&
+                descriptor->closing)
                 descriptor->closing = 0u;
-                (void)__atomic_fetch_and(&descriptor->pins,
-                                         ~RIN_ICONV_PIN_CLOSING,
-                                         __ATOMIC_RELEASE);
-            }
             rin_iconv_table_unlock();
             errno = saved_errno;
             return -1;
         }
+        rin_iconv_table_lock();
     }
-    rin_iconv_table_lock();
-    if (!descriptor->used ||
-        __atomic_load_n(&descriptor->token, __ATOMIC_ACQUIRE) != token ||
-        !descriptor->closing) {
-        rin_iconv_table_unlock();
-        errno = EBADF;
-        return -1;
-    }
-    descriptor->used = 0u;
-    descriptor->closing = 0u;
-    __atomic_store_n(&descriptor->token, 0u, __ATOMIC_RELEASE);
-    descriptor->input_encoding = RIN_ICONV_ENCODING_INVALID;
-    descriptor->output_encoding = RIN_ICONV_ENCODING_INVALID;
-    descriptor->input_byte_order = 0u;
-    descriptor->input_started = 0u;
-    descriptor->output_started = 0u;
-    descriptor->descriptor_lock = 0u;
-    __atomic_store_n(&descriptor->pins,
-                     ((uint32_t)descriptor->generation &
-                      RIN_ICONV_PIN_GENERATION_VALUE_MASK) <<
-                         RIN_ICONV_PIN_GENERATION_SHIFT,
-                     __ATOMIC_RELEASE);
-    if (descriptor->generation >=
-            (UINTPTR_MAX >> RIN_ICONV_SLOT_INDEX_BITS) ||
-        descriptor->generation >= RIN_ICONV_PIN_GENERATION_MAX ||
-        rin_iconv_token_for(descriptor->generation,
-                            descriptor->slot_index - 1u) == UINTPTR_MAX) {
-        descriptor->retired = 1u;
-        descriptor->free_next = NULL;
-    } else {
-        descriptor->free_next = g_iconv_free_list;
-        g_iconv_free_list = descriptor;
-    }
-    rin_iconv_table_unlock();
-    return 0;
 }

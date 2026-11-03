@@ -371,8 +371,6 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define SO_ZEROCOPY     60  /* 完了通知はMSG_ERRQUEUEから取得 */
 #define SO_PASSCRED     16  /* UNIX socketで送信者資格情報を受信 */
 #define SO_PEERCRED     17  /* UNIX socketの接続時peer資格情報 */
-#define SO_PEERSEC      31  /* UNIX socket peerのsecurity labelを取得 */
-#define SO_PASSSEC      34  /* UNIX socket送信者labelをSCM_SECURITYで受信 */
 #define SO_NONBLOCK               0x5003 /* kernel socket nonblocking */
 
 /* RinOSでのソケットoption対応範囲:
@@ -487,7 +485,6 @@ struct cmsghdr {
 
 #define SCM_RIGHTS 0x01
 #define SCM_CREDENTIALS 0x02
-#define SCM_SECURITY 0x03
 #define SCM_RXQ_OVFL SO_RXQ_OVFL
 
 struct ucred {

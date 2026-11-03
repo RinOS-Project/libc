@@ -4,6 +4,7 @@
 #ifndef _RIN_MONETARY_H
 #define _RIN_MONETARY_H
 
+#include "features.h"
 #include <stddef.h>
 #include <sys/types.h>
 #include <locale.h>

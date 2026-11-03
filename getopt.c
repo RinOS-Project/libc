@@ -4,7 +4,6 @@
  */
 
 #include "getopt.h"
-#if !defined(_RIN_LIBC_GETOPT_HOSTED_FORWARD)
 #include "stdlib.h"
 
 char* optarg = NULL;
@@ -23,6 +22,3 @@ int _rin_getopt_posixly_correct(void)
 {
     return getenv("POSIXLY_CORRECT") != NULL;
 }
-#else
-typedef int _rin_getopt_hosted_crt_owner_translation_unit;
-#endif

@@ -11,16 +11,7 @@
  */
 
 #include "pthread.h"
-#include "rin_atomic_wait.h"
-
-#ifndef RIN_PTHREAD_KEY_WAIT
-#define RIN_PTHREAD_KEY_WAIT(address, expected) \
-    rin_atomic_wait_u32((address), (uint32_t)(expected), NULL)
-#endif
-#ifndef RIN_PTHREAD_KEY_NOTIFY_ALL
-#define RIN_PTHREAD_KEY_NOTIFY_ALL(address) \
-    rin_atomic_notify_all_u32((address))
-#endif
+#include "sched.h"
 
 /* ═══════════════════════════════════════════════════════════════
  * スレッドローカル errno
@@ -142,8 +133,6 @@ static void pthread_key_finalize_delete(unsigned int key,
     __sync_synchronize();
     __sync_lock_test_and_set(&_pthread_tls_key_state[key],
                              RIN_PTHREAD_KEY_FREE);
-    (void)RIN_PTHREAD_KEY_NOTIFY_ALL(
-        (volatile uint32_t*)&_pthread_tls_key_state[key]);
 }
 
 static void pthread_key_dispatch_release(unsigned int key)
@@ -160,18 +149,9 @@ static void pthread_key_dispatch_release(unsigned int key)
         next = word - 1u;
         if (__sync_bool_compare_and_swap(
                 &_pthread_tls_key_state[key], word, next)) {
-            if (state == RIN_PTHREAD_KEY_DELETING) {
-                if ((next & RIN_PTHREAD_KEY_DISPATCH_MASK) == 0u) {
-                    pthread_key_finalize_delete(key, next);
-                } else {
-                    /* A deleting thread may be waiting to distinguish its
-                     * own in-flight destructor frames from callbacks on
-                     * other threads. Wake on every decrement so a count
-                     * change to local_depth cannot strand that waiter. */
-                    (void)RIN_PTHREAD_KEY_NOTIFY_ALL(
-                        (volatile uint32_t*)&_pthread_tls_key_state[key]);
-                }
-            }
+            if (state == RIN_PTHREAD_KEY_DELETING &&
+                (next & RIN_PTHREAD_KEY_DISPATCH_MASK) == 0u)
+                pthread_key_finalize_delete(key, next);
             return;
         }
         word = pthread_key_state_word_load(key);
@@ -286,9 +266,7 @@ int pthread_key_delete(pthread_key_t key) {
              * already belong to a new key, which this delete must not touch. */
             return 0;
         }
-        if (RIN_PTHREAD_KEY_WAIT(
-                (volatile uint32_t*)&_pthread_tls_key_state[key], word) != 0)
-            return errno != 0 ? errno : EIO;
+        (void)sched_yield();
     }
 
 }
