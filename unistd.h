@@ -1248,10 +1248,6 @@ static inline pid_t set_tid_address(int* clear_child_tid) {
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL1(
         SYS_set_tid_address, (uintptr_t)clear_child_tid));
     if (result < 0) return (pid_t)-1;
-    if (result == 0) {
-        errno = EIO;
-        return (pid_t)-1;
-    }
     if ((uintptr_t)result > (uintptr_t)INT_MAX) {
         errno = EOVERFLOW;
         return (pid_t)-1;
@@ -2365,11 +2361,16 @@ static inline int _rin_pathconf_name_is_known(int name) {
 /* A character device is a terminal only when its terminal ioctl contract is
  * present. This internal cleanup must remain available even when the public
  * close() declaration is hidden by feature-test macros. */
-static inline void _rin_unistd_close_internal(int fd) {
+static inline int _rin_unistd_close_status_internal(int fd) {
     __rin_pthread_cancel_point_if_linked();
-    (void)_rin_unistd_status(_RIN_UNISTD_SYSCALL1(
+    int result = _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
         SYS_CLOSE, (uintptr_t)(intptr_t)fd));
     __rin_pthread_cancel_point_if_linked();
+    return result;
+}
+
+static inline void _rin_unistd_close_internal(int fd) {
+    (void)_rin_unistd_close_status_internal(fd);
 }
 
 /* Keep the probe's errno and temporary descriptor private. */
