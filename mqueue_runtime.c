@@ -30,8 +30,7 @@ enum {
     RIN_LIBC_SDK_IPC_POSIX_MQ_WAIT_RECEIVE_BEGIN = 22u,
     RIN_LIBC_SDK_IPC_POSIX_MQ_WAIT_RECEIVE_END = 23u,
     RIN_LIBC_SDK_IPC_EVENT_QUERY = 24u,
-    RIN_LIBC_SDK_IPC_POSIX_MQ_TIMEOUT_SNAPSHOT = 25u,
-    RIN_LIBC_SDK_IPC_POSIX_MQ_USER_SNAPSHOT = 28u
+    RIN_LIBC_SDK_IPC_POSIX_MQ_TIMEOUT_SNAPSHOT = 25u
 };
 
 typedef struct RinLibcMqNotifySlot {
@@ -94,7 +93,7 @@ static int mq_error_from_result(int32_t result, uint32_t operation,
     case RIN_ERROR_LIMIT_EXCEEDED:
         errno = operation == RIN_LIBC_SDK_IPC_POSIX_MQ_OPEN
                     ? ENOSPC
-                    : operation == RIN_LIBC_SDK_IPC_POSIX_MQ_USER_SNAPSHOT
+                    : operation == RIN_SDK_IPC_POSIX_MQ_USER_SNAPSHOT
                           ? ENAMETOOLONG : EOVERFLOW;
         break;
     case RIN_ERROR_INVALID_ADDRESS: errno = EFAULT; break;
@@ -121,9 +120,9 @@ static int mq_user_snapshot(const void* source, size_t size, int string_mode,
     request.value[2] = string_mode ? 1u : 0u;
     return mq_error_from_result(
         mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
-                        RIN_LIBC_SDK_IPC_POSIX_MQ_USER_SNAPSHOT,
+                        RIN_SDK_IPC_POSIX_MQ_USER_SNAPSHOT,
                         &request, destination, (uint32_t)size),
-        RIN_LIBC_SDK_IPC_POSIX_MQ_USER_SNAPSHOT, 0);
+        RIN_SDK_IPC_POSIX_MQ_USER_SNAPSHOT, 0);
 }
 
 static int mq_name_snapshot(const char* name,
