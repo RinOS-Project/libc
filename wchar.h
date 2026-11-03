@@ -369,6 +369,17 @@ wint_t putwc(wchar_t c, FILE* stream);
 wint_t putwchar(wchar_t c);
 wint_t ungetwc(wint_t c, FILE* stream);
 
+#if defined(__RIN_FEATURES_GNU) || defined(RIN_WIDE_STDIO_IMPLEMENTATION)
+wint_t fgetwc_unlocked(FILE* stream);
+wchar_t* fgetws_unlocked(wchar_t* s, int n, FILE* stream);
+wint_t fputwc_unlocked(wchar_t c, FILE* stream);
+int fputws_unlocked(const wchar_t* s, FILE* stream);
+wint_t getwc_unlocked(FILE* stream);
+wint_t getwchar_unlocked(void);
+wint_t putwc_unlocked(wchar_t c, FILE* stream);
+wint_t putwchar_unlocked(wchar_t c);
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * ワイド文字printf/scanf
  * ═══════════════════════════════════════════════════════════════*/

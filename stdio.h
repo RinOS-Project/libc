@@ -8,7 +8,7 @@
 #define _STDIO_H
 #define __STDC_VERSION_STDIO_H__ 202311L
 
-
+#include "features.h"
 #include "stddef.h"
 #include "stdint.h"
 #include "stdarg.h"
@@ -96,6 +96,18 @@ int fputc(int c, FILE* stream);
 int putc_unlocked(int c, FILE* stream);
 int fputs(const char* s, FILE* stream);
 int fgetc(FILE* stream);
+#if defined(__RIN_FEATURES_GNU) || defined(RIN_STDIO_OWNER_BUILD)
+int fgetc_unlocked(FILE* stream);
+int fputc_unlocked(int c, FILE* stream);
+char* fgets_unlocked(char* s, int size, FILE* stream);
+int fputs_unlocked(const char* s, FILE* stream);
+size_t fread_unlocked(void* ptr, size_t size, size_t nmemb, FILE* stream);
+size_t fwrite_unlocked(const void* ptr, size_t size, size_t nmemb, FILE* stream);
+int feof_unlocked(FILE* stream);
+int ferror_unlocked(FILE* stream);
+void clearerr_unlocked(FILE* stream);
+int fileno_unlocked(FILE* stream);
+#endif
 int getc_unlocked(FILE* stream);
 int getchar(void);
 int getchar_unlocked(void);
