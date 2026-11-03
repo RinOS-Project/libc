@@ -373,6 +373,7 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define SO_SNDTIMEO     21  /* 送信タイムアウト */
 #define SO_ACCEPTCONN   30  /* accept可能か */
 #define SO_REUSEPORT    15  /* ポート再利用 */
+#define SO_ATTACH_FILTER 26 /* classic BPF socket filterを設定 */
 #define SO_DETACH_FILTER 27  /* attached socket filterを解除 */
 #define SO_DETACH_BPF   SO_DETACH_FILTER
 #define SO_ATTACH_BPF   50  /* eBPF socket filterを設定 */
