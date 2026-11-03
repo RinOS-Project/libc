@@ -354,6 +354,9 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define SO_REUSEADDR    2   /* アドレス再利用 */
 #define SO_TYPE         3   /* ソケットタイプ取得 */
 #define SO_ERROR        4   /* エラー取得 */
+#ifndef SO_BINDTODEVICE
+#define SO_BINDTODEVICE 25  /* interface nameをsocketに固定 */
+#endif
 #define SO_PROTOCOL    38   /* 実際に作成されたプロトコル番号 */
 #define SO_DOMAIN      39   /* ソケットのアドレスファミリ */
 #define SO_COOKIE      57   /* ソケット寿命中に不変の64-bit identity */
@@ -397,6 +400,9 @@ static inline uint32_t ntohl(uint32_t netlong) {
  * - SO_ZEROCOPYはIPv4/IPv6 TCPのみ。MSG_ZEROCOPY送信はuser pageをcopy完了までpinし、
  *   copied completionをMSG_ERRQUEUEで返す。error queueはnonblockingで、保留中はPOLLERR。
  *   TCP_NODELAY/TCP_MAXSEG/TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNTもTCPのみ。
+ * - SO_BINDTODEVICEはTCP、UDP、raw IPv4/IPv6でinterface名を固定する。
+ *   NETWORK_ADMIN capabilityを要求し、空文字またはoptlen=0で解除する。
+ *   getsockopt()は現在のinterface名を返し、短いbufferでは安全に切り詰める。
  * - SO_DEBUG/SO_DONTROUTEは未対応で、setsockopt/getsockoptはENOPROTOOPTを返す。
  * set値はintをちょうど1個、取得bufferは少なくともint 1個を渡す。
  */
