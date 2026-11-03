@@ -3152,7 +3152,7 @@ static inline const char* __rin_exec_search_path(
 }
 
 static inline int __rin_exec_shell_fallback(
-    const char* path, char* const argv[], char** environment) {
+    const char* path, char* const argv[], char* const* environment) {
     char* shell_arguments[__RIN_EXEC_ARGUMENT_COUNT_MAX + 1u];
     size_t input_count = 0u;
     size_t output_count = 2u;
@@ -3174,7 +3174,9 @@ static inline int __rin_exec_shell_fallback(
     return _RIN_UNISTD_EXECVE("/bin/sh", shell_arguments, environment);
 }
 
-static inline int __rin_execvp(const char* file, char* const argv[]) {
+static inline int __rin_exec_search_and_execute(
+    const char* file, char* const argv[],
+    char* const* explicit_environment, int use_explicit_environment) {
     static const char default_path[] = "/bin:/sys/bin:/sys/apps";
     const char* search_path;
     const char* segment;
@@ -3185,6 +3187,7 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
     char file_snapshot[__RIN_EXEC_PATH_MAX];
     char candidate[__RIN_EXEC_PATH_MAX];
     char** environment;
+    char* const* execution_environment;
 
     if (!file || !argv) {
         errno = EINVAL;
@@ -3203,11 +3206,15 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
         return -1;
     }
     environment = __rin_unistd_environment_snapshot(&environment_epoch);
+    execution_environment = use_explicit_environment
+                                ? explicit_environment : environment;
     for (size_t index = 0u; index < file_length; ++index) {
         if (file[index] == '/') {
-            int result = _RIN_UNISTD_EXECVE(file, argv, environment);
+            int result = _RIN_UNISTD_EXECVE(
+                file, argv, execution_environment);
             if (result < 0 && errno == ENOEXEC)
-                result = __rin_exec_shell_fallback(file, argv, environment);
+                result = __rin_exec_shell_fallback(
+                    file, argv, execution_environment);
             return __rin_unistd_environment_finish(
                 result, environment_epoch);
         }
@@ -3246,10 +3253,11 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
             if (directory_length) candidate[offset++] = '/';
             for (size_t index = 0u; index <= name_length; ++index)
                 candidate[offset++] = file[index];
-            result = _RIN_UNISTD_EXECVE(candidate, argv, environment);
+            result = _RIN_UNISTD_EXECVE(
+                candidate, argv, execution_environment);
             if (result < 0 && errno == ENOEXEC) {
                 result = __rin_exec_shell_fallback(
-                    candidate, argv, environment);
+                    candidate, argv, execution_environment);
                 return __rin_unistd_environment_finish(
                     result, environment_epoch);
             }
@@ -3269,6 +3277,15 @@ static inline int __rin_execvp(const char* file, char* const argv[]) {
     }
     errno = saved_error;
     return __rin_unistd_environment_finish(-1, environment_epoch);
+}
+
+static inline int __rin_execvp(const char* file, char* const argv[]) {
+    return __rin_exec_search_and_execute(file, argv, NULL, 0);
+}
+
+static inline int __rin_execvpe(
+    const char* file, char* const argv[], char* const envp[]) {
+    return __rin_exec_search_and_execute(file, argv, envp, 1);
 }
 
 static inline int execl(const char* pathname, const char* arg, ...) {
@@ -3335,6 +3352,12 @@ static inline int execv(const char* pathname, char* const argv[]) {
 static inline int execvp(const char* file, char* const argv[]) {
     return __rin_execvp(file, argv);
 }
+#if defined(_RIN_USE_GNU_EXECVPE)
+static inline int execvpe(const char* file, char* const argv[],
+                          char* const envp[]) {
+    return __rin_execvpe(file, argv, envp);
+}
+#endif /* _RIN_USE_GNU_EXECVPE */
 #endif /* RIN_UNISTD_TARGET_PROCESS_FRONTEND */
 
 /* POSIX getopt belongs to <unistd.h>. GNU long-option declarations and
