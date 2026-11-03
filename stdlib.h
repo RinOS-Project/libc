@@ -266,7 +266,18 @@ void* calloc(size_t nmemb, size_t size);
 #ifndef realloc
 void* realloc(void* ptr, size_t size);
 #endif
+#if defined(_RIN_USE_GNU_REALLOCARRAY) || defined(_GNU_SOURCE) || \
+    defined(__USE_GNU) || defined(_DEFAULT_SOURCE) || \
+    defined(_BSD_SOURCE) || defined(__USE_MISC) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI) || \
+    (!defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE) && \
+     !defined(_XOPEN_SOURCE))
+/* POSIX.1-2024 adopted reallocarray; keep older strict POSIX profiles clear
+ * while retaining the long-standing GNU/BSD/default extension surface. */
 void* reallocarray(void* ptr, size_t nmemb, size_t size);
+#endif
 size_t memalignment(const void* ptr);
 #if !defined(__cplusplus)
 int strfromd(char* restrict s, size_t n, const char* restrict format,
