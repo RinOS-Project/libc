@@ -31,6 +31,7 @@ extern "C" {
 #define IN_DELETE       0x00000200u
 #define IN_DELETE_SELF  0x00000400u
 #define IN_MOVE_SELF    0x00000800u
+#define IN_UNMOUNT      0x00002000u
 #define IN_Q_OVERFLOW   0x00004000u
 #define IN_IGNORED      0x00008000u
 #define IN_ONLYDIR      0x01000000u
