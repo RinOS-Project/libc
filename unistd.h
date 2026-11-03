@@ -36,6 +36,15 @@
 #ifndef _RINOS_LIBC_UNISTD_H
 #define _RINOS_LIBC_UNISTD_H
 
+#include "features.h"
+
+#if (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI) || \
+    defined(RIN_POSIX_CLOSE_RUNTIME_IMPLEMENTATION)
+#define _RIN_UNISTD_POSIX_CLOSE_VISIBLE 1
+#endif
+
 #include "stddef.h"
 #include "stdint.h"
 #include "stdarg.h"
@@ -602,6 +611,7 @@ static inline ssize_t pwrite64(int fd, const void* buf, size_t count,
     return _rin_unistd_positional_io(fd, buf, count, (int64_t)offset, 1);
 }
 
+#if defined(_RIN_UNISTD_POSIX_CLOSE_VISIBLE)
 #ifndef POSIX_CLOSE_RESTART
 /* RinOS closes descriptors synchronously and never restarts close on signals. */
 #define POSIX_CLOSE_RESTART 0
@@ -648,6 +658,7 @@ static inline int posix_close(int fd, int flags) {
     return _rin_posix_close_impl(fd, flags);
 }
 #endif
+#endif /* _RIN_UNISTD_POSIX_CLOSE_VISIBLE */
 
 static inline int close_range(unsigned int first, unsigned int last,
                               int flags) {
