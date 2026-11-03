@@ -169,6 +169,8 @@ extern "C" {
 #define PR_SVE_GET_VL       51  /* Get SVE vector length */
 #define PR_GET_SPECULATION_CTRL 52
 #define PR_SET_SPECULATION_CTRL 53
+#define PR_RIN_CPU_MICROCODE_UPDATE 0x52494e01
+#define RIN_PRCTL_CPU_MICROCODE_UPDATE_CONTROL_SUPPORTED 1
 #define PR_PAC_RESET_KEYS   54
 #define PR_SET_TAGGED_ADDR_CTRL 55
 #define PR_GET_TAGGED_ADDR_CTRL 56
@@ -398,6 +400,7 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_SECCOMP || option == PR_GET_SECCOMP ||
         option == PR_GET_SPECULATION_CTRL ||
         option == PR_SET_SPECULATION_CTRL ||
+        option == PR_RIN_CPU_MICROCODE_UPDATE ||
         option == PR_SCHED_CORE ||
         option == PR_SET_TIMERSLACK || option == PR_GET_TIMERSLACK ||
         option == PR_SET_TSC || option == PR_GET_TSC ||
@@ -467,6 +470,7 @@ static inline int prctl(int option, ...) {
         option == PR_SET_SECUREBITS || option == PR_CAP_AMBIENT ||
         option == PR_GET_SPECULATION_CTRL ||
         option == PR_SET_SPECULATION_CTRL ||
+        option == PR_RIN_CPU_MICROCODE_UPDATE ||
         option == PR_SCHED_CORE) {
         __builtin_va_list args;
         __builtin_va_start(args, option);
@@ -518,6 +522,9 @@ static inline int prctl(int option, ...) {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
             if (option == PR_SET_SPECULATION_CTRL)
                 arg3 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
+        } else if (option == PR_RIN_CPU_MICROCODE_UPDATE) {
+            arg2 = (uintptr_t)__builtin_va_arg(args, const void*);
+            arg3 = (uintptr_t)__builtin_va_arg(args, unsigned long);
         } else if (option == PR_SCHED_CORE) {
             arg2 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
             arg3 = (uintptr_t)(uint32_t)__builtin_va_arg(args, int);
