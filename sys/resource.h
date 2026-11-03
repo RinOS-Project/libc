@@ -25,11 +25,10 @@
 #include "../errno.h"
 #include "../limits.h"
 
-#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU)
-#define __RIN_RESOURCE_LIMIT_EXTENSIONS 1
+#if defined(__RIN_FEATURES_GNU)
+#define __RIN_RESOURCE_LIMIT_GNU_EXTENSIONS 1
 #endif
-#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU) || \
-    defined(_LARGEFILE64_SOURCE)
+#if defined(__RIN_FEATURES_GNU) || defined(_LARGEFILE64_SOURCE)
 #define __RIN_RESOURCE_LIMIT64_EXTENSIONS 1
 #endif
 #if defined(RIN_FREESTANDING) || defined(RIN_USERSPACE) || \
@@ -319,7 +318,7 @@ struct rusage {
 
 #define RUSAGE_SELF     0
 #define RUSAGE_CHILDREN (-1)
-#if defined(__RIN_RESOURCE_LIMIT_EXTENSIONS)
+#if defined(__RIN_RESOURCE_LIMIT_GNU_EXTENSIONS)
 #define RUSAGE_THREAD   1
 #endif
 
@@ -393,7 +392,7 @@ static inline int setrlimit(int resource, const struct rlimit* rlim) {
 #endif
 }
 
-#if defined(__RIN_RESOURCE_LIMIT_EXTENSIONS)
+#if defined(__RIN_RESOURCE_LIMIT_GNU_EXTENSIONS)
 /* prlimit - プロセスのリソース制限を取得/設定 */
 static inline int prlimit(pid_t pid, int resource,
                           const struct rlimit* new_limit,
@@ -465,7 +464,7 @@ static inline int setrlimit64(int resource, const struct rlimit64* rlim)
 }
 #endif
 
-#if defined(__RIN_RESOURCE_LIMIT_EXTENSIONS) && \
+#if defined(__RIN_RESOURCE_LIMIT_GNU_EXTENSIONS) && \
     defined(__RIN_RESOURCE_LIMIT64_EXTENSIONS)
 static inline int prlimit64(pid_t pid, int resource,
                             const struct rlimit64* new_limit,
@@ -607,7 +606,7 @@ static inline int setpriority(int which, id_t who, int prio) {
 
 #endif /* _SYS_RESOURCE_H */
 
-#undef __RIN_RESOURCE_LIMIT_EXTENSIONS
+#undef __RIN_RESOURCE_LIMIT_GNU_EXTENSIONS
 #undef __RIN_RESOURCE_LIMIT64_EXTENSIONS
 #undef __RIN_RUSAGE_THREAD_VALUE
 

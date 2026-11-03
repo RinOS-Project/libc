@@ -106,7 +106,7 @@ typedef int idtype_t;
 #define P_PID  1
 #define P_PGID 2
 #define __RIN_WAIT_IDTYPE_PIDFD 3
-#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU)
+#if defined(__RIN_FEATURES_GNU)
 #define P_PIDFD 3
 #endif
 
@@ -280,7 +280,7 @@ struct rusage {
 /* rusageの定数 */
 #define RUSAGE_SELF     0
 #define RUSAGE_CHILDREN (-1)
-#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU)
+#if defined(__RIN_FEATURES_GNU)
 #define RUSAGE_THREAD   1
 #endif
 

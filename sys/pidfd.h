@@ -15,6 +15,7 @@
 #ifndef _SYS_PIDFD_H
 #define _SYS_PIDFD_H
 
+#include "../features.h"
 #include "../syscall.h"
 #include "types.h"
 #include "../signal.h"
@@ -23,6 +24,7 @@
 extern "C" {
 #endif
 
+#if defined(__RIN_FEATURES_GNU)
 static inline int pidfd_getfd(int pidfd, int target_fd, unsigned int flags)
 {
     return (int)syscall(SYS_PIDFD_GETFD, pidfd, target_fd, flags);
@@ -37,6 +39,7 @@ static inline int pidfd_open(pid_t pid, unsigned int flags)
 {
     return (int)syscall(SYS_PIDFD_OPEN, (int)pid, flags);
 }
+#endif
 
 #ifndef _RIN_PIDFD_SEND_SIGNAL_SYSCALL4
 #define _RIN_PIDFD_SEND_SIGNAL_SYSCALL4(number, argument1, argument2, argument3, argument4) \
@@ -45,13 +48,22 @@ static inline int pidfd_open(pid_t pid, unsigned int flags)
               (uintptr_t)(argument4))
 #endif
 
-static inline int pidfd_send_signal(int pidfd, int signal_number,
-                                    const siginfo_t* info,
-                                    unsigned int flags)
+static inline int __rin_pidfd_send_signal(int pidfd, int signal_number,
+                                          const siginfo_t* info,
+                                          unsigned int flags)
 {
     return (int)__rin_syscall_posixize(_RIN_PIDFD_SEND_SIGNAL_SYSCALL4(
         SYS_PIDFD_SEND_SIGNAL, pidfd, signal_number, info, flags));
 }
+
+#if defined(__RIN_FEATURES_GNU)
+static inline int pidfd_send_signal(int pidfd, int signal_number,
+                                    const siginfo_t* info,
+                                    unsigned int flags)
+{
+    return __rin_pidfd_send_signal(pidfd, signal_number, info, flags);
+}
+#endif
 
 #ifdef __cplusplus
 }

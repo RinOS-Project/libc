@@ -32,7 +32,8 @@ static inline int rin_child_pidfd_wait_status(int pidfd, int* status_out) {
         return -1;
     }
     for (;;) {
-        if (waitid(P_PIDFD, (id_t)pidfd, &information, WEXITED) == 0)
+        if (waitid(__RIN_WAIT_IDTYPE_PIDFD, (id_t)pidfd, &information,
+                   WEXITED) == 0)
             break;
         if (errno != EINTR) return -1;
     }
@@ -62,7 +63,7 @@ static inline int rin_child_pidfd_terminate_and_wait(int* pidfd_inout) {
     if (pidfd_inout == NULL || *pidfd_inout < 0) return 0;
     pidfd = *pidfd_inout;
     do {
-        signal_result = pidfd_send_signal(pidfd, SIGKILL, NULL, 0u);
+        signal_result = __rin_pidfd_send_signal(pidfd, SIGKILL, NULL, 0u);
     } while (signal_result != 0 && errno == EINTR);
     if (signal_result != 0 && errno != ESRCH)
         saved_error = errno != 0 ? errno : EIO;
