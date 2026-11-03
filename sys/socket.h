@@ -354,6 +354,9 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define SO_REUSEADDR    2   /* アドレス再利用 */
 #define SO_TYPE         3   /* ソケットタイプ取得 */
 #define SO_ERROR        4   /* エラー取得 */
+#define SO_PROTOCOL    38   /* 実際に作成されたプロトコル番号 */
+#define SO_DOMAIN      39   /* ソケットのアドレスファミリ */
+#define SO_COOKIE      57   /* ソケット寿命中に不変の64-bit identity */
 #define SO_DONTROUTE    5   /* ルーティング回避 */
 #define SO_BROADCAST    6   /* ブロードキャスト許可 */
 #define SO_SNDBUF       7   /* 送信バッファサイズ */
