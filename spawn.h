@@ -53,7 +53,10 @@ typedef struct {
 #define POSIX_SPAWN_SETSIGMASK 0x0008
 #define POSIX_SPAWN_SETSCHEDPARAM 0x0010
 #define POSIX_SPAWN_SETSCHEDULER 0x0020
-#define POSIX_SPAWN_SETSID 0x0080
+#define _RIN_POSIX_SPAWN_SETSID 0x0080
+#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU)
+#define POSIX_SPAWN_SETSID _RIN_POSIX_SPAWN_SETSID
+#endif
 
 static inline int _rin_posix_spawn_scheduler_policy_supported(int policy) {
     return policy == SCHED_OTHER || policy == SCHED_FIFO ||
@@ -150,7 +153,7 @@ _RIN_POSIX_SPAWN_API_INLINE int posix_spawnattr_setflags(posix_spawnattr_t* attr
                           POSIX_SPAWN_SETSIGMASK |
                           POSIX_SPAWN_SETSCHEDPARAM |
                           POSIX_SPAWN_SETSCHEDULER |
-                          POSIX_SPAWN_SETSID)) != 0) return EINVAL;
+                          _RIN_POSIX_SPAWN_SETSID)) != 0) return EINVAL;
     attr->flags = flags;
     return 0;
 }
@@ -579,6 +582,8 @@ _RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addclose(posix_spawn_fi
 }
 #endif
 
+#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU) || \
+    defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
 #if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
 extern int posix_spawn_file_actions_addclosefrom_np(
     posix_spawn_file_actions_t* actions, int from);
@@ -595,6 +600,7 @@ _RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addclosefrom_np(
     action->src_fd = -1;
     return 0;
 }
+#endif
 #endif
 
 #if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
@@ -716,10 +722,10 @@ static inline int _rin_posix_spawn_validate(
                                           POSIX_SPAWN_SETSIGMASK |
                                           POSIX_SPAWN_SETSCHEDPARAM |
                                           POSIX_SPAWN_SETSCHEDULER |
-                                          POSIX_SPAWN_SETSID);
+                                          _RIN_POSIX_SPAWN_SETSID);
     if (attr && (attr->flags & (short)~supported_flags) != 0)
         return EINVAL;
-    if (attr && (attr->flags & POSIX_SPAWN_SETSID) != 0 &&
+    if (attr && (attr->flags & _RIN_POSIX_SPAWN_SETSID) != 0 &&
         (attr->flags & POSIX_SPAWN_SETPGROUP) != 0)
         return EINVAL;
     if (attr && (attr->flags & POSIX_SPAWN_SETPGROUP) != 0 &&
@@ -781,11 +787,11 @@ static inline int _rin_posix_spawn_wire_flags(
                                 POSIX_SPAWN_SETSIGMASK |
                                 POSIX_SPAWN_SETSCHEDPARAM |
                                 POSIX_SPAWN_SETSCHEDULER |
-                                POSIX_SPAWN_SETSID)) != 0)
+                                _RIN_POSIX_SPAWN_SETSID)) != 0)
         return EINVAL;
     if ((attr->flags & POSIX_SPAWN_RESETIDS) != 0)
         *flags_out |= (uintptr_t)RIN_POSIX_SPAWN_FLAG_RESETIDS;
-    if ((attr->flags & POSIX_SPAWN_SETSID) != 0)
+    if ((attr->flags & _RIN_POSIX_SPAWN_SETSID) != 0)
         *flags_out |= (uintptr_t)RIN_POSIX_SPAWN_FLAG_SETSID;
     return 0;
 }
@@ -802,7 +808,8 @@ static inline int _rin_posix_spawn_attribute_action(
                                         POSIX_SPAWN_SETSCHEDULER);
     if (!attr || !action) return EINVAL;
     if ((attr->flags & payload_flags) == 0) return 0;
-    if ((attr->flags & (short)~(payload_flags | POSIX_SPAWN_SETSID)) != 0)
+    if ((attr->flags & (short)~(payload_flags |
+                                _RIN_POSIX_SPAWN_SETSID)) != 0)
         return EINVAL;
     memset(action, 0, sizeof(*action));
     wire.struct_size = (uint32_t)sizeof(wire);
