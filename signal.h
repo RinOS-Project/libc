@@ -227,7 +227,18 @@ union __rin_siginfo_fields {
 
     struct {
         void* _addr;
-        short _addr_lsb;
+        union {
+            short _addr_lsb;
+            struct {
+                char _dummy_pkey[sizeof(void*)];
+                uint32_t _pkey;
+            } _addr_pkey;
+            struct {
+                char _dummy_bnd[sizeof(void*)];
+                void* _lower;
+                void* _upper;
+            } _addr_bnd;
+        } _detail;
     } _sigfault;
     struct {
         int _pid;

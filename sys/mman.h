@@ -9,7 +9,8 @@
     defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
     !defined(_RIN_MMAN_SYSCALL0) && !defined(_RIN_MMAN_SYSCALL1) && \
     !defined(_RIN_MMAN_SYSCALL2) && !defined(_RIN_MMAN_SYSCALL3) && \
-    !defined(_RIN_MMAN_SYSCALL5) && !defined(_RIN_MMAN_SYSCALL6)
+    !defined(_RIN_MMAN_SYSCALL4) && !defined(_RIN_MMAN_SYSCALL5) && \
+    !defined(_RIN_MMAN_SYSCALL6)
 #include_next <sys/mman.h>
 #else
 
@@ -69,6 +70,17 @@
 #endif
 #endif
 
+#ifndef _RIN_MMAN_SYSCALL4
+#if defined(__RIN_MMAN_HOSTED_WINDOWS)
+#define _RIN_MMAN_SYSCALL4(number, arg1, arg2, arg3, arg4) \
+    ((intptr_t)-ENOSYS)
+#else
+#define _RIN_MMAN_SYSCALL4(number, arg1, arg2, arg3, arg4) \
+    _syscall4((uintptr_t)(number), (uintptr_t)(arg1), (uintptr_t)(arg2), \
+              (uintptr_t)(arg3), (uintptr_t)(arg4))
+#endif
+#endif
+
 #ifndef _RIN_MMAN_SYSCALL5
 #if defined(__RIN_MMAN_HOSTED_WINDOWS)
 #define _RIN_MMAN_SYSCALL5(number, arg1, arg2, arg3, arg4, arg5) \
@@ -104,6 +116,17 @@ static inline int __rin_mman_zero_result(intptr_t result)
 {
     if (result == 0) return 0;
     if (result > 0) {
+        errno = EIO;
+        return -1;
+    }
+    errno = result >= -4095 ? (int)(-result) : EIO;
+    return -1;
+}
+
+static inline int __rin_mman_int_result(intptr_t result)
+{
+    if (result >= 0 && result <= INT_MAX) return (int)result;
+    if (result > INT_MAX) {
         errno = EIO;
         return -1;
     }
@@ -326,6 +349,114 @@ static inline int mseal(void* addr, size_t length, unsigned long flags) {
         SYS_MSEAL, (uintptr_t)addr, (uintptr_t)length,
         (uintptr_t)flags);
     return __rin_mman_zero_result(ret);
+}
+
+#ifndef PKEY_DISABLE_ACCESS
+#define PKEY_DISABLE_ACCESS 0x1
+#endif
+#ifndef PKEY_DISABLE_WRITE
+#define PKEY_DISABLE_WRITE 0x2
+#endif
+
+static inline int pkey_mprotect(void* addr, size_t length, int prot, int pkey)
+{
+    intptr_t ret = _RIN_MMAN_SYSCALL4(
+        SYS_PKEY_MPROTECT, (uintptr_t)addr, (uintptr_t)length,
+        (uintptr_t)(intptr_t)prot, (uintptr_t)(intptr_t)pkey);
+    return __rin_mman_zero_result(ret);
+}
+
+static inline int pkey_alloc(unsigned int flags, unsigned int access_rights)
+{
+    intptr_t ret = _RIN_MMAN_SYSCALL2(
+        SYS_PKEY_ALLOC, (uintptr_t)flags, (uintptr_t)access_rights);
+    return __rin_mman_int_result(ret);
+}
+
+static inline int pkey_free(int pkey)
+{
+    intptr_t ret = _RIN_MMAN_SYSCALL1(
+        SYS_PKEY_FREE, (uintptr_t)(intptr_t)pkey);
+    return __rin_mman_zero_result(ret);
+}
+
+static inline int __rin_mman_pku_enabled(void)
+{
+#if (defined(__i386__) || defined(__x86_64__)) && \
+    (defined(__GNUC__) || defined(__clang__))
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(0u), "c"(0u));
+    if (eax < 7u) return 0;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(7u), "c"(0u));
+    /* PKU is bit 3; OSPKE proves the current kernel enabled CR4.PKE. */
+    return (ecx & ((1u << 3) | (1u << 4))) ==
+           ((1u << 3) | (1u << 4));
+#else
+    return 0;
+#endif
+}
+
+static inline int pkey_get(int pkey)
+{
+    uint32_t rights;
+    uint32_t high;
+    if (pkey < 0 || pkey > 15) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!__rin_mman_pku_enabled()) {
+        errno = ENOSYS;
+        return -1;
+    }
+#if (defined(__i386__) || defined(__x86_64__)) && \
+    (defined(__GNUC__) || defined(__clang__))
+    __asm__ volatile("rdpkru"
+                     : "=a"(rights), "=d"(high)
+                     : "c"(0u)
+                     : "memory");
+    (void)high;
+    return (int)((rights >> ((uint32_t)pkey * 2u)) & 3u);
+#else
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+static inline int pkey_set(int pkey, unsigned int access_rights)
+{
+    uint32_t rights;
+    uint32_t high;
+    uint32_t shift;
+    if (pkey < 0 || pkey > 15 || (access_rights & ~3u) != 0u) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!__rin_mman_pku_enabled()) {
+        errno = ENOSYS;
+        return -1;
+    }
+#if (defined(__i386__) || defined(__x86_64__)) && \
+    (defined(__GNUC__) || defined(__clang__))
+    __asm__ volatile("rdpkru"
+                     : "=a"(rights), "=d"(high)
+                     : "c"(0u)
+                     : "memory");
+    (void)high;
+    shift = (uint32_t)pkey * 2u;
+    rights = (rights & ~(3u << shift)) | (access_rights << shift);
+    __asm__ volatile("wrpkru\n\tlfence"
+                     :
+                     : "a"(rights), "c"(0u), "d"(0u)
+                     : "memory");
+    return 0;
+#else
+    errno = ENOSYS;
+    return -1;
+#endif
 }
 
 /* ═══════════════════════════════════════════════════════════════
