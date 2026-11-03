@@ -251,12 +251,18 @@ static inline int _rin_glob_component_wild(const char* pattern, int flags)
     if (!pattern) return 0;
     for (size_t index = 0; pattern[index] != '\0'; ++index) {
         if (pattern[index] == '\\' && !(flags & GLOB_NOESCAPE)) {
-            if (pattern[index + 1u] == '\0') return -1;
-            ++index;
+            if (pattern[index + 1u] != '\0') ++index;
             continue;
         }
-        if (pattern[index] == '*' || pattern[index] == '?' ||
-            pattern[index] == '[') return 1;
+        if (pattern[index] == '*' || pattern[index] == '?') return 1;
+        if (pattern[index] == '[') {
+            const char* class_end = pattern + index + 1u;
+            if (_rin_glob_class_match(&class_end, 0, flags, NULL, 0u,
+                                     NULL) >= 0) {
+                index = (size_t)(class_end - pattern) - 1u;
+                return 1;
+            }
+        }
     }
     return 0;
 }
@@ -270,8 +276,8 @@ static inline int _rin_glob_component_copy(const char* pattern,
     for (size_t index = 0; index < length; ++index) {
         char value = pattern[index];
         if (value == '\\' && !(flags & GLOB_NOESCAPE)) {
-            if (++index >= length) return GLOB_NOSYS;
-            value = pattern[index];
+            if (index + 1u < length)
+                value = pattern[++index];
         }
         if (cursor + 1u >= capacity) return GLOB_NOSPACE;
         output[cursor++] = value;
@@ -468,26 +474,6 @@ static inline int _rin_glob_class_match(const char** pattern,
     return matched;
 }
 
-static inline int _rin_glob_component_validate(const char* pattern, int flags)
-{
-    if (!pattern) return -1;
-    for (size_t index = 0u; pattern[index] != '\0'; ++index) {
-        if (pattern[index] == '\\' && !(flags & GLOB_NOESCAPE)) {
-            if (pattern[index + 1u] == '\0') return -1;
-            ++index;
-            continue;
-        }
-        if (pattern[index] == '[') {
-            const char* class_end = pattern + index + 1u;
-            if (_rin_glob_class_match(&class_end, 0, flags, NULL, 0u,
-                                     NULL) < 0)
-                return -1;
-            index = (size_t)(class_end - pattern) - 1u;
-        }
-    }
-    return 0;
-}
-
 static inline int _rin_glob_component_allows_period(const char* pattern,
                                                     int flags)
 {
@@ -640,14 +626,16 @@ static inline int _rin_glob_component_match_bounded(
             if (pattern[pattern_offset] == '[') {
                 const char* class_end = pattern + pattern_offset + 1u;
                 if (_rin_glob_class_match(
-                        &class_end, 0, flags, NULL, 0u, NULL) < 0) {
-                    failure = -1;
-                    break;
+                        &class_end, 0, flags, NULL, 0u, NULL) >= 0) {
+                    frame->atom_end = (uint16_t)(size_t)(class_end - pattern);
+                    frame->next_candidate = (uint16_t)value_offset;
+                    frame->phase = 4u;
+                    continue;
                 }
-                frame->atom_end = (uint16_t)(size_t)(class_end - pattern);
-                frame->next_candidate = (uint16_t)value_offset;
-                frame->phase = 4u;
-                continue;
+                /* POSIX pathname patterns do not make a malformed bracket
+                 * expression an unsupported-operation error. Treat this
+                 * opening bracket as an ordinary character and continue
+                 * parsing the following pattern bytes normally. */
             }
             {
                 const char* literal = pattern + pattern_offset;
@@ -658,11 +646,8 @@ static inline int _rin_glob_component_match_bounded(
                 wchar_t ignored;
                 if (pattern[pattern_offset] == '\\' &&
                     !(flags & GLOB_NOESCAPE)) {
-                    if (pattern_offset + 1u >= pattern_length) {
-                        failure = -1;
-                        break;
-                    }
-                    literal = pattern + pattern_offset + 1u;
+                    if (pattern_offset + 1u < pattern_length)
+                        literal = pattern + pattern_offset + 1u;
                 }
                 if (_rin_glob_decode_character(
                         literal, &after_literal, literal_encoded, &ignored) !=
@@ -1679,8 +1664,6 @@ static inline int _rin_glob_run_body(
         components[component_count].wildcard =
             _rin_glob_component_wild(component_copy, flags);
         if (components[component_count].wildcard < 0)
-            return GLOB_NOSYS;
-        if (_rin_glob_component_validate(component_copy, flags) != 0)
             return GLOB_NOSYS;
         if (components[component_count].wildcard > 0) has_wildcard = 1;
         ++component_count;
