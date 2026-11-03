@@ -9,6 +9,7 @@
 #define __STDC_VERSION_WCHAR_H__ 202311L
 
 
+#include "features.h"
 #include "stddef.h"
 #include "stdint.h"
 #include "limits.h"
@@ -71,6 +72,8 @@ static inline size_t wcsnlen(const wchar_t* string, size_t maxlen) {
 
 wchar_t* wcsdup(const wchar_t* string);
 
+#if defined(__RIN_FEATURES_POSIX_2024) || \
+    defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
 static inline size_t wcslcpy(wchar_t* destination, const wchar_t* source,
                              size_t size) {
     size_t source_length = 0u;
@@ -104,6 +107,7 @@ static inline size_t wcslcat(wchar_t* destination, const wchar_t* source,
     destination[destination_length + copied] = L'\0';
     return destination_length + source_length;
 }
+#endif
 #endif
 
 static inline wchar_t* wcscpy(wchar_t* dest, const wchar_t* src) {

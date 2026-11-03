@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* POSIX named semaphore syscall bridge. */
 
+#define RIN_SEMAPHORE_IMPLEMENTATION 1
 #include "semaphore.h"
 #include "fcntl_flags.h"
 #include "stdarg.h"

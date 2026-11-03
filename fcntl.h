@@ -18,6 +18,8 @@
 #ifndef RINOS_LIBC_FCNTL_H
 #define RINOS_LIBC_FCNTL_H
 
+#include "features.h"
+
 /* Publish the descriptor-relative path flags before any dependent header can
  * recurse through stat.h, so path-at users see the same ABI constants as
  * direct fcntl consumers. */
@@ -113,7 +115,11 @@ extern "C" {
 
 /* ファイルディスクリプタフラグ */
 #define FD_CLOEXEC  1   /* exec時にクローズ */
-#define FD_CLOFORK  2   /* fork時に子へ継承しない */
+#define __RIN_FD_CLOFORK 2
+#if defined(__RIN_FEATURES_POSIX_2024) || \
+    defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+#define FD_CLOFORK __RIN_FD_CLOFORK /* fork時に子へ継承しない */
+#endif
 
 /* ロックタイプ */
 #define F_RDLCK     0   /* 読み取りロック */
@@ -144,7 +150,11 @@ struct flock {
  * ═══════════════════════════════════════════════════════════════*/
 
 #define F_DUPFD_CLOEXEC 1030 /* F_DUPFDと同様だがCLOEXECを設定 */
-#define F_DUPFD_CLOFORK 0x52494E01 /* RinOS private CLOFORK extension */
+#define __RIN_F_DUPFD_CLOFORK 0x52494E01
+#if defined(__RIN_FEATURES_POSIX_2024) || \
+    defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+#define F_DUPFD_CLOFORK __RIN_F_DUPFD_CLOFORK
+#endif
 #define F_SETOWN        8    /* シグナル送信先プロセスを設定 */
 #define F_GETOWN        9    /* シグナル送信先プロセスを取得 */
 #define F_SETSIG        10   /* シグナル番号を設定 */
@@ -497,9 +507,10 @@ static inline int fcntl(int fd, int cmd, ...) {
             break;
         }
 
-        case F_DUPFD_CLOFORK: {
+        case __RIN_F_DUPFD_CLOFORK: {
             int minfd = va_arg(ap, int);
-            result = _fcntl_dupfd_at_least(fd, minfd, F_DUPFD_CLOFORK);
+            result = _fcntl_dupfd_at_least(fd, minfd,
+                                           __RIN_F_DUPFD_CLOFORK);
             break;
         }
 
@@ -521,7 +532,7 @@ static inline int fcntl(int fd, int cmd, ...) {
             if (fd < 0 || fd >= _FCNTL_MAX_FDS) {
                 errno = EBADF;
                 result = -1;
-            } else if ((flags & ~(FD_CLOEXEC | FD_CLOFORK)) != 0) {
+            } else if ((flags & ~(FD_CLOEXEC | __RIN_FD_CLOFORK)) != 0) {
                 errno = EINVAL;
                 result = -1;
             } else {

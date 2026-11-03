@@ -5,6 +5,8 @@
 #ifndef _FCNTL_FLAGS_H
 #define _FCNTL_FLAGS_H
 
+#include "features.h"
+
 #ifndef O_RDONLY
 #define O_RDONLY    0x0001
 #endif
@@ -56,8 +58,12 @@
 #ifndef O_CLOEXEC
 #define O_CLOEXEC   0x0200
 #endif
+#define __RIN_O_CLOFORK 0x20000
+#if defined(__RIN_FEATURES_POSIX_2024) || \
+    defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
 #ifndef O_CLOFORK
-#define O_CLOFORK   0x20000
+#define O_CLOFORK   __RIN_O_CLOFORK
+#endif
 #endif
 #ifndef O_DIRECTORY
 #define O_DIRECTORY 0x0400

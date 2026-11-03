@@ -14,6 +14,7 @@
 #ifndef _POLL_H
 #define _POLL_H
 
+#include "features.h"
 #include "stddef.h"
 #include "stdint.h"
 #include "errno.h"
@@ -439,9 +440,9 @@ static inline int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
 }
 
 /* ppoll - シグナルマスク付きpoll */
-static inline int ppoll(struct pollfd* fds, nfds_t nfds,
-                        const struct timespec* timeout_ts,
-                        const sigset_t* sigmask) {
+static inline int __rin_ppoll_impl(struct pollfd* fds, nfds_t nfds,
+                                   const struct timespec* timeout_ts,
+                                   const sigset_t* sigmask) {
     int64_t timeout_ns;
     struct timespec timeout_snapshot;
     int result;
@@ -458,6 +459,15 @@ static inline int ppoll(struct pollfd* fds, nfds_t nfds,
     __rin_pthread_cancel_point_if_linked();
     return result;
 }
+
+#if defined(__RIN_FEATURES_POSIX_2024) || \
+    defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+static inline int ppoll(struct pollfd* fds, nfds_t nfds,
+                        const struct timespec* timeout_ts,
+                        const sigset_t* sigmask) {
+    return __rin_ppoll_impl(fds, nfds, timeout_ts, sigmask);
+}
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * select関数 (poll.hに含める)
@@ -574,7 +584,7 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
                                        RIN_SELECT_LOCAL_POLLFD_COUNT,
                                        &pfds, &npfds) != 0)
             return -1;
-        ret = ppoll(pfds, npfds, timeout, sigmask);
+        ret = __rin_ppoll_impl(pfds, npfds, timeout, sigmask);
         if (ret < 0) {
             __rin_select_release_pollfds(pfds, local_pollfds);
             return ret;

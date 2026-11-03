@@ -7,6 +7,7 @@
 #ifndef _SEMAPHORE_H
 #define _SEMAPHORE_H
 
+#include "features.h"
 #include "stddef.h"
 #include "stdint.h"
 #include "limits.h"
@@ -321,8 +322,12 @@ static inline int __rin_sem_clockwait_impl(
 }
 
 /* Out-of-line public entry points are exported by semaphore_runtime.c. */
+#if defined(__RIN_FEATURES_POSIX_2024) || \
+    defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT) || \
+    defined(RIN_SEMAPHORE_IMPLEMENTATION)
 int sem_clockwait(sem_t* sem, clockid_t clock_id,
                   const struct timespec* abstime);
+#endif
 int sem_timedwait(sem_t* sem, const struct timespec* abstime);
 
 /* セマフォのインクリメント (V操作/post) */
