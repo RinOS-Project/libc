@@ -41,7 +41,9 @@
  * implement a GNU ABI, while leaving the broader GNU namespace disabled. */
 #if defined(_GNU_SOURCE)
 #define _RIN_USE_GNU_CLOSE_RANGE 1
+#define _RIN_USE_GNU_GETTID 1
 #define _RIN_USE_GNU_EXECVPE 1
+#define _RIN_USE_GNU_SYNCFS 1
 #define _RIN_USE_GNU_ARGP 1
 #define _RIN_USE_GNU_FOPENCOOKIE 1
 #define _RIN_USE_GNU_EVENTFD 1
@@ -102,7 +104,9 @@
 #if !defined(__RINOS__)
 #if defined(_GNU_SOURCE) || defined(__USE_GNU)
 #define _RIN_USE_GNU_CLOSE_RANGE 1
+#define _RIN_USE_GNU_GETTID 1
 #define _RIN_USE_GNU_EXECVPE 1
+#define _RIN_USE_GNU_SYNCFS 1
 #endif
 #if (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
     (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800)

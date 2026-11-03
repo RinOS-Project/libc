@@ -1221,6 +1221,7 @@ static inline pid_t getpid(void) {
  * the process/thread generation translation; libc only validates the raw
  * result so zero or an out-of-range positive word cannot be exposed as a
  * successful POSIX pid_t. */
+#if defined(_RIN_USE_GNU_GETTID)
 static inline pid_t gettid(void) {
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_GETTID));
     if (result < 0) return (pid_t)-1;
@@ -1234,6 +1235,7 @@ static inline pid_t gettid(void) {
     }
     return (pid_t)result;
 }
+#endif /* _RIN_USE_GNU_GETTID */
 
 static inline pid_t getppid(void) {
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL0(SYS_GETPPID));
@@ -3045,6 +3047,7 @@ static inline int fsync(int fd) {
     return result;
 }
 
+#if defined(_RIN_USE_GNU_SYNCFS)
 static inline int syncfs(int fd) {
     __rin_pthread_cancel_point_if_linked();
     int result = _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
@@ -3052,6 +3055,7 @@ static inline int syncfs(int fd) {
     __rin_pthread_cancel_point_if_linked();
     return result;
 }
+#endif /* _RIN_USE_GNU_SYNCFS */
 
 static inline int fdatasync(int fd) {
     return fsync(fd);
