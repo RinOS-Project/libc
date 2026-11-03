@@ -81,6 +81,8 @@
     ((uint32_t)(SKF_AD_OFF + SKF_AD_IFINDEX))
 #define SKF_AD_HATYPE_LOAD \
     ((uint32_t)(SKF_AD_OFF + SKF_AD_HATYPE))
+#define SKF_AD_CPU_LOAD \
+    ((uint32_t)(SKF_AD_OFF + SKF_AD_CPU))
 #define SKF_AD_ALU_XOR_X_LOAD \
     ((uint32_t)(SKF_AD_OFF + SKF_AD_ALU_XOR_X))
 
