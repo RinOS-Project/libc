@@ -1,12 +1,10 @@
 # libc TODO
+未完了項目はリポジトリrootの [`TODO.md`](../../../TODO.md) を正本とする。このファイルには完了記録のみを残す。
 - [x] **LIBC-ENV-NOOP-RECLAIM-SCAN-01 / P2 / M** — 既存変数への `setenv(..., 0)` と未登録名への `unsetenv()` は環境を変更せず、reader epoch同期やallocation全走査を行わない。変更失敗後の回収と、並行reader中の環境更新の安全性を保つ。
-- [ ] **LIBC-PTHREAD-PROCESS-SHARED-IA32-01 / P2 / M** — **source確認 (2026-11-02):** IA-32 freestandingでは `RIN_PTHREAD_PROCESS_SHARED_UNSUPPORTED` によりmutex／condition variable／rwlock／barrier／spinlockのprocess-shared設定が `ENOTSUP` になる。kernel futexには共有mappingを物理word keyで結ぶ経路がある一方、libcの32-bit mutex owner tokenはPIDとTIDを32-bitへXOR圧縮しており、衝突し得るためmacroを外すだけでは安全でない。**受入:** pthread object ABIを保ちながらgeneration付きで衝突しないowner identityとrobust owner登録を実現し、別process・別virtual mapping間でmutex／condition variable／rwlock／barrier／spinlock、owner exit・PID再利用を検証する。IA-32のfeature macroと`sysconf()` capabilityも実装に合わせる。未実装のためunchecked。
 
-- [ ] **LIBC-HOSTED-WINDOWS-SYSCALL-FRONTEND-01 / P1 / M** — hosted Windowsでは`unistd.h`と`sys/mman.h`がhost CRTへ委譲されず、`_syscall*`経由のRinOS syscall IDを使う。Windows向けbackendがないため、`setuid`／job control／`fsync`／`mmap`／`mprotect`／`clock_gettime`等を直接呼ぶconsumerはWindows syscall ABIと一致しない。POSIX capabilityは未対応へ修正したが、API自体のproviderは未実装。**受入:** Windows providerを実装するか各headerを利用可能なhost APIへ委譲し、hosted C/C++実行からRinOS syscall selectorが発行されないことを確認する。`_POSIX_*` macroと`sysconf()`をproviderの実装範囲へ合わせ、RinOS freestanding IA-32／x86_64のsyscall ABIを維持する。
 
 - [x] **LIBC-PTHREAD-STACKADDR-LEGACY-API-01 / P3 / S** — 下向き成長するx86 stackのlegacy high addressを`pthread_attr_setstack()`のlow baseへ変換し、getterは逆変換する。stack size、null、undersized、underflow／overflow検証とtarget capabilityを維持する。
 
-- [ ] **LIBC-PTHREAD-PRIO-PROTECT-01 / P2 / M** — `PTHREAD_PRIO_PROTECT`は定義済みだが、`pthread_mutexattr_setprotocol()`は常に`ENOTSUP`を返し、mutex属性／mutex本体のpriority-ceiling取得・設定APIもない。**受入:** ceiling値の設定・範囲検証と、mutex取得時の優先度昇格および解放時の復元をスケジューラの所有権・待機処理へ統合し、priority inheritance、timeout、cancel、異常終了との相互作用を確認する。
 
 - [x] **LIBC-FERAISEEXCEPT-TRAP-DELIVERY-01 / P2 / M** — `feraiseexcept()`はx87 statusとMXCSRのsticky bitを直接書き換えるため、対応例外のtrapがunmaskedでも`#MF`／`#XM`を発生させず、フラグ設定だけで成功を返す。WG14の規定はenabled trapも取る意図を示す。**受入:** 対象例外を実際に発生させるx87／SSE操作を安全に選び、overflow／underflow時の追加`FE_INEXACT`や複数例外の順序を含むC実装契約を定義する。x86／x86_64でunmasked trapが`SIGFPE`として配送され、masked時のflag union、既存フラグ、rounding mode、`feraiseexcept()`の戻り値を保つことをruntime確認する。
 
