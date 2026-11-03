@@ -631,12 +631,14 @@ static inline int close(int fd) {
     return rc;
 }
 
+#if defined(_RIN_USE_GNU_CLOSE_RANGE)
 #ifndef CLOSE_RANGE_CLOEXEC
 #define CLOSE_RANGE_CLOEXEC RIN_CLOSE_RANGE_FLAG_CLOEXEC
 #endif
 #ifndef CLOSE_RANGE_UNSHARE
 #define CLOSE_RANGE_UNSHARE RIN_CLOSE_RANGE_FLAG_UNSHARE
 #endif
+#endif /* _RIN_USE_GNU_CLOSE_RANGE */
 
 /* POSIX.1-2024 posix_close(). POSIX_CLOSE_RESTART is zero on RinOS, so
  * the syscall completes atomically with respect to signal delivery. Invalid
@@ -666,6 +668,7 @@ static inline int posix_close(int fd, int flags) {
 #endif
 #endif /* _RIN_UNISTD_POSIX_CLOSE_VISIBLE */
 
+#if defined(_RIN_USE_GNU_CLOSE_RANGE)
 static inline int close_range(unsigned int first, unsigned int last,
                               int flags) {
     int result = _rin_unistd_status(_RIN_UNISTD_SYSCALL3(
@@ -673,6 +676,7 @@ static inline int close_range(unsigned int first, unsigned int last,
         (uintptr_t)(unsigned int)flags));
     return result;
 }
+#endif /* _RIN_USE_GNU_CLOSE_RANGE */
 
 static inline off_t lseek(int fd, off_t offset, int whence) {
     intptr_t result = _rin_unistd_result(_RIN_UNISTD_SYSCALL3(
