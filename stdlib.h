@@ -65,6 +65,17 @@
     defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI)
 #define _RIN_STDLIB_SECURE_GETENV_VISIBLE 1
 #endif
+#if defined(_RIN_USE_GNU_MKOSTEMP) || defined(_GNU_SOURCE) || \
+    defined(__USE_GNU) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI)
+#define _RIN_STDLIB_MKOSTEMP_VISIBLE 1
+#endif
+#if defined(_RIN_USE_GNU_MKOSTEMPS) || defined(_GNU_SOURCE) || \
+    defined(__USE_GNU)
+#define _RIN_STDLIB_MKOSTEMPS_VISIBLE 1
+#endif
 
 #ifndef _RIN_STDLIB_SYSCALL1
 #define _RIN_STDLIB_SYSCALL1(number, arg1) \
@@ -182,7 +193,10 @@ void free(void* ptr);
 #ifdef __cplusplus
 extern "C" {
 #endif
+#if defined(_RIN_STDLIB_MKOSTEMP_VISIBLE) || \
+    defined(RIN_STDLIB_MKOSTEMP_IMPLEMENTATION)
 static inline int mkostemp(char* tmpl, int flags);
+#endif
 #ifdef __cplusplus
 }
 #endif
@@ -1656,13 +1670,19 @@ static inline int mkstemps(char* tmpl, int suffixlen) {
 }
 
 /* GNU-compatible variants atomically apply O_APPEND/O_CLOEXEC on creation. */
+#if defined(_RIN_STDLIB_MKOSTEMP_VISIBLE) || \
+    defined(RIN_STDLIB_MKOSTEMP_IMPLEMENTATION)
 static inline int mkostemp(char* tmpl, int flags) {
     return _rin_mkostemps_internal(tmpl, 0, flags);
 }
+#endif
 
+#if defined(_RIN_STDLIB_MKOSTEMPS_VISIBLE) || \
+    defined(RIN_STDLIB_MKOSTEMP_IMPLEMENTATION)
 static inline int mkostemps(char* tmpl, int suffixlen, int flags) {
     return _rin_mkostemps_internal(tmpl, suffixlen, flags);
 }
+#endif
 
 /* mkdtemp - create a unique temporary directory */
 static inline char* mkdtemp(char* tmpl) {
@@ -1832,6 +1852,8 @@ static inline size_t wcstombs(char* dest, const wchar_t* src, size_t n) {
 #undef _RIN_STDLIB_HOSTED_CXX_OWNER
 #undef _RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER
 #undef _RIN_STDLIB_SECURE_GETENV_VISIBLE
+#undef _RIN_STDLIB_MKOSTEMP_VISIBLE
+#undef _RIN_STDLIB_MKOSTEMPS_VISIBLE
 
 #ifdef __cplusplus
 }

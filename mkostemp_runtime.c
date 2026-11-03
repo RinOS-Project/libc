@@ -6,6 +6,7 @@
 #define mkostemp __rin_mkostemp_inline
 #define mkostemps __rin_mkostemps_inline
 #define mkdtemp __rin_mkdtemp_inline
+#define RIN_STDLIB_MKOSTEMP_IMPLEMENTATION 1
 #include "stdlib.h"
 #undef mkstemp
 #undef mkstemps
