@@ -373,10 +373,25 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define SO_SNDTIMEO     21  /* 送信タイムアウト */
 #define SO_ACCEPTCONN   30  /* accept可能か */
 #define SO_REUSEPORT    15  /* ポート再利用 */
+#define SO_DETACH_FILTER 27  /* attached socket filterを解除 */
+#define SO_DETACH_BPF   SO_DETACH_FILTER
+#define SO_ATTACH_BPF   50  /* eBPF socket filterを設定 */
 #define SO_RXQ_OVFL     40  /* UDP receive queue drop count in SCM_RXQ_OVFL */
+#define SO_TIMESTAMP    29  /* software ingress time as struct timeval */
+#define SO_TIMESTAMPNS  35  /* software ingress time as struct timespec */
 #define SO_ZEROCOPY     60  /* 完了通知はMSG_ERRQUEUEから取得 */
+#define SO_TXTIME       61  /* UDP sendmsgのSCM_TXTIME送信期限 */
+#define SOF_TXTIME_DEADLINE_MODE 0x1u
+#define SOF_TXTIME_REPORT_ERRORS 0x2u
+#define SOF_TXTIME_FLAGS_MASK \
+    (SOF_TXTIME_DEADLINE_MODE | SOF_TXTIME_REPORT_ERRORS)
 #define SO_PASSCRED     16  /* UNIX socketで送信者資格情報を受信 */
 #define SO_PEERCRED     17  /* UNIX socketの接続時peer資格情報 */
+#define SO_PEERSEC      31  /* UNIX socket peerのsecurity labelを取得 */
+#define SO_PASSSEC      34  /* UNIX socket送信者labelをSCM_SECURITYで受信 */
+#ifndef SO_PEEK_OFF
+#define SO_PEEK_OFF     42  /* UNIX socketでMSG_PEEKを開始する受信queue offset */
+#endif
 #define SO_NONBLOCK               0x5003 /* kernel socket nonblocking */
 
 /* RinOSでのソケットoption対応範囲:
@@ -392,6 +407,12 @@ static inline uint32_t ntohl(uint32_t netlong) {
  * - SO_BROADCASTはIPv4 UDPのみ。SO_LINGERはTCPのみ。
  * - SO_RXQ_OVFLはIPv4 UDPのみ。有効時はrecvmsg()のSCM_RXQ_OVFLに
  *   socket生成後の受信queue drop累積数をuint32_tで返す。
+ * - SO_TIMESTAMP／SO_TIMESTAMPNSはTCP、UDP IPv4/IPv6、raw IPv4/IPv6、
+ *   packet socketでsoftware ingress時刻を返す。clockはCLOCK_REALTIME。
+ *   recvmsg()は受信先頭byte/packetの時刻をSCM_TIMESTAMP timevalまたは
+ *   SCM_TIMESTAMPNS timespecで一つだけ返し、両option有効時はNSを優先する。
+ *   timevalはmicrosecond、timespecはnanosecond精度。32-bit classic ABIで
+ *   2038年以降の秒が範囲外の場合、最大表現可能な時刻へ飽和する。
  * - SO_ERRORは取得のみ。TCP/UNIXは保留errorを返し、TCPは取得時にclearする。
  *   UDP/raw/packetは現状0を返す。SO_ACCEPTCONNはTCP/UNIXで取得可能。
  * - TCP_USER_TIMEOUTはTCP levelでミリ秒単位の未ACK／zero-window停滞上限を設定し、
@@ -403,6 +424,10 @@ static inline uint32_t ntohl(uint32_t netlong) {
  * - SO_BINDTODEVICEはTCP、UDP、raw IPv4/IPv6でinterface名を固定する。
  *   NETWORK_ADMIN capabilityを要求し、空文字またはoptlen=0で解除する。
  *   getsockopt()は現在のinterface名を返し、短いbufferでは安全に切り詰める。
+ * - SO_TXTIMEはIPv4/IPv6 UDPのみ。sock_txtimeはCLOCK_MONOTONICを使い、
+ *   SCM_TXTIMEのuint64_t nanosecond値をbounded egress queueで処理する。
+ *   REPORT_ERRORS時のmissed/invalid通知はMSG_ERRQUEUEのIP_RECVERR/
+ *   IPV6_RECVERRとPOLLERRで取得する。
  * - SO_DEBUG/SO_DONTROUTEは未対応で、setsockopt/getsockoptはENOPROTOOPTを返す。
  * set値はintをちょうど1個、取得bufferは少なくともint 1個を渡す。
  */
@@ -494,7 +519,19 @@ struct cmsghdr {
 
 #define SCM_RIGHTS 0x01
 #define SCM_CREDENTIALS 0x02
+#define SCM_SECURITY 0x03
+#define SCM_TIMESTAMP SO_TIMESTAMP
+#define SCM_TIMESTAMPNS SO_TIMESTAMPNS
 #define SCM_RXQ_OVFL SO_RXQ_OVFL
+#define SCM_TXTIME SO_TXTIME
+
+struct sock_txtime {
+    int clockid;
+    uint32_t flags;
+};
+
+#define IP_RECVERR 11
+#define IPV6_RECVERR 25
 
 struct ucred {
     pid_t pid;
