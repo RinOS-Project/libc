@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 
+#define RIN_STDLIB_PTSNAME_R_IMPLEMENTATION 1
 #include "stdlib.h"
 
 #include "errno.h"

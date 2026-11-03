@@ -204,7 +204,14 @@ int posix_openpt(int oflag);
 int grantpt(int fd);
 int unlockpt(int fd);
 char* ptsname(int fd);
+#if defined(_RIN_USE_GNU_PTSNAME_R) || defined(_GNU_SOURCE) || \
+    defined(__USE_GNU) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI) || \
+    defined(RIN_STDLIB_PTSNAME_R_IMPLEMENTATION)
 int ptsname_r(int fd, char* buffer, size_t buffer_size);
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * alloca - スタック上のメモリ確保
