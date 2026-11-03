@@ -25,6 +25,14 @@
 
 #include "features.h"
 
+#if defined(_RIN_USE_GNU_PTHREAD) || defined(__USE_GNU) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI) || \
+    defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
+#define _RIN_PTHREAD_CLOCK_WAIT_VISIBLE 1
+#endif
+
 /* Let C++ wrappers distinguish this ABI from a hosted provider even when
  * both headers use the conventional `_PTHREAD_H` include guard. */
 #define RIN_LIBC_PTHREAD_HEADER 1
@@ -1399,8 +1407,10 @@ extern int pthread_mutex_destroy(pthread_mutex_t* mutex);
 extern int pthread_mutex_lock(pthread_mutex_t* mutex);
 extern int pthread_mutex_timedlock(pthread_mutex_t* mutex,
                                   const struct timespec* abstime);
+#if defined(_RIN_PTHREAD_CLOCK_WAIT_VISIBLE)
 extern int pthread_mutex_clocklock(pthread_mutex_t* mutex, clockid_t clock_id,
                                    const struct timespec* abstime);
+#endif
 extern int pthread_mutex_trylock(pthread_mutex_t* mutex);
 extern int pthread_mutex_unlock(pthread_mutex_t* mutex);
 extern int pthread_mutex_consistent(pthread_mutex_t* mutex);
@@ -1607,12 +1617,14 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond,
         cond, mutex, abstime, cond ? cond->clock_id : CLOCK_REALTIME);
 }
 
+#if defined(_RIN_PTHREAD_CLOCK_WAIT_VISIBLE)
 static inline int pthread_cond_clockwait(pthread_cond_t* cond,
                                           pthread_mutex_t* mutex,
                                           clockid_t clock_id,
                                           const struct timespec* abstime) {
     return __rin_pthread_cond_timedwait_clock(cond, mutex, abstime, clock_id);
 }
+#endif
 
 static inline int pthread_cond_signal(pthread_cond_t* cond) {
     if (!cond) return EINVAL;
@@ -1648,9 +1660,11 @@ extern int pthread_cond_destroy(pthread_cond_t* cond);
 extern int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex);
 extern int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
                                   const struct timespec* abstime);
+#if defined(_RIN_PTHREAD_CLOCK_WAIT_VISIBLE)
 extern int pthread_cond_clockwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
                                  clockid_t clock_id,
                                  const struct timespec* abstime);
+#endif
 extern int pthread_cond_signal(pthread_cond_t* cond);
 extern int pthread_cond_broadcast(pthread_cond_t* cond);
 #endif
@@ -1962,12 +1976,14 @@ extern int pthread_rwlock_timedrdlock(pthread_rwlock_t* rwlock,
                                       const struct timespec* abstime);
 extern int pthread_rwlock_timedwrlock(pthread_rwlock_t* rwlock,
                                       const struct timespec* abstime);
+#if defined(_RIN_PTHREAD_CLOCK_WAIT_VISIBLE)
 extern int pthread_rwlock_clockrdlock(pthread_rwlock_t* rwlock,
                                       clockid_t clock_id,
                                       const struct timespec* abstime);
 extern int pthread_rwlock_clockwrlock(pthread_rwlock_t* rwlock,
                                       clockid_t clock_id,
                                       const struct timespec* abstime);
+#endif
 extern int pthread_rwlock_tryrdlock(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_trywrlock(pthread_rwlock_t* rwlock);
 extern int pthread_rwlock_unlock(pthread_rwlock_t* rwlock);
