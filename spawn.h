@@ -69,6 +69,7 @@ enum {
     _RIN_POSIX_SPAWN_ACTION_ATTRIBUTES = RIN_POSIX_SPAWN_ACTION_ATTRIBUTES,
     _RIN_POSIX_SPAWN_ACTION_CHDIR = RIN_POSIX_SPAWN_ACTION_CHDIR,
     _RIN_POSIX_SPAWN_ACTION_FCHDIR = RIN_POSIX_SPAWN_ACTION_FCHDIR,
+    _RIN_POSIX_SPAWN_ACTION_CLOSEFROM = RIN_POSIX_SPAWN_ACTION_CLOSEFROM,
 };
 
 typedef struct {
@@ -398,6 +399,32 @@ static inline int _rin_posix_spawn_action_is_valid(
             !_rin_posix_spawn_action_tail_is_zero(action, path_length))
             return EINVAL;
         return 0;
+    case _RIN_POSIX_SPAWN_ACTION_CHDIR:
+        if (action->fd != 0 || action->src_fd != -1 ||
+            action->oflag != 0 || action->mode != 0)
+            return EINVAL;
+        error = _rin_posix_spawn_bounded_path_length(
+            action->path, &path_length);
+        if (error != 0 || path_length == 0u ||
+            !_rin_posix_spawn_action_tail_is_zero(action, path_length))
+            return EINVAL;
+        return 0;
+    case _RIN_POSIX_SPAWN_ACTION_FCHDIR:
+        if (action->fd >= OPEN_MAX || action->src_fd != -1 ||
+            action->oflag != 0 || action->mode != 0)
+            return EINVAL;
+        return action->path[0] == '\0' &&
+                       _rin_posix_spawn_action_tail_is_zero(action, 0u)
+                   ? 0
+                   : EINVAL;
+    case _RIN_POSIX_SPAWN_ACTION_CLOSEFROM:
+        if (action->src_fd != -1 || action->oflag != 0 ||
+            action->mode != 0)
+            return EINVAL;
+        return action->path[0] == '\0' &&
+                       _rin_posix_spawn_action_tail_is_zero(action, 0u)
+                   ? 0
+                   : EINVAL;
     case _RIN_POSIX_SPAWN_ACTION_CLOSE:
         if (action->src_fd != -1 || action->oflag != 0 || action->mode != 0)
             return EINVAL;
@@ -548,6 +575,24 @@ _RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addclose(posix_spawn_fi
     action->src_fd = -1;
     action->oflag = 0;
     action->mode = 0;
+    return 0;
+}
+#endif
+
+#if defined(RINSDK_SPLIT_BUILD) && !defined(RIN_LIBC_POSIX_SPAWN_RUNTIME_IMPLEMENTATION)
+extern int posix_spawn_file_actions_addclosefrom_np(
+    posix_spawn_file_actions_t* actions, int from);
+#else
+_RIN_POSIX_SPAWN_API_INLINE int posix_spawn_file_actions_addclosefrom_np(
+    posix_spawn_file_actions_t* actions, int from) {
+    _rin_posix_spawn_file_action_t* action;
+    int error;
+    if (from < 0) return EBADF;
+    error = _rin_posix_spawn_reserve_action(actions, &action);
+    if (error != 0) return error;
+    action->type = _RIN_POSIX_SPAWN_ACTION_CLOSEFROM;
+    action->fd = from;
+    action->src_fd = -1;
     return 0;
 }
 #endif
