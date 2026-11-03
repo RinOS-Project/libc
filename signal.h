@@ -17,6 +17,7 @@
 #ifndef _SIGNAL_H
 #define _SIGNAL_H
 
+#include "features.h"
 #include "stddef.h"
 #include "stdint.h"
 #include "sys/syscall.h"
@@ -293,7 +294,10 @@ typedef union siginfo {
 #define si_pid       __fields._sifields._kill._pid
 #define si_uid       __fields._sifields._kill._uid
 #define si_addr      __fields._sifields._sigfault._addr
-#define si_addr_lsb  __fields._sifields._sigfault._addr_lsb
+#define si_addr_lsb  __fields._sifields._sigfault._detail._addr_lsb
+#define si_pkey      __fields._sifields._sigfault._detail._addr_pkey._pkey
+#define si_lower     __fields._sifields._sigfault._detail._addr_bnd._lower
+#define si_upper     __fields._sifields._sigfault._detail._addr_bnd._upper
 #define si_call_addr __fields._sifields._sigsys._call_addr
 #define si_syscall   __fields._sifields._sigsys._syscall
 #define si_arch      __fields._sifields._sigsys._arch
@@ -596,6 +600,7 @@ static inline int kill(int pid, int sig) {
         _RIN_SIGNAL_SYSCALL2(SYS_KILL, pid, sig));
 }
 
+#if defined(_RIN_USE_XSI_KILLPG)
 static inline int killpg(int pgrp, int sig) {
     if (pgrp < 0) {
         errno = EINVAL;
@@ -603,6 +608,7 @@ static inline int killpg(int pgrp, int sig) {
     }
     return kill(pgrp == 0 ? 0 : -pgrp, sig);
 }
+#endif
 
 /* POSIX declares these thread entry points in both signal.h and pthread.h. */
 int pthread_kill(pthread_t thread, int sig);
@@ -690,13 +696,17 @@ static inline int sigsuspend(const sigset_t* mask) {
 }
 
 static inline int sigwait(const sigset_t* set, int* signal_number_out) {
+    int saved_errno = errno;
     intptr_t result;
     RinSignalWaitRequestV1 request;
     sigset_t set_snapshot;
     if (!set) return EINVAL;
     if (!signal_number_out) return EFAULT;
-    if (__rin_signal_mask_snapshot(set, &set_snapshot) != 0)
-        return errno != 0 ? errno : EFAULT;
+    if (__rin_signal_mask_snapshot(set, &set_snapshot) != 0) {
+        const int wait_error = errno != 0 ? errno : EFAULT;
+        errno = saved_errno;
+        return wait_error;
+    }
     request.struct_size = (uint32_t)sizeof(request);
     request.version = RIN_CONTRACT_STRUCT_VERSION_1;
     request.reserved = 0u;
@@ -710,10 +720,16 @@ static inline int sigwait(const sigset_t* set, int* signal_number_out) {
     } while (result == -(intptr_t)EINTR);
     if (result < 0) {
         uintptr_t magnitude = (uintptr_t)0 - (uintptr_t)result;
-        return magnitude != 0u && magnitude <= 4095u
-                   ? (int)magnitude : EIO;
+        const int wait_error = magnitude != 0u && magnitude <= 4095u
+                                   ? (int)magnitude : EIO;
+        errno = saved_errno;
+        return wait_error;
     }
-    if (result <= 0 || result >= NSIG) return EIO;
+    if (result <= 0 || result >= NSIG) {
+        errno = saved_errno;
+        return EIO;
+    }
+    errno = saved_errno;
     return 0;
 }
 
