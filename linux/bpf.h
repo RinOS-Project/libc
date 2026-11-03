@@ -1,0 +1,107 @@
+/* SPDX-License-Identifier: MIT */
+/* Linux bpf(2) ABI subset implemented by RinOS. */
+#ifndef RIN_LIBC_LINUX_BPF_H
+#define RIN_LIBC_LINUX_BPF_H
+
+#include <rin/bpf_abi.h>
+#include <sys/syscall.h>
+
+#define bpf_insn rin_bpf_insn
+#define bpf_attr rin_bpf_attr
+
+#define BPF_MAP_CREATE RIN_BPF_MAP_CREATE
+#define BPF_MAP_LOOKUP_ELEM RIN_BPF_MAP_LOOKUP_ELEM
+#define BPF_MAP_UPDATE_ELEM RIN_BPF_MAP_UPDATE_ELEM
+#define BPF_MAP_DELETE_ELEM RIN_BPF_MAP_DELETE_ELEM
+#define BPF_MAP_GET_NEXT_KEY RIN_BPF_MAP_GET_NEXT_KEY
+#define BPF_PROG_LOAD RIN_BPF_PROG_LOAD
+#define BPF_OBJ_PIN RIN_BPF_OBJ_PIN
+#define BPF_OBJ_GET RIN_BPF_OBJ_GET
+#define BPF_PROG_ATTACH RIN_BPF_PROG_ATTACH
+#define BPF_PROG_DETACH RIN_BPF_PROG_DETACH
+#define BPF_PROG_TEST_RUN RIN_BPF_PROG_TEST_RUN
+#define BPF_OBJ_GET_INFO_BY_FD RIN_BPF_OBJ_GET_INFO_BY_FD
+#define BPF_FEATURE_QUERY RIN_BPF_FEATURE_QUERY
+#define BPF_MAP_TYPE_UNSPEC RIN_BPF_MAP_TYPE_UNSPEC
+#define BPF_MAP_TYPE_HASH RIN_BPF_MAP_TYPE_HASH
+#define BPF_MAP_TYPE_ARRAY RIN_BPF_MAP_TYPE_ARRAY
+#define BPF_PROG_TYPE_UNSPEC RIN_BPF_PROG_TYPE_UNSPEC
+#define BPF_PROG_TYPE_SOCKET_FILTER RIN_BPF_PROG_TYPE_SOCKET_FILTER
+#define BPF_PROG_TYPE_TRACEPOINT RIN_BPF_PROG_TYPE_TRACEPOINT
+#define BPF_TRACE_SYSCALL_ENTER RIN_BPF_ATTACH_TYPE_TRACE_SYSCALL_ENTER
+#define BPF_ANY RIN_BPF_ANY
+#define BPF_NOEXIST RIN_BPF_NOEXIST
+#define BPF_EXIST RIN_BPF_EXIST
+#define BPF_PSEUDO_MAP_FD RIN_BPF_PSEUDO_MAP_FD
+#define BPF_FUNC_map_lookup_elem 1
+#define BPF_FUNC_map_update_elem 2
+#define BPF_FUNC_map_delete_elem 3
+#define BPF_FUNC_get_current_pid_tgid 14
+#define BPF_FUNC_get_current_uid_gid 15
+#define BPF_FEATURE_MAPS RIN_BPF_FEATURE_MAPS
+#define BPF_FEATURE_TRACEPOINT_PROGRAMS RIN_BPF_FEATURE_TRACEPOINT_PROGRAMS
+#define BPF_FEATURE_BOUNDED_VERIFIER RIN_BPF_FEATURE_BOUNDED_VERIFIER
+#define BPF_FEATURE_TRACEPOINT_ATTACH RIN_BPF_FEATURE_TRACEPOINT_ATTACH
+#define BPF_FEATURE_MAP_HELPERS RIN_BPF_FEATURE_MAP_HELPERS
+#define BPF_FEATURE_PID_UID_HELPERS RIN_BPF_FEATURE_PID_UID_HELPERS
+
+#define BPF_CLASS(code) ((code) & 0x07u)
+#define BPF_SIZE(code) ((code) & 0x18u)
+#define BPF_MODE(code) ((code) & 0xe0u)
+#define BPF_OP(code) ((code) & 0xf0u)
+#define BPF_SRC(code) ((code) & 0x08u)
+#define BPF_K 0x00u
+#define BPF_X 0x08u
+#define BPF_LD RIN_BPF_LD
+#define BPF_LDX RIN_BPF_LDX
+#define BPF_ST RIN_BPF_ST
+#define BPF_STX RIN_BPF_STX
+#define BPF_ALU RIN_BPF_ALU
+#define BPF_JMP RIN_BPF_JMP
+#define BPF_JMP32 RIN_BPF_JMP32
+#define BPF_ALU64 RIN_BPF_ALU64
+#define BPF_IMM RIN_BPF_IMM
+#define BPF_MEM RIN_BPF_MEM
+#define BPF_W RIN_BPF_W
+#define BPF_H RIN_BPF_H
+#define BPF_B RIN_BPF_B
+#define BPF_DW RIN_BPF_DW
+#define BPF_ADD RIN_BPF_ADD
+#define BPF_SUB RIN_BPF_SUB
+#define BPF_MUL RIN_BPF_MUL
+#define BPF_DIV RIN_BPF_DIV
+#define BPF_OR RIN_BPF_OR
+#define BPF_AND RIN_BPF_AND
+#define BPF_LSH RIN_BPF_LSH
+#define BPF_RSH RIN_BPF_RSH
+#define BPF_NEG RIN_BPF_NEG
+#define BPF_MOD RIN_BPF_MOD
+#define BPF_XOR RIN_BPF_XOR
+#define BPF_MOV RIN_BPF_MOV
+#define BPF_ARSH RIN_BPF_ARSH
+#define BPF_JA RIN_BPF_JA
+#define BPF_JEQ RIN_BPF_JEQ
+#define BPF_JGT RIN_BPF_JGT
+#define BPF_JGE RIN_BPF_JGE
+#define BPF_JSET RIN_BPF_JSET
+#define BPF_JNE RIN_BPF_JNE
+#define BPF_JSGT RIN_BPF_JSGT
+#define BPF_JSGE RIN_BPF_JSGE
+#define BPF_CALL RIN_BPF_CALL
+#define BPF_EXIT RIN_BPF_EXIT
+#define BPF_JLT RIN_BPF_JLT
+#define BPF_JLE RIN_BPF_JLE
+#define BPF_JSLT RIN_BPF_JSLT
+#define BPF_JSLE RIN_BPF_JSLE
+
+#ifndef __ASSEMBLER__
+#ifdef __cplusplus
+extern "C" {
+#endif
+int bpf(int command, union rin_bpf_attr* attribute, unsigned int size);
+#ifdef __cplusplus
+}
+#endif
+#endif
+
+#endif /* RIN_LIBC_LINUX_BPF_H */
