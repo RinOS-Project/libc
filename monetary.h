@@ -9,7 +9,7 @@
 #include <sys/types.h>
 #include <locale.h>
 
-#if defined(__RINOS__) || defined(__USE_XOPEN_EXTENDED) || \
+#if defined(__USE_XOPEN_EXTENDED) || \
     defined(__USE_GNU) || defined(__DARWIN_C_SOURCE) || \
     (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L) || \
     (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500) || \
@@ -25,7 +25,7 @@ extern "C" {
 ssize_t strfmon(char* RIN_MONETARY_RESTRICT s, size_t maxsize,
                 const char* RIN_MONETARY_RESTRICT format, ...);
 
-#if defined(__RINOS__) || defined(__USE_XOPEN2K8) || \
+#if defined(__USE_XOPEN2K8) || \
     defined(__USE_XOPEN2K8XSI) || defined(__USE_GNU) || \
     defined(__DARWIN_C_SOURCE) || \
     (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L) || \
