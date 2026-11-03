@@ -105,7 +105,10 @@ typedef int idtype_t;
 #define P_ALL  0
 #define P_PID  1
 #define P_PGID 2
+#define __RIN_WAIT_IDTYPE_PIDFD 3
+#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU)
 #define P_PIDFD 3
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * 終了ステータスマクロ
@@ -219,7 +222,7 @@ static inline int waitid(idtype_t idtype, id_t id, siginfo_t* infop,
                 return -1;
             }
             break;
-        case P_PIDFD:
+        case __RIN_WAIT_IDTYPE_PIDFD:
             /* The kernel resolves this selector as an FD and reports EBADF
              * for values that cannot name a PIDFD. */
             break;
@@ -281,6 +284,7 @@ struct rusage {
 #define RUSAGE_THREAD   1
 #endif
 
+#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU)
 static inline int __rin_wait_bsd_options_valid(int options) {
     return (options & ~(WNOHANG | WUNTRACED | WCONTINUED)) == 0;
 }
@@ -320,6 +324,7 @@ static inline pid_t wait4(pid_t pid, int* wstatus, int options, struct rusage* r
     }
     return waitpid(pid, wstatus, options);
 }
+#endif
 
 #ifdef __cplusplus
 }
