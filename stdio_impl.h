@@ -1171,8 +1171,8 @@ static inline int _rin_stdio_stream_owned_by_current(FILE* stream) {
     if (!entry) return 0;
     owner = _rin_stdio_lock_owner_token();
     _rin_stdio_lock_table_enter();
-    owned = entry->active != 0u && entry->lock_closing == 0u &&
-            entry->lock_owner == owner && entry->lock_depth != 0u;
+    owned = entry->active != 0u && entry->lock_owner == owner &&
+            entry->lock_depth != 0u;
     _rin_stdio_lock_table_leave();
     return owned;
 }
@@ -1185,8 +1185,8 @@ static inline int _rin_stdio_stream_lock_try(FILE* stream) {
     if (!entry) return 1;
     owner = _rin_stdio_lock_owner_token();
     if (!_rin_stdio_lock_table_try_enter()) return 1;
-    if (entry->active != 0u && entry->lock_closing == 0u &&
-        entry->lock_owner == owner && entry->lock_depth != UINT32_MAX) {
+    if (entry->active != 0u && entry->lock_owner == owner &&
+        entry->lock_depth != UINT32_MAX) {
         ++entry->lock_depth;
         _rin_stdio_lock_table_leave();
         return 0;
@@ -1216,7 +1216,7 @@ static inline int _rin_stdio_stream_lock_wait(FILE* stream) {
     if (!entry) return 1;
     owner = _rin_stdio_lock_owner_token();
     _rin_stdio_lock_table_enter();
-    if (entry->active == 0u || entry->lock_closing != 0u) {
+    if (entry->active == 0u) {
         _rin_stdio_lock_table_leave();
         return 1;
     }
@@ -1224,6 +1224,10 @@ static inline int _rin_stdio_stream_lock_wait(FILE* stream) {
         ++entry->lock_depth;
         _rin_stdio_lock_table_leave();
         return 2;
+    }
+    if (entry->lock_closing != 0u) {
+        _rin_stdio_lock_table_leave();
+        return 1;
     }
     if (entry->lock_owner == 0u && entry->lock_waiters == 0u) {
         entry->lock_owner = owner;
@@ -1811,6 +1815,8 @@ static inline intptr_t _rin_stdio_read_backend(FILE* stream,
                                                 size_t length) {
 #if defined(RIN_USERSPACE)
     intptr_t result = 0;
+    if (rin_stdio_cookie_read(stream, output, length, &result))
+        return result;
     if (rin_stdio_memstream_read(stream, output, length, &result))
         return result;
 #endif
@@ -1826,6 +1832,8 @@ static inline intptr_t _rin_stdio_write_backend(FILE* stream,
                                                  size_t length) {
 #if defined(RIN_USERSPACE)
     intptr_t result = 0;
+    if (rin_stdio_cookie_write(stream, input, length, &result))
+        return result;
     if (rin_stdio_memstream_write(stream, input, length, &result))
         return result;
 #endif
@@ -1838,6 +1846,9 @@ static inline intptr_t _rin_stdio_write_backend(FILE* stream,
 
 static inline int _rin_stdio_claim_byte_orientation(FILE* stream) {
     if (!stream) return 0;
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) return 0;
+#endif
     if (stream->orientation > 0) {
         errno = EINVAL;
         stream->error = 1;
@@ -1849,6 +1860,9 @@ static inline int _rin_stdio_claim_byte_orientation(FILE* stream) {
 
 _RIN_STDIO_INTERNAL int _rin_stdio_claim_wide_orientation(FILE* stream) {
     if (!stream) return 0;
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) return 0;
+#endif
     if (stream->orientation < 0) {
         errno = EINVAL;
         stream->error = 1;
@@ -1873,6 +1887,9 @@ static inline int _rin_stdio_write_all_raw(FILE* stream, const char* data,
         if (stream) stream->error = 1;
         return -1;
     }
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) return -1;
+#endif
     while (written < length) {
         intptr_t result = _rin_stdio_write_backend(
             stream, (const unsigned char*)(data + written),
@@ -2299,6 +2316,19 @@ static inline void _rin_stdio_flush_stdout_before_input(FILE* input) {
  * inherently ordered and ftell fails on them regardless. */
 static inline int _rin_stdio_seek_backend_to_end(FILE* stream) {
 #if defined(RIN_USERSPACE)
+    int entry_errno = errno;
+    int entry_error = stream->error;
+    int cookie_status = rin_stdio_cookie_seek(stream, 0, SEEK_END, NULL);
+    if (cookie_status != 0) {
+        if (cookie_status > 0) return 0;
+        if (errno == ESPIPE) {
+            stream->error = entry_error;
+            errno = entry_errno;
+            return 0;
+        }
+        stream->error = 1;
+        return -1;
+    }
     if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
         if (rin_stdio_memstream_seek(stream, 0, SEEK_END) != 0) {
             stream->error = 1;
@@ -2343,6 +2373,12 @@ _RIN_STDIO_INTERNAL size_t _rin_stdio_write_buffered(FILE* stream,
         if (failed) *failed = 1;
         return 0u;
     }
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) {
+        if (failed) *failed = 1;
+        return 0u;
+    }
+#endif
     if ((stream->mode & O_ACCMODE) == O_RDONLY) {
         errno = EBADF;
         stream->error = 1;
@@ -2524,6 +2560,9 @@ _RIN_STDIO_INTERNAL intptr_t _rin_stdio_read_block(FILE* stream,
         if (stream) stream->error = 1;
         return -1;
     }
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) return -1;
+#endif
     if (length == 0u) return 0;
     if (!_rin_stdio_stream_is_readable(stream)) return -1;
     _rin_stdio_initialize_standard_buffer(stream);
@@ -2903,6 +2942,7 @@ static inline int _rin_fclose_unlocked(FILE* stream) {
     int flush_failed;
 #if defined(RIN_USERSPACE)
     int memstream_handled = 0;
+    int cookie_handled = 0;
 #endif
     unsigned char* previous_buffer;
     int previous_owned;
@@ -2920,7 +2960,10 @@ static inline int _rin_fclose_unlocked(FILE* stream) {
 
 #if defined(RIN_USERSPACE)
     ret = rin_stdio_memstream_close(stream, &memstream_handled);
-    if (!memstream_handled)
+    if (!memstream_handled) {
+        ret = rin_stdio_cookie_close(stream, &cookie_handled);
+    }
+    if (!memstream_handled && !cookie_handled)
 #endif
     {
         ret = _rin_stdio_syscall_result(
@@ -2960,6 +3003,13 @@ _RIN_STDIO_API int fclose(FILE* stream) {
         return EOF;
     }
     flockfile(stream);
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) {
+        funlockfile(stream);
+        errno = EBUSY;
+        return EOF;
+    }
+#endif
     if (!_rin_stdio_stream_lock_close_begin(stream)) {
         funlockfile(stream);
         errno = EBADF;
@@ -3004,6 +3054,7 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     int stream_index;
 #if defined(RIN_USERSPACE)
     int memstream_handled = 0;
+    int cookie_handled = 0;
 #endif
     unsigned char* previous_buffer;
     int previous_owned;
@@ -3016,6 +3067,12 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
         errno = EINVAL;
         return NULL;
     }
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) {
+        errno = EBUSY;
+        return NULL;
+    }
+#endif
     /* POSIX requires freopen() to attempt a flush, but to ignore a flush
      * failure and continue closing/reopening the stream. */
     (void)_rin_stdio_flush_output_buffer(stream);
@@ -3023,11 +3080,13 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     /* Detach memory-stream ownership after publishing its final buffer/size.
      * This also releases fmemopen-owned storage before any later error path. */
     (void)rin_stdio_memstream_close(stream, &memstream_handled);
+    if (!memstream_handled)
+        (void)rin_stdio_cookie_close(stream, &cookie_handled);
 #endif
     if (_rin_stdio_parse_mode(mode, &flags) != 0) {
         int saved_errno = errno;
 #if defined(RIN_USERSPACE)
-        if (!memstream_handled)
+        if (!memstream_handled && !cookie_handled)
 #endif
         (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
         _rin_freopen_discard_stream(stream);
@@ -3037,7 +3096,7 @@ static inline FILE* _rin_freopen_unlocked(const char* path, const char* mode, FI
     /* POSIX freopen() closes the old descriptor before opening the new path.
      * This also lets the replacement reuse its descriptor-table slot. */
 #if defined(RIN_USERSPACE)
-    if (!memstream_handled)
+    if (!memstream_handled && !cookie_handled)
 #endif
     (void)_RIN_STDIO_SYSCALL1(SYS_CLOSE, (uintptr_t)stream->fd);
     stream->fd = -1;
@@ -3171,6 +3230,9 @@ static inline int _rin_setvbuf_unlocked(FILE* stream, char* buf, int mode, size_
         errno = EINVAL;
         return -1;
     }
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) return -1;
+#endif
     if (mode != _IONBF && size == 0u) {
         if (buf) {
             errno = EINVAL;
@@ -3418,11 +3480,31 @@ static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
         }
     }
 #if defined(RIN_USERSPACE)
-    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
-        ret = rin_stdio_memstream_seek(stream, (int64_t)offset, whence) == 0
-            ? 0 : -1;
-    } else
-#endif
+    {
+        int cookie_status = rin_stdio_cookie_seek(
+            stream, (int64_t)offset, whence, NULL);
+        if (cookie_status > 0) {
+            ret = 0;
+        } else if (cookie_status < 0) {
+            ret = -1;
+        } else if (rin_stdio_memstream_kind(stream) !=
+                   RIN_STDIO_MEMSTREAM_NONE) {
+            ret = rin_stdio_memstream_seek(
+                stream, (int64_t)offset, whence) == 0 ? 0 : -1;
+        } else {
+            uint64_t offset_bits = (uint64_t)(int64_t)offset;
+            ret = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
+                SYS_LSEEK64, (uintptr_t)stream->fd,
+                (uintptr_t)(uint32_t)offset_bits,
+                (uintptr_t)(uint32_t)(offset_bits >> 32),
+                (uintptr_t)whence, (uintptr_t)&position));
+            if (ret == 0 && position < 0) {
+                errno = EIO;
+                ret = -1;
+            }
+        }
+    }
+#else
     {
         uint64_t offset_bits = (uint64_t)(int64_t)offset;
         ret = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
@@ -3435,6 +3517,7 @@ static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
             ret = -1;
         }
     }
+#endif
     if (ret < 0) {
         stream->error = 1;
         return -1;
@@ -3472,17 +3555,45 @@ static inline long _rin_ftell_unlocked(FILE* stream) {
         return -1;
     }
 #if defined(RIN_USERSPACE)
-    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
-        int64_t memory_position;
-        if (rin_stdio_memstream_tell(stream, &memory_position) != 0)
+    {
+        int cookie_status = rin_stdio_cookie_seek(
+            stream, 0, SEEK_CUR, &wide_position);
+        if (cookie_status > 0) {
+            if (wide_position > (int64_t)LONG_MAX) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            position = (long)wide_position;
+        } else if (cookie_status < 0) {
             return -1;
-        if (memory_position < 0 || memory_position > (int64_t)LONG_MAX) {
+        } else if (rin_stdio_memstream_kind(stream) !=
+                   RIN_STDIO_MEMSTREAM_NONE) {
+            int64_t memory_position;
+            if (rin_stdio_memstream_tell(stream, &memory_position) != 0)
+                return -1;
+            if (memory_position < 0 || memory_position > (int64_t)LONG_MAX) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            position = (long)memory_position;
+        } else {
+        raw_position = _rin_stdio_syscall_result(
+            _RIN_STDIO_SYSCALL5(SYS_LSEEK64, (uintptr_t)stream->fd,
+                                0u, 0u, (uintptr_t)SEEK_CUR,
+                                (uintptr_t)&wide_position));
+        if (raw_position < 0) return -1;
+        if (raw_position != 0 || wide_position < 0) {
+            errno = EIO;
+            return -1;
+        }
+        if ((uint64_t)wide_position > (uint64_t)LONG_MAX) {
             errno = EOVERFLOW;
             return -1;
         }
-        position = (long)memory_position;
-    } else
-#endif
+        position = (long)wide_position;
+        }
+    }
+#else
     {
         raw_position = _rin_stdio_syscall_result(
             _RIN_STDIO_SYSCALL5(SYS_LSEEK64, (uintptr_t)stream->fd,
@@ -3499,6 +3610,7 @@ static inline long _rin_ftell_unlocked(FILE* stream) {
         }
         position = (long)wide_position;
     }
+#endif
     if (_rin_stdio_output_buffer_enabled(stream) &&
         _rin_stdio_get_io_direction(stream) ==
             _RIN_STDIO_IO_DIRECTION_WRITE) {
@@ -3645,11 +3757,26 @@ static inline int _rin_fseeko64_unlocked(FILE* stream, off64_t offset,
         }
     }
 #if defined(RIN_USERSPACE)
-    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
-        status = rin_stdio_memstream_seek(stream, adjusted, whence) == 0
-            ? 0 : -1;
-    } else
-#endif
+    {
+        int cookie_status = rin_stdio_cookie_seek(
+            stream, (int64_t)adjusted, whence, NULL);
+        if (cookie_status > 0) {
+            status = 0;
+        } else if (cookie_status < 0) {
+            status = -1;
+        } else if (rin_stdio_memstream_kind(stream) !=
+                   RIN_STDIO_MEMSTREAM_NONE) {
+            status = rin_stdio_memstream_seek(stream, adjusted, whence) == 0
+                ? 0 : -1;
+        } else {
+            status = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
+                SYS_LSEEK64, (uintptr_t)stream->fd,
+                (uintptr_t)(uint32_t)(uint64_t)adjusted,
+                (uintptr_t)(uint32_t)((uint64_t)adjusted >> 32),
+                (uintptr_t)whence, (uintptr_t)&position));
+        }
+    }
+#else
     {
         status = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
             SYS_LSEEK64, (uintptr_t)stream->fd,
@@ -3657,6 +3784,7 @@ static inline int _rin_fseeko64_unlocked(FILE* stream, off64_t offset,
             (uintptr_t)(uint32_t)((uint64_t)adjusted >> 32),
             (uintptr_t)whence, (uintptr_t)&position));
     }
+#endif
     if (status < 0) {
         stream->error = 1;
         return -1;
@@ -3699,11 +3827,26 @@ static inline off64_t _rin_ftello64_unlocked(FILE* stream) {
         return (off64_t)-1;
     }
 #if defined(RIN_USERSPACE)
-    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
-        if (rin_stdio_memstream_tell(stream, &position) != 0)
-            return (off64_t)-1;
-    } else
-#endif
+    {
+        int cookie_status = rin_stdio_cookie_seek(
+            stream, 0, SEEK_CUR, &position);
+        if (cookie_status < 0) return (off64_t)-1;
+        if (cookie_status == 0 &&
+            rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
+            if (rin_stdio_memstream_tell(stream, &position) != 0)
+                return (off64_t)-1;
+        } else if (cookie_status == 0) {
+            status = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
+                SYS_LSEEK64, (uintptr_t)stream->fd, 0u, 0u,
+                (uintptr_t)SEEK_CUR, (uintptr_t)&position));
+            if (status < 0) return (off64_t)-1;
+            if (status != 0 || position < 0) {
+                errno = EIO;
+                return (off64_t)-1;
+            }
+        }
+    }
+#else
     {
         status = _rin_stdio_syscall_result(_RIN_STDIO_SYSCALL5(
             SYS_LSEEK64, (uintptr_t)stream->fd, 0u, 0u,
@@ -3714,6 +3857,7 @@ static inline off64_t _rin_ftello64_unlocked(FILE* stream) {
             return (off64_t)-1;
         }
     }
+#endif
     if (_rin_stdio_output_buffer_enabled(stream) &&
         _rin_stdio_get_io_direction(stream) ==
             _RIN_STDIO_IO_DIRECTION_WRITE) {
@@ -3785,6 +3929,9 @@ _RIN_STDIO_API off64_t ftello64(FILE* stream) {
 }
 
 static inline void _rin_rewind_unlocked(FILE* stream) {
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) return;
+#endif
     fseek(stream, 0, SEEK_SET);
     stream->eof = 0;
     stream->error = 0;
@@ -3867,12 +4014,21 @@ _RIN_STDIO_API int ferror(FILE* stream) {
 _RIN_STDIO_API void clearerr(FILE* stream) {
     if (!stream) return;
     flockfile(stream);
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) {
+        funlockfile(stream);
+        return;
+    }
+#endif
     stream->eof = 0;
     stream->error = 0;
     funlockfile(stream);
 }
 
 static inline int _rin_stdio_flush_output_only_unlocked(FILE* stream) {
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) return EOF;
+#endif
     if (_rin_stdio_flush_output_buffer(stream) != 0) return EOF;
 #if defined(RIN_USERSPACE)
     if (rin_stdio_memstream_flush(stream) < 0) return EOF;

@@ -8,6 +8,7 @@
 #define _STDIO_H
 #define __STDC_VERSION_STDIO_H__ 202311L
 
+#include "features.h"
 
 #include "stddef.h"
 #include "stdint.h"
@@ -158,6 +159,25 @@ FILE* popen(const char* command, const char* type);
 int pclose(FILE* stream);
 FILE* fmemopen(void* buffer, size_t size, const char* mode);
 FILE* open_memstream(char** buffer, size_t* size);
+
+#if defined(_RIN_USE_GNU_FOPENCOOKIE)
+typedef ssize_t cookie_read_function_t(void* cookie, char* buffer,
+                                       size_t size);
+typedef ssize_t cookie_write_function_t(void* cookie, const char* buffer,
+                                        size_t size);
+typedef int cookie_seek_function_t(void* cookie, off64_t* offset, int whence);
+typedef int cookie_close_function_t(void* cookie);
+
+typedef struct {
+    cookie_read_function_t* read;
+    cookie_write_function_t* write;
+    cookie_seek_function_t* seek;
+    cookie_close_function_t* close;
+} cookie_io_functions_t;
+
+FILE* fopencookie(void* cookie, const char* mode,
+                  cookie_io_functions_t functions);
+#endif
 
 int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap);
 int snprintf(char* buf, size_t size, const char* fmt, ...);

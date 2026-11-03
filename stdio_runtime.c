@@ -5,6 +5,7 @@
 #ifndef RINSDK_SPLIT_BUILD
 #define RINSDK_SPLIT_BUILD 1
 #endif
+#define _RIN_USE_GNU_FOPENCOOKIE 1
 #define RIN_STDIO_OWNER_BUILD 1
 #define _STDIO_GLOBAL_IMPL 1
 #include "stdio_impl.h"
@@ -47,7 +48,19 @@ typedef struct RinStdioMemstreamOwner {
     struct RinStdioMemstreamOwner* next;
 } RinStdioMemstreamOwner;
 
+typedef struct RinStdioCookieOwner {
+    FILE* stream;
+    uint64_t generation;
+    void* cookie;
+    cookie_io_functions_t functions;
+    unsigned int callback_active;
+    unsigned int closing;
+    struct RinStdioCookieOwner* next;
+} RinStdioCookieOwner;
+
 static RinStdioMemstreamOwner* _rin_stdio_memstream_buckets[
+    _RIN_STDIO_STREAM_INDEX_BUCKET_COUNT];
+static RinStdioCookieOwner* _rin_stdio_cookie_buckets[
     _RIN_STDIO_STREAM_INDEX_BUCKET_COUNT];
 
 static size_t _rin_stdio_memstream_bucket(FILE* stream) {
@@ -84,6 +97,30 @@ static RinStdioMemstreamOwner* _rin_stdio_memstream_find(FILE* stream) {
 #if defined(RIN_STDIO_REGISTRY_INSTRUMENT)
     _rin_stdio_registry_update_max(&_rin_stdio_reg_mfind_max_chain, chain);
 #endif
+    return found;
+}
+
+/* Cookie owners are bound to one FILE lifetime, not just its reusable
+ * address. Public stdio operations hold the FILE lock while looking up and
+ * using a cookie owner, so the record cannot be detached during a callback. */
+static RinStdioCookieOwner* _rin_stdio_cookie_find(FILE* stream) {
+    _RinStdioStreamOwner* stream_owner;
+    RinStdioCookieOwner* found = NULL;
+    size_t bucket;
+    if (!stream) return NULL;
+    stream_owner = _rin_stdio_stream_owner(stream);
+    if (!stream_owner || stream_owner->active == 0u) return NULL;
+    bucket = _rin_stdio_memstream_bucket(stream);
+    _rin_stdio_lock_table_enter();
+    for (RinStdioCookieOwner* owner = _rin_stdio_cookie_buckets[bucket];
+         owner; owner = owner->next) {
+        if (owner->stream == stream &&
+            owner->generation == stream_owner->generation) {
+            found = owner;
+            break;
+        }
+    }
+    _rin_stdio_lock_table_leave();
     return found;
 }
 
@@ -521,6 +558,272 @@ int rin_stdio_memstream_close(FILE* stream, int* handled) {
     _rin_stdio_lock_table_leave();
     RIN_STDIO_MEMSTREAM_FREE(owner);
     return result;
+}
+
+static void _rin_stdio_cookie_callback_error(FILE* stream, int error) {
+    errno = error;
+    if (stream) stream->error = 1;
+}
+
+static FILE* _rin_stdio_cookie_open(void* cookie, const char* mode,
+                                    cookie_io_functions_t functions) {
+    unsigned int flags = 0u;
+    size_t index;
+    RinStdioCookieOwner* owner;
+    _RinStdioStreamOwner* stream_owner;
+    FILE* stream;
+
+    if (_rin_stdio_parse_mode(mode, &flags) != 0) return NULL;
+    /* fopencookie shares fopen's mode grammar; file creation, truncation,
+     * and exclusivity flags have no backing descriptor to apply to. */
+    flags &= ~(O_CREATE | O_TRUNC | O_EXCL);
+
+    owner = (RinStdioCookieOwner*)RIN_STDIO_MEMSTREAM_MALLOC(sizeof(*owner));
+    if (!owner) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    memset(owner, 0, sizeof(*owner));
+    stream = _rin_stdio_stream_allocate(-1, flags, 0, 1);
+    if (!stream) {
+        RIN_STDIO_MEMSTREAM_FREE(owner);
+        return NULL;
+    }
+    stream_owner = _rin_stdio_stream_owner(stream);
+    if (!stream_owner || stream_owner->generation == 0u) {
+        /* The stream allocator promises a generation for every live stream;
+         * fail closed if that registry invariant is ever broken. */
+        (void)fclose(stream);
+        RIN_STDIO_MEMSTREAM_FREE(owner);
+        errno = EIO;
+        return NULL;
+    }
+    owner->stream = stream;
+    owner->generation = stream_owner->generation;
+    owner->cookie = cookie;
+    owner->functions = functions;
+    _rin_stdio_lock_table_enter();
+    index = _rin_stdio_memstream_bucket(stream);
+    owner->next = _rin_stdio_cookie_buckets[index];
+    _rin_stdio_cookie_buckets[index] = owner;
+    _rin_stdio_lock_table_leave();
+    /* Match fopen's initial position for pure append. Update-append begins
+     * at zero, while each write still seeks to the cookie end. */
+    if ((flags & O_APPEND) != 0u && (flags & O_ACCMODE) != O_RDWR) {
+        flockfile(stream);
+        (void)_rin_stdio_seek_backend_to_end(stream);
+        funlockfile(stream);
+    }
+    return stream;
+}
+
+FILE* fopencookie(void* cookie, const char* mode,
+                  cookie_io_functions_t functions) {
+    return _rin_stdio_cookie_open(cookie, mode, functions);
+}
+
+int rin_stdio_cookie_read(FILE* stream, unsigned char* output,
+                          size_t capacity, intptr_t* result) {
+    RinStdioCookieOwner* owner = _rin_stdio_cookie_find(stream);
+    ssize_t callback_result;
+    int saved_errno;
+    int callback_errno;
+    if (!owner) return 0;
+    if (!result || (!output && capacity != 0u)) {
+        errno = EINVAL;
+        if (result) *result = -1;
+        stream->error = 1;
+        return 1;
+    }
+    if (owner->closing || owner->callback_active) {
+        _rin_stdio_cookie_callback_error(stream, EBUSY);
+        *result = -1;
+        return 1;
+    }
+    if ((stream->mode & O_ACCMODE) == O_WRONLY) {
+        _rin_stdio_cookie_callback_error(stream, EBADF);
+        *result = -1;
+        return 1;
+    }
+    if (owner->functions.read == NULL) {
+        *result = 0;
+        return 1;
+    }
+    saved_errno = errno;
+    errno = 0;
+    owner->callback_active = 1u;
+    callback_result = owner->functions.read(
+        owner->cookie, (char*)output, capacity);
+    callback_errno = errno;
+    owner->callback_active = 0u;
+    if (callback_result < 0) {
+        _rin_stdio_cookie_callback_error(stream,
+            callback_errno != 0 ? callback_errno : EIO);
+        *result = -1;
+        return 1;
+    }
+    if ((uintmax_t)callback_result > (uintmax_t)capacity) {
+        _rin_stdio_cookie_callback_error(stream, EIO);
+        *result = -1;
+        return 1;
+    }
+    errno = saved_errno;
+    *result = (intptr_t)callback_result;
+    return 1;
+}
+
+int rin_stdio_cookie_write(FILE* stream, const unsigned char* input,
+                           size_t length, intptr_t* result) {
+    RinStdioCookieOwner* owner = _rin_stdio_cookie_find(stream);
+    ssize_t callback_result;
+    int saved_errno;
+    int callback_errno;
+    if (!owner) return 0;
+    if (!result || (!input && length != 0u)) {
+        errno = EINVAL;
+        if (result) *result = -1;
+        stream->error = 1;
+        return 1;
+    }
+    if (owner->closing || owner->callback_active) {
+        _rin_stdio_cookie_callback_error(stream, EBUSY);
+        *result = -1;
+        return 1;
+    }
+    if ((stream->mode & O_ACCMODE) == O_RDONLY) {
+        _rin_stdio_cookie_callback_error(stream, EBADF);
+        *result = -1;
+        return 1;
+    }
+    if (owner->functions.write == NULL) {
+        *result = length > (size_t)INTPTR_MAX
+            ? INTPTR_MAX : (intptr_t)length;
+        return 1;
+    }
+    if ((stream->mode & O_APPEND) != 0u && owner->functions.seek != NULL &&
+        rin_stdio_cookie_seek(stream, 0, SEEK_END, NULL) < 0) {
+        *result = -1;
+        return 1;
+    }
+    saved_errno = errno;
+    errno = 0;
+    owner->callback_active = 1u;
+    callback_result = owner->functions.write(
+        owner->cookie, (const char*)input, length);
+    callback_errno = errno;
+    owner->callback_active = 0u;
+    if (callback_result < 0) {
+        _rin_stdio_cookie_callback_error(stream,
+            callback_errno != 0 ? callback_errno : EIO);
+        *result = -1;
+        return 1;
+    }
+    if (callback_result == 0 && length != 0u) {
+        _rin_stdio_cookie_callback_error(stream,
+            callback_errno != 0 ? callback_errno : EIO);
+        *result = -1;
+        return 1;
+    }
+    if ((uintmax_t)callback_result > (uintmax_t)length) {
+        _rin_stdio_cookie_callback_error(stream, EIO);
+        *result = -1;
+        return 1;
+    }
+    errno = saved_errno;
+    *result = (intptr_t)callback_result;
+    return 1;
+}
+
+int rin_stdio_cookie_seek(FILE* stream, int64_t offset, int whence,
+                          int64_t* position) {
+    RinStdioCookieOwner* owner = _rin_stdio_cookie_find(stream);
+    off64_t callback_offset;
+    int callback_result;
+    int saved_errno;
+    int callback_errno;
+    if (!owner) return 0;
+    if (whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) {
+        _rin_stdio_cookie_callback_error(stream, EINVAL);
+        return -1;
+    }
+    if (owner->closing || owner->callback_active) {
+        _rin_stdio_cookie_callback_error(stream, EBUSY);
+        return -1;
+    }
+    if (!owner->functions.seek) {
+        _rin_stdio_cookie_callback_error(stream, ESPIPE);
+        return -1;
+    }
+    callback_offset = (off64_t)offset;
+    saved_errno = errno;
+    errno = 0;
+    owner->callback_active = 1u;
+    callback_result = owner->functions.seek(
+        owner->cookie, &callback_offset, whence);
+    callback_errno = errno;
+    owner->callback_active = 0u;
+    if (callback_result != 0) {
+        _rin_stdio_cookie_callback_error(stream,
+            callback_errno != 0 ? callback_errno : EIO);
+        return -1;
+    }
+    if (position) {
+        if (callback_offset < 0) {
+            _rin_stdio_cookie_callback_error(stream, EIO);
+            return -1;
+        }
+        *position = (int64_t)callback_offset;
+    }
+    errno = saved_errno;
+    return 1;
+}
+
+int rin_stdio_cookie_active(FILE* stream) {
+    RinStdioCookieOwner* owner = _rin_stdio_cookie_find(stream);
+    if (!owner || !_rin_stdio_stream_owned_by_current(stream) ||
+        (!owner->callback_active && !owner->closing))
+        return 0;
+    _rin_stdio_cookie_callback_error(stream, EBUSY);
+    return 1;
+}
+
+int rin_stdio_cookie_close(FILE* stream, int* handled) {
+    RinStdioCookieOwner* owner = _rin_stdio_cookie_find(stream);
+    RinStdioCookieOwner** link;
+    size_t bucket;
+    int callback_result = 0;
+    int callback_errno = 0;
+    int saved_errno = errno;
+    if (handled) *handled = owner != NULL;
+    if (!owner) return 0;
+    if (owner->closing || owner->callback_active) {
+        _rin_stdio_cookie_callback_error(stream, EBUSY);
+        return -1;
+    }
+    owner->closing = 1u;
+    if (owner->functions.close) {
+        errno = 0;
+        owner->callback_active = 1u;
+        callback_result = owner->functions.close(owner->cookie);
+        callback_errno = errno;
+        owner->callback_active = 0u;
+    }
+    bucket = _rin_stdio_memstream_bucket(stream);
+    _rin_stdio_lock_table_enter();
+    link = &_rin_stdio_cookie_buckets[bucket];
+    while (*link && *link != owner) link = &(*link)->next;
+    if (*link == owner) *link = owner->next;
+    owner->stream = NULL;
+    owner->next = NULL;
+    _rin_stdio_lock_table_leave();
+    RIN_STDIO_MEMSTREAM_FREE(owner);
+    if (callback_result != 0) {
+        _rin_stdio_cookie_callback_error(stream,
+            callback_errno != 0 ? callback_errno : EIO);
+        return -1;
+    }
+    errno = saved_errno;
+    return 0;
 }
 
 static int _rin_stdio_memstream_mode(const char* mode, unsigned int* flags,
