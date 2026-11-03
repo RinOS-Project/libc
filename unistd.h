@@ -45,6 +45,12 @@
 #define _RIN_UNISTD_POSIX_CLOSE_VISIBLE 1
 #endif
 
+#if (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI)
+#define _RIN_UNISTD_POSIX_2024_VISIBLE 1
+#endif
+
 #include "stddef.h"
 #include "stdint.h"
 #include "stdarg.h"
@@ -728,11 +734,15 @@ static inline int pipe(int pipefd[2]) {
     return rc;
 }
 
+#if defined(_RIN_USE_GNU_PIPE2) || defined(__USE_GNU) || \
+    defined(_RIN_UNISTD_POSIX_2024_VISIBLE) || \
+    defined(RIN_UNISTD_PIPE2_IMPLEMENTATION)
 static inline int pipe2(int pipefd[2], int flags) {
     int rc = _rin_unistd_status(_RIN_UNISTD_SYSCALL2(
         SYS_PIPE, (uintptr_t)pipefd, (uintptr_t)(intptr_t)flags));
     return rc;
 }
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * ファイルシステム操作
@@ -2353,7 +2363,16 @@ static inline int _rin_pathconf_name_is_known(int name) {
 }
 
 /* A character device is a terminal only when its terminal ioctl contract is
- * present.  Keep the probe's errno and temporary descriptor private. */
+ * present. This internal cleanup must remain available even when the public
+ * close() declaration is hidden by feature-test macros. */
+static inline void _rin_unistd_close_internal(int fd) {
+    __rin_pthread_cancel_point_if_linked();
+    (void)_rin_unistd_status(_RIN_UNISTD_SYSCALL1(
+        SYS_CLOSE, (uintptr_t)(intptr_t)fd));
+    __rin_pthread_cancel_point_if_linked();
+}
+
+/* Keep the probe's errno and temporary descriptor private. */
 static inline int _rin_pathconf_path_is_terminal(const char* path) {
     int saved_errno = errno;
     int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
@@ -2363,7 +2382,7 @@ static inline int _rin_pathconf_path_is_terminal(const char* path) {
         return -1;
     }
     result = isatty(fd);
-    (void)close(fd);
+    _rin_unistd_close_internal(fd);
     errno = saved_errno;
     return result;
 }
@@ -3034,6 +3053,8 @@ static inline int fdatasync(int fd) {
 }
 
 /* dup3 - フラグ付きdup2 */
+#if defined(_RIN_USE_GNU_DUP3) || defined(__USE_GNU) || \
+    defined(_RIN_UNISTD_POSIX_2024_VISIBLE)
 static inline int dup3(int oldfd, int newfd, int flags) {
     intptr_t result;
     if (oldfd == newfd) {
@@ -3055,6 +3076,7 @@ static inline int dup3(int oldfd, int newfd, int flags) {
     }
     return (int)result;
 }
+#endif
 
 /* exec frontend.  These bounds match the kernel's pointer-free snapshot. */
 #if defined(RIN_UNISTD_TARGET_PROCESS_FRONTEND)

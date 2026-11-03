@@ -41,12 +41,16 @@
 #define _RIN_USE_GNU_PTSNAME_R 1
 #define _RIN_USE_GNU_MKOSTEMP 1
 #define _RIN_USE_GNU_MKOSTEMPS 1
+#define _RIN_USE_GNU_PIPE2 1
+#define _RIN_USE_GNU_DUP3 1
+#define _RIN_USE_BSD_GETENTROPY 1
 #define _RIN_USE_XSI_NICE 1
 #define _RIN_USE_XSI_KILLPG 1
 #define _RIN_USE_BSD_RANDOM 1
 #endif
 #if defined(_DEFAULT_SOURCE) || defined(_BSD_SOURCE)
 #define _RIN_USE_BSD_RANDOM 1
+#define _RIN_USE_BSD_GETENTROPY 1
 #define _RIN_USE_XSI_KILLPG 1
 #endif
 #if !defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE) && \

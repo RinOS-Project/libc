@@ -61,6 +61,13 @@ static inline ssize_t getrandom(void* buf, size_t buflen, unsigned int flags)
     return (ssize_t)ret;
 }
 
+#if defined(_RIN_USE_BSD_GETENTROPY) || defined(_DEFAULT_SOURCE) || \
+    defined(_BSD_SOURCE) || defined(__USE_MISC) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI) || \
+    (!defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE) && \
+     !defined(_XOPEN_SOURCE))
 static inline int getentropy(void* buffer, size_t length)
 {
     unsigned char* bytes = (unsigned char*)buffer;
@@ -85,6 +92,7 @@ static inline int getentropy(void* buffer, size_t length)
     }
     return 0;
 }
+#endif
 
 #ifdef __cplusplus
 }
