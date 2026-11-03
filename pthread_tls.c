@@ -160,9 +160,18 @@ static void pthread_key_dispatch_release(unsigned int key)
         next = word - 1u;
         if (__sync_bool_compare_and_swap(
                 &_pthread_tls_key_state[key], word, next)) {
-            if (state == RIN_PTHREAD_KEY_DELETING &&
-                (next & RIN_PTHREAD_KEY_DISPATCH_MASK) == 0u)
-                pthread_key_finalize_delete(key, next);
+            if (state == RIN_PTHREAD_KEY_DELETING) {
+                if ((next & RIN_PTHREAD_KEY_DISPATCH_MASK) == 0u) {
+                    pthread_key_finalize_delete(key, next);
+                } else {
+                    /* A deleting thread may be waiting to distinguish its
+                     * own in-flight destructor frames from callbacks on
+                     * other threads. Wake on every decrement so a count
+                     * change to local_depth cannot strand that waiter. */
+                    (void)RIN_PTHREAD_KEY_NOTIFY_ALL(
+                        (volatile uint32_t*)&_pthread_tls_key_state[key]);
+                }
+            }
             return;
         }
         word = pthread_key_state_word_load(key);
