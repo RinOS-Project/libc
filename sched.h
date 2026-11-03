@@ -307,6 +307,10 @@ static inline int unshare(int flags) {
     long result = syscall(SYS_UNSHARE, (uint32_t)flags);
     return (int)result;
 }
+static inline int setns(int fd, int nstype) {
+    long result = syscall(SYS_SETNS, (int32_t)fd, (uint32_t)nstype);
+    return (int)result;
+}
 #endif
 
 #ifndef _RIN_SCHED_SYSCALL0
