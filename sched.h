@@ -95,6 +95,7 @@ struct sched_param {
  * CPU集合 (cpuset)
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(_RIN_USE_GNU_CPU_SET)
 #define CPU_SETSIZE 1024
 
 typedef struct {
@@ -163,7 +164,6 @@ static inline int __rin_sched_cpu_count(const cpu_set_t* cpuset) {
 #define CPU_ZERO(cpusetp) __rin_sched_cpu_zero((cpusetp))
 #define CPU_COUNT(cpusetp) __rin_sched_cpu_count((cpusetp))
 
-#if defined(_RIN_USE_GNU_CPU_SET)
 void* calloc(size_t nmemb, size_t size);
 void free(void* pointer);
 
@@ -777,6 +777,7 @@ static inline int sched_rr_get_interval(pid_t pid, struct timespec* interval) {
 }
 
 /* CPU affinity を取得 */
+#if defined(_RIN_USE_GNU_CPU_SET)
 static inline int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t* mask) {
     if (!mask || cpusetsize == 0u || cpusetsize > sizeof(cpu_set_t)) {
         errno = EINVAL;
@@ -796,6 +797,7 @@ static inline int sched_setaffinity(pid_t pid, size_t cpusetsize, const cpu_set_
     return _rin_sched_status(_RIN_SCHED_SYSCALL3(
         SYS_SCHED_SETAFFINITY, (uintptr_t)pid, cpusetsize, (uintptr_t)mask));
 }
+#endif
 
 /* Process-local NUMA placement policy.  The kernel accepts only the current
  * process and validates every field, so a stale or malformed policy cannot
