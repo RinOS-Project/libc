@@ -22,6 +22,7 @@
 #define RIN_USER_ARENA_MAX_ALLOCATION ((size_t)32768u)
 #define RIN_USER_ARENA_CLASS_COUNT 12u
 #define RIN_USER_FREE_TREE_MAX_HEIGHT 32u
+#define RIN_USER_MAP_TREE_MAX_HEIGHT 64u
 #define RIN_USER_ARENA_LARGE_CLASS UINT16_MAX
 #define RIN_USER_ARENA_MAP_MAGIC UINT32_C(0x52494e4d)
 #define RIN_USER_ARENA_MAGIC_ALLOCATED UINT32_C(0x52494e41)
@@ -121,6 +122,11 @@ struct RinUserAllocatorMap {
     size_t data_offset;
     size_t data_end;
     RinUserAllocatorMap* next;
+    RinUserAllocatorMap* list_previous;
+    RinUserAllocatorMap* tree_left;
+    RinUserAllocatorMap* tree_right;
+    RinUserAllocatorMap* tree_parent;
+    uint32_t tree_height;
     volatile unsigned lock;
     uint32_t reserved2;
     RinUserAllocationHeader* first;
@@ -137,6 +143,8 @@ struct RinUserAllocatorMap {
 };
 
 static RinUserAllocatorMap* rin_user_allocator_maps = 0;
+static RinUserAllocatorMap* rin_user_allocator_map_tree_root = 0;
+static volatile unsigned rin_user_allocator_directory_corrupt = 0u;
 static volatile unsigned rin_user_allocator_directory_lock = 0u;
 static RinUserAllocatorMap* rin_user_allocator_reap_map_cursor = 0;
 
@@ -1564,6 +1572,11 @@ static void rin_user_map_metadata_clear(RinUserAllocatorMap* map,
     map->data_offset = rin_user_align_up(sizeof(*map));
     map->data_end = map_size;
     map->next = NULL;
+    map->list_previous = NULL;
+    map->tree_left = NULL;
+    map->tree_right = NULL;
+    map->tree_parent = NULL;
+    map->tree_height = 0u;
     map->lock = 0u;
     map->reserved2 = 0u;
     map->first = (RinUserAllocationHeader*)((unsigned char*)map +
@@ -1680,42 +1693,421 @@ static RinUserAllocatorMap* rin_user_create_large(size_t requested_size,
     return map;
 }
 
-static void rin_user_map_insert(RinUserAllocatorMap* map)
+static uint32_t rin_user_map_tree_height(
+    const RinUserAllocatorMap* map)
 {
-    map->next = rin_user_allocator_maps;
+    return map ? map->tree_height : 0u;
+}
+
+static int rin_user_map_tree_node_valid(
+    const RinUserAllocatorMap* map, const RinUserAllocatorMap* parent,
+    int require_balanced)
+{
+    uint32_t left_height;
+    uint32_t right_height;
+    uint32_t expected_height;
+    uintptr_t base;
+    uintptr_t end;
+    if (!map || !rin_user_map_shape_valid(map) ||
+        map->tree_parent != parent || map->tree_height == 0u ||
+        map->tree_height > RIN_USER_MAP_TREE_MAX_HEIGHT ||
+        (parent && parent->tree_left != map && parent->tree_right != map))
+        return 0;
+    left_height = rin_user_map_tree_height(map->tree_left);
+    right_height = rin_user_map_tree_height(map->tree_right);
+    if (left_height > RIN_USER_MAP_TREE_MAX_HEIGHT ||
+        right_height > RIN_USER_MAP_TREE_MAX_HEIGHT)
+        return 0;
+    if ((map->tree_left &&
+         (!rin_user_map_shape_valid(map->tree_left) ||
+          map->tree_left->tree_parent != map)) ||
+        (map->tree_right &&
+         (!rin_user_map_shape_valid(map->tree_right) ||
+          map->tree_right->tree_parent != map)))
+        return 0;
+    if (require_balanced &&
+        (left_height > right_height + 1u ||
+         right_height > left_height + 1u))
+        return 0;
+    expected_height = left_height > right_height ? left_height : right_height;
+    if (map->tree_height != expected_height + 1u) return 0;
+
+    base = (uintptr_t)map;
+    end = base + map->map_size;
+    if (map->tree_left) {
+        uintptr_t left_base = (uintptr_t)map->tree_left;
+        if (left_base >= base ||
+            left_base + map->tree_left->map_size > base)
+            return 0;
+    }
+    if (map->tree_right) {
+        uintptr_t right_base = (uintptr_t)map->tree_right;
+        if (right_base < end) return 0;
+    }
+    return 1;
+}
+
+static int rin_user_map_tree_replace(RinUserAllocatorMap* old_node,
+                                     RinUserAllocatorMap* new_node)
+{
+    RinUserAllocatorMap* parent;
+    if (!old_node) return 0;
+    parent = old_node->tree_parent;
+    if (!parent) {
+        if (rin_user_allocator_map_tree_root != old_node) return 0;
+        rin_user_allocator_map_tree_root = new_node;
+    } else if (parent->tree_left == old_node) {
+        parent->tree_left = new_node;
+    } else if (parent->tree_right == old_node) {
+        parent->tree_right = new_node;
+    } else {
+        return 0;
+    }
+    if (new_node) new_node->tree_parent = parent;
+    return 1;
+}
+
+static void rin_user_map_tree_update_height(RinUserAllocatorMap* map)
+{
+    uint32_t left_height = rin_user_map_tree_height(map->tree_left);
+    uint32_t right_height = rin_user_map_tree_height(map->tree_right);
+    map->tree_height = (left_height > right_height ? left_height :
+                        right_height) + 1u;
+}
+
+static RinUserAllocatorMap* rin_user_map_tree_rotate_left(
+    RinUserAllocatorMap* node)
+{
+    RinUserAllocatorMap* pivot = node ? node->tree_right : NULL;
+    RinUserAllocatorMap* middle;
+    if (!pivot || pivot->tree_parent != node) return NULL;
+    middle = pivot->tree_left;
+    if (!rin_user_map_tree_replace(node, pivot)) return NULL;
+    pivot->tree_left = node;
+    node->tree_parent = pivot;
+    node->tree_right = middle;
+    if (middle) middle->tree_parent = node;
+    rin_user_map_tree_update_height(node);
+    rin_user_map_tree_update_height(pivot);
+    return pivot;
+}
+
+static RinUserAllocatorMap* rin_user_map_tree_rotate_right(
+    RinUserAllocatorMap* node)
+{
+    RinUserAllocatorMap* pivot = node ? node->tree_left : NULL;
+    RinUserAllocatorMap* middle;
+    if (!pivot || pivot->tree_parent != node) return NULL;
+    middle = pivot->tree_right;
+    if (!rin_user_map_tree_replace(node, pivot)) return NULL;
+    pivot->tree_right = node;
+    node->tree_parent = pivot;
+    node->tree_left = middle;
+    if (middle) middle->tree_parent = node;
+    rin_user_map_tree_update_height(node);
+    rin_user_map_tree_update_height(pivot);
+    return pivot;
+}
+
+static int rin_user_map_tree_rebalance(RinUserAllocatorMap* node)
+{
+    unsigned steps;
+    for (steps = 0u; node && steps < RIN_USER_MAP_TREE_MAX_HEIGHT; ++steps) {
+        RinUserAllocatorMap* parent;
+        uint32_t left_height;
+        uint32_t right_height;
+        int balance;
+        if (!rin_user_map_shape_valid(node) ||
+            (node->tree_parent &&
+             node->tree_parent->tree_left != node &&
+             node->tree_parent->tree_right != node) ||
+            (node->tree_left && node->tree_left->tree_parent != node) ||
+            (node->tree_right && node->tree_right->tree_parent != node))
+            return 0;
+        left_height = rin_user_map_tree_height(node->tree_left);
+        right_height = rin_user_map_tree_height(node->tree_right);
+        if (left_height > RIN_USER_MAP_TREE_MAX_HEIGHT ||
+            right_height > RIN_USER_MAP_TREE_MAX_HEIGHT ||
+            left_height > right_height + 2u ||
+            right_height > left_height + 2u)
+            return 0;
+        rin_user_map_tree_update_height(node);
+        if (!rin_user_map_tree_node_valid(node, node->tree_parent, 0))
+            return 0;
+        balance = (int)left_height - (int)right_height;
+        if (balance > 1) {
+            RinUserAllocatorMap* left = node->tree_left;
+            if (!left || left->tree_parent != node) return 0;
+            if (rin_user_map_tree_height(left->tree_right) >
+                rin_user_map_tree_height(left->tree_left)) {
+                if (!rin_user_map_tree_rotate_left(left)) return 0;
+            }
+            node = rin_user_map_tree_rotate_right(node);
+            if (!node) return 0;
+        } else if (balance < -1) {
+            RinUserAllocatorMap* right = node->tree_right;
+            if (!right || right->tree_parent != node) return 0;
+            if (rin_user_map_tree_height(right->tree_left) >
+                rin_user_map_tree_height(right->tree_right)) {
+                if (!rin_user_map_tree_rotate_right(right)) return 0;
+            }
+            node = rin_user_map_tree_rotate_left(node);
+            if (!node) return 0;
+        }
+        parent = node->tree_parent;
+        node = parent;
+    }
+    if (node || (rin_user_allocator_map_tree_root &&
+                 rin_user_allocator_map_tree_root->tree_parent))
+        return 0;
+    return 1;
+}
+
+static int rin_user_map_tree_insert(RinUserAllocatorMap* map)
+{
+    RinUserAllocatorMap* parent = NULL;
+    RinUserAllocatorMap* node = rin_user_allocator_map_tree_root;
+    uintptr_t base;
+    uintptr_t end;
+    uintptr_t lower_end = 0u;
+    uintptr_t upper_base = UINTPTR_MAX;
+    int has_lower = 0;
+    int has_upper = 0;
+    unsigned steps = 0u;
+    if (!map || !rin_user_map_shape_valid(map) || map->tree_left ||
+        map->tree_right || map->tree_parent || map->tree_height != 0u)
+        return 0;
+    base = (uintptr_t)map;
+    end = base + map->map_size;
+    if (!node) {
+        map->tree_height = 1u;
+        rin_user_allocator_map_tree_root = map;
+        return 1;
+    }
+    while (node) {
+        uintptr_t node_base;
+        uintptr_t node_end;
+        if (++steps > RIN_USER_MAP_TREE_MAX_HEIGHT ||
+            !rin_user_map_tree_node_valid(node, parent, 1))
+            return 0;
+        node_base = (uintptr_t)node;
+        node_end = node_base + node->map_size;
+        if ((has_lower && node_base < lower_end) ||
+            (has_upper && node_end > upper_base))
+            return 0;
+        parent = node;
+        if (end <= node_base) {
+            upper_base = node_base;
+            has_upper = 1;
+            node = node->tree_left;
+        } else if (base >= node_end) {
+            lower_end = node_end;
+            has_lower = 1;
+            node = node->tree_right;
+        } else {
+            return 0;
+        }
+    }
+    map->tree_parent = parent;
+    map->tree_height = 1u;
+    if (base < (uintptr_t)parent) parent->tree_left = map;
+    else parent->tree_right = map;
+    return rin_user_map_tree_rebalance(parent);
+}
+
+static int rin_user_map_tree_remove(RinUserAllocatorMap* target)
+{
+    RinUserAllocatorMap* node;
+    RinUserAllocatorMap* start;
+    uintptr_t target_base;
+    uintptr_t lower_end = 0u;
+    uintptr_t upper_base = UINTPTR_MAX;
+    int has_lower = 0;
+    int has_upper = 0;
+    unsigned steps = 0u;
+    if (!target || !rin_user_map_shape_valid(target)) return 0;
+    target_base = (uintptr_t)target;
+    node = rin_user_allocator_map_tree_root;
+    while (node && node != target) {
+        uintptr_t node_base;
+        uintptr_t node_end;
+        RinUserAllocatorMap* parent = node->tree_parent;
+        if (++steps > RIN_USER_MAP_TREE_MAX_HEIGHT ||
+            !rin_user_map_tree_node_valid(node, parent, 1))
+            return 0;
+        node_base = (uintptr_t)node;
+        node_end = node_base + node->map_size;
+        if ((has_lower && node_base < lower_end) ||
+            (has_upper && node_end > upper_base))
+            return 0;
+        if (target_base < node_base) {
+            upper_base = node_base;
+            has_upper = 1;
+            node = node->tree_left;
+        } else if (target_base >= node_end) {
+            lower_end = node_end;
+            has_lower = 1;
+            node = node->tree_right;
+        } else {
+            node = NULL;
+        }
+        if (node == NULL && target_base != node_base &&
+            target_base >= node_base && target_base < node_end)
+            return 0;
+    }
+    if (node != target ||
+        !rin_user_map_tree_node_valid(target, target->tree_parent, 1))
+        return 0;
+    if (!target->tree_left || !target->tree_right) {
+        RinUserAllocatorMap* child = target->tree_left
+            ? target->tree_left : target->tree_right;
+        start = target->tree_parent ? target->tree_parent : child;
+        if (!rin_user_map_tree_replace(target, child)) return 0;
+    } else {
+        RinUserAllocatorMap* successor = target->tree_right;
+        unsigned successor_steps = 0u;
+        while (successor->tree_left) {
+            if (++successor_steps > RIN_USER_MAP_TREE_MAX_HEIGHT ||
+                !rin_user_map_tree_node_valid(
+                    successor, successor->tree_parent, 1) ||
+                successor->tree_left->tree_parent != successor)
+                return 0;
+            successor = successor->tree_left;
+        }
+        if (!rin_user_map_tree_node_valid(
+                successor, successor->tree_parent, 1))
+            return 0;
+        if (successor->tree_parent != target) {
+            RinUserAllocatorMap* successor_parent = successor->tree_parent;
+            if (!rin_user_map_tree_replace(successor, successor->tree_right))
+                return 0;
+            successor->tree_right = target->tree_right;
+            successor->tree_right->tree_parent = successor;
+            start = successor_parent;
+        } else {
+            start = successor;
+        }
+        if (!rin_user_map_tree_replace(target, successor)) return 0;
+        successor->tree_left = target->tree_left;
+        successor->tree_left->tree_parent = successor;
+        successor->tree_height = target->tree_height;
+    }
+    target->tree_left = NULL;
+    target->tree_right = NULL;
+    target->tree_parent = NULL;
+    target->tree_height = 0u;
+    if (start && !rin_user_map_tree_rebalance(start)) return 0;
+    return !rin_user_allocator_map_tree_root ||
+           (rin_user_allocator_map_tree_root->tree_parent == NULL &&
+            rin_user_allocator_map_tree_root->tree_height <=
+                RIN_USER_MAP_TREE_MAX_HEIGHT);
+}
+
+static int rin_user_map_insert(RinUserAllocatorMap* map)
+{
+    RinUserAllocatorMap* previous = NULL;
+    if (__atomic_load_n(&rin_user_allocator_directory_corrupt,
+                        __ATOMIC_ACQUIRE) != 0u ||
+        !map || map->next || map->list_previous) {
+        __atomic_store_n(&rin_user_allocator_directory_corrupt, 1u,
+                         __ATOMIC_RELEASE);
+        return 0;
+    }
+    if (rin_user_allocator_maps) {
+        if (rin_user_allocator_maps->list_previous != NULL) {
+            __atomic_store_n(&rin_user_allocator_directory_corrupt, 1u,
+                             __ATOMIC_RELEASE);
+            return 0;
+        }
+        previous = rin_user_allocator_maps;
+    }
+    if (!rin_user_map_tree_insert(map)) {
+        __atomic_store_n(&rin_user_allocator_directory_corrupt, 1u,
+                         __ATOMIC_RELEASE);
+        return 0;
+    }
+    map->next = previous;
+    map->list_previous = NULL;
+    if (previous) previous->list_previous = map;
     rin_user_allocator_maps = map;
     if (!rin_user_allocator_reap_map_cursor)
         rin_user_allocator_reap_map_cursor = map;
+    return 1;
 }
 
 static RinUserAllocatorMap* rin_user_find_map(const void* pointer)
 {
-    RinUserAllocatorMap* map;
+    RinUserAllocatorMap* node = rin_user_allocator_map_tree_root;
+    RinUserAllocatorMap* parent = NULL;
     uintptr_t address = (uintptr_t)pointer;
-    for (map = rin_user_allocator_maps; map; map = map->next) {
-        if (rin_user_map_shape_valid(map) &&
-            rin_user_map_range_valid(map, address, 1u))
-            return map;
+    uintptr_t lower_end = 0u;
+    uintptr_t upper_base = UINTPTR_MAX;
+    int has_lower = 0;
+    int has_upper = 0;
+    unsigned steps = 0u;
+    if (__atomic_load_n(&rin_user_allocator_directory_corrupt,
+                        __ATOMIC_ACQUIRE) != 0u)
+        return NULL;
+    while (node) {
+        uintptr_t base;
+        uintptr_t end;
+        if (++steps > RIN_USER_MAP_TREE_MAX_HEIGHT ||
+            !rin_user_map_tree_node_valid(node, parent, 1))
+            goto corrupt;
+        base = (uintptr_t)node;
+        end = base + node->map_size;
+        if ((has_lower && base < lower_end) ||
+            (has_upper && end > upper_base))
+            goto corrupt;
+        if (address < base) {
+            upper_base = base;
+            has_upper = 1;
+            parent = node;
+            node = node->tree_left;
+        } else if (address >= end) {
+            lower_end = end;
+            has_lower = 1;
+            parent = node;
+            node = node->tree_right;
+        } else {
+            if (rin_user_map_range_valid(node, address, 1u)) return node;
+            goto corrupt;
+        }
     }
+    return NULL;
+corrupt:
+    __atomic_store_n(&rin_user_allocator_directory_corrupt, 1u,
+                     __ATOMIC_RELEASE);
     return NULL;
 }
 
 static int rin_user_unlink_map(RinUserAllocatorMap* target)
 {
-    RinUserAllocatorMap** cursor = &rin_user_allocator_maps;
-    while (*cursor) {
-        if (*cursor == target) {
-            RinUserAllocatorMap* next = target->next;
-            *cursor = target->next;
-            if (rin_user_allocator_reap_map_cursor == target)
-                rin_user_allocator_reap_map_cursor = next ? next
-                                                          : rin_user_allocator_maps;
-            target->next = NULL;
-            return 1;
-        }
-        cursor = &(*cursor)->next;
+    RinUserAllocatorMap* previous;
+    RinUserAllocatorMap* next;
+    if (!target ||
+        __atomic_load_n(&rin_user_allocator_directory_corrupt,
+                        __ATOMIC_ACQUIRE) != 0u)
+        return 0;
+    previous = target->list_previous;
+    next = target->next;
+    if ((previous && previous->next != target) ||
+        (!previous && rin_user_allocator_maps != target) ||
+        (next && next->list_previous != target) ||
+        !rin_user_map_tree_remove(target)) {
+        __atomic_store_n(&rin_user_allocator_directory_corrupt, 1u,
+                         __ATOMIC_RELEASE);
+        return 0;
     }
-    return 0;
+    if (previous) previous->next = next;
+    else rin_user_allocator_maps = next;
+    if (next) next->list_previous = previous;
+    if (rin_user_allocator_reap_map_cursor == target)
+        rin_user_allocator_reap_map_cursor = next ? next
+                                                  : rin_user_allocator_maps;
+    target->next = NULL;
+    target->list_previous = NULL;
+    return 1;
 }
 
 static int rin_user_release_block(RinUserAllocatorMap* map,
@@ -2450,6 +2842,11 @@ void rin_user_allocator_trim(void)
 {
     RinUserAllocatorTlsCache* cache;
     int corrupt = 0;
+    if (__atomic_load_n(&rin_user_allocator_directory_corrupt,
+                        __ATOMIC_ACQUIRE) != 0u) {
+        rin_user_allocator_corruption();
+        return;
+    }
     rin_user_allocator_lock(&rin_user_allocator_cache_registry_lock);
     for (cache = rin_user_allocator_cache_registry; cache;
          cache = cache->registry_next) {
@@ -2655,6 +3052,11 @@ void* rin_user_allocator_malloc(size_t size)
     if (size == 0u ||
         (requested_total = rin_user_block_total_for_request(size)) == 0u)
         return NULL;
+    if (__atomic_load_n(&rin_user_allocator_directory_corrupt,
+                        __ATOMIC_ACQUIRE) != 0u) {
+        rin_user_allocator_corruption();
+        return NULL;
+    }
 
     cache_enabled = rin_user_allocator_thread_cache_ensure(cache);
     if (cache_enabled) {
@@ -2714,14 +3116,16 @@ void* rin_user_allocator_malloc(size_t size)
             if (!result && !corrupt) {
                 map = rin_user_create_arena();
                 if (map) {
-                    rin_user_map_insert(map);
-                    rin_user_map_lock(map);
-                    block = map->first;
-                    result = rin_user_allocator_allocate_from_arena_locked(
-                        map, cache, class_index, size, requested_total,
-                        allocation_backtrace, &corrupt);
-                    rin_user_allocator_unlock(&map->lock);
-                    (void)block;
+                    if (!rin_user_map_insert(map)) corrupt = 1;
+                    else {
+                        rin_user_map_lock(map);
+                        block = map->first;
+                        result = rin_user_allocator_allocate_from_arena_locked(
+                            map, cache, class_index, size, requested_total,
+                            allocation_backtrace, &corrupt);
+                        rin_user_allocator_unlock(&map->lock);
+                        (void)block;
+                    }
                 }
             }
             rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
@@ -2780,16 +3184,18 @@ void* rin_user_allocator_malloc(size_t size)
                 if (!result && !corrupt) {
                     map = rin_user_create_arena();
                     if (map) {
-                        rin_user_map_insert(map);
-                        rin_user_map_lock(map);
-                        result = rin_user_take_free_block(
-                            map, map->first, size, requested_total,
-                            allocation_backtrace, owner_token,
-                            owner_generation);
-                        if (!result) corrupt = 1;
-                        rin_user_allocator_unlock(&map->lock);
-                        if (result && cache_enabled)
-                            cache->arena_by_class[class_index] = map;
+                        if (!rin_user_map_insert(map)) corrupt = 1;
+                        else {
+                            rin_user_map_lock(map);
+                            result = rin_user_take_free_block(
+                                map, map->first, size, requested_total,
+                                allocation_backtrace, owner_token,
+                                owner_generation);
+                            if (!result) corrupt = 1;
+                            rin_user_allocator_unlock(&map->lock);
+                            if (result && cache_enabled)
+                                cache->arena_by_class[class_index] = map;
+                        }
                     }
                 }
             } else {
@@ -2797,8 +3203,8 @@ void* rin_user_allocator_malloc(size_t size)
                                             allocation_backtrace,
                                             owner_token, owner_generation);
                 if (map) {
-                    rin_user_map_insert(map);
-                    result = rin_user_block_payload(map->first);
+                    if (!rin_user_map_insert(map)) corrupt = 1;
+                    else result = rin_user_block_payload(map->first);
                 }
             }
             rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
@@ -3135,12 +3541,16 @@ void rin_user_allocator_free(void* pointer)
             rin_user_allocator_corruption();
             return;
         }
-        map_size = map->map_size;
-        large = 1;
-        rin_user_asan_poison(
-            rin_user_block_payload(block),
-            block->total_size - sizeof(*block) - RIN_USER_ARENA_TAIL_GUARD_SIZE);
-        (void)rin_user_unlink_map(map);
+        if (!rin_user_unlink_map(map)) {
+            corrupt = 1;
+        } else {
+            map_size = map->map_size;
+            large = 1;
+            rin_user_asan_poison(
+                rin_user_block_payload(block),
+                block->total_size - sizeof(*block) -
+                    RIN_USER_ARENA_TAIL_GUARD_SIZE);
+        }
     } else if (cache_enabled && block->owner_token == cache->owner_token &&
                block->owner_generation == cache->owner_generation &&
                block->bin_index < RIN_USER_ARENA_CLASS_COUNT &&
@@ -3179,7 +3589,7 @@ void rin_user_allocator_free(void* pointer)
         /* A failed unmap must not leave the allocator believing ownership was
          * released.  Re-publish the still-valid mapping and fail closed. */
         rin_user_allocator_lock(&rin_user_allocator_directory_lock);
-        rin_user_map_insert(map);
+        (void)rin_user_map_insert(map);
         rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
         rin_user_allocator_corruption();
     }
