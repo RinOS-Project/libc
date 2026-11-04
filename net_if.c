@@ -291,6 +291,23 @@ done:
     return result;
 }
 
+static unsigned int netif_posix_index(uint64_t interface_id)
+{
+    if (interface_id == RIN_NET_INTERFACE_ID_LOOPBACK)
+        return (unsigned int)RIN_NET_IFINDEX_LOOPBACK;
+    if (interface_id == 0u ||
+        interface_id > RIN_NET_INTERFACE_ID_MAX)
+        return 0u;
+    return (unsigned int)interface_id;
+}
+
+static uint64_t netif_kernel_interface_id(unsigned int ifindex)
+{
+    if (ifindex == (unsigned int)RIN_NET_IFINDEX_LOOPBACK)
+        return (uint64_t)RIN_NET_INTERFACE_ID_LOOPBACK;
+    return (uint64_t)ifindex;
+}
+
 unsigned int if_nametoindex(const char* ifname)
 {
     RinNetIfaddrsSnapshotListV2 snapshot;
@@ -308,8 +325,15 @@ unsigned int if_nametoindex(const char* ifname)
         return 0u;
     for (index = 0u; index < snapshot.count; ++index) {
         const RinNetIfaddrsInterfaceV2* entry = &snapshot.interfaces[index];
-        if (strcmp(ifname, entry->addresses.ifname) == 0)
-            return (unsigned int)entry->addresses.interface_id;
+        if (strcmp(ifname, entry->addresses.ifname) == 0) {
+            const unsigned int posix_index =
+                netif_posix_index(entry->addresses.interface_id);
+            if (posix_index == 0u) {
+                errno = EPROTO;
+                return 0u;
+            }
+            return posix_index;
+        }
     }
     errno = ENXIO;
     return 0u;
@@ -324,11 +348,17 @@ char* if_indextoname(unsigned int ifindex, char* ifname)
         errno = EINVAL;
         return (char*)0;
     }
+    if (ifindex > RIN_NET_INTERFACE_ID_MAX &&
+        ifindex != (unsigned int)RIN_NET_IFINDEX_LOOPBACK) {
+        errno = ENXIO;
+        return (char*)0;
+    }
     if (netif_snapshot(&snapshot) != 0)
         return (char*)0;
     for (index = 0u; index < snapshot.count; ++index) {
         const RinNetIfaddrsInterfaceV2* entry = &snapshot.interfaces[index];
-        if (entry->addresses.interface_id == (uint64_t)ifindex) {
+        if (entry->addresses.interface_id ==
+            netif_kernel_interface_id(ifindex)) {
             memcpy(ifname, entry->addresses.ifname, IF_NAMESIZE);
             return ifname;
         }
@@ -371,7 +401,13 @@ struct if_nameindex* if_nameindex(void)
     for (index = 0u; index < snapshot.count; ++index) {
         const RinNetIfaddrsInterfaceV2* entry = &snapshot.interfaces[index];
         size_t length = strlen(entry->addresses.ifname) + 1u;
-        result[index].if_index = (unsigned int)entry->addresses.interface_id;
+        result[index].if_index =
+            netif_posix_index(entry->addresses.interface_id);
+        if (result[index].if_index == 0u) {
+            free(result);
+            errno = EPROTO;
+            return (struct if_nameindex*)0;
+        }
         result[index].if_name = next_name;
         memcpy(next_name, entry->addresses.ifname, length);
         next_name += length;
