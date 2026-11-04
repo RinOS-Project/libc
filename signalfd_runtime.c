@@ -13,7 +13,7 @@ int signalfd4(int fd, const sigset_t* mask, int sizemask, int flags)
         errno = EFAULT;
         return -1;
     }
-    if ((flags & ~(SFD_NONBLOCK | SFD_CLOEXEC)) != 0) {
+    if ((flags & ~(SFD_NONBLOCK | SFD_CLOEXEC | __RIN_O_CLOFORK)) != 0) {
         errno = EINVAL;
         return -1;
     }

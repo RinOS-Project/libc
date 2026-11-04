@@ -9,6 +9,7 @@
 #ifndef _SYS_EPOLL_H
 #define _SYS_EPOLL_H
 
+#include "../features.h"
 #include "../signal.h"
 #include "../time.h"
 #include "../stdint.h"
@@ -38,6 +39,9 @@ _Static_assert(sizeof(struct epoll_event) == 12u,
 #endif
 
 #define EPOLL_CLOEXEC 0x00080000
+#if defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+#define EPOLL_CLOFORK 0x00020000
+#endif
 
 #define EPOLL_CTL_ADD 1
 #define EPOLL_CTL_DEL 2

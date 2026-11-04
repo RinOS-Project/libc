@@ -22,6 +22,9 @@
 #define TFD_TIMER_CANCEL_ON_SET 0x0002
 #define TFD_NONBLOCK O_NONBLOCK
 #define TFD_CLOEXEC  O_CLOEXEC
+#if defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+#define TFD_CLOFORK  O_CLOFORK
+#endif
 
 #ifdef __cplusplus
 extern "C" {

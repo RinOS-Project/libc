@@ -2,6 +2,7 @@
 
 #include "sys/epoll.h"
 
+#include "fcntl_flags.h"
 #include "limits.h"
 #include "sys/syscall.h"
 
@@ -17,7 +18,7 @@ int epoll_create(int size)
 int epoll_create1(int flags)
 {
     intptr_t result;
-    if ((flags & ~EPOLL_CLOEXEC) != 0) {
+    if ((flags & ~(EPOLL_CLOEXEC | __RIN_O_CLOFORK)) != 0) {
         errno = EINVAL;
         return -1;
     }

@@ -10,6 +10,7 @@
 #ifndef _SYS_FANOTIFY_H
 #define _SYS_FANOTIFY_H
 
+#include "../features.h"
 #include "syscall.h"
 #include "../errno.h"
 #include "../stdint.h"
@@ -38,6 +39,9 @@ extern "C" {
 
 #define FAN_CLOEXEC            0x00000001u
 #define FAN_NONBLOCK           0x00000002u
+#if defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+#define FAN_CLOFORK            0x00020000u
+#endif
 #define FAN_CLASS_NOTIF        0x00000000u
 #define FAN_CLASS_CONTENT      0x00000004u
 #define FAN_CLASS_PRE_CONTENT  0x00000008u
@@ -110,7 +114,12 @@ static inline int fanotify_init(unsigned int flags,
     unsigned int class_bits =
         flags & (FAN_CLASS_CONTENT | FAN_CLASS_PRE_CONTENT);
     int rin_permission_token = (flags & FAN_RIN_PERMISSION_TOKEN) != 0u;
-    if ((flags & ~(FAN_CLOEXEC | FAN_NONBLOCK | FAN_CLASS_CONTENT |
+    if ((flags & ~(FAN_CLOEXEC | FAN_NONBLOCK
+#if defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+                   | FAN_CLOFORK
+#endif
+                   |
+                   FAN_CLASS_CONTENT |
                    FAN_CLASS_PRE_CONTENT | FAN_REPORT_FID |
                    FAN_RIN_PERMISSION_TOKEN)) != 0u ||
         (flags & (FAN_CLASS_CONTENT | FAN_CLASS_PRE_CONTENT)) ==

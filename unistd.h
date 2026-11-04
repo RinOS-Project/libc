@@ -3094,7 +3094,7 @@ static inline int dup3(int oldfd, int newfd, int flags) {
         errno = EINVAL;
         return -1;
     }
-    if ((flags & ~O_CLOEXEC) != 0) {
+    if ((flags & ~(O_CLOEXEC | O_CLOFORK)) != 0) {
         errno = EINVAL;
         return -1;
     }

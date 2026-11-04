@@ -10,7 +10,7 @@
 int timerfd_create(clockid_t clock_id, int flags)
 {
     intptr_t result;
-    if (flags & ~(TFD_NONBLOCK | TFD_CLOEXEC)) {
+    if (flags & ~(TFD_NONBLOCK | TFD_CLOEXEC | __RIN_O_CLOFORK)) {
         errno = EINVAL;
         return -1;
     }

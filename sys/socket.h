@@ -16,6 +16,7 @@
 #ifndef _SYS_SOCKET_H
 #define _SYS_SOCKET_H
 
+#include "../features.h"
 #include "types.h"
 #if !defined(_WIN32)
 /* MinGW sys/types.h uses foreign guards and redefines ino_t/pid_t/
@@ -184,6 +185,10 @@ typedef unsigned short sa_family_t;
 /* ソケットフラグ (ORで組み合わせ可能) */
 #define SOCK_NONBLOCK  0x800   /* ノンブロッキング */
 #define SOCK_CLOEXEC   0x80000 /* exec時にクローズ */
+#if defined(__RIN_FEATURES_POSIX_2024) || \
+    defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+#define SOCK_CLOFORK   0x20000 /* fork時に子へ継承しない */
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * プロトコル番号

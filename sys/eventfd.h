@@ -17,6 +17,9 @@
 #define EFD_SEMAPHORE 0x0001
 #define EFD_NONBLOCK  O_NONBLOCK
 #define EFD_CLOEXEC   O_CLOEXEC
+#if defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+#define EFD_CLOFORK   O_CLOFORK
+#endif
 
 #ifdef __cplusplus
 extern "C" {

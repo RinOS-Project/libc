@@ -17,6 +17,7 @@
 #ifndef _SYS_MMAN_H
 #define _SYS_MMAN_H
 
+#include "../features.h"
 #include "types.h"
 #include "syscall.h"
 #include "../errno.h"
@@ -597,6 +598,11 @@ int shm_unlink(const char* name);
 #endif
 int memfd_create(const char* name, unsigned int flags);
 
+#if defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+#ifndef MFD_CLOFORK
+#define MFD_CLOFORK 0x00020000U
+#endif
+#endif
 #ifdef __cplusplus
 }
 #endif

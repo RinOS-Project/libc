@@ -20,6 +20,9 @@
 
 #define SFD_NONBLOCK O_NONBLOCK
 #define SFD_CLOEXEC O_CLOEXEC
+#if defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+#define SFD_CLOFORK O_CLOFORK
+#endif
 
 /* Fixed 128-byte read record. Layout matches Linux struct
  * signalfd_siginfo and the kernel RinSignalfdSiginfo. */

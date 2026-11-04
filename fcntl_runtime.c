@@ -146,7 +146,7 @@ int memfd_create(const char* name, unsigned int flags) {
         errno = EFAULT;
         return -1;
     }
-    if ((flags & ~MFD_CLOEXEC) != 0u) {
+    if ((flags & ~(MFD_CLOEXEC | __RIN_O_CLOFORK)) != 0u) {
         errno = EINVAL;
         return -1;
     }
@@ -170,7 +170,9 @@ int memfd_create(const char* name, unsigned int flags) {
     /* O_EXCL makes the anonymous inode permanently un-linkable, matching
      * memfd lifetime semantics even though the current backing is tmpfs. */
     fd = openat(AT_FDCWD, "/dev/shm", O_TMPFILE | O_EXCL | O_RDWR |
-                    ((flags & MFD_CLOEXEC) != 0u ? O_CLOEXEC : 0),
+                    ((flags & MFD_CLOEXEC) != 0u ? O_CLOEXEC : 0) |
+                    ((flags & __RIN_O_CLOFORK) != 0u
+                        ? __RIN_O_CLOFORK : 0),
                 0600);
     if (fd < 0) return -1;
 

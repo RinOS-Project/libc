@@ -9,6 +9,7 @@
 #ifndef _SYS_INOTIFY_H
 #define _SYS_INOTIFY_H
 
+#include "../features.h"
 #include "syscall.h"
 #include "../errno.h"
 #include "../stdint.h"
@@ -48,6 +49,9 @@ extern "C" {
  * event publication remains nonblocking. */
 #define IN_CLOEXEC      0x00080000
 #define IN_NONBLOCK     0x00000800
+#if defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+#define IN_CLOFORK      0x00020000
+#endif
 
 static inline int __rin_inotify_result(intptr_t result)
 {
@@ -62,7 +66,11 @@ static inline int __rin_inotify_result(intptr_t result)
 
 static inline int inotify_init1(int flags)
 {
-    if ((flags & ~(IN_CLOEXEC | IN_NONBLOCK)) != 0) {
+    if ((flags & ~(IN_CLOEXEC | IN_NONBLOCK
+#if defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
+                   | IN_CLOFORK
+#endif
+                   )) != 0) {
         errno = EINVAL;
         return -1;
     }
