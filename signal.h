@@ -343,6 +343,11 @@ union __rin_siginfo_fields {
                 void* _lower;
                 void* _upper;
             } _addr_bnd;
+            struct {
+                unsigned long _data;
+                uint32_t _type;
+                uint32_t _flags;
+            } _perf;
         } _detail;
     } _sigfault;
     struct {
@@ -402,6 +407,9 @@ typedef union siginfo {
 #define si_pkey      __fields._sifields._sigfault._detail._addr_pkey._pkey
 #define si_lower     __fields._sifields._sigfault._detail._addr_bnd._lower
 #define si_upper     __fields._sifields._sigfault._detail._addr_bnd._upper
+#define si_perf_data  __fields._sifields._sigfault._detail._perf._data
+#define si_perf_type  __fields._sifields._sigfault._detail._perf._type
+#define si_perf_flags __fields._sifields._sigfault._detail._perf._flags
 #define si_call_addr __fields._sifields._sigsys._call_addr
 #define si_syscall   __fields._sifields._sigsys._syscall
 #define si_arch      __fields._sifields._sigsys._arch
@@ -499,6 +507,9 @@ struct sigaction {
 #define TRAP_TRACE      2   /* Process trace trap */
 #define TRAP_BRANCH     3   /* Process taken branch trap */
 #define TRAP_HWBKPT     4   /* Hardware breakpoint/watchpoint */
+#define TRAP_UNK        5   /* Undiagnosed trap */
+#define TRAP_PERF       6   /* Perf event with sigtrap=1 */
+#define TRAP_PERF_FLAG_ASYNC (1u << 0)
 
 /* si_code values for SIGCHLD */
 #define CLD_EXITED      1   /* Child has exited */
