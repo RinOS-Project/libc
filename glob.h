@@ -246,6 +246,12 @@ static inline int _rin_glob_match_list_add(_RinGlobMatchList* list,
     return 0;
 }
 
+static inline int _rin_glob_class_match(const char** pattern,
+                                        wchar_t value, int flags,
+                                        const char* value_bytes,
+                                        size_t value_length,
+                                        size_t* value_consumed);
+
 static inline int _rin_glob_component_wild(const char* pattern, int flags)
 {
     if (!pattern) return 0;
