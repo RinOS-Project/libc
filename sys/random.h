@@ -43,7 +43,10 @@ extern "C" {
               (uintptr_t)(length), (uintptr_t)(flags))
 #endif
 
-static inline ssize_t getrandom(void* buf, size_t buflen, unsigned int flags)
+/* Keep the raw operation separate: getentropy() is not a cancellation point,
+ * while getrandom() is. */
+static inline ssize_t __rin_getrandom_raw(
+    void* buf, size_t buflen, unsigned int flags)
 {
     intptr_t ret = _RIN_RANDOM_SYSCALL3(__NR_getrandom, buf, buflen, flags);
     if (ret < 0) {
@@ -59,6 +62,15 @@ static inline ssize_t getrandom(void* buf, size_t buflen, unsigned int flags)
         return -1;
     }
     return (ssize_t)ret;
+}
+
+static inline ssize_t getrandom(void* buf, size_t buflen, unsigned int flags)
+{
+    ssize_t result;
+    __rin_pthread_cancel_point_if_linked();
+    result = __rin_getrandom_raw(buf, buflen, flags);
+    __rin_pthread_cancel_point_if_linked();
+    return result;
 }
 
 #if defined(_RIN_USE_BSD_GETENTROPY) || defined(_DEFAULT_SOURCE) || \
@@ -82,7 +94,8 @@ static inline int getentropy(void* buffer, size_t length)
         return -1;
     }
     while (offset < length) {
-        ssize_t received = getrandom(bytes + offset, length - offset, 0);
+        ssize_t received = __rin_getrandom_raw(
+            bytes + offset, length - offset, 0);
         if (received <= 0) {
             if (received < 0 && errno == EINTR) continue;
             if (received == 0) errno = EIO;
