@@ -16,11 +16,10 @@
 typedef uint_least16_t char16_t;
 typedef uint_least32_t char32_t;
 #endif
-#if (!defined(__cplusplus) && \
-     (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L)) || \
-    (defined(__cplusplus) && __cplusplus < 202002L)
-/* C23 and C++20 provide char8_t as a keyword; older modes use the byte alias
- * so the C23 conversion declarations below name the same type everywhere. */
+/* C23 provides char8_t as an unsigned-char typedef through <uchar.h>, while
+ * C++20 provides it as a distinct keyword type. Older modes retain the
+ * byte-sized compatibility alias used by the RinOS conversion API. */
+#if !defined(__cplusplus) || __cplusplus < 202002L
 #if defined(__cplusplus) && \
     ((defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 10) || \
      (defined(__clang__) && __clang_major__ >= 10))
