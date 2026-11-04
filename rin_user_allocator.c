@@ -21,6 +21,7 @@
 #define RIN_USER_ARENA_MIN_BLOCKS 8u
 #define RIN_USER_ARENA_MAX_ALLOCATION ((size_t)32768u)
 #define RIN_USER_ARENA_CLASS_COUNT 12u
+#define RIN_USER_FREE_TREE_MAX_HEIGHT 32u
 #define RIN_USER_ARENA_LARGE_CLASS UINT16_MAX
 #define RIN_USER_ARENA_MAP_MAGIC UINT32_C(0x52494e4d)
 #define RIN_USER_ARENA_MAGIC_ALLOCATED UINT32_C(0x52494e41)
@@ -79,8 +80,10 @@ typedef struct RinUserAllocatorMap RinUserAllocatorMap;
 typedef struct RinUserAllocationHeader RinUserAllocationHeader;
 
 typedef struct RinUserFreeLinks {
-    struct RinUserFreeLinks* previous;
-    struct RinUserFreeLinks* next;
+    struct RinUserFreeLinks* left;
+    struct RinUserFreeLinks* right;
+    struct RinUserFreeLinks* parent;
+    uint32_t height;
 } RinUserFreeLinks;
 
 struct RinUserAllocationHeader {
@@ -122,7 +125,7 @@ struct RinUserAllocatorMap {
     uint32_t reserved2;
     RinUserAllocationHeader* first;
     uint64_t block_boundary_index[RIN_USER_ARENA_BOUNDARY_WORDS];
-    RinUserFreeLinks* free_lists[RIN_USER_ARENA_CLASS_COUNT];
+    RinUserFreeLinks* free_tree_roots[RIN_USER_ARENA_CLASS_COUNT];
     RinUserAllocationHeader* volatile remote_free_head;
     volatile unsigned remote_free_lock;
     volatile uint64_t remote_free_depth;
@@ -314,7 +317,7 @@ static size_t rin_user_min_block_size(void)
 {
     size_t size = sizeof(RinUserAllocationHeader) +
                   RIN_USER_ARENA_TAIL_GUARD_SIZE +
-                  RIN_USER_BLOCK_ALIGNMENT;
+                  sizeof(RinUserFreeLinks);
     return rin_user_align_up(size);
 }
 
@@ -573,7 +576,9 @@ static int rin_user_map_remote_queue_valid_locked(
     return nodes == depth;
 }
 
-static int rin_user_map_block_graph_valid(const RinUserAllocatorMap* map)
+static int rin_user_map_block_graph_valid(
+    const RinUserAllocatorMap* map,
+    size_t free_counts[RIN_USER_ARENA_CLASS_COUNT])
 {
     uintptr_t begin;
     uintptr_t end;
@@ -583,7 +588,10 @@ static int rin_user_map_block_graph_valid(const RinUserAllocatorMap* map)
     size_t block_count = 0u;
     int saw_block = 0;
 
-    if (!rin_user_map_shape_valid(map)) return 0;
+    unsigned index;
+    if (!rin_user_map_shape_valid(map) || !free_counts) return 0;
+    for (index = 0u; index < RIN_USER_ARENA_CLASS_COUNT; ++index)
+        free_counts[index] = 0u;
     begin = (uintptr_t)map + map->data_offset;
     end = (uintptr_t)map + map->data_end;
     cursor = begin;
@@ -630,6 +638,8 @@ static int rin_user_map_block_graph_valid(const RinUserAllocatorMap* map)
                 __atomic_load_n(&block->remote_next, __ATOMIC_RELAXED) != NULL ||
                 (remote_state != 0u && remote_state != 2u))
                 return 0;
+            if (free_counts[block->bin_index] == SIZE_MAX) return 0;
+            ++free_counts[block->bin_index];
         } else if (block->magic == RIN_USER_ARENA_MAGIC_CACHED) {
             if (block->flags != RIN_USER_BLOCK_FLAG_CACHED ||
                 block->bin_index >= RIN_USER_ARENA_CLASS_COUNT ||
@@ -784,6 +794,398 @@ static RinUserAllocationHeader* rin_user_block_from_free_link(
     return (RinUserAllocationHeader*)(uintptr_t)header_address;
 }
 
+static int rin_user_free_tree_node_valid(
+    RinUserAllocatorMap* map, RinUserFreeLinks* links, unsigned index,
+    RinUserAllocationHeader** block_out)
+{
+    RinUserAllocationHeader* block;
+    size_t capacity;
+    uint32_t remote_state;
+    if (!map || map->kind != RIN_USER_ARENA_KIND || !links ||
+        index >= RIN_USER_ARENA_CLASS_COUNT ||
+        (block = rin_user_block_from_free_link(map, links)) == NULL)
+        return 0;
+    capacity = block->total_size - sizeof(*block) -
+               RIN_USER_ARENA_TAIL_GUARD_SIZE;
+    remote_state = __atomic_load_n(&block->remote_state, __ATOMIC_ACQUIRE);
+    if (block->magic != RIN_USER_ARENA_MAGIC_FREE ||
+        block->flags != RIN_USER_BLOCK_FLAG_FREE ||
+        block->requested_size != 0u || block->bin_index != index ||
+        block->bin_index != rin_user_bin_for_size(capacity) ||
+        block->owner_token != 0u || block->owner_generation != 0u ||
+        __atomic_load_n(&block->remote_next, __ATOMIC_RELAXED) != NULL ||
+        (remote_state != 0u && remote_state != 2u) ||
+        (links->height == 0u ||
+         links->height > RIN_USER_FREE_TREE_MAX_HEIGHT) ||
+        !rin_user_block_tail_valid(block))
+        return 0;
+    if (block_out) *block_out = block;
+    return 1;
+}
+
+static int rin_user_free_tree_compare(
+    const RinUserAllocationHeader* lhs,
+    const RinUserAllocationHeader* rhs)
+{
+    if (lhs->total_size < rhs->total_size) return -1;
+    if (lhs->total_size > rhs->total_size) return 1;
+    if ((uintptr_t)lhs < (uintptr_t)rhs) return -1;
+    return (uintptr_t)lhs > (uintptr_t)rhs ? 1 : 0;
+}
+
+static int rin_user_free_tree_height(RinUserAllocatorMap* map,
+                                     RinUserFreeLinks* links,
+                                     unsigned index, uint32_t* height_out)
+{
+    if (!height_out) return 0;
+    if (!links) {
+        *height_out = 0u;
+        return 1;
+    }
+    if (!rin_user_free_tree_node_valid(map, links, index, NULL)) return 0;
+    *height_out = links->height;
+    return 1;
+}
+
+static int rin_user_free_tree_update_height(RinUserAllocatorMap* map,
+                                            RinUserFreeLinks* links,
+                                            unsigned index)
+{
+    uint32_t left_height;
+    uint32_t right_height;
+    uint32_t height;
+    if (!rin_user_free_tree_node_valid(map, links, index, NULL) ||
+        !rin_user_free_tree_height(map, links->left, index, &left_height) ||
+        !rin_user_free_tree_height(map, links->right, index, &right_height) ||
+        (links->left && links->left->parent != links) ||
+        (links->right && links->right->parent != links))
+        return 0;
+    height = left_height > right_height ? left_height : right_height;
+    if (height >= RIN_USER_FREE_TREE_MAX_HEIGHT) return 0;
+    links->height = height + 1u;
+    return 1;
+}
+
+static int rin_user_free_tree_replace(RinUserAllocatorMap* map,
+                                      unsigned index,
+                                      RinUserFreeLinks* old_links,
+                                      RinUserFreeLinks* new_links)
+{
+    RinUserFreeLinks* parent;
+    if (!map || index >= RIN_USER_ARENA_CLASS_COUNT ||
+        !rin_user_free_tree_node_valid(map, old_links, index, NULL))
+        return 0;
+    parent = old_links->parent;
+    if (parent) {
+        if (!rin_user_free_tree_node_valid(map, parent, index, NULL))
+            return 0;
+        if (parent->left == old_links) parent->left = new_links;
+        else if (parent->right == old_links) parent->right = new_links;
+        else return 0;
+    } else {
+        if (map->free_tree_roots[index] != old_links) return 0;
+        map->free_tree_roots[index] = new_links;
+    }
+    if (new_links) {
+        if (!rin_user_free_tree_node_valid(map, new_links, index, NULL))
+            return 0;
+        new_links->parent = parent;
+    }
+    return 1;
+}
+
+static int rin_user_free_tree_rotate_left(RinUserAllocatorMap* map,
+                                           RinUserFreeLinks* root,
+                                           unsigned index,
+                                           RinUserFreeLinks** result_out)
+{
+    RinUserFreeLinks* pivot;
+    RinUserFreeLinks* inner;
+    if (!result_out ||
+        !rin_user_free_tree_node_valid(map, root, index, NULL) ||
+        (pivot = root->right) == NULL ||
+        !rin_user_free_tree_node_valid(map, pivot, index, NULL) ||
+        pivot->parent != root)
+        return 0;
+    inner = pivot->left;
+    if (inner && (!rin_user_free_tree_node_valid(map, inner, index, NULL) ||
+                  inner->parent != pivot))
+        return 0;
+    if (!rin_user_free_tree_replace(map, index, root, pivot)) return 0;
+    pivot->left = root;
+    root->parent = pivot;
+    root->right = inner;
+    if (inner) inner->parent = root;
+    if (!rin_user_free_tree_update_height(map, root, index) ||
+        !rin_user_free_tree_update_height(map, pivot, index))
+        return 0;
+    *result_out = pivot;
+    return 1;
+}
+
+static int rin_user_free_tree_rotate_right(RinUserAllocatorMap* map,
+                                            RinUserFreeLinks* root,
+                                            unsigned index,
+                                            RinUserFreeLinks** result_out)
+{
+    RinUserFreeLinks* pivot;
+    RinUserFreeLinks* inner;
+    if (!result_out ||
+        !rin_user_free_tree_node_valid(map, root, index, NULL) ||
+        (pivot = root->left) == NULL ||
+        !rin_user_free_tree_node_valid(map, pivot, index, NULL) ||
+        pivot->parent != root)
+        return 0;
+    inner = pivot->right;
+    if (inner && (!rin_user_free_tree_node_valid(map, inner, index, NULL) ||
+                  inner->parent != pivot))
+        return 0;
+    if (!rin_user_free_tree_replace(map, index, root, pivot)) return 0;
+    pivot->right = root;
+    root->parent = pivot;
+    root->left = inner;
+    if (inner) inner->parent = root;
+    if (!rin_user_free_tree_update_height(map, root, index) ||
+        !rin_user_free_tree_update_height(map, pivot, index))
+        return 0;
+    *result_out = pivot;
+    return 1;
+}
+
+static int rin_user_free_tree_rebalance(RinUserAllocatorMap* map,
+                                         RinUserFreeLinks* links,
+                                         unsigned index)
+{
+    unsigned depth = 0u;
+    while (links) {
+        RinUserFreeLinks* subtree = links;
+        RinUserFreeLinks* parent;
+        uint32_t left_height;
+        uint32_t right_height;
+        if (++depth > RIN_USER_FREE_TREE_MAX_HEIGHT ||
+            !rin_user_free_tree_update_height(map, links, index) ||
+            !rin_user_free_tree_height(map, links->left, index,
+                                       &left_height) ||
+            !rin_user_free_tree_height(map, links->right, index,
+                                       &right_height))
+            return 0;
+        if (left_height > right_height + 1u) {
+            uint32_t left_left_height;
+            uint32_t left_right_height;
+            if (!links->left ||
+                !rin_user_free_tree_height(map, links->left->left, index,
+                                           &left_left_height) ||
+                !rin_user_free_tree_height(map, links->left->right, index,
+                                           &left_right_height))
+                return 0;
+            if (left_right_height > left_left_height) {
+                RinUserFreeLinks* rotated;
+                if (!rin_user_free_tree_rotate_left(
+                        map, links->left, index, &rotated))
+                    return 0;
+            }
+            if (!rin_user_free_tree_rotate_right(map, links, index,
+                                                  &subtree))
+                return 0;
+        } else if (right_height > left_height + 1u) {
+            uint32_t right_left_height;
+            uint32_t right_right_height;
+            if (!links->right ||
+                !rin_user_free_tree_height(map, links->right->left, index,
+                                           &right_left_height) ||
+                !rin_user_free_tree_height(map, links->right->right, index,
+                                           &right_right_height))
+                return 0;
+            if (right_left_height > right_right_height) {
+                RinUserFreeLinks* rotated;
+                if (!rin_user_free_tree_rotate_right(
+                        map, links->right, index, &rotated))
+                    return 0;
+            }
+            if (!rin_user_free_tree_rotate_left(map, links, index,
+                                                 &subtree))
+                return 0;
+        }
+        parent = subtree->parent;
+        links = parent;
+    }
+    return 1;
+}
+
+static int rin_user_free_tree_insert(RinUserAllocatorMap* map,
+                                      RinUserAllocationHeader* block,
+                                      unsigned index)
+{
+    RinUserFreeLinks* links;
+    RinUserFreeLinks* parent = NULL;
+    RinUserFreeLinks* cursor;
+    unsigned depth = 0u;
+    if (!map || map->kind != RIN_USER_ARENA_KIND || !block ||
+        index >= RIN_USER_ARENA_CLASS_COUNT || block->bin_index != index)
+        return 0;
+    links = (RinUserFreeLinks*)rin_user_block_payload(block);
+    cursor = map->free_tree_roots[index];
+    while (cursor) {
+        RinUserAllocationHeader* cursor_block;
+        int comparison;
+        if (++depth > RIN_USER_FREE_TREE_MAX_HEIGHT ||
+            !rin_user_free_tree_node_valid(map, cursor, index,
+                                           &cursor_block) ||
+            cursor->parent != parent)
+            return 0;
+        comparison = rin_user_free_tree_compare(block, cursor_block);
+        if (comparison == 0) return 0;
+        parent = cursor;
+        cursor = comparison < 0 ? cursor->left : cursor->right;
+    }
+    links->left = NULL;
+    links->right = NULL;
+    links->parent = parent;
+    links->height = 1u;
+    if (!parent) {
+        if (map->free_tree_roots[index] != NULL) return 0;
+        map->free_tree_roots[index] = links;
+        return 1;
+    }
+    {
+        RinUserAllocationHeader* parent_block;
+        if (!rin_user_free_tree_node_valid(map, parent, index,
+                                           &parent_block))
+            return 0;
+        if (rin_user_free_tree_compare(block, parent_block) < 0) {
+            if (parent->left != NULL) return 0;
+            parent->left = links;
+        } else {
+            if (parent->right != NULL) return 0;
+            parent->right = links;
+        }
+    }
+    return rin_user_free_tree_rebalance(map, parent, index);
+}
+
+static int rin_user_free_tree_remove(RinUserAllocatorMap* map,
+                                      RinUserAllocationHeader* block,
+                                      unsigned index)
+{
+    RinUserFreeLinks* links;
+    RinUserFreeLinks* left;
+    RinUserFreeLinks* right;
+    RinUserFreeLinks* parent;
+    RinUserFreeLinks* rebalance_from;
+    if (!map || map->kind != RIN_USER_ARENA_KIND || !block ||
+        index >= RIN_USER_ARENA_CLASS_COUNT || block->bin_index != index)
+        return 0;
+    links = (RinUserFreeLinks*)rin_user_block_payload(block);
+    if (!rin_user_free_tree_node_valid(map, links, index, NULL)) return 0;
+    left = links->left;
+    right = links->right;
+    parent = links->parent;
+    if (left && (!rin_user_free_tree_node_valid(map, left, index, NULL) ||
+                 left->parent != links))
+        return 0;
+    if (right && (!rin_user_free_tree_node_valid(map, right, index, NULL) ||
+                  right->parent != links))
+        return 0;
+    if (parent &&
+        (!rin_user_free_tree_node_valid(map, parent, index, NULL) ||
+         (parent->left != links && parent->right != links)))
+        return 0;
+    if (!parent && map->free_tree_roots[index] != links) return 0;
+
+    if (!left || !right) {
+        RinUserFreeLinks* child = left ? left : right;
+        if (!rin_user_free_tree_replace(map, index, links, child)) return 0;
+        rebalance_from = parent ? parent : child;
+    } else {
+        RinUserFreeLinks* successor = right;
+        RinUserFreeLinks* successor_parent;
+        unsigned successor_depth = 0u;
+        while (successor->left) {
+            if (++successor_depth > RIN_USER_FREE_TREE_MAX_HEIGHT ||
+                !rin_user_free_tree_node_valid(map, successor, index, NULL) ||
+                !rin_user_free_tree_node_valid(map, successor->left, index,
+                                               NULL) ||
+                successor->left->parent != successor)
+                return 0;
+            successor = successor->left;
+        }
+        if (!rin_user_free_tree_node_valid(map, successor, index, NULL))
+            return 0;
+        successor_parent = successor->parent;
+        if (successor_parent != links) {
+            RinUserFreeLinks* successor_right = successor->right;
+            if (!successor_parent ||
+                !rin_user_free_tree_node_valid(map, successor_parent, index,
+                                               NULL) ||
+                successor_parent->left != successor ||
+                !rin_user_free_tree_replace(map, index, successor,
+                                            successor_right))
+                return 0;
+            successor->right = right;
+            right->parent = successor;
+            rebalance_from = successor_parent;
+        } else {
+            rebalance_from = successor;
+        }
+        if (!rin_user_free_tree_replace(map, index, links, successor)) return 0;
+        successor->left = left;
+        left->parent = successor;
+        if (!rin_user_free_tree_update_height(map, successor, index)) return 0;
+    }
+    links->left = NULL;
+    links->right = NULL;
+    links->parent = NULL;
+    links->height = 0u;
+    return rebalance_from
+        ? rin_user_free_tree_rebalance(map, rebalance_from, index)
+        : 1;
+}
+
+#if RIN_USER_ALLOCATOR_DEBUG_GRAPH_CHECK
+static int rin_user_free_tree_validate_node(
+    RinUserAllocatorMap* map, RinUserFreeLinks* links,
+    RinUserFreeLinks* expected_parent, unsigned index,
+    RinUserAllocationHeader* lower_bound,
+    RinUserAllocationHeader* upper_bound, unsigned depth,
+    size_t* count_out, uint32_t* height_out)
+{
+    RinUserAllocationHeader* block;
+    uint32_t left_height;
+    uint32_t right_height;
+    uint32_t expected_height;
+    size_t count = 0u;
+    if (!links) {
+        *count_out = 0u;
+        *height_out = 0u;
+        return 1;
+    }
+    if (depth > RIN_USER_FREE_TREE_MAX_HEIGHT ||
+        !rin_user_free_tree_node_valid(map, links, index, &block) ||
+        links->parent != expected_parent ||
+        (lower_bound && rin_user_free_tree_compare(lower_bound, block) >= 0) ||
+        (upper_bound && rin_user_free_tree_compare(block, upper_bound) >= 0) ||
+        !rin_user_free_tree_validate_node(
+            map, links->left, links, index, lower_bound, block, depth + 1u,
+            &count, &left_height))
+        return 0;
+    *count_out = count;
+    if (!rin_user_free_tree_validate_node(
+            map, links->right, links, index, block, upper_bound, depth + 1u,
+            &count, &right_height))
+        return 0;
+    if (count == SIZE_MAX) return 0;
+    *count_out += count + 1u;
+    expected_height = left_height > right_height ? left_height : right_height;
+    if (expected_height >= RIN_USER_FREE_TREE_MAX_HEIGHT ||
+        (left_height > right_height + 1u) ||
+        (right_height > left_height + 1u) ||
+        links->height != expected_height + 1u)
+        return 0;
+    *height_out = expected_height + 1u;
+    return 1;
+}
+#endif
+
 static int rin_user_map_free_lists_valid(RinUserAllocatorMap* map)
 {
     if (!rin_user_map_shape_valid(map) ||
@@ -791,39 +1193,29 @@ static int rin_user_map_free_lists_valid(RinUserAllocatorMap* map)
         return 0;
 #if RIN_USER_ALLOCATOR_DEBUG_GRAPH_CHECK
     unsigned index;
-    size_t maximum_entries;
+    size_t free_counts[RIN_USER_ARENA_CLASS_COUNT];
     int graph_valid;
     rin_user_allocator_lock((volatile unsigned*)&map->remote_free_lock);
     graph_valid =
         __atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) == 0u &&
-        rin_user_map_block_graph_valid(map) &&
+        rin_user_map_block_graph_valid(map, free_counts) &&
         rin_user_map_remote_queue_valid_locked(map);
     rin_user_allocator_unlock((volatile unsigned*)&map->remote_free_lock);
     if (!graph_valid) {
         rin_user_map_mark_corrupt(map);
         return 0;
     }
-    maximum_entries = (map->data_end - map->data_offset) /
-                      rin_user_min_block_size() + 1u;
     for (index = 0u; index < RIN_USER_ARENA_CLASS_COUNT; ++index) {
-        RinUserFreeLinks* previous = (RinUserFreeLinks*)0;
-        RinUserFreeLinks* link = map->free_lists[index];
-        size_t entries = 0u;
-        while (link) {
-            RinUserAllocationHeader* block;
-            if (++entries > maximum_entries ||
-                !rin_user_map_range_valid(map, (uintptr_t)link,
-                                           sizeof(*link)) ||
-                (block = rin_user_block_from_free_link(map, link)) == NULL ||
-                block->magic != RIN_USER_ARENA_MAGIC_FREE ||
-                block->bin_index != index ||
-                link->previous != previous) {
-                rin_user_map_mark_corrupt(map);
-                return 0;
-            }
-            previous = link;
-            link = link->next;
+        RinUserFreeLinks* root = map->free_tree_roots[index];
+        size_t tree_count = 0u;
+        uint32_t tree_height = 0u;
+        if (!rin_user_free_tree_validate_node(
+                map, root, NULL, index, NULL, NULL, 1u, &tree_count,
+                &tree_height) || tree_count != free_counts[index]) {
+            rin_user_map_mark_corrupt(map);
+            return 0;
         }
+        (void)tree_height;
     }
     return 1;
 #else
@@ -870,9 +1262,6 @@ static RinUserAllocationHeader* rin_user_find_block_locked(
 static int rin_user_remove_free_block(RinUserAllocatorMap* map,
                                       RinUserAllocationHeader* block)
 {
-    RinUserFreeLinks* links;
-    RinUserFreeLinks* previous;
-    RinUserFreeLinks* next;
     if (!map || !block || block->magic != RIN_USER_ARENA_MAGIC_FREE ||
         block->bin_index >= RIN_USER_ARENA_CLASS_COUNT ||
         !rin_user_header_is_exact(map, block) ||
@@ -883,40 +1272,8 @@ static int rin_user_remove_free_block(RinUserAllocatorMap* map,
                 RIN_USER_ARENA_TAIL_GUARD_SIZE) ||
         !rin_user_block_tail_valid(block))
         goto corrupt;
-    links = (RinUserFreeLinks*)rin_user_block_payload(block);
-    previous = links->previous;
-    next = links->next;
-    if (previous) {
-        RinUserAllocationHeader* previous_block =
-            rin_user_block_from_free_link(map, previous);
-        if (previous_block == NULL ||
-            previous_block->magic != RIN_USER_ARENA_MAGIC_FREE ||
-            previous_block->flags != RIN_USER_BLOCK_FLAG_FREE ||
-            previous_block->requested_size != 0u ||
-            previous_block->bin_index != block->bin_index ||
-            !rin_user_block_tail_valid(previous_block) ||
-            previous->next != links)
-            goto corrupt;
-    } else if (map->free_lists[block->bin_index] != links) {
+    if (!rin_user_free_tree_remove(map, block, block->bin_index))
         goto corrupt;
-    }
-    if (next) {
-        RinUserAllocationHeader* next_block =
-            rin_user_block_from_free_link(map, next);
-        if (next_block == NULL ||
-            next_block->magic != RIN_USER_ARENA_MAGIC_FREE ||
-            next_block->flags != RIN_USER_BLOCK_FLAG_FREE ||
-            next_block->requested_size != 0u ||
-            next_block->bin_index != block->bin_index ||
-            !rin_user_block_tail_valid(next_block) ||
-            next->previous != links)
-            goto corrupt;
-    }
-    if (previous) previous->next = next;
-    else map->free_lists[block->bin_index] = next;
-    if (next) next->previous = previous;
-    links->previous = NULL;
-    links->next = NULL;
     return 1;
 corrupt:
     rin_user_map_mark_corrupt(map);
@@ -927,8 +1284,6 @@ static int rin_user_insert_free_block(RinUserAllocatorMap* map,
                                       RinUserAllocationHeader* block)
 {
     size_t payload_size;
-    RinUserAllocationHeader* first_block = NULL;
-    RinUserFreeLinks* first;
     unsigned index;
     unsigned trace_index;
     RinUserFreeLinks* links;
@@ -940,30 +1295,6 @@ static int rin_user_insert_free_block(RinUserAllocatorMap* map,
     payload_size = block->total_size - sizeof(*block) -
                           RIN_USER_ARENA_TAIL_GUARD_SIZE;
     index = rin_user_bin_for_size(payload_size);
-    first = map->free_lists[index];
-    if (first) {
-        first_block = rin_user_block_from_free_link(map, first);
-        if (!first_block || first_block == block ||
-            first_block->magic != RIN_USER_ARENA_MAGIC_FREE ||
-            first_block->flags != RIN_USER_BLOCK_FLAG_FREE ||
-            first_block->requested_size != 0u ||
-            first_block->bin_index != index ||
-            !rin_user_block_tail_valid(first_block) ||
-            first->previous != NULL)
-            goto corrupt;
-        if (first->next) {
-            RinUserAllocationHeader* second_block =
-                rin_user_block_from_free_link(map, first->next);
-            if (!second_block || second_block == block ||
-                second_block->magic != RIN_USER_ARENA_MAGIC_FREE ||
-                second_block->flags != RIN_USER_BLOCK_FLAG_FREE ||
-                second_block->requested_size != 0u ||
-                second_block->bin_index != index ||
-                !rin_user_block_tail_valid(second_block) ||
-                first->next->previous != first)
-                goto corrupt;
-        }
-    }
     /* A block may have been poisoned while it was allocated, and the poison
      * helper below writes the whole payload before the links are restored. */
     if (payload_size < sizeof(RinUserFreeLinks)) goto corrupt;
@@ -988,15 +1319,16 @@ static int rin_user_insert_free_block(RinUserAllocatorMap* map,
              trace_index < RIN_USER_ALLOCATOR_BACKTRACE_DEPTH; ++trace_index)
             block->backtrace[trace_index] = 0u;
         links = (RinUserFreeLinks*)payload;
-        links->previous = NULL;
-        links->next = first;
-        if (first) first->previous = links;
-        map->free_lists[index] = links;
+        links->left = NULL;
+        links->right = NULL;
+        links->parent = NULL;
+        links->height = 1u;
         rin_user_block_store_tail(block);
         if (payload_size > sizeof(RinUserFreeLinks))
             rin_user_asan_poison(payload + sizeof(RinUserFreeLinks),
                                  payload_size - sizeof(RinUserFreeLinks));
     }
+    if (!rin_user_free_tree_insert(map, block, index)) goto corrupt;
     return 1;
 corrupt:
     rin_user_map_mark_corrupt(map);
@@ -1174,42 +1506,45 @@ static RinUserAllocationHeader* rin_user_find_free_block(
 {
     size_t requested_total =
         rin_user_block_total_for_request(requested_size);
-    size_t maximum_nodes;
     unsigned index = rin_user_bin_for_size(requested_size);
     if (!map || requested_total == 0u) return NULL;
-    maximum_nodes = (map->data_end - map->data_offset) /
-                    rin_user_min_block_size() + 1u;
     for (; index < RIN_USER_ARENA_CLASS_COUNT; ++index) {
-        RinUserFreeLinks* link = map->free_lists[index];
-        RinUserFreeLinks* previous = NULL;
-        size_t visited = 0u;
-        while (link) {
+        RinUserFreeLinks* links = map->free_tree_roots[index];
+        RinUserFreeLinks* parent = NULL;
+        RinUserAllocationHeader* best_fit = NULL;
+        unsigned depth = 0u;
+        while (links) {
             RinUserAllocationHeader* block;
-            if (++visited > maximum_nodes)
+            uint32_t left_height;
+            uint32_t right_height;
+            uint32_t expected_height;
+            if (++depth > RIN_USER_FREE_TREE_MAX_HEIGHT ||
+                !rin_user_free_tree_node_valid(map, links, index, &block) ||
+                links->parent != parent ||
+                !rin_user_free_tree_height(map, links->left, index,
+                                           &left_height) ||
+                !rin_user_free_tree_height(map, links->right, index,
+                                           &right_height) ||
+                (links->left && links->left->parent != links) ||
+                (links->right && links->right->parent != links))
                 goto corrupt;
-            block = rin_user_block_from_free_link(map, link);
-            if (!block || block->magic != RIN_USER_ARENA_MAGIC_FREE ||
-                block->flags != RIN_USER_BLOCK_FLAG_FREE ||
-                block->requested_size != 0u || block->bin_index != index ||
-                link->previous != previous ||
-                !rin_user_block_tail_valid(block))
+            expected_height = left_height > right_height
+                ? left_height : right_height;
+            if (expected_height >= RIN_USER_FREE_TREE_MAX_HEIGHT ||
+                (left_height > right_height + 1u) ||
+                (right_height > left_height + 1u) ||
+                links->height != expected_height + 1u)
                 goto corrupt;
-            if (link->next) {
-                RinUserAllocationHeader* next_block =
-                    rin_user_block_from_free_link(map, link->next);
-                if (!next_block ||
-                    next_block->magic != RIN_USER_ARENA_MAGIC_FREE ||
-                    next_block->flags != RIN_USER_BLOCK_FLAG_FREE ||
-                    next_block->requested_size != 0u ||
-                    next_block->bin_index != index ||
-                    !rin_user_block_tail_valid(next_block) ||
-                    link->next->previous != link)
-                    goto corrupt;
+            if (block->total_size >= requested_total) {
+                best_fit = block;
+                parent = links;
+                links = links->left;
+            } else {
+                parent = links;
+                links = links->right;
             }
-            if (block->total_size >= requested_total) return block;
-            previous = link;
-            link = link->next;
         }
+        if (best_fit) return best_fit;
     }
     return NULL;
 corrupt:
@@ -1236,7 +1571,7 @@ static void rin_user_map_metadata_clear(RinUserAllocatorMap* map,
     for (index = 0u; index < RIN_USER_ARENA_BOUNDARY_WORDS; ++index)
         map->block_boundary_index[index] = 0u;
     for (index = 0u; index < RIN_USER_ARENA_CLASS_COUNT; ++index)
-        map->free_lists[index] = NULL;
+        map->free_tree_roots[index] = NULL;
     map->remote_free_head = NULL;
     map->remote_free_lock = 0u;
     map->remote_free_depth = 0u;
