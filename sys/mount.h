@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <rin/contract_abi.h>
 #include <rin/fs/fd_mount_abi.h>
+#include <rin/linux_syscall_abi.h>
 #include <linux/mount.h>
 #include <sys/syscall.h>
 
@@ -131,6 +132,20 @@ static inline int fspick(int dirfd, const char* path, unsigned int flags) {
     request.args[0] = (uint64_t)(uintptr_t)path;
     request.args[1] = flags;
     return (int)__rin_filesystem_fd_mount_call(&request);
+}
+
+static inline int statmount(const struct mnt_id_req* request,
+                            struct statmount* buffer, size_t buffer_size,
+                            unsigned int flags) {
+    return (int)syscall(RIN_LINUX_NR_STATMOUNT, request, buffer,
+                        buffer_size, flags);
+}
+
+static inline int listmount(const struct mnt_id_req* request,
+                            uint64_t* mount_ids, size_t mount_id_count,
+                            unsigned int flags) {
+    return (int)syscall(RIN_LINUX_NR_LISTMOUNT, request, mount_ids,
+                        mount_id_count, flags);
 }
 
 static inline int rin_mount(const char* device, const char* mount_point,

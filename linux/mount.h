@@ -3,6 +3,7 @@
 #define _LINUX_MOUNT_H
 
 #include <stdint.h>
+#include <rin/linux_mount_abi.h>
 
 #define OPEN_TREE_CLONE        UINT32_C(0x00000001)
 #define OPEN_TREE_CLOEXEC      UINT32_C(0x00080000)
@@ -44,6 +45,10 @@
 #define MS_NOSUID              UINT32_C(0x00000002)
 #define MS_NODEV               UINT32_C(0x00000004)
 #define MS_NOEXEC              UINT32_C(0x00000008)
+#define MS_UNBINDABLE          UINT32_C(0x00020000)
+#define MS_PRIVATE             UINT32_C(0x00040000)
+#define MS_SLAVE               UINT32_C(0x00080000)
+#define MS_SHARED              UINT32_C(0x00100000)
 #define FSPICK_CLOEXEC             UINT32_C(0x00000001)
 #define FSPICK_SYMLINK_NOFOLLOW    UINT32_C(0x00000002)
 #define FSPICK_NO_AUTOMOUNT        UINT32_C(0x00000004)
