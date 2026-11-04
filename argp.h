@@ -69,6 +69,13 @@ typedef error_t (*argp_parser_t)(int key, char *arg,
 #define ARGP_KEY_HELP_DUP_ARGS_NOTE 0x2000005
 #define ARGP_KEY_HELP_ARGS_DOC      0x2000006
 
+struct argp_child {
+    const struct argp *argp;
+    int flags;
+    const char *header;
+    int group;
+};
+
 struct argp {
     const struct argp_option *options;
     argp_parser_t parser;
@@ -77,13 +84,6 @@ struct argp {
     const struct argp_child *children;
     char *(*help_filter)(int key, const char *text, void *input);
     const char *argp_domain;
-};
-
-struct argp_child {
-    const struct argp *argp;
-    int flags;
-    const char *header;
-    int group;
 };
 
 struct argp_state {
