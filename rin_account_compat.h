@@ -30,8 +30,11 @@
 #define __RIN_CREDENTIAL_SET_UID 1u
 #define __RIN_CREDENTIAL_SET_GID 2u
 #define __RIN_CREDENTIAL_SET_EUID 3u
+#define __RIN_CREDENTIAL_SET_EGID 4u
 #define __RIN_SUPPLEMENTARY_GROUPS_VERSION 1u
 #define __RIN_SUPPLEMENTARY_GROUPS_OPERATION_SET 1u
+#define __RIN_SUPPLEMENTARY_GROUPS_USER_VERSION 2u
+#define __RIN_SUPPLEMENTARY_GROUPS_OPERATION_GET 2u
 #define __RIN_ACCOUNT_QUERY_VERSION 1u
 #define __RIN_ACCOUNT_INFO_VERSION 1u
 #define __RIN_ACCOUNT_QUERY_BY_UID 1u
@@ -160,6 +163,19 @@ static inline int __rin_account_errno(intptr_t result)
     if (result > 0) return EIO;
     error = (uintptr_t)0 - (uintptr_t)result;
     return error > 4095u ? EIO : (int)error;
+}
+
+static inline int __rin_group_count_result(intptr_t result)
+{
+    if (result < 0) {
+        errno = __rin_account_errno(result);
+        return -1;
+    }
+    if ((uint64_t)result > INT32_MAX) {
+        errno = EIO;
+        return -1;
+    }
+    return (int)result;
 }
 
 static inline void __rin_account_zero(void* value, size_t size)
