@@ -2443,6 +2443,12 @@ static inline long _rin_pathconf_fd_capability(
         filesystem.f_flag, name, saved_errno);
 }
 
+static inline long _rin_pathconf_result_preserving_errno(
+    long result, int saved_errno) {
+    errno = saved_errno;
+    return result;
+}
+
 static inline long pathconf(const char* path, int name) {
     struct stat status;
     int saved_errno = errno;
@@ -2458,23 +2464,25 @@ static inline long pathconf(const char* path, int name) {
     if (name == _PC_NAME_MAX) {
         struct statvfs filesystem;
         if (statvfs(path, &filesystem) < 0) return -1;
-        return (long)filesystem.f_namemax;
+        return _rin_pathconf_result_preserving_errno(
+            (long)filesystem.f_namemax, saved_errno);
     }
     if (stat(path, &status) < 0) return -1;
     switch (name) {
         case _PC_PATH_MAX:
-            return PATH_MAX;
+            return _rin_pathconf_result_preserving_errno(
+                PATH_MAX, saved_errno);
         case _PC_PIPE_BUF:
             if (S_ISFIFO(status.st_mode) || S_ISDIR(status.st_mode)) {
-                errno = saved_errno;
-                return PIPE_BUF;
+                return _rin_pathconf_result_preserving_errno(
+                    PIPE_BUF, saved_errno);
             }
             errno = EINVAL;
             return -1;
         case _PC_CHOWN_RESTRICTED:
-            return 1;
+            return _rin_pathconf_result_preserving_errno(1, saved_errno);
         case _PC_NO_TRUNC:
-            return 1;
+            return _rin_pathconf_result_preserving_errno(1, saved_errno);
         case _PC_MAX_CANON:
         case _PC_MAX_INPUT:
         case _PC_VDISABLE:
@@ -2482,29 +2490,29 @@ static inline long pathconf(const char* path, int name) {
                 errno = EINVAL;
                 return -1;
             }
-            saved_errno = errno;
             terminal = _rin_pathconf_path_is_terminal(path);
             if (terminal < 0) return -1;
-            errno = saved_errno;
             if (!terminal) {
                 errno = EINVAL;
                 return -1;
             }
-            if (name == _PC_VDISABLE) return _POSIX_VDISABLE;
+            if (name == _PC_VDISABLE) {
+                return _rin_pathconf_result_preserving_errno(
+                    _POSIX_VDISABLE, saved_errno);
+            }
             /* The terminal ioctl ABI does not publish canonical/input queue
              * limits.  Report an indeterminate limit instead of guessing. */
-            return -1;
+            return _rin_pathconf_result_preserving_errno(-1, saved_errno);
         case _PC_LINK_MAX:
             /* VFS stat does not expose the backing filesystem's link limit;
              * report it as indeterminate instead of assuming every mount is
              * a writable RinFS volume. */
-            return -1;
+            return _rin_pathconf_result_preserving_errno(-1, saved_errno);
         case _PC_2_SYMLINKS:
             return _rin_pathconf_path_capability(path, name, saved_errno);
         case _PC_SYNC_IO:
             if (S_ISFIFO(status.st_mode) || S_ISCHR(status.st_mode)) {
-                errno = saved_errno;
-                return 0;
+                return _rin_pathconf_result_preserving_errno(0, saved_errno);
             }
             return _rin_pathconf_path_capability(path, name, saved_errno);
         case _PC_ASYNC_IO:
@@ -2517,7 +2525,7 @@ static inline long pathconf(const char* path, int name) {
         case _PC_ALLOC_SIZE_MIN:
         case _PC_SYMLINK_MAX:
         case _PC_TIMESTAMP_RESOLUTION:
-            return -1;
+            return _rin_pathconf_result_preserving_errno(-1, saved_errno);
         default:
             errno = EINVAL;
             return -1;
@@ -2535,22 +2543,25 @@ static inline long fpathconf(int fd, int name) {
     if (name == _PC_NAME_MAX) {
         intptr_t maximum = __rin_syscall_posixize(_syscall1(
             (uintptr_t)RIN_SYS_FILESYSTEM_NAME_MAX_GET_FD, (uintptr_t)fd));
-        return maximum < 0 ? -1 : (long)maximum;
+        if (maximum < 0) return -1;
+        return _rin_pathconf_result_preserving_errno(
+            (long)maximum, saved_errno);
     }
     if (fstat(fd, &status) < 0) return -1;
     switch (name) {
         case _PC_PATH_MAX:
-            return PATH_MAX;
+            return _rin_pathconf_result_preserving_errno(
+                PATH_MAX, saved_errno);
         case _PC_PIPE_BUF:
             if (S_ISFIFO(status.st_mode)) {
-                errno = saved_errno;
-                return PIPE_BUF;
+                return _rin_pathconf_result_preserving_errno(
+                    PIPE_BUF, saved_errno);
             }
             errno = EINVAL;
             return -1;
         case _PC_CHOWN_RESTRICTED:
         case _PC_NO_TRUNC:
-            return 1;
+            return _rin_pathconf_result_preserving_errno(1, saved_errno);
         case _PC_MAX_CANON:
         case _PC_MAX_INPUT:
         case _PC_VDISABLE:
@@ -2558,17 +2569,18 @@ static inline long fpathconf(int fd, int name) {
                 errno = EINVAL;
                 return -1;
             }
-            saved_errno = errno;
             terminal = _rin_pathconf_fd_is_terminal(fd);
-            errno = saved_errno;
             if (!terminal) {
                 errno = EINVAL;
                 return -1;
             }
-            if (name == _PC_VDISABLE) return _POSIX_VDISABLE;
-            return -1;
+            if (name == _PC_VDISABLE) {
+                return _rin_pathconf_result_preserving_errno(
+                    _POSIX_VDISABLE, saved_errno);
+            }
+            return _rin_pathconf_result_preserving_errno(-1, saved_errno);
         case _PC_LINK_MAX:
-            return -1;
+            return _rin_pathconf_result_preserving_errno(-1, saved_errno);
         case _PC_2_SYMLINKS:
             return _rin_pathconf_fd_capability(fd, name, saved_errno);
         case _PC_SYNC_IO:
@@ -2587,7 +2599,7 @@ static inline long fpathconf(int fd, int name) {
         case _PC_ALLOC_SIZE_MIN:
         case _PC_SYMLINK_MAX:
         case _PC_TIMESTAMP_RESOLUTION:
-            return -1;
+            return _rin_pathconf_result_preserving_errno(-1, saved_errno);
         default:
             errno = EINVAL;
             return -1;
