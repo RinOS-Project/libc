@@ -185,6 +185,12 @@
 #define scalbn(x, n)     __RIN_TGMATH_UNARY_REAL_WITH_ARG(scalbn, (x), (n))
 #define scalbln(x, n)    __RIN_TGMATH_UNARY_REAL_WITH_ARG(scalbln, (x), (n))
 
+/* GNU sincos extension: the input selects matching output precision, while
+ * the unevaluated generic control expression keeps x single-evaluation. */
+#define sincos(x, sinp, cosp) \
+    _Generic((x), float: sincosf, long double: sincosl, default: sincos)( \
+        (x), (sinp), (cosp))
+
 /* C23 extrema (B44): usual-arithmetic-conversion dispatch. */
 #define fmaximum(x, y)     __RIN_TGMATH_BINARY_REAL(fmaximum, (x), (y))
 #define fminimum(x, y)     __RIN_TGMATH_BINARY_REAL(fminimum, (x), (y))
