@@ -67,7 +67,7 @@ int epoll_pwait2(int epoll_fd, struct epoll_event* events,
                  int max_events, const struct timespec* timeout,
                  const sigset_t* signal_mask)
 {
-    intptr_t result = __rin_syscall6(
+    intptr_t result = _syscall6(
         SYS_EPOLL_PWAIT2, (uintptr_t)(unsigned int)epoll_fd,
         (uintptr_t)events, (uintptr_t)(unsigned int)max_events,
         (uintptr_t)timeout, (uintptr_t)signal_mask,
