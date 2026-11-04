@@ -154,6 +154,7 @@ struct in_pktinfo {
  * IPv6オプション
  * ═══════════════════════════════════════════════════════════════*/
 
+#define IPV6_CHECKSUM        7
 #define IPV6_UNICAST_HOPS   16
 #define IPV6_MULTICAST_IF   17
 #define IPV6_MULTICAST_HOPS 18
