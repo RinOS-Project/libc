@@ -20,8 +20,8 @@ extern "C" {
 #endif
 
 /* Linux-compatible public layout. RinOS supplies uptime, RAM, process count,
- * and scheduler load averages; unsupported swap, buffer and high-memory
- * values remain zero. */
+ * scheduler load averages, and swap capacity/availability. Shared/buffer RAM
+ * and high-memory values remain zero because those metrics are not exposed. */
 struct sysinfo {
     long uptime;
     unsigned long loads[3];
@@ -73,9 +73,9 @@ long get_avphys_pages(void);
 
 /* Return validity bits for the RinSystemInfoSnapshotV1 fields. This query
  * does not describe every field of Linux struct sysinfo: Linux sysinfo loads
- * are populated from the scheduler, while LOADS_VALID is clear because the
- * Rin V1 snapshot has no load fields. Unavailable fields in Linux sysinfo
- * (shared/buffer RAM, swap, and high memory) are zero-filled. */
+ * and swap are populated separately, while LOADS_VALID and SWAP_VALID remain
+ * clear because the Rin V1 snapshot has no load or swap fields. Unavailable
+ * fields (shared/buffer RAM and high memory) are zero-filled. */
 static inline int rin_sysinfo_valid_metrics(uint32_t* valid_metrics_out) {
     RinSystemInfoSnapshotV1 snapshot = {0};
     if (valid_metrics_out == 0) {
