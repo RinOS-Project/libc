@@ -184,7 +184,7 @@ int memfd_create(const char* name, unsigned int flags) {
                   sizeof(debug_label_prefix) - 1u + name_length + 1u,
                   XATTR_CREATE) != 0) {
         int saved_errno = errno;
-        (void)close(fd);
+        (void)_rin_unistd_close_status_internal(fd);
         errno = saved_errno;
         return -1;
     }
