@@ -317,8 +317,9 @@ static inline int initgroups(const char* user, gid_t group) {
     __rin_supplementary_groups_v1 request;
 #else
     RinSupplementaryGroupsUserV2 request;
-    uint32_t group_id;
 #endif
+    uint32_t group_ids[2];
+    uint32_t group_count;
     int error;
     if (!user || user[0] == '\0') {
         errno = EINVAL;
@@ -336,9 +337,11 @@ static inline int initgroups(const char* user, gid_t group) {
         errno = error;
         return -1;
     }
+    group_ids[0] = info.gid;
+    group_count = 1u;
     if (info.gid != (uint32_t)group) {
-        errno = EINVAL;
-        return -1;
+        group_ids[1] = (uint32_t)group;
+        group_count = 2u;
     }
 #if defined(__RIN_SYS_TYPES_HOST_OWNER)
     __rin_account_zero(&request, sizeof(request));
@@ -346,17 +349,17 @@ static inline int initgroups(const char* user, gid_t group) {
     request.version = __RIN_SUPPLEMENTARY_GROUPS_VERSION;
     request.operation = __RIN_SUPPLEMENTARY_GROUPS_OPERATION_SET;
     request.target_uid = info.uid;
-    request.group_count = 1u;
-    request.groups[0] = (uint32_t)group;
+    request.group_count = group_count;
+    request.groups[0] = group_ids[0];
+    if (group_count > 1u) request.groups[1] = group_ids[1];
 #else
-    group_id = (uint32_t)group;
     __rin_account_zero(&request, sizeof(request));
     request.struct_size = sizeof(request);
     request.version = __RIN_SUPPLEMENTARY_GROUPS_USER_VERSION;
     request.operation = __RIN_SUPPLEMENTARY_GROUPS_OPERATION_SET;
     request.target_uid = info.uid;
-    request.group_count = 1u;
-    request.groups_address = (uint64_t)(uintptr_t)&group_id;
+    request.group_count = group_count;
+    request.groups_address = (uint64_t)(uintptr_t)group_ids;
 #endif
     error = __rin_account_errno(_RIN_CREDENTIAL_SYSCALL1(
         RIN_SYS_CREDENTIAL_GROUPS_SET, &request));
