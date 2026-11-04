@@ -11,6 +11,7 @@
     (defined(_RIN_UNISTD_SYSCALL0) || defined(_RIN_UNISTD_SYSCALL1) || \
      defined(_RIN_UNISTD_SYSCALL2) || defined(_RIN_UNISTD_SYSCALL3) || \
      defined(_RIN_UNISTD_SYSCALL5) || \
+    defined(_RIN_RANDOM_SYSCALL3) || \
      defined(RIN_ACCOUNT_CUSTOM_SYSCALL_HOOK) || \
      (defined(_RIN_CREDENTIAL_SYSCALL1) && \
       !defined(RIN_LIBC_DEFAULT_CREDENTIAL_SYSCALL1)) || \
