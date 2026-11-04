@@ -102,7 +102,7 @@ static inline int thrd_sleep(const struct timespec* duration,
                              struct timespec* remaining)
 {
     if (nanosleep(duration, remaining) == 0) return 0;
-    return -1;
+    return errno == EINTR ? -1 : -2;
 }
 
 static inline void thrd_yield(void)
