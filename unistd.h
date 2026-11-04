@@ -3425,9 +3425,68 @@ __attribute__((unused, noinline)) static void* sbrk(long increment) {
 #endif
 
 #include "sys/splice.h"
-/* POSIX.1-2024 places getentropy() in <unistd.h>. Keep its implementation in
- * the shared sys/random.h header so both public include paths have one owner. */
-#include "sys/random.h"
+
+/* Share the low-level random syscall with <sys/random.h> without importing
+ * that header's GNU/Linux getrandom() API into <unistd.h>. */
+#ifndef _RIN_RANDOM_SYSCALL3
+#define _RIN_RANDOM_SYSCALL3(number, buffer, length, flags) \
+    _syscall3((uintptr_t)(number), (uintptr_t)(buffer), \
+              (uintptr_t)(length), (uintptr_t)(flags))
+#endif
+
+static inline ssize_t __rin_getrandom_raw(
+    void* buf, size_t buflen, unsigned int flags)
+{
+    intptr_t ret = _RIN_RANDOM_SYSCALL3(
+        SYS_GETRANDOM, buf, buflen, flags);
+    if (ret < 0) {
+        errno = ret >= -(intptr_t)4095 ? (int)-ret : EIO;
+        return -1;
+    }
+    if ((uintptr_t)ret > (uintptr_t)buflen) {
+        errno = EIO;
+        return -1;
+    }
+    if (ret > (intptr_t)SSIZE_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return (ssize_t)ret;
+}
+
+#if defined(_RIN_UNISTD_POSIX_2024_VISIBLE) || \
+    defined(_RIN_USE_BSD_GETENTROPY) || \
+    defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT) || \
+    defined(_DEFAULT_SOURCE) || defined(_BSD_SOURCE) || \
+    defined(__USE_MISC) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 202405L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 800) || \
+    defined(__USE_XOPEN2K24) || defined(__USE_XOPEN2K24XSI)
+static inline int getentropy(void* buffer, size_t length)
+{
+    unsigned char* bytes = (unsigned char*)buffer;
+    size_t offset = 0u;
+    if (length > 256u) {
+        errno = EIO;
+        return -1;
+    }
+    if (!buffer && length != 0u) {
+        errno = EFAULT;
+        return -1;
+    }
+    while (offset < length) {
+        ssize_t received = __rin_getrandom_raw(
+            bytes + offset, length - offset, 0u);
+        if (received <= 0) {
+            if (received < 0 && errno == EINTR) continue;
+            if (received == 0) errno = EIO;
+            return -1;
+        }
+        offset += (size_t)received;
+    }
+    return 0;
+}
+#endif
 
 #ifdef __cplusplus
 }
