@@ -94,6 +94,74 @@ typedef struct {
  * アトミック操作 (GCC built-in使用)
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(__clang__)
+#define atomic_init(obj, value) \
+    __c11_atomic_init((obj), (value))
+
+#define atomic_store(obj, value) \
+    __c11_atomic_store((obj), (value), memory_order_seq_cst)
+
+#define atomic_store_explicit(obj, value, order) \
+    __c11_atomic_store((obj), (value), (order))
+
+#define atomic_load(obj) \
+    __c11_atomic_load((obj), memory_order_seq_cst)
+
+#define atomic_load_explicit(obj, order) \
+    __c11_atomic_load((obj), (order))
+
+#define atomic_exchange(obj, desired) \
+    __c11_atomic_exchange((obj), (desired), memory_order_seq_cst)
+
+#define atomic_exchange_explicit(obj, desired, order) \
+    __c11_atomic_exchange((obj), (desired), (order))
+
+#define atomic_compare_exchange_strong(obj, expected, desired) \
+    __c11_atomic_compare_exchange_strong( \
+        (obj), (expected), (desired), memory_order_seq_cst, memory_order_seq_cst)
+
+#define atomic_compare_exchange_strong_explicit(obj, expected, desired, succ, fail) \
+    __c11_atomic_compare_exchange_strong( \
+        (obj), (expected), (desired), (succ), (fail))
+
+#define atomic_compare_exchange_weak(obj, expected, desired) \
+    __c11_atomic_compare_exchange_weak( \
+        (obj), (expected), (desired), memory_order_seq_cst, memory_order_seq_cst)
+
+#define atomic_compare_exchange_weak_explicit(obj, expected, desired, succ, fail) \
+    __c11_atomic_compare_exchange_weak( \
+        (obj), (expected), (desired), (succ), (fail))
+
+#define atomic_fetch_add(obj, arg) \
+    __c11_atomic_fetch_add((obj), (arg), memory_order_seq_cst)
+
+#define atomic_fetch_add_explicit(obj, arg, order) \
+    __c11_atomic_fetch_add((obj), (arg), (order))
+
+#define atomic_fetch_sub(obj, arg) \
+    __c11_atomic_fetch_sub((obj), (arg), memory_order_seq_cst)
+
+#define atomic_fetch_sub_explicit(obj, arg, order) \
+    __c11_atomic_fetch_sub((obj), (arg), (order))
+
+#define atomic_fetch_and(obj, arg) \
+    __c11_atomic_fetch_and((obj), (arg), memory_order_seq_cst)
+
+#define atomic_fetch_and_explicit(obj, arg, order) \
+    __c11_atomic_fetch_and((obj), (arg), (order))
+
+#define atomic_fetch_or(obj, arg) \
+    __c11_atomic_fetch_or((obj), (arg), memory_order_seq_cst)
+
+#define atomic_fetch_or_explicit(obj, arg, order) \
+    __c11_atomic_fetch_or((obj), (arg), (order))
+
+#define atomic_fetch_xor(obj, arg) \
+    __c11_atomic_fetch_xor((obj), (arg), memory_order_seq_cst)
+
+#define atomic_fetch_xor_explicit(obj, arg, order) \
+    __c11_atomic_fetch_xor((obj), (arg), (order))
+#else
 #define __RIN_ATOMIC_VALUE_TYPE(obj) \
     __typeof__(__atomic_load_n((obj), __ATOMIC_RELAXED))
 #define __RIN_ATOMIC_VALUE_PTR(obj) ((__RIN_ATOMIC_VALUE_TYPE(obj)*)(obj))
@@ -160,25 +228,42 @@ typedef struct {
 
 #define atomic_fetch_xor_explicit(obj, arg, order) \
     __atomic_fetch_xor(__RIN_ATOMIC_VALUE_PTR(obj), arg, order)
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * atomic_flag操作
  * ═══════════════════════════════════════════════════════════════*/
 
 static inline _Bool atomic_flag_test_and_set(volatile atomic_flag* flag) {
+#if defined(__clang__)
+    return __c11_atomic_exchange(&flag->value, 1, memory_order_seq_cst);
+#else
     return __atomic_test_and_set(&flag->value, __ATOMIC_SEQ_CST);
+#endif
 }
 
 static inline _Bool atomic_flag_test_and_set_explicit(volatile atomic_flag* flag, memory_order order) {
+#if defined(__clang__)
+    return __c11_atomic_exchange(&flag->value, 1, order);
+#else
     return __atomic_test_and_set(&flag->value, order);
+#endif
 }
 
 static inline void atomic_flag_clear(volatile atomic_flag* flag) {
+#if defined(__clang__)
+    __c11_atomic_store(&flag->value, 0, memory_order_seq_cst);
+#else
     __atomic_clear(&flag->value, __ATOMIC_SEQ_CST);
+#endif
 }
 
 static inline void atomic_flag_clear_explicit(volatile atomic_flag* flag, memory_order order) {
+#if defined(__clang__)
+    __c11_atomic_store(&flag->value, 0, order);
+#else
     __atomic_clear(&flag->value, order);
+#endif
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -204,7 +289,11 @@ static inline void atomic_flag_clear_explicit(volatile atomic_flag* flag, memory
 #define ATOMIC_LLONG_LOCK_FREE      __GCC_ATOMIC_LLONG_LOCK_FREE
 #define ATOMIC_POINTER_LOCK_FREE    __GCC_ATOMIC_POINTER_LOCK_FREE
 
+#if defined(__clang__)
+#define atomic_is_lock_free(obj) __c11_atomic_is_lock_free(sizeof(*(obj)))
+#else
 #define atomic_is_lock_free(obj) __atomic_is_lock_free(sizeof(*(obj)), obj)
+#endif
 
 #ifdef __cplusplus
 }
