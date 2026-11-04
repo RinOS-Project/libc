@@ -341,6 +341,7 @@
 #define LINUX_NR_io_uring_register 427
 #define LINUX_NR_clone3            435
 #define LINUX_NR_futex_waitv       449
+#define LINUX_NR_fchmodat2         452
 #define LINUX_NR_statmount         457
 #define LINUX_NR_listmount         458
 
