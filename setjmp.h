@@ -157,6 +157,7 @@ longjmp(jmp_buf env __attribute__((unused)),
 #define _setjmp setjmp
 #define _longjmp longjmp
 
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 typedef struct {
     jmp_buf __context;
     sigset_t __saved_mask;
@@ -190,6 +191,7 @@ static inline void __rin_sigjmp_restore(sigjmp_buf env) {
         __rin_sigjmp_restore((env)); \
         longjmp((env)[0].__context, (val)); \
     } while (0)
+#endif /* _RIN_SIGNAL_POSIX_VISIBLE */
 
 #ifdef __cplusplus
 }

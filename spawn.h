@@ -25,6 +25,10 @@
 #include "errno.h"
 #include "fcntl.h"
 #include "signal.h"
+#ifndef _SIGSET_T_DEFINED
+#define _SIGSET_T_DEFINED
+typedef uint64_t sigset_t;
+#endif
 #include "sched.h"
 #include "stdlib.h"
 #include "string.h"

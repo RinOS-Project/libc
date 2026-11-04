@@ -27,6 +27,43 @@
 #include "internal/pthread_cancel_point.h"
 #include <rin/contract_abi.h>
 
+/* Keep the ISO C signal surface available in strict modes while gating the
+ * POSIX signal namespace.  Runtime owners may opt in privately because their
+ * implementation is not a public header consumer. */
+#if defined(_RIN_SIGNAL_RUNTIME_IMPLEMENTATION) || \
+    defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION) || \
+    defined(RIN_TIMER_THREAD_RUNTIME) || \
+    defined(__USE_POSIX) || defined(__USE_XOPEN) || \
+    defined(__USE_XOPEN_EXTENDED) || defined(__USE_MISC) || \
+    defined(__USE_GNU) || defined(__RIN_FEATURES_DEFAULT) || \
+    defined(__RIN_FEATURES_GNU) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199009L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500)
+#define _RIN_SIGNAL_POSIX_VISIBLE 1
+#endif
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE) && \
+    (defined(_RIN_SIGNAL_RUNTIME_IMPLEMENTATION) || \
+     defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION) || \
+     defined(RIN_TIMER_THREAD_RUNTIME) || \
+     defined(_RIN_USE_GNU_PTHREAD_SIGQUEUE) || \
+     defined(__USE_GNU) || defined(__RIN_FEATURES_DEFAULT) || \
+     defined(__RIN_FEATURES_GNU) || \
+     (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199309L) || \
+     (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500))
+#define _RIN_SIGNAL_REALTIME_VISIBLE 1
+#endif
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE) && \
+    (defined(_RIN_SIGNAL_RUNTIME_IMPLEMENTATION) || \
+     defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION) || \
+     defined(RIN_TIMER_THREAD_RUNTIME) || \
+     defined(__USE_XOPEN_EXTENDED) || defined(__USE_XOPEN) || \
+     defined(__USE_MISC) || defined(__USE_GNU) || \
+     defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU) || \
+     (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L) || \
+     (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500))
+#define _RIN_SIGNAL_ALTSTACK_VISIBLE 1
+#endif
+
 #ifndef _RIN_SIGNAL_SYSCALL0
 #define _RIN_SIGNAL_SYSCALL0(number) _syscall0((uintptr_t)(number))
 #endif
@@ -70,14 +107,21 @@ extern "C" {
  * ═══════════════════════════════════════════════════════════════*/
 
 typedef int sig_atomic_t;
-typedef void (*sighandler_t)(int);
+typedef void (*__rin_signal_handler_t)(int);
+#if defined(__RIN_FEATURES_GNU) || defined(__USE_GNU)
+typedef __rin_signal_handler_t sighandler_t;
+#endif
 
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 #ifndef _SIGSET_T_DEFINED
 #define _SIGSET_T_DEFINED
 typedef uint64_t sigset_t;
 #endif
+#endif
 
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 struct timespec;
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * シグナル番号
@@ -127,17 +171,65 @@ struct timespec;
 
 #define SIGRTMIN    32
 #define SIGRTMAX    61
+#define __RIN_SIGNAL_LIMIT 64
 #ifndef NSIG
 #define NSIG        64  /* 62 is internal; 63 is reserved for cancellation. */
+#endif
+#if !defined(_RIN_SIGNAL_POSIX_VISIBLE) || \
+    (!defined(__USE_GNU) && !defined(__RIN_FEATURES_GNU) && \
+     !defined(__RIN_FEATURES_DEFAULT) && \
+     !defined(_RIN_SIGNAL_RUNTIME_IMPLEMENTATION))
+#undef NSIG
+#endif
+#if !defined(_RIN_SIGNAL_REALTIME_VISIBLE)
+#undef SIGRTMIN
+#undef SIGRTMAX
+#endif
+#if !defined(_RIN_SIGNAL_POSIX_VISIBLE)
+#undef SIGHUP
+#undef SIGQUIT
+#undef SIGTRAP
+#undef SIGBUS
+#undef SIGKILL
+#undef SIGUSR1
+#undef SIGUSR2
+#undef SIGPIPE
+#undef SIGALRM
+#undef SIGSTKFLT
+#undef SIGCHLD
+#undef SIGCONT
+#undef SIGSTOP
+#undef SIGTSTP
+#undef SIGTTIN
+#undef SIGTTOU
+#undef SIGURG
+#undef SIGXCPU
+#undef SIGXFSZ
+#undef SIGVTALRM
+#undef SIGPROF
+#undef SIGWINCH
+#undef SIGIO
+#undef SIGPOLL
+#undef SIGPWR
+#undef SIGSYS
+#undef SIGRTMIN
+#undef SIGRTMAX
+#undef NSIG
 #endif
 #define __RIN_SIGCANCEL 63
 
 static inline int __rin_signal_is_private_timer_wake(int signum) {
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
     return signum == (int)RIN_TIMER_THREAD_SIGNAL;
+#else
+    (void)signum;
+    return 0;
+#endif
 }
 
 static inline int __rin_signal_private_action_is_allowed(int signum) {
-#if defined(RIN_TIMER_THREAD_RUNTIME)
+#if defined(RIN_TIMER_THREAD_RUNTIME) || \
+    defined(_RIN_SIGNAL_RUNTIME_IMPLEMENTATION)
     return __rin_signal_is_private_timer_wake(signum);
 #else
     (void)signum;
@@ -145,6 +237,7 @@ static inline int __rin_signal_private_action_is_allowed(int signum) {
 #endif
 }
 
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 static inline int __rin_signal_mask_snapshot(const sigset_t* source,
                                               sigset_t* snapshot) {
     if (source == NULL || snapshot == NULL) {
@@ -159,26 +252,30 @@ static inline int __rin_signal_mask_snapshot(const sigset_t* source,
     }
     return 0;
 }
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * シグナルハンドラ定数
  * ═══════════════════════════════════════════════════════════════*/
 
 #ifndef SIG_DFL
-#define SIG_DFL     ((sighandler_t)0)   /* デフォルト動作 */
+#define SIG_DFL     ((__rin_signal_handler_t)0)   /* デフォルト動作 */
 #endif
 #ifndef SIG_IGN
-#define SIG_IGN     ((sighandler_t)1)   /* 無視 */
+#define SIG_IGN     ((__rin_signal_handler_t)1)   /* 無視 */
 #endif
 #ifndef SIG_ERR
-#define SIG_ERR     ((sighandler_t)-1)  /* エラー */
+#define SIG_ERR     ((__rin_signal_handler_t)-1)  /* エラー */
 #endif
 
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 /* sigprocmask how argument */
 #define SIG_BLOCK   0   /* Block signals */
 #define SIG_UNBLOCK 1   /* Unblock signals */
 #define SIG_SETMASK 2   /* Set signal mask */
+#endif
 
+#if defined(_RIN_SIGNAL_REALTIME_VISIBLE)
 /* ═══════════════════════════════════════════════════════════════
  * siginfo_t - Linux ABI 互換シグナル情報構造体 (128 bytes)
  *
@@ -316,7 +413,9 @@ typedef union siginfo {
 #define si_fd        __fields._sifields._sigpoll._fd
 #define si_timerid   __fields._sifields._timer._tid
 #define si_overrun   __fields._sifields._timer._overrun
+#endif /* _RIN_SIGNAL_REALTIME_VISIBLE */
 
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 /* ═══════════════════════════════════════════════════════════════
  * sigaction構造体
  * ═══════════════════════════════════════════════════════════════*/
@@ -324,8 +423,12 @@ typedef union siginfo {
 /* Include ucontext for full definition (used with SA_SIGINFO) */
 #include "ucontext.h"
 
+#if !defined(_RIN_SIGNAL_REALTIME_VISIBLE)
+typedef union siginfo siginfo_t;
+#endif
+
 union __rin_sigaction_handler {
-    sighandler_t sa_handler;
+    __rin_signal_handler_t sa_handler;
     void (*sa_sigaction)(int, siginfo_t*, void*);
 };
 
@@ -342,16 +445,22 @@ struct sigaction {
 /* sa_flags */
 #define SA_NOCLDSTOP    0x00000001  /* 子停止時にSIGCHLDを送らない */
 #define SA_NOCLDWAIT    0x00000002  /* 子をゾンビにしない */
+#if defined(_RIN_SIGNAL_REALTIME_VISIBLE)
 #define SA_SIGINFO      0x00000004  /* 詳細情報付きハンドラ */
+#endif
+#if defined(_RIN_SIGNAL_ALTSTACK_VISIBLE)
 #define SA_ONSTACK      0x08000000  /* 代替シグナルスタックを使用 */
+#endif
 #define SA_RESTART      0x10000000  /* システムコールを再開 */
 #define SA_NODEFER      0x40000000  /* ハンドラ実行中もブロックしない */
 #define SA_RESETHAND    0x80000000  /* 1回だけ */
+#endif /* _RIN_SIGNAL_POSIX_VISIBLE */
 
 /* ═══════════════════════════════════════════════════════════════
  * Signal Codes (si_code values)
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(_RIN_SIGNAL_REALTIME_VISIBLE)
 /* si_code values for SIGILL */
 #define ILL_ILLOPC      1   /* Illegal opcode */
 #define ILL_ILLOPN      2   /* Illegal operand */
@@ -406,8 +515,10 @@ struct sigaction {
 #define POLL_ERR        4   /* I/O error */
 #define POLL_PRI        5   /* High priority input available */
 #define POLL_HUP        6   /* Device disconnected */
+#endif /* _RIN_SIGNAL_REALTIME_VISIBLE */
 
 /* General si_code values */
+#if defined(_RIN_SIGNAL_REALTIME_VISIBLE)
 #define SI_USER         0       /* Sent by kill, sigsend, raise */
 #define SI_KERNEL       0x80    /* Sent by the kernel */
 #define SI_QUEUE        -1      /* Sent by sigqueue */
@@ -416,7 +527,9 @@ struct sigaction {
 #define SI_ASYNCIO      -4      /* Sent by AIO completion */
 #define SI_SIGIO        -5      /* Sent by queued SIGIO */
 #define SI_TKILL        -6      /* Sent by tkill system call */
+#endif /* _RIN_SIGNAL_REALTIME_VISIBLE */
 
+#if defined(_RIN_SIGNAL_ALTSTACK_VISIBLE)
 /* ═══════════════════════════════════════════════════════════════
  * Alternate Signal Stack
  * ═══════════════════════════════════════════════════════════════*/
@@ -446,7 +559,9 @@ static inline int sigaltstack(const stack_t* ss, stack_t* old_ss) {
     return __rin_signal_status_result(
         _RIN_SIGNAL_SYSCALL2(SYS_sigaltstack, ss, old_ss));
 }
+#endif /* _RIN_SIGNAL_ALTSTACK_VISIBLE */
 
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 /* ═══════════════════════════════════════════════════════════════
  * シグナルセット操作
  * ═══════════════════════════════════════════════════════════════*/
@@ -472,7 +587,7 @@ static inline int sigfillset(sigset_t* set) {
 }
 
 static inline int sigaddset(sigset_t* set, int signum) {
-    if (!set || signum < 1 || signum >= NSIG ||
+    if (!set || signum < 1 || signum >= __RIN_SIGNAL_LIMIT ||
         signum == __RIN_SIGCANCEL ||
         __rin_signal_is_private_timer_wake(signum)) {
         errno = EINVAL;
@@ -483,7 +598,7 @@ static inline int sigaddset(sigset_t* set, int signum) {
 }
 
 static inline int sigdelset(sigset_t* set, int signum) {
-    if (!set || signum < 1 || signum >= NSIG ||
+    if (!set || signum < 1 || signum >= __RIN_SIGNAL_LIMIT ||
         signum == __RIN_SIGCANCEL ||
         __rin_signal_is_private_timer_wake(signum)) {
         errno = EINVAL;
@@ -494,7 +609,7 @@ static inline int sigdelset(sigset_t* set, int signum) {
 }
 
 static inline int sigismember(const sigset_t* set, int signum) {
-    if (!set || signum < 1 || signum >= NSIG ||
+    if (!set || signum < 1 || signum >= __RIN_SIGNAL_LIMIT ||
         signum == __RIN_SIGCANCEL ||
         __rin_signal_is_private_timer_wake(signum)) {
         errno = EINVAL;
@@ -502,6 +617,7 @@ static inline int sigismember(const sigset_t* set, int signum) {
     }
     return (*set & (UINT64_C(1) << (unsigned)signum)) ? 1 : 0;
 }
+#endif /* _RIN_SIGNAL_POSIX_VISIBLE */
 
 /* ═══════════════════════════════════════════════════════════════
  * シグナル復帰トランポリン (sa_restorer)
@@ -536,13 +652,31 @@ static void __restore_rt(void) {
  * シグナル関数
  * ═══════════════════════════════════════════════════════════════*/
 
+struct __rin_signal_action_abi {
+    __rin_signal_handler_t handler;
+    uint64_t mask;
+    int flags;
+    void (*restorer)(void);
+};
+
+static inline int __rin_signal_number_valid(int signum) {
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
+    return signum > 0 && signum < __RIN_SIGNAL_LIMIT &&
+           signum != __RIN_SIGCANCEL &&
+           !__rin_signal_is_private_timer_wake(signum) &&
+           signum != 9 && signum != 19;
+#else
+    return signum == SIGABRT || signum == SIGFPE || signum == SIGILL ||
+           signum == SIGINT || signum == SIGSEGV || signum == SIGTERM;
+#endif
+}
+
 #if !defined(_INC_SIGNAL)
-static inline sighandler_t signal(int signum, sighandler_t handler) {
+static inline __rin_signal_handler_t signal(
+    int signum, __rin_signal_handler_t handler) {
     intptr_t result;
-    struct sigaction oldact;
-    if (signum < 1 || signum >= NSIG || signum == __RIN_SIGCANCEL ||
-        __rin_signal_is_private_timer_wake(signum) ||
-        signum == SIGKILL || signum == SIGSTOP) {
+    struct __rin_signal_action_abi oldact;
+    if (!__rin_signal_number_valid(signum)) {
         errno = EINVAL;
         return SIG_ERR;
     }
@@ -555,22 +689,30 @@ static inline sighandler_t signal(int signum, sighandler_t handler) {
         ((unsigned char*)&oldact)[index] = 0u;
 
     /* sigaction経由でカーネルに登録 */
-    struct sigaction act;
-    act.sa_handler = handler;
-    act.sa_mask = 0;
-    act.sa_flags = 0x04000000; /* SA_RESTORER */
-    act.sa_restorer = __restore_rt;
+    struct __rin_signal_action_abi act;
+    act.handler = handler;
+    act.mask = 0;
+#if defined(__x86_64__) || defined(_M_X64) || \
+    defined(__i386__) || defined(_M_IX86)
+    act.flags = 0x04000000; /* SA_RESTORER */
+    act.restorer = __restore_rt;
+#else
+    act.flags = 0;
+    act.restorer = 0;
+#endif
 
     result = _RIN_SIGNAL_SYSCALL4(
-        SYS_rt_sigaction, signum, &act, &oldact, sizeof(sigset_t));
+        SYS_rt_sigaction, signum, &act, &oldact, sizeof(oldact.mask));
     if (__rin_signal_status_result(result) != 0) return SIG_ERR;
-    return oldact.sa_handler;
+    return oldact.handler;
 }
 #endif /* !_INC_SIGNAL */
 
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 static inline int sigaction(int signum, const struct sigaction* act,
                             struct sigaction* oldact) {
-    if (signum < 1 || signum >= NSIG || signum == __RIN_SIGCANCEL ||
+    if (signum < 1 || signum >= __RIN_SIGNAL_LIMIT ||
+        signum == __RIN_SIGCANCEL ||
         (__rin_signal_is_private_timer_wake(signum) &&
          !__rin_signal_private_action_is_allowed(signum)) ||
         signum == SIGKILL || signum == SIGSTOP) {
@@ -596,9 +738,11 @@ static inline int sigaction(int signum, const struct sigaction* act,
             SYS_rt_sigaction, signum, 0, oldact, sizeof(sigset_t)));
     }
 }
+#endif /* _RIN_SIGNAL_POSIX_VISIBLE */
 
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 static inline int kill(int pid, int sig) {
-    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL ||
+    if (sig < 0 || sig >= __RIN_SIGNAL_LIMIT || sig == __RIN_SIGCANCEL ||
         __rin_signal_is_private_timer_wake(sig)) {
         errno = EINVAL;
         return -1;
@@ -620,12 +764,14 @@ static inline int killpg(int pgrp, int sig) {
 /* POSIX declares these thread entry points in both signal.h and pthread.h. */
 int pthread_kill(pthread_t thread, int sig);
 int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset);
+#endif /* _RIN_SIGNAL_POSIX_VISIBLE */
 
+#if defined(_RIN_SIGNAL_REALTIME_VISIBLE)
 static inline int sigqueue(int pid, int signum, union sigval value) {
     siginfo_t information;
     intptr_t result;
     unsigned char* bytes = (unsigned char*)&information;
-    if (pid <= 0 || signum < 0 || signum >= NSIG ||
+    if (pid <= 0 || signum < 0 || signum >= __RIN_SIGNAL_LIMIT ||
         signum == __RIN_SIGCANCEL ||
         __rin_signal_is_private_timer_wake(signum) ||
         signum == SIGKILL || signum == SIGSTOP) {
@@ -641,13 +787,13 @@ static inline int sigqueue(int pid, int signum, union sigval value) {
                                   &information);
     return __rin_signal_status_result(result);
 }
+#endif /* _RIN_SIGNAL_REALTIME_VISIBLE */
 
 #if !defined(_INC_SIGNAL)
 static inline int raise(int sig) {
     intptr_t tid;
     intptr_t result;
-    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL ||
-        __rin_signal_is_private_timer_wake(sig)) {
+    if (!__rin_signal_number_valid(sig)) {
         errno = EINVAL;
         return -1;
     }
@@ -658,6 +804,7 @@ static inline int raise(int sig) {
 }
 #endif /* !_INC_SIGNAL */
 
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 static inline int sigprocmask(int how, const sigset_t* set, sigset_t* oldset) {
     sigset_t set_snapshot = 0u;
     const sigset_t* effective_set = set;
@@ -702,6 +849,7 @@ static inline int sigsuspend(const sigset_t* mask) {
     return __rin_signal_status_result(result);
 }
 
+#if defined(_RIN_SIGNAL_REALTIME_VISIBLE)
 static inline int sigwait(const sigset_t* set, int* signal_number_out) {
     int saved_errno = errno;
     intptr_t result;
@@ -732,7 +880,7 @@ static inline int sigwait(const sigset_t* set, int* signal_number_out) {
         errno = saved_errno;
         return wait_error;
     }
-    if (result <= 0 || result >= NSIG) {
+    if (result <= 0 || result >= __RIN_SIGNAL_LIMIT) {
         errno = saved_errno;
         return EIO;
     }
@@ -758,7 +906,7 @@ static inline int sigwaitinfo(const sigset_t* set,
         (void)__rin_signal_status_result(result);
         return -1;
     }
-    if (result <= 0 || result >= NSIG) {
+    if (result <= 0 || result >= __RIN_SIGNAL_LIMIT) {
         errno = EIO;
         return -1;
     }
@@ -784,22 +932,25 @@ static inline int sigtimedwait(const sigset_t* set,
         (void)__rin_signal_status_result(result);
         return -1;
     }
-    if (result <= 0 || result >= NSIG) {
+    if (result <= 0 || result >= __RIN_SIGNAL_LIMIT) {
         errno = EIO;
         return -1;
     }
     return (int)result;
 }
+#endif /* _RIN_SIGNAL_REALTIME_VISIBLE */
+#endif /* _RIN_SIGNAL_POSIX_VISIBLE */
 
 /* pthread_kill: スレッドにシグナル送信 */
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 static inline int pthread_kill_sig(uintptr_t tid, int sig) {
     intptr_t result;
-    if (sig < 0 || sig >= NSIG || sig == __RIN_SIGCANCEL ||
-        __rin_signal_is_private_timer_wake(sig)) return EINVAL;
+    if (!__rin_signal_number_valid(sig)) return EINVAL;
     result = _RIN_SIGNAL_SYSCALL2(SYS_TKILL, tid, sig);
     if (result < 0 && result >= -4095) return (int)-result;
     return result == 0 ? 0 : EIO;
 }
+#endif
 
 #ifdef __cplusplus
 }

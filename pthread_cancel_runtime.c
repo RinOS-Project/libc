@@ -39,6 +39,7 @@
  */
 
 #define RIN_PTHREAD_CANCEL_RUNTIME_IMPLEMENTATION 1
+#define _RIN_SIGNAL_RUNTIME_IMPLEMENTATION 1
 #include "pthread.h"
 #include "stdlib.h"
 #include "string.h"

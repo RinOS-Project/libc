@@ -35,12 +35,14 @@
 #include "locale.h"
 #endif
 #include "fcntl_flags.h"
+#if defined(RIN_STDLIB_ABORT_RUNTIME_IMPLEMENTATION)
 #if !defined(MIDL_PASS) && !defined(_MSVCRT_COMPAT) && \
     (defined(__RINOS__) || defined(RIN_USERSPACE) || \
      defined(RIN_FREESTANDING))
 #include "signal.h"
 #define _RIN_STDLIB_HAS_SIGNAL_API 1
 #endif
+#endif /* RIN_STDLIB_ABORT_RUNTIME_IMPLEMENTATION */
 #if !defined(__cplusplus) && !defined(RIN_FREESTANDING) && \
     defined(__STDC_HOSTED__) && __STDC_HOSTED__
 #define _RIN_STDLIB_HOSTED_SYSTEM_CRT_OWNER
@@ -369,6 +371,7 @@ __attribute__((noreturn)) static inline void _Exit(int status) {
 #ifndef _MSVCRT_COMPAT
 #ifndef _RIN_CSTDLIB_GLOBAL_ABORT_DEFINED
 #define _RIN_CSTDLIB_GLOBAL_ABORT_DEFINED
+#if defined(RIN_STDLIB_ABORT_RUNTIME_IMPLEMENTATION)
 __attribute__((noreturn)) static inline void abort(void) {
     /* Debug: output abort message with stack trace via serial */
     const char* msg = "[ABORT] libc abort() called\n";
@@ -448,9 +451,10 @@ __attribute__((noreturn)) static inline void abort(void) {
         bp = next_bp;
     }
 
-    /* POSIX abort delivers SIGABRT even if the caller blocked or ignored it.
-     * If a handler returns, restore the default action and deliver it again. */
-#if defined(_RIN_STDLIB_HAS_SIGNAL_API)
+    /* POSIX abort must unblock SIGABRT before delivery.  Strict ISO builds
+     * keep signal.h's POSIX mask/action names hidden and use the ISO signal()
+     * and raise() interface instead. */
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
     sigset_t abort_set;
     if (sigemptyset(&abort_set) == 0 && sigaddset(&abort_set, SIGABRT) == 0)
         (void)sigprocmask(SIG_UNBLOCK, &abort_set, 0);
@@ -465,14 +469,22 @@ __attribute__((noreturn)) static inline void abort(void) {
     if (sigemptyset(&abort_set) == 0 && sigaddset(&abort_set, SIGABRT) == 0)
         (void)sigprocmask(SIG_UNBLOCK, &abort_set, 0);
     (void)raise(SIGABRT);
-
-    _RIN_STDLIB_SYSCALL1(SYS_EXIT, (uintptr_t)(128 + SIGABRT));
 #else
-    /* Non-RinOS compatibility builds have no RinOS signal ABI to invoke. */
-    _RIN_STDLIB_SYSCALL1(SYS_EXIT, (uintptr_t)134u);
+    (void)raise(SIGABRT);
+    (void)signal(SIGABRT, SIG_DFL);
+    (void)raise(SIGABRT);
 #endif
+    _RIN_STDLIB_SYSCALL1(SYS_EXIT, (uintptr_t)(128 + SIGABRT));
     for(;;) {}
 }
+#elif defined(RIN_USERSPACE) && RIN_USERSPACE
+__attribute__((noreturn)) void abort(void);
+#else
+__attribute__((noreturn)) static inline void abort(void) {
+    _RIN_STDLIB_SYSCALL1(SYS_EXIT, (uintptr_t)134u);
+    for (;;) {}
+}
+#endif
 #endif /* _RIN_CSTDLIB_GLOBAL_ABORT_DEFINED */
 
 /* atexit - 宣言のみ、実装はmalloc.cにある */

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /* C++ standard-library bridges to the libc-owned conversion and process APIs. */
 
+#define _RIN_SIGNAL_RUNTIME_IMPLEMENTATION 1
+#define RIN_STDLIB_ABORT_RUNTIME_IMPLEMENTATION 1
 #define RIN_STDLIB_NO_INLINE_GETSUBOPT 1
 #define RIN_STDLIB_ALIGNED_ALLOC_RUNTIME_IMPLEMENTATION 1
 /* signal.h first: see the include-order contract in unistd.h.  This unit
