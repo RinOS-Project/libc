@@ -39,6 +39,15 @@ int rin_stdio_memstream_seek(FILE* stream, int64_t offset, int whence);
 int rin_stdio_memstream_tell(FILE* stream, int64_t* position);
 int rin_stdio_memstream_flush(FILE* stream);
 int rin_stdio_memstream_close(FILE* stream, int* handled);
+
+int rin_stdio_cookie_read(FILE* stream, unsigned char* output,
+                          size_t capacity, intptr_t* result);
+int rin_stdio_cookie_write(FILE* stream, const unsigned char* input,
+                           size_t length, intptr_t* result);
+int rin_stdio_cookie_seek(FILE* stream, int64_t offset, int whence,
+                          int64_t* position);
+int rin_stdio_cookie_active(FILE* stream);
+int rin_stdio_cookie_close(FILE* stream, int* handled);
 #endif
 
 #endif /* _RIN_STDIO_INTERNAL_H */

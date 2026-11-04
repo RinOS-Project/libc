@@ -9,6 +9,7 @@
 #define __STDC_VERSION_STDIO_H__ 202311L
 
 #include "features.h"
+
 #include "stddef.h"
 #include "stdint.h"
 #include "stdarg.h"
@@ -96,18 +97,6 @@ int fputc(int c, FILE* stream);
 int putc_unlocked(int c, FILE* stream);
 int fputs(const char* s, FILE* stream);
 int fgetc(FILE* stream);
-#if defined(__RIN_FEATURES_GNU) || defined(RIN_STDIO_OWNER_BUILD)
-int fgetc_unlocked(FILE* stream);
-int fputc_unlocked(int c, FILE* stream);
-char* fgets_unlocked(char* s, int size, FILE* stream);
-int fputs_unlocked(const char* s, FILE* stream);
-size_t fread_unlocked(void* ptr, size_t size, size_t nmemb, FILE* stream);
-size_t fwrite_unlocked(const void* ptr, size_t size, size_t nmemb, FILE* stream);
-int feof_unlocked(FILE* stream);
-int ferror_unlocked(FILE* stream);
-void clearerr_unlocked(FILE* stream);
-int fileno_unlocked(FILE* stream);
-#endif
 int getc_unlocked(FILE* stream);
 int getchar(void);
 int getchar_unlocked(void);
@@ -170,6 +159,25 @@ FILE* popen(const char* command, const char* type);
 int pclose(FILE* stream);
 FILE* fmemopen(void* buffer, size_t size, const char* mode);
 FILE* open_memstream(char** buffer, size_t* size);
+
+#if defined(_RIN_USE_GNU_FOPENCOOKIE)
+typedef ssize_t cookie_read_function_t(void* cookie, char* buffer,
+                                       size_t size);
+typedef ssize_t cookie_write_function_t(void* cookie, const char* buffer,
+                                        size_t size);
+typedef int cookie_seek_function_t(void* cookie, off64_t* offset, int whence);
+typedef int cookie_close_function_t(void* cookie);
+
+typedef struct {
+    cookie_read_function_t* read;
+    cookie_write_function_t* write;
+    cookie_seek_function_t* seek;
+    cookie_close_function_t* close;
+} cookie_io_functions_t;
+
+FILE* fopencookie(void* cookie, const char* mode,
+                  cookie_io_functions_t functions);
+#endif
 
 int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap);
 int snprintf(char* buf, size_t size, const char* fmt, ...);
