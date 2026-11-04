@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* POSIX hash, binary-tree, linear-search, and intrusive-queue runtime. */
 
+#define _RIN_USE_GNU_SEARCH 1
 #include "search.h"
 
 #include "errno.h"

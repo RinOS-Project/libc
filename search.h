@@ -8,7 +8,8 @@
 #include <stddef.h>
 
 #if defined(__USE_XOPEN_EXTENDED) || \
-    defined(__USE_GNU) || defined(__DARWIN_C_SOURCE) || \
+    defined(__USE_GNU) || defined(_RIN_USE_GNU_SEARCH) || \
+    defined(__DARWIN_C_SOURCE) || \
     (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500) || \
     (defined(__XSI_VISIBLE) && __XSI_VISIBLE)
 
