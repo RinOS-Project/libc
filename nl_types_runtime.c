@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: MIT */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 202405L
+#endif
 #include "nl_types.h"
 
 #include "errno.h"

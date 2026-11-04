@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: MIT */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 202405L
+#endif
 #define RIN_DIRENT_RUNTIME_LEGACY_LAYOUT 1
 #define _RIN_USE_GNU_DIRENT 1
 #define _RIN_USE_GNU_STRVERSCMP 1
