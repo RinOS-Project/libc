@@ -55,6 +55,8 @@ typedef struct RinUserAllocatorMetricsV1 {
 
 /* Flush live thread magazines and drain arena remote-free queues. */
 void rin_user_allocator_trim(void);
+/* Run an explicit full block/free-tree/remote-queue integrity scrub. */
+int rin_user_allocator_validate(void);
 /* Snapshot lock, magazine, and remote-free counters without changing state. */
 int rin_user_allocator_metrics_read(RinUserAllocatorMetricsV1* metrics);
 
