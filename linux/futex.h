@@ -85,8 +85,9 @@ struct futex_waitv {
 #define FUTEX_OP_CMP_GE         5   /* >= */
 
 /* FUTEX_OP macro to encode operation */
+#define FUTEX_OP_OPARG_SHIFT  8
 #define FUTEX_OP(op, oparg, cmp, cmparg) \
-    (((op) & 0xf) | (((cmp) & 0xf) << 4) | \
-     (((oparg) & 0xfff) << 8) | (((cmparg) & 0xfff) << 20))
+    ((((op) & 0xf) << 28) | (((cmp) & 0xf) << 24) | \
+     (((oparg) & 0xfff) << 12) | ((cmparg) & 0xfff))
 
 #endif /* _LINUX_FUTEX_H */
