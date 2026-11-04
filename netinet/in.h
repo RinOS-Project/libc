@@ -8,6 +8,7 @@
 #define _NETINET_IN_H
 
 #include "../sys/socket.h"
+#include <errno.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -140,6 +141,250 @@ struct ip_mreqn {
     struct in_addr imr_address;
     int            imr_ifindex;
 };
+
+#ifndef MCAST_BLOCK_SOURCE
+#define MCAST_BLOCK_SOURCE 43
+#endif
+#ifndef MCAST_JOIN_GROUP
+#define MCAST_JOIN_GROUP 42
+#endif
+#ifndef MCAST_LEAVE_GROUP
+#define MCAST_LEAVE_GROUP 45
+#endif
+#ifndef MCAST_UNBLOCK_SOURCE
+#define MCAST_UNBLOCK_SOURCE 44
+#endif
+#ifndef MCAST_JOIN_SOURCE_GROUP
+#define MCAST_JOIN_SOURCE_GROUP 46
+#endif
+#ifndef MCAST_LEAVE_SOURCE_GROUP
+#define MCAST_LEAVE_SOURCE_GROUP 47
+#endif
+
+#define RIN_MCAST_SOURCE_FILTER_V1 0x7f50
+#define RIN_MCAST_SOURCE_FILTER_ABI_VERSION 1u
+#define RIN_MCAST_SOURCE_FILTER_MAX_SOURCES 64u
+#define RIN_MCAST_FILTER_EXCLUDE 0u
+#define RIN_MCAST_FILTER_INCLUDE 1u
+#ifndef MCAST_EXCLUDE
+#define MCAST_EXCLUDE RIN_MCAST_FILTER_EXCLUDE
+#endif
+#ifndef MCAST_INCLUDE
+#define MCAST_INCLUDE RIN_MCAST_FILTER_INCLUDE
+#endif
+
+struct group_req {
+    uint32_t gr_interface;
+    struct sockaddr_storage gr_group;
+};
+
+struct group_source_req {
+    uint32_t gsr_interface;
+    struct sockaddr_storage gsr_group;
+    struct sockaddr_storage gsr_source;
+};
+
+/* Versioned fixed-size socket option used by setsourcefilter/getsourcefilter.
+ * The fixed layout keeps native64 and compat32 callers on the same ABI. */
+struct rin_mcast_source_filter_v1 {
+    uint32_t struct_size;
+    uint32_t version;
+    uint32_t address_family;
+    uint32_t interface_index;
+    uint32_t filter_mode;
+    uint32_t source_count;
+    uint32_t reserved[2];
+    uint8_t group[16];
+    uint8_t sources[RIN_MCAST_SOURCE_FILTER_MAX_SOURCES][16];
+};
+
+static inline int __rin_mcast_source_filter_address(
+    uint32_t family, const struct sockaddr* address, socklen_t address_length,
+    uint8_t output[16]) {
+    uint32_t index;
+    for (index = 0u; index < 16u; ++index) output[index] = 0u;
+    if (address == NULL) { errno = EFAULT; return -1; }
+    if (family == AF_INET) {
+        struct sockaddr_in value;
+        if (address_length < sizeof(value) || address->sa_family != AF_INET) {
+            errno = EINVAL; return -1;
+        }
+        for (index = 0u; index < sizeof(value); ++index)
+            ((uint8_t*)&value)[index] = ((const uint8_t*)address)[index];
+        for (index = 0u; index < 4u; ++index)
+            output[index] = ((const uint8_t*)&value.sin_addr.s_addr)[index];
+        return 0;
+    }
+    if (family == AF_INET6) {
+        struct sockaddr_in6 value;
+        if (address_length < sizeof(value) || address->sa_family != AF_INET6) {
+            errno = EINVAL; return -1;
+        }
+        for (index = 0u; index < sizeof(value); ++index)
+            ((uint8_t*)&value)[index] = ((const uint8_t*)address)[index];
+        for (index = 0u; index < 16u; ++index)
+            output[index] = value.sin6_addr.s6_addr[index];
+        return 0;
+    }
+    errno = EAFNOSUPPORT;
+    return -1;
+}
+
+static inline int setsourcefilter(
+    int sockfd, uint32_t interface_index, const struct sockaddr* group,
+    socklen_t group_length, uint32_t filter_mode, uint32_t source_count,
+    const struct sockaddr_storage* source_list) {
+    struct rin_mcast_source_filter_v1 request = {0};
+    uint32_t family;
+    uint32_t index;
+    if (group == NULL) { errno = EFAULT; return -1; }
+    family = group->sa_family;
+    if (source_count > RIN_MCAST_SOURCE_FILTER_MAX_SOURCES) {
+        errno = ENOBUFS; return -1;
+    }
+    if ((filter_mode != RIN_MCAST_FILTER_INCLUDE &&
+         filter_mode != RIN_MCAST_FILTER_EXCLUDE) ||
+        (source_count != 0u && source_list == NULL)) {
+        errno = EINVAL; return -1;
+    }
+    if (__rin_mcast_source_filter_address(
+            family, group, group_length, request.group) != 0)
+        return -1;
+    if (family == AF_INET6) {
+        struct sockaddr_in6 group_address = {0};
+        uint32_t byte;
+        for (byte = 0u; byte < sizeof(group_address); ++byte)
+            ((uint8_t*)&group_address)[byte] =
+                ((const uint8_t*)group)[byte];
+        if (group_address.sin6_scope_id != 0u) {
+            if (interface_index != 0u &&
+                interface_index != group_address.sin6_scope_id) {
+                errno = EINVAL; return -1;
+            }
+            interface_index = group_address.sin6_scope_id;
+        }
+    }
+    request.struct_size = sizeof(request);
+    request.version = RIN_MCAST_SOURCE_FILTER_ABI_VERSION;
+    request.address_family = family;
+    request.interface_index = interface_index;
+    request.filter_mode = filter_mode;
+    request.source_count = source_count;
+    for (index = 0u; index < source_count; ++index) {
+        if (source_list[index].ss_family != family) {
+            errno = EINVAL; return -1;
+        }
+        if (family == AF_INET6) {
+            struct sockaddr_in6 source_address = {0};
+            uint32_t byte;
+            for (byte = 0u; byte < sizeof(source_address); ++byte)
+                ((uint8_t*)&source_address)[byte] =
+                    ((const uint8_t*)&source_list[index])[byte];
+            if (source_address.sin6_scope_id != 0u &&
+                source_address.sin6_scope_id != interface_index) {
+                errno = EINVAL; return -1;
+            }
+        }
+        if (__rin_mcast_source_filter_address(
+                family, (const struct sockaddr*)&source_list[index],
+                (socklen_t)sizeof(source_list[index]),
+                request.sources[index]) != 0)
+            return -1;
+    }
+    return setsockopt(sockfd, family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6,
+                      RIN_MCAST_SOURCE_FILTER_V1, &request,
+                      (socklen_t)sizeof(request));
+}
+
+static inline int getsourcefilter(
+    int sockfd, uint32_t interface_index, const struct sockaddr* group,
+    socklen_t group_length, uint32_t* filter_mode, uint32_t* source_count,
+    struct sockaddr_storage* source_list) {
+    struct rin_mcast_source_filter_v1 request = {0};
+    uint32_t family;
+    uint32_t capacity;
+    uint32_t index;
+    socklen_t option_length;
+    if (filter_mode == NULL || source_count == NULL) {
+        errno = EFAULT; return -1;
+    }
+    if (group == NULL) { errno = EFAULT; return -1; }
+    family = group->sa_family;
+    capacity = *source_count;
+    if (capacity != 0u && source_list == NULL) {
+        errno = EFAULT; return -1;
+    }
+    if (capacity > RIN_MCAST_SOURCE_FILTER_MAX_SOURCES)
+        capacity = RIN_MCAST_SOURCE_FILTER_MAX_SOURCES;
+    if (__rin_mcast_source_filter_address(
+            family, group, group_length, request.group) != 0)
+        return -1;
+    if (family == AF_INET6) {
+        struct sockaddr_in6 group_address = {0};
+        uint32_t byte;
+        for (byte = 0u; byte < sizeof(group_address); ++byte)
+            ((uint8_t*)&group_address)[byte] =
+                ((const uint8_t*)group)[byte];
+        if (group_address.sin6_scope_id != 0u) {
+            if (interface_index != 0u &&
+                interface_index != group_address.sin6_scope_id) {
+                errno = EINVAL; return -1;
+            }
+            interface_index = group_address.sin6_scope_id;
+        }
+    }
+    request.struct_size = sizeof(request);
+    request.version = RIN_MCAST_SOURCE_FILTER_ABI_VERSION;
+    request.address_family = family;
+    request.interface_index = interface_index;
+    request.filter_mode = RIN_MCAST_FILTER_EXCLUDE;
+    request.source_count = RIN_MCAST_SOURCE_FILTER_MAX_SOURCES;
+    option_length = (socklen_t)sizeof(request);
+    if (getsockopt(sockfd, family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6,
+                   RIN_MCAST_SOURCE_FILTER_V1, &request,
+                   &option_length) != 0)
+        return -1;
+    if (option_length != sizeof(request) ||
+        request.struct_size != sizeof(request) ||
+        request.version != RIN_MCAST_SOURCE_FILTER_ABI_VERSION ||
+        request.address_family != family ||
+        (request.filter_mode != RIN_MCAST_FILTER_INCLUDE &&
+         request.filter_mode != RIN_MCAST_FILTER_EXCLUDE) ||
+        request.reserved[0] != 0u || request.reserved[1] != 0u ||
+        request.source_count > RIN_MCAST_SOURCE_FILTER_MAX_SOURCES) {
+        errno = EINVAL; return -1;
+    }
+    *filter_mode = request.filter_mode;
+    *source_count = request.source_count;
+    for (index = 0u; index < capacity && index < request.source_count; ++index) {
+        uint32_t byte;
+        for (byte = 0u; byte < sizeof(source_list[index]); ++byte)
+            ((uint8_t*)&source_list[index])[byte] = 0u;
+        source_list[index].ss_family = (sa_family_t)family;
+        if (family == AF_INET) {
+            struct sockaddr_in value = {0};
+            value.sin_family = AF_INET;
+            for (byte = 0u; byte < 4u; ++byte)
+                ((uint8_t*)&value.sin_addr.s_addr)[byte] =
+                    request.sources[index][byte];
+            for (byte = 0u; byte < sizeof(value); ++byte)
+                ((uint8_t*)&source_list[index])[byte] =
+                    ((const uint8_t*)&value)[byte];
+        } else {
+            struct sockaddr_in6 value = {0};
+            value.sin6_family = AF_INET6;
+            for (byte = 0u; byte < 16u; ++byte)
+                value.sin6_addr.s6_addr[byte] = request.sources[index][byte];
+            if (value.sin6_addr.s6_addr[0] == 0xfeu &&
+                (value.sin6_addr.s6_addr[1] & 0xc0u) == 0x80u)
+                value.sin6_scope_id = request.interface_index;
+            for (byte = 0u; byte < sizeof(value); ++byte)
+                ((uint8_t*)&source_list[index])[byte] =
+                    ((const uint8_t*)&value)[byte];
+        }
+    }
+    return 0;
+}
 
 /* Linux-compatible packet metadata payloads used by recvmsg(2).  RinOS
  * exposes the same fixed-width control payload even though the network stack
