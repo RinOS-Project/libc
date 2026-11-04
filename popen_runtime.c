@@ -365,6 +365,7 @@ int pclose(FILE* stream) {
     RinPopenChild* record;
     int close_result;
     int close_error;
+    int fd_flags;
     int status = 0;
     int cancel_state = -1;
     int wait_error = 0;
@@ -385,6 +386,20 @@ int pclose(FILE* stream) {
         cursor = &(*cursor)->next;
     record = *cursor;
     if (record) {
+        fd_flags = RIN_POPEN_FCNTL(record->fd, F_GETFD);
+        if (fd_flags < 0 ||
+            (!(fd_flags & FD_CLOEXEC) &&
+             RIN_POPEN_FCNTL(record->fd, F_SETFD,
+                             fd_flags | FD_CLOEXEC) < 0)) {
+            int flag_error = errno ? errno : EIO;
+            rin_popen_unlock();
+            rin_popen_restore_cancel_state(cancel_state);
+            errno = flag_error;
+            return -1;
+        }
+        /* Once it leaves the registry, close-on-exec protects the short
+         * interval before fclose releases the underlying descriptor. */
+        record->fd = -1;
         *cursor = record->next;
         record->registered = 0;
     }
