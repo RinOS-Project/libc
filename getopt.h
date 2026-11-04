@@ -225,6 +225,33 @@ static inline void _rin_getopt_long_diagnostic(char* const argv[],
             argument ? argument : "?");
 }
 
+/* Resolve a long-option spelling. Exact names take precedence over
+ * abbreviations; a prefix is accepted only when it identifies one option. */
+static inline int _rin_getopt_match_long_option(
+    const struct option* longopts, const char* name, int name_len,
+    int* ambiguous) {
+    int match = -1;
+    if (ambiguous) *ambiguous = 0;
+    if (!longopts || !name || name_len < 0) return -1;
+
+    for (int index = 0; longopts[index].name; ++index) {
+        const char* candidate = longopts[index].name;
+        int offset = 0;
+        while (offset < name_len && candidate[offset] &&
+               candidate[offset] == name[offset])
+            ++offset;
+        if (offset != name_len) continue;
+
+        if (candidate[offset] == '\0') return index;
+        if (match >= 0) {
+            if (ambiguous) *ambiguous = 1;
+            return -1;
+        }
+        match = index;
+    }
+    return match;
+}
+
 static inline int _rin_getopt_return_nonoption(char* const argv[],
                                                 const char* optstring) {
     if (!optstring || optstring[0] != '-') return -1;
