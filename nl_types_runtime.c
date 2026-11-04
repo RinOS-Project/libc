@@ -549,25 +549,35 @@ char* catgets(nl_catd descriptor, int set_id, int message_id,
     RinCatalogMessage search;
     RinCatalogMessage* found;
     char* result = (char*)default_string;
-    if (set_id <= 0 || message_id <= 0) return result;
-    search.set_id = (uint32_t)set_id;
-    search.message_id = (uint32_t)message_id;
-    search.text = NULL;
+    const int saved_errno = errno;
+    int missing;
     rin_catalog_lock();
     slot = rin_catalog_resolve_locked(descriptor);
-    if (slot) {
-        if (slot->catalog->message_count != 0u) {
-            found = (RinCatalogMessage*)bsearch(
-                &search, slot->catalog->messages,
-                slot->catalog->message_count,
-                sizeof(*slot->catalog->messages),
-                rin_catalog_message_compare);
-        } else {
-            found = NULL;
-        }
-        if (found) result = found->text;
+    if (!slot) {
+        rin_catalog_unlock();
+        errno = saved_errno;
+        return result;
+    }
+    found = NULL;
+    if (set_id > 0 && message_id > 0 &&
+        slot->catalog->message_count != 0u) {
+        search.set_id = (uint32_t)set_id;
+        search.message_id = (uint32_t)message_id;
+        search.text = NULL;
+        found = (RinCatalogMessage*)bsearch(
+            &search, slot->catalog->messages,
+            slot->catalog->message_count,
+            sizeof(*slot->catalog->messages),
+            rin_catalog_message_compare);
+    }
+    if (found) {
+        result = found->text;
+        missing = 0;
+    } else {
+        missing = 1;
     }
     rin_catalog_unlock();
+    errno = missing ? ENOMSG : saved_errno;
     return result;
 }
 
