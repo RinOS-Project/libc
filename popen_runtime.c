@@ -4,6 +4,10 @@
 #ifndef RINSDK_SPLIT_BUILD
 #define RINSDK_SPLIT_BUILD 1
 #endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 202405L
+#endif
+#define RIN_UNISTD_PIPE2_IMPLEMENTATION 1
 #include "stdio.h"
 
 #if defined(RIN_USERSPACE)
