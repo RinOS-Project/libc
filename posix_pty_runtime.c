@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 
+#define _POSIX_C_SOURCE 202405L
 #define RIN_STDLIB_PTSNAME_R_IMPLEMENTATION 1
 #include "stdlib.h"
 
