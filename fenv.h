@@ -250,7 +250,11 @@ static inline void __rin_fenv_raise_x87(unsigned int requested) {
     (void)result; \
 } while (0)
 
-static inline void __rin_fenv_raise_sse(unsigned int requested) {
+/* The IA-32 runtime is compiled without SSE enabled globally.  Keep the
+ * SSE2-only floating-point exception operations in a target-specific helper
+ * so the rest of the runtime retains the baseline compiler target. */
+__attribute__((target("sse2"))) static inline void
+__rin_fenv_raise_sse(unsigned int requested) {
     const volatile double zero = 0.0;
     const volatile double one = 1.0;
     const volatile double two = 2.0;
