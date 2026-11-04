@@ -4,6 +4,7 @@
 #ifndef RINSDK_SPLIT_BUILD
 #define RINSDK_SPLIT_BUILD 1
 #endif
+#define RIN_UNISTD_PIPE2_IMPLEMENTATION 1
 #include "stdio.h"
 
 #if defined(RIN_USERSPACE)
@@ -45,6 +46,7 @@ typedef struct RinPopenChild {
     struct RinPopenChild* next;
     FILE* stream;
     int pidfd;
+    int fd;
     int registered;
 } RinPopenChild;
 
@@ -167,6 +169,17 @@ static int rin_popen_move_above_stdio(int descriptors[2], int* extra_fd) {
     return 0;
 }
 
+static int rin_popen_set_cloexec(int fd, int enabled) {
+    int flags;
+    int desired;
+    if (fd < 0) return -1;
+    flags = RIN_POPEN_FCNTL(fd, F_GETFD);
+    if (flags < 0) return -1;
+    desired = enabled ? flags | FD_CLOEXEC : flags & ~FD_CLOEXEC;
+    if (desired == flags) return 0;
+    return RIN_POPEN_FCNTL(fd, F_SETFD, desired) < 0 ? -1 : 0;
+}
+
 FILE* popen(const char* command, const char* type) {
     int descriptors[2] = {-1, -1};
     int extra_fd = -1;
@@ -180,17 +193,23 @@ FILE* popen(const char* command, const char* type) {
     int saved_error;
     int cancel_state = -1;
     int lock_cancel_state = -1;
+    int popen_lock_held = 0;
+    int type_cloexec;
     pid_t child = 0;
     int child_pidfd = -1;
     char* arguments[4];
     RinPopenChild* record;
+    RinPopenChild* open_child;
     FILE* stream;
 
     if (!command || !type ||
-        !((type[0] == 'r' || type[0] == 'w') && type[1] == '\0')) {
+        !((type[0] == 'r' || type[0] == 'w') &&
+          (type[1] == '\0' ||
+           (type[1] == 'e' && type[2] == '\0')))) {
         errno = EINVAL;
         return NULL;
     }
+    type_cloexec = type[1] == 'e';
     error = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cancel_state);
     if (error != 0) {
         errno = error;
@@ -234,6 +253,22 @@ FILE* popen(const char* command, const char* type) {
         goto fail_before_spawn;
     }
     actions_initialized = 1;
+    /* Serialize the registry snapshot with other popen calls.  Keep the new
+     * pipe close-on-exec until its child actions have consumed it. */
+    if (rin_popen_lock(&lock_cancel_state) != 0) {
+        saved_error = errno ? errno : EIO;
+        goto fail_before_spawn;
+    }
+    popen_lock_held = 1;
+    for (open_child = g_popen_children; open_child;
+         open_child = open_child->next) {
+        if (open_child->fd < 0) continue;
+        error = posix_spawn_file_actions_addclose(&actions, open_child->fd);
+        if (error != 0) {
+            saved_error = error;
+            goto fail_before_spawn;
+        }
+    }
     error = posix_spawn_file_actions_adddup2(
         &actions, descriptors[child_index], child_target);
     if (error == 0)
@@ -265,32 +300,30 @@ FILE* popen(const char* command, const char* type) {
         saved_error = errno ? errno : EIO;
         goto fail_after_spawn;
     }
+    if (rin_popen_set_cloexec(descriptors[parent_index], type_cloexec) != 0) {
+        saved_error = errno ? errno : EIO;
+        goto fail_after_spawn;
+    }
 
     stream = RIN_POPEN_FDOPEN(descriptors[parent_index], stream_mode);
     if (!stream) {
         saved_error = errno ? errno : EIO;
         goto fail_after_spawn;
     }
+    record->fd = descriptors[parent_index];
     descriptors[parent_index] = -1;
 
     record->stream = stream;
     record->pidfd = child_pidfd;
     child_pidfd = -1;
     record->registered = 0;
-    if (rin_popen_lock(&lock_cancel_state) != 0) {
-        saved_error = errno ? errno : EIO;
-        (void)RIN_POPEN_FCLOSE(stream);
-        rin_popen_reap_failed_child(&record->pidfd);
-        RIN_POPEN_FREE(record);
-        rin_popen_restore_cancel_state(cancel_state);
-        errno = saved_error;
-        return NULL;
-    }
     record->next = g_popen_children;
     g_popen_children = record;
     record->registered = 1;
     pthread_cleanup_push(rin_popen_cancel_child, record);
     rin_popen_unlock();
+    popen_lock_held = 0;
+    rin_popen_restore_cancel_state(lock_cancel_state);
     error = pthread_setcancelstate(cancel_state, NULL);
     pthread_cleanup_pop(error != 0);
     if (error != 0) {
@@ -300,6 +333,11 @@ FILE* popen(const char* command, const char* type) {
     return stream;
 
 fail_after_spawn:
+    if (popen_lock_held) {
+        rin_popen_unlock();
+        popen_lock_held = 0;
+        rin_popen_restore_cancel_state(lock_cancel_state);
+    }
     rin_popen_close_pipe(descriptors, extra_fd);
     rin_popen_reap_failed_child(&child_pidfd);
     RIN_POPEN_FREE(record);
@@ -310,6 +348,11 @@ fail_after_spawn:
 fail_before_spawn:
     if (actions_initialized)
         (void)posix_spawn_file_actions_destroy(&actions);
+    if (popen_lock_held) {
+        rin_popen_unlock();
+        popen_lock_held = 0;
+        rin_popen_restore_cancel_state(lock_cancel_state);
+    }
     rin_popen_close_pipe(descriptors, extra_fd);
     RIN_POPEN_FREE(record);
     rin_popen_restore_cancel_state(cancel_state);
