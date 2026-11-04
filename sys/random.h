@@ -54,6 +54,8 @@ static inline ssize_t getrandom(void* buf, size_t buflen, unsigned int flags)
 
 #endif /* hosted random provider selection */
 
-#ifndef GRND_INSECURE
-#    define GRND_INSECURE 0x0004
+#if !defined(RIN_SYS_RANDOM_HOSTED_UNAVAILABLE)
+#    ifndef GRND_INSECURE
+#        define GRND_INSECURE 0x0004
+#    endif
 #endif
