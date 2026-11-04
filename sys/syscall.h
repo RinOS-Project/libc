@@ -314,7 +314,77 @@ typedef struct rin_thread_stack_info_v1 {
  * x86: int $0x80 (eax=num, ebx,ecx,edx,esi,edi,ebp=args)
  * ═══════════════════════════════════════════════════════════════*/
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(_WIN32) && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    !defined(RIN_HOSTED_WINDOWS_ENABLE_RIN_SYSCALL)
+/* The target syscall numbers and register conventions are not a Windows
+ * host ABI.  Hosted Windows callers get the ordinary negative-errno result
+ * until they provide an explicit adapter; product targets keep the assembly
+ * implementation below by defining RIN_FREESTANDING. */
+static inline intptr_t _syscall0(uintptr_t num) {
+    (void)num;
+    return -(intptr_t)ENOSYS;
+}
+
+static inline intptr_t _syscall1(uintptr_t num, uintptr_t a1) {
+    (void)num;
+    (void)a1;
+    return -(intptr_t)ENOSYS;
+}
+
+static inline intptr_t _syscall2(uintptr_t num, uintptr_t a1, uintptr_t a2) {
+    (void)num;
+    (void)a1;
+    (void)a2;
+    return -(intptr_t)ENOSYS;
+}
+
+static inline intptr_t _syscall3(uintptr_t num, uintptr_t a1,
+                                 uintptr_t a2, uintptr_t a3) {
+    (void)num;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    return -(intptr_t)ENOSYS;
+}
+
+static inline intptr_t _syscall4(uintptr_t num, uintptr_t a1,
+                                 uintptr_t a2, uintptr_t a3,
+                                 uintptr_t a4) {
+    (void)num;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    return -(intptr_t)ENOSYS;
+}
+
+static inline intptr_t _syscall5(uintptr_t num, uintptr_t a1,
+                                 uintptr_t a2, uintptr_t a3,
+                                 uintptr_t a4, uintptr_t a5) {
+    (void)num;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
+    return -(intptr_t)ENOSYS;
+}
+
+static inline intptr_t _syscall6(uintptr_t num, uintptr_t a1,
+                                 uintptr_t a2, uintptr_t a3,
+                                 uintptr_t a4, uintptr_t a5,
+                                 uintptr_t a6) {
+    (void)num;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
+    (void)a6;
+    return -(intptr_t)ENOSYS;
+}
+#elif defined(__x86_64__) || defined(_M_X64)
 /* ─────────────────────────────────────────────────────────────
  * x86-64 syscall implementations
  * ─────────────────────────────────────────────────────────────*/

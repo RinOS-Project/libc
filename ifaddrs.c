@@ -226,7 +226,7 @@ int getifaddrs(struct ifaddrs** ifap)
             uint16_t hardware_type = 0u;
             if (rin_ifaddrs_link_hardware_type(source, &hardware_type) &&
                 addresses->interface_id != 0u &&
-                addresses->interface_id <= RIN_NET_INTERFACE_ID_MAX &&
+                addresses->interface_id <= (uint64_t)INT32_MAX &&
                 rin_ifaddrs_has_link_address(addresses->mac)) {
                 struct ifaddrs* entry = &storage->entries[count++];
                 struct sockaddr_ll* address =

@@ -24,37 +24,6 @@ void* memccpy(void* destination, const void* source, int stop_byte,
     return NULL;
 }
 
-void* mempcpy(void* destination, const void* source, size_t size) {
-    unsigned char* output = (unsigned char*)destination;
-    const unsigned char* input = (const unsigned char*)source;
-    size_t index;
-    for (index = 0u; index < size; ++index) output[index] = input[index];
-    return output + size;
-}
-
-char* strchrnul(const char* string, int character) {
-    while (*string != '\0' && *string != (char)character) ++string;
-    return (char*)(uintptr_t)string;
-}
-
-void* memmem(const void* haystack, size_t haystack_length,
-             const void* needle, size_t needle_length) {
-    const unsigned char* bytes = (const unsigned char*)haystack;
-    const unsigned char* pattern = (const unsigned char*)needle;
-    size_t offset;
-    if (needle_length == 0u) return (void*)(uintptr_t)haystack;
-    if (haystack_length < needle_length) return NULL;
-    for (offset = 0u; offset <= haystack_length - needle_length; ++offset) {
-        size_t index = 0u;
-        while (index < needle_length &&
-               bytes[offset + index] == pattern[index])
-            ++index;
-        if (index == needle_length)
-            return (void*)(uintptr_t)(bytes + offset);
-    }
-    return NULL;
-}
-
 void* memset_explicit(void* memory, int value, size_t size) {
     volatile unsigned char* output = (volatile unsigned char*)memory;
     const unsigned char byte = (unsigned char)value;
@@ -202,19 +171,6 @@ size_t wcsnlen(const wchar_t* string, size_t maxlen) {
     size_t length = 0u;
     while (length < maxlen && string[length] != L'\0') ++length;
     return length;
-}
-
-wchar_t* wcschrnul(const wchar_t* string, wchar_t character) {
-    while (*string != L'\0' && *string != character) ++string;
-    return (wchar_t*)(uintptr_t)string;
-}
-
-wchar_t* wmempcpy(wchar_t* destination, const wchar_t* source,
-                  size_t count) {
-    size_t index;
-    for (index = 0u; index < count; ++index)
-        destination[index] = source[index];
-    return destination + count;
 }
 
 wchar_t* wcsdup(const wchar_t* string) {

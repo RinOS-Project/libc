@@ -2518,12 +2518,6 @@ _RIN_STDIO_API int fputc(int c, FILE* stream) {
         ? (unsigned char)c : EOF;
 }
 
-#if defined(__RIN_FEATURES_GNU) || defined(RIN_STDIO_OWNER_BUILD)
-_RIN_STDIO_API int fputc_unlocked(int c, FILE* stream) {
-    return _rin_fputc_unlocked(c, stream);
-}
-#endif
-
 _RIN_STDIO_API int putc_unlocked(int c, FILE* stream) {
     return _rin_fputc_unlocked(c, stream);
 }
@@ -2547,20 +2541,6 @@ _RIN_STDIO_API int fputs(const char* s, FILE* stream) {
     while (s[length]) ++length;
     return _rin_stdio_write_all(stream, s, length) == 0 ? 0 : EOF;
 }
-
-#if defined(__RIN_FEATURES_GNU) || defined(RIN_STDIO_OWNER_BUILD)
-_RIN_STDIO_API int fputs_unlocked(const char* s, FILE* stream) {
-    size_t length = 0u;
-    if (!s || !stream) {
-        errno = EINVAL;
-        if (stream) stream->error = 1;
-        return EOF;
-    }
-    while (s[length]) ++length;
-    if (!_rin_stdio_claim_byte_orientation(stream)) return EOF;
-    return _rin_stdio_write_all_buffered(stream, s, length) == 0 ? 0 : EOF;
-}
-#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * 文字入力
@@ -2682,12 +2662,6 @@ _RIN_STDIO_API int fgetc(FILE* stream) {
     return result;
 }
 
-#if defined(__RIN_FEATURES_GNU) || defined(RIN_STDIO_OWNER_BUILD)
-_RIN_STDIO_API int fgetc_unlocked(FILE* stream) {
-    return _rin_fgetc_unlocked(stream);
-}
-#endif
-
 _RIN_STDIO_API int getc_unlocked(FILE* stream) {
     return _rin_fgetc_unlocked(stream);
 }
@@ -2741,12 +2715,6 @@ _RIN_STDIO_API char* fgets(char* s, int size, FILE* stream) {
     funlockfile(stream);
     return result;
 }
-
-#if defined(__RIN_FEATURES_GNU) || defined(RIN_STDIO_OWNER_BUILD)
-_RIN_STDIO_API char* fgets_unlocked(char* s, int size, FILE* stream) {
-    return _rin_fgets_unlocked(s, size, stream);
-}
-#endif
 
 static inline void _rin_stdio_mark_stream_error(FILE* stream) {
     if (!stream) return;
@@ -3399,13 +3367,6 @@ _RIN_STDIO_API size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream) 
     return result;
 }
 
-#if defined(__RIN_FEATURES_GNU) || defined(RIN_STDIO_OWNER_BUILD)
-_RIN_STDIO_API size_t fread_unlocked(void* ptr, size_t size, size_t nmemb,
-                                     FILE* stream) {
-    return _rin_fread_unlocked(ptr, size, nmemb, stream);
-}
-#endif
-
 static inline size_t _rin_fwrite_unlocked(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
     size_t total;
     size_t copied;
@@ -3463,13 +3424,6 @@ _RIN_STDIO_API size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* s
     funlockfile(stream);
     return result;
 }
-
-#if defined(__RIN_FEATURES_GNU) || defined(RIN_STDIO_OWNER_BUILD)
-_RIN_STDIO_API size_t fwrite_unlocked(const void* ptr, size_t size, size_t nmemb,
-                                      FILE* stream) {
-    return _rin_fwrite_unlocked(ptr, size, nmemb, stream);
-}
-#endif
 
 static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
     intptr_t ret;
@@ -4173,47 +4127,6 @@ _RIN_STDIO_API int fileno(FILE* stream) {
     funlockfile(stream);
     return result;
 }
-
-#if defined(__RIN_FEATURES_GNU) || defined(RIN_STDIO_OWNER_BUILD)
-_RIN_STDIO_API int feof_unlocked(FILE* stream) {
-    if (!stream) {
-        errno = EINVAL;
-        return 0;
-    }
-    return stream->eof;
-}
-
-_RIN_STDIO_API int ferror_unlocked(FILE* stream) {
-    if (!stream) {
-        errno = EINVAL;
-        return 0;
-    }
-    return stream->error;
-}
-
-_RIN_STDIO_API void clearerr_unlocked(FILE* stream) {
-    if (!stream) return;
-#if defined(RIN_USERSPACE)
-    if (rin_stdio_cookie_active(stream)) return;
-#endif
-    stream->eof = 0;
-    stream->error = 0;
-}
-
-_RIN_STDIO_API int fileno_unlocked(FILE* stream) {
-    if (!stream) {
-        errno = EINVAL;
-        return -1;
-    }
-#if defined(RIN_USERSPACE)
-    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
-        errno = EBADF;
-        return -1;
-    }
-#endif
-    return stream->fd;
-}
-#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * フォーマット出力

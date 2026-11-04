@@ -104,21 +104,6 @@ RIN_STRING_INLINE void* memccpy(void* destination, const void* source,
 #endif
 #endif
 
-/* GNU byte-copy extension: return the first byte after the copied range. */
-#if defined(__RIN_FEATURES_GNU) || defined(RIN_STRING_IMPLEMENTATION)
-#ifdef RIN_STRING_IMPLEMENTATION
-void* mempcpy(void* destination, const void* source, size_t size);
-#else
-RIN_STRING_INLINE void* mempcpy(void* destination, const void* source,
-                                size_t size) {
-    unsigned char* output = (unsigned char*)destination;
-    const unsigned char* input = (const unsigned char*)source;
-    size_t index;
-    for (index = 0u; index < size; ++index) output[index] = input[index];
-    return output + size;
-}
-#endif
-#endif
 /* C23 secure wipe: volatile stores remain observable even when the caller
  * does not read the cleared bytes again. */
 #ifndef memset_explicit
@@ -142,32 +127,6 @@ RIN_STRING_INLINE void* memset_explicit(void* memory, int value, size_t size) {
  * rin.hでマクロ定義済みの場合はスキップ
  * ═══════════════════════════════════════════════════════════════*/
 
-#if defined(__RIN_FEATURES_POSIX_2024) || defined(__RIN_FEATURES_GNU) || \
-    defined(RIN_STRING_IMPLEMENTATION)
-#ifdef RIN_STRING_IMPLEMENTATION
-void* memmem(const void* haystack, size_t haystack_length,
-             const void* needle, size_t needle_length);
-#else
-RIN_STRING_INLINE void* memmem(const void* haystack, size_t haystack_length,
-                               const void* needle, size_t needle_length) {
-    const unsigned char* bytes = (const unsigned char*)haystack;
-    const unsigned char* pattern = (const unsigned char*)needle;
-    size_t offset;
-    if (needle_length == 0u) return (void*)(__UINTPTR_TYPE__)haystack;
-    if (haystack_length < needle_length) return NULL;
-    for (offset = 0u; offset <= haystack_length - needle_length; ++offset) {
-        size_t index = 0u;
-        while (index < needle_length &&
-               bytes[offset + index] == pattern[index])
-            ++index;
-        if (index == needle_length)
-            return (void*)(__UINTPTR_TYPE__)(bytes + offset);
-    }
-    return NULL;
-}
-#endif
-#endif
-
 #ifndef strlen
 #ifdef RIN_STRING_IMPLEMENTATION
 size_t strlen(const char* s);
@@ -177,9 +136,6 @@ char* strcat(char* dest, const char* src);
 int strcmp(const char* s1, const char* s2);
 int strncmp(const char* s1, const char* s2, size_t n);
 char* strchr(const char* s, int c);
-#if defined(__RIN_FEATURES_GNU) || defined(RIN_STRING_IMPLEMENTATION)
-char* strchrnul(const char* string, int character);
-#endif
 char* strrchr(const char* s, int c);
 char* strstr(const char* haystack, const char* needle);
 #else
@@ -226,13 +182,6 @@ RIN_STRING_INLINE char* strchr(const char* s, int c) {
     }
     return (c == '\0') ? (char*)(__UINTPTR_TYPE__)s : NULL;
 }
-
-#if defined(__RIN_FEATURES_GNU)
-RIN_STRING_INLINE char* strchrnul(const char* string, int character) {
-    while (*string != '\0' && *string != (char)character) ++string;
-    return (char*)(__UINTPTR_TYPE__)string;
-}
-#endif
 
 RIN_STRING_INLINE char* strrchr(const char* s, int c) {
     const char* last = NULL;

@@ -544,34 +544,27 @@ char* catgets(nl_catd descriptor, int set_id, int message_id,
               const char* default_string) {
     RinCatalogSlot* slot;
     RinCatalogMessage search;
-    RinCatalogMessage* found = NULL;
+    RinCatalogMessage* found;
     char* result = (char*)default_string;
-    const int saved_errno = errno;
-    int missing = 0;
-
+    if (set_id <= 0 || message_id <= 0) return result;
+    search.set_id = (uint32_t)set_id;
+    search.message_id = (uint32_t)message_id;
+    search.text = NULL;
     rin_catalog_lock();
     slot = rin_catalog_resolve_locked(descriptor);
     if (slot) {
-        if (set_id > 0 && message_id > 0 &&
-            slot->catalog->message_count != 0u) {
-            search.set_id = (uint32_t)set_id;
-            search.message_id = (uint32_t)message_id;
-            search.text = NULL;
+        if (slot->catalog->message_count != 0u) {
             found = (RinCatalogMessage*)bsearch(
                 &search, slot->catalog->messages,
                 slot->catalog->message_count,
                 sizeof(*slot->catalog->messages),
                 rin_catalog_message_compare);
-        }
-        if (found) {
-            result = found->text;
         } else {
-            missing = 1;
+            found = NULL;
         }
+        if (found) result = found->text;
     }
     rin_catalog_unlock();
-
-    errno = missing ? ENOMSG : saved_errno;
     return result;
 }
 
