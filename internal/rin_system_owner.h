@@ -4,6 +4,22 @@
 #ifndef RIN_SYSTEM_OWNER_H
 #define RIN_SYSTEM_OWNER_H
 
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    (!defined(RIN_USERSPACE) || !RIN_USERSPACE)
+
+#include "../errno.h"
+
+/* A freestanding target without the userspace process environment cannot
+ * start a command processor. Keep stdlib.h usable without importing the
+ * POSIX signal and wait namespaces just to provide this unavailable API. */
+static inline int _rin_system_owner(const char* command) {
+    if (!command) return 0;
+    errno = ENOSYS;
+    return -1;
+}
+
+#else
+
 #include "../limits.h"
 #include "../signal.h"
 #include "../pthread.h"
@@ -422,5 +438,7 @@ system_transaction_finish:
 
     }
 }
+
+#endif /* freestanding target without userspace process support */
 
 #endif /* RIN_SYSTEM_OWNER_H */
