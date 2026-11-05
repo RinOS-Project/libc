@@ -300,11 +300,8 @@ iconv_t iconv_open(const char* tocode, const char* fromcode) {
             errno = ENOMEM;
             return (iconv_t)(uintptr_t)-1;
         }
-        for (size_t byte_index = 0u;
-             byte_index < (size_t)available * sizeof(*candidate_chunk);
-             ++byte_index) {
-            ((unsigned char*)candidate_chunk)[byte_index] = 0u;
-        }
+        __builtin_memset(candidate_chunk, 0,
+                         (size_t)available * sizeof(*candidate_chunk));
 
         rin_iconv_table_lock();
         if (g_iconv_free_list ||

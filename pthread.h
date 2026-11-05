@@ -2157,7 +2157,22 @@ extern int pthread_once(pthread_once_t* once_control, void (*init_routine)(void)
  * シグナルマスク
  * ═══════════════════════════════════════════════════════════════*/
 
-#if defined(_RIN_USE_GNU_PTHREAD_SIGQUEUE)
+/* Forward declare sigset_t if not already defined */
+#ifndef _SIGSET_T_DEFINED
+#define _SIGSET_T_DEFINED
+typedef uint64_t sigset_t;
+#endif
+
+/* SIG_BLOCK, SIG_UNBLOCK, SIG_SETMASK may be defined in signal.h */
+#ifndef SIG_BLOCK
+#define SIG_BLOCK   0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
+#endif
+#ifndef NSIG
+#define NSIG 64
+#endif
+
 static inline int pthread_sigqueue(pthread_t thread, int sig,
                                    union sigval value) {
     siginfo_t information;
@@ -2188,7 +2203,6 @@ static inline int pthread_sigqueue(pthread_t thread, int sig,
         return error;
     }
 }
-#endif /* _RIN_USE_GNU_PTHREAD_SIGQUEUE */
 
 /* Product-owned deferred cancellation.  The implementation keeps the
  * cancellation record in libc rather than inheriting a host pthread ABI. */

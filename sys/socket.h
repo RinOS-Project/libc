@@ -840,6 +840,8 @@ static inline int accept(int sockfd, struct sockaddr* addr,
 }
 
 static inline int connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
+    (void)addr;
+    (void)addrlen;
     uint32_t retry_count = 0u;
     uint32_t delay_ms = 1u;
     __rin_pthread_cancel_point_if_linked();
@@ -868,23 +870,10 @@ static inline int connect(int sockfd, const struct sockaddr* addr, socklen_t add
         }
         if (nonblocking != 0) return -1;
 
-        int domain = 0;
-        socklen_t domain_size = (socklen_t)sizeof(domain);
-        if (getsockopt(sockfd, SOL_SOCKET, SO_DOMAIN, &domain,
-                       &domain_size) == 0 &&
-            domain_size == (socklen_t)sizeof(domain) && domain == AF_UNIX) {
-            int type = 0;
-            socklen_t type_size = (socklen_t)sizeof(type);
-            if (getsockopt(sockfd, SOL_SOCKET, SO_TYPE, &type,
-                           &type_size) == 0 &&
-                type_size == (socklen_t)sizeof(type) &&
-                (type == SOCK_STREAM || type == SOCK_SEQPACKET))
-                return -1;
-        }
-
-        /* AF_UNIX stream backlog waits in the kernel until a slot opens or
-         * the attempt is interrupted. Keep the bounded fallback for other
-         * socket families that report transient EAGAIN. */
+        /* Connect EAGAIN can reflect transient admission pressure. Sleep with
+         * exponential backoff for at most 511 ms; the kernel syscall never
+         * spins or parks a worker while waiting for capacity. Nonblocking
+         * sockets and other errors return immediately. */
         struct timespec delay = {0, (long)delay_ms * 1000000L};
         if (nanosleep(&delay, 0) != 0) return -1;
         ++retry_count;

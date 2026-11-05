@@ -190,3 +190,7 @@ int memfd_create(const char* name, unsigned int flags) {
     }
     return fd;
 }
+
+int memfd_secret(unsigned int flags) {
+    return (int)syscall(SYS_MEMFD_SECRET, flags);
+}

@@ -1,8 +1,5 @@
 /* SPDX-License-Identifier: MIT */
 /* This implementation uses the GNU pipe2 extension internally. */
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 202405L
-#endif
 #define RIN_UNISTD_PIPE2_IMPLEMENTATION 1
 #include "wordexp.h"
 

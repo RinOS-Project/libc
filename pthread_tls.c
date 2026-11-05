@@ -13,10 +13,6 @@
 #include "pthread.h"
 #include "sched.h"
 
-/* POSIX lgamma/tgamma sign storage.  Unlike errno this is process-global:
- * the standard requires one shared signgam, not per-thread state. */
-int signgam = 0;
-
 /* ═══════════════════════════════════════════════════════════════
  * スレッドローカル errno
  * ═══════════════════════════════════════════════════════════════*/

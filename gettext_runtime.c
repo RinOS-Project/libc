@@ -1,9 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* Bounded GNU MO catalog reader and gettext runtime. */
 
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 202405L
-#endif
 #define RIN_GETTEXT_RUNTIME_IMPLEMENTATION 1
 #include "libintl.h"
 

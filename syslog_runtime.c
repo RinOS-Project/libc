@@ -1,8 +1,5 @@
 /* RinOS libc syslog process-owned configuration. */
 
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 202405L
-#endif
 #include "syslog.h"
 #include "pthread.h"
 #include <rin/syslog_transport_v1.h>

@@ -2,7 +2,6 @@
 /* Out-of-line process owner for split libc and RinSDK runtime builds. */
 
 #define RINSDK_SPLIT_BUILD 1
-#define _RIN_SIGNAL_RUNTIME_IMPLEMENTATION 1
 #include "limits.h"
 #include "signal.h"
 #include "stdlib.h"

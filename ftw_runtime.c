@@ -1,10 +1,5 @@
 /* SPDX-License-Identifier: MIT */
 
-#ifndef RIN_FTW_HOST_TEST
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 202405L
-#endif
-#endif
 #ifdef RIN_FTW_HOST_TEST
 #include <ftw.h>
 #include <dirent.h>

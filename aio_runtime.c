@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: MIT */
 
-#define _RIN_SIGNAL_RUNTIME_IMPLEMENTATION 1
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 202405L
-#endif
 #include "aio.h"
 
 #include "errno.h"
