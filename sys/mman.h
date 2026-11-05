@@ -29,6 +29,31 @@
 #include <rin/process/madvise_abi.h>
 #include <stdarg.h>
 
+/* Keep the POSIX base separate from Linux/GNU mmap extensions.  The hosted
+ * Unix path above delegates to the host header; these selectors cover RinOS
+ * and hosted-Windows consumers. */
+#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU) || \
+    defined(__USE_MISC) || defined(__USE_GNU) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200112L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500) || \
+    defined(__RIN_FEATURES_POSIX_2024)
+#define __RIN_MMAN_POSIX_VISIBLE 1
+#endif
+
+#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU) || \
+    defined(__USE_MISC) || defined(__USE_GNU)
+#define __RIN_MMAN_LINUX_VISIBLE 1
+#endif
+
+#if defined(__RIN_FEATURES_GNU) || defined(__USE_GNU)
+#define __RIN_MMAN_GNU_VISIBLE 1
+#endif
+
+#if defined(__RIN_MMAN_GNU_VISIBLE) || defined(_LARGEFILE64_SOURCE) || \
+    defined(__USE_LARGEFILE64) || defined(__RIN_FILE_OFFSET_BITS64)
+#define __RIN_MMAN_LARGEFILE64_VISIBLE 1
+#endif
+
 #if defined(_WIN32) && !defined(RIN_FREESTANDING)
 /* Hosted Windows has no RinOS syscall provider.  An application may supply
  * an arity-specific _RIN_MMAN_SYSCALL* hook; otherwise these wrappers must
@@ -141,24 +166,32 @@ static inline int __rin_mman_int_result(intptr_t result)
  * mmap プロテクションフラグ
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(__RIN_MMAN_POSIX_VISIBLE)
 #define PROT_NONE      0x00       /* アクセス不可 */
 #define PROT_READ      0x01       /* 読み取り可能 */
 #define PROT_WRITE     0x02       /* 書き込み可能 */
 #define PROT_EXEC      0x04       /* 実行可能 */
+#endif
+#if defined(__RIN_MMAN_LINUX_VISIBLE)
 /* RinOSでは未対応。mmap()／mprotect()はEINVALを返す。 */
 #define PROT_GROWSDOWN 0x01000000 /* スタック用（下方向に拡張） */
 #define PROT_GROWSUP   0x02000000 /* 上方向に拡張 */
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * mmap フラグ
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(__RIN_MMAN_POSIX_VISIBLE)
 #define MAP_SHARED      0x01   /* 他プロセスと共有 */
 #define MAP_PRIVATE     0x02   /* プライベートコピーオンライト */
+#define MAP_FIXED       0x10   /* 指定アドレスに配置 */
+#define MAP_FAILED ((void*)-1)
+#endif
+#if defined(__RIN_MMAN_LINUX_VISIBLE)
 #define MAP_SHARED_VALIDATE \
     (MAP_SHARED | MAP_PRIVATE) /* 未知flagを厳密に検証する共有mapping */
 #define MAP_SYNC        0x80000 /* 永続同期mappingを要求 */
-#define MAP_FIXED       0x10   /* 指定アドレスに配置 */
 #define MAP_FIXED_NOREPLACE 0x00100000 /* 既存マッピングを置換せず固定配置 */
 #define MAP_ANONYMOUS   0x20   /* ファイルなし (メモリのみ) */
 #define MAP_ANON        MAP_ANONYMOUS
@@ -172,20 +205,24 @@ static inline int __rin_mman_int_result(intptr_t result)
 #define MAP_DENYWRITE   0x800  /* Linux互換用。Linuxでは無視される */
 #define MAP_STACK       0x20000/* スタック用ヒント */
 #define MAP_HUGETLB     0x40000/* ヒュージページを使用 */
-
-/* mmap失敗時の戻り値 */
-#define MAP_FAILED ((void*)-1)
+#endif
 
 /* The Rin mmap syscall ABI kept NOREPLACE at its original private bit.
  * Translate the Linux-facing libc flag at the wrapper boundary so existing
  * binaries that use the Rin syscall bit remain compatible. */
+#if defined(__RIN_MMAN_POSIX_VISIBLE)
+#define __RIN_MMAN_MAP_ANONYMOUS_ABI 0x20
+#define __RIN_MMAN_MAP_DENYWRITE_ABI 0x800
+#define __RIN_MMAN_MAP_FIXED_NOREPLACE_LINUX 0x00100000
 #define __RIN_MMAN_MAP_NOREPLACE_ABI 0x08000000
 static inline int __rin_mman_syscall_flags(int flags)
 {
-    if ((flags & MAP_FIXED_NOREPLACE) != 0) {
-        flags &= ~MAP_FIXED_NOREPLACE;
+#if defined(__RIN_MMAN_LINUX_VISIBLE)
+    if ((flags & __RIN_MMAN_MAP_FIXED_NOREPLACE_LINUX) != 0) {
+        flags &= ~__RIN_MMAN_MAP_FIXED_NOREPLACE_LINUX;
         flags |= __RIN_MMAN_MAP_NOREPLACE_ABI;
     }
+#endif
     return flags;
 }
 
@@ -195,19 +232,23 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
     errno = result >= -4095 ? (int)(-result) : EIO;
     return MAP_FAILED;
 }
+#endif /* __RIN_MMAN_POSIX_VISIBLE */
 
 /* ═══════════════════════════════════════════════════════════════
  * msync フラグ
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(__RIN_MMAN_POSIX_VISIBLE)
 #define MS_ASYNC      1   /* 非同期書き込み */
 #define MS_SYNC       4   /* 同期書き込み */
 #define MS_INVALIDATE 2   /* キャッシュ無効化 */
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * madvise アドバイス
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(__RIN_MMAN_LINUX_VISIBLE)
 #define MADV_NORMAL      0   /* デフォルト */
 #define MADV_RANDOM      1   /* ランダムアクセス */
 #define MADV_SEQUENTIAL  2   /* シーケンシャルアクセス */
@@ -234,61 +275,58 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 /* First-touch anonymous THP policy is implemented by the x86_64 kernel. */
 #define RIN_MMAN_THP_ADVICE_SUPPORTED_X86_64 1
 #define RIN_MMAN_THP_ADVICE_SUPPORTED_IA32   0
+#endif /* __RIN_MMAN_LINUX_VISIBLE */
 
 /* POSIX spells the advisory values separately from the Linux madvise names.
  * RinOS uses the same ABI values and exposes the POSIX return convention. */
+#if defined(__RIN_MMAN_POSIX_VISIBLE)
 #ifndef POSIX_MADV_NORMAL
-#define POSIX_MADV_NORMAL     MADV_NORMAL
-#define POSIX_MADV_RANDOM     MADV_RANDOM
-#define POSIX_MADV_SEQUENTIAL MADV_SEQUENTIAL
-#define POSIX_MADV_WILLNEED   MADV_WILLNEED
-#define POSIX_MADV_DONTNEED   MADV_DONTNEED
+#define POSIX_MADV_NORMAL     0
+#define POSIX_MADV_RANDOM     1
+#define POSIX_MADV_SEQUENTIAL 2
+#define POSIX_MADV_WILLNEED   3
+#define POSIX_MADV_DONTNEED   4
 #endif
-
-static inline int __rin_posix_madvise_advice_valid(int advice) {
-    switch (advice) {
-        case POSIX_MADV_NORMAL:
-        case POSIX_MADV_RANDOM:
-        case POSIX_MADV_SEQUENTIAL:
-        case POSIX_MADV_WILLNEED:
-        case POSIX_MADV_DONTNEED:
-            return 1;
-        default:
-            return 0;
-    }
-}
+#endif /* __RIN_MMAN_POSIX_VISIBLE */
 
 /* ═══════════════════════════════════════════════════════════════
  * mlock フラグ
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(__RIN_MMAN_POSIX_VISIBLE)
 #define MCL_CURRENT 1   /* 現在のページをロック */
 #define MCL_FUTURE  2   /* 将来のページもロック */
+#endif
+#if defined(__RIN_MMAN_LINUX_VISIBLE)
 #define MCL_ONFAULT 4   /* フォルト時にロック */
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * mremap フラグ
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(__RIN_MMAN_GNU_VISIBLE)
 #define MREMAP_MAYMOVE   1  /* 移動可能 */
 #define MREMAP_FIXED     2  /* 固定アドレス */
 #define MREMAP_DONTUNMAP 4  /* 元のマッピングを保持 */
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * メモリマッピング関数
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(__RIN_MMAN_POSIX_VISIBLE)
 static inline void* mmap(void* addr, size_t length, int prot, int flags,
                          int fd, off_t offset) {
     intptr_t ret;
     /* Linux keeps MAP_DENYWRITE for compatibility but ignores it. */
-    flags &= ~MAP_DENYWRITE;
+    flags &= ~__RIN_MMAN_MAP_DENYWRITE_ABI;
     flags = __rin_mman_syscall_flags(flags);
-    if ((flags & MAP_ANONYMOUS) == 0 && fd < 0) {
+    if ((flags & __RIN_MMAN_MAP_ANONYMOUS_ABI) == 0 && fd < 0) {
         errno = EBADF;
         return MAP_FAILED;
     }
-    if ((flags & MAP_ANONYMOUS) != 0) {
+    if ((flags & __RIN_MMAN_MAP_ANONYMOUS_ABI) != 0) {
         ret = _RIN_MMAN_SYSCALL6(SYS_MMAP,
                                  (uintptr_t)addr,
                                  (uintptr_t)length,
@@ -307,17 +345,20 @@ static inline void* mmap(void* addr, size_t length, int prot, int flags,
     }
     return __rin_mman_pointer_result(ret);
 }
+#endif /* __RIN_MMAN_POSIX_VISIBLE */
 
-#if !defined(__RIN_SYS_TYPES_HOST_OWNER)
-static inline void* mmap64(void* addr, size_t length, int prot, int flags,
+#if defined(__RIN_MMAN_POSIX_VISIBLE) && \
+    defined(__RIN_MMAN_LARGEFILE64_VISIBLE) && \
+    !defined(__RIN_SYS_TYPES_HOST_OWNER)
+static inline void* __rin_mmap64(void* addr, size_t length, int prot, int flags,
                            int fd, off64_t offset) {
     RinMmapFdCallV1 call = {0};
     intptr_t result;
 
     /* Keep mmap64 consistent with mmap for the ignored legacy flag. */
-    flags &= ~MAP_DENYWRITE;
+    flags &= ~__RIN_MMAN_MAP_DENYWRITE_ABI;
     flags = __rin_mman_syscall_flags(flags);
-    if ((flags & MAP_ANONYMOUS) != 0) {
+    if ((flags & __RIN_MMAN_MAP_ANONYMOUS_ABI) != 0) {
         if (offset != 0) {
             errno = EINVAL;
             return MAP_FAILED;
@@ -344,8 +385,13 @@ static inline void* mmap64(void* addr, size_t length, int prot, int flags,
     result = _RIN_MMAN_SYSCALL1(SYS_MMAP_FD64, (uintptr_t)&call);
     return __rin_mman_pointer_result(result);
 }
+#if defined(__RIN_MMAN_GNU_VISIBLE) || defined(_LARGEFILE64_SOURCE) || \
+    defined(__USE_LARGEFILE64)
+#define mmap64 __rin_mmap64
+#endif
 #endif /* !__RIN_SYS_TYPES_HOST_OWNER */
 
+#if defined(__RIN_MMAN_POSIX_VISIBLE)
 static inline int munmap(void* addr, size_t length) {
     intptr_t ret = _RIN_MMAN_SYSCALL2(
         SYS_MUNMAP, (uintptr_t)addr, (uintptr_t)length);
@@ -358,7 +404,9 @@ static inline int mprotect(void* addr, size_t length, int prot) {
         (uintptr_t)(intptr_t)prot);
     return __rin_mman_zero_result(ret);
 }
+#endif /* __RIN_MMAN_POSIX_VISIBLE */
 
+#if defined(__RIN_MMAN_GNU_VISIBLE)
 /* Linux mseal permanently prevents destructive changes to a mapped range.
  * flags is reserved and must be zero. */
 static inline int mseal(void* addr, size_t length, unsigned long flags) {
@@ -475,11 +523,13 @@ static inline int pkey_set(int pkey, unsigned int access_rights)
     return -1;
 #endif
 }
+#endif /* __RIN_MMAN_GNU_VISIBLE */
 
 /* ═══════════════════════════════════════════════════════════════
  * 追加メモリ管理関数
  * ═══════════════════════════════════════════════════════════════*/
 
+#if defined(__RIN_MMAN_POSIX_VISIBLE)
 static inline int msync(void* addr, size_t length, int flags) {
     __rin_pthread_cancel_point_if_linked();
     intptr_t ret = _RIN_MMAN_SYSCALL3(
@@ -489,20 +539,62 @@ static inline int msync(void* addr, size_t length, int flags) {
     __rin_pthread_cancel_point_if_linked();
     return result;
 }
+#endif /* __RIN_MMAN_POSIX_VISIBLE */
 
+#if defined(__RIN_MMAN_GNU_VISIBLE)
 static inline int cachestat(int fd, const struct cachestat_range* range,
                             struct cachestat* stats, unsigned int flags) {
     return __rin_mman_zero_result(_RIN_MMAN_SYSCALL4(
         RIN_LINUX_NR_CACHESTAT, fd, range, stats, flags));
 }
+#endif /* __RIN_MMAN_GNU_VISIBLE */
 
-static inline int madvise(void* addr, size_t length, int advice) {
+#if defined(__RIN_MMAN_POSIX_VISIBLE) || \
+    defined(__RIN_MMAN_LINUX_VISIBLE) || \
+    defined(RIN_MMAN_POSIX_ADVISE_RUNTIME_IMPLEMENTATION)
+static inline int __rin_mman_madvise(void* addr, size_t length, int advice) {
     intptr_t ret = _RIN_MMAN_SYSCALL3(
         SYS_MADVISE, (uintptr_t)addr, (uintptr_t)length,
         (uintptr_t)(intptr_t)advice);
     return __rin_mman_zero_result(ret);
 }
+#endif
 
+#if defined(__RIN_MMAN_POSIX_VISIBLE) || \
+    defined(RIN_MMAN_POSIX_ADVISE_RUNTIME_IMPLEMENTATION)
+static inline int __rin_mman_posix_madvise(void* addr, size_t length,
+                                           int advice) {
+    int saved_errno = errno;
+    int error;
+    switch (advice) {
+        case 0: /* POSIX_MADV_NORMAL */
+        case 1: /* POSIX_MADV_RANDOM */
+        case 2: /* POSIX_MADV_SEQUENTIAL */
+        case 3: /* POSIX_MADV_WILLNEED */
+        case 4: /* POSIX_MADV_DONTNEED */
+            break;
+        default:
+            return EINVAL;
+    }
+    /* POSIX DONTNEED is a hint and must not discard mapped contents. */
+    if (advice == 4) advice = 0;
+    if (__rin_mman_madvise(addr, length, advice) == 0) {
+        errno = saved_errno;
+        return 0;
+    }
+    error = errno;
+    errno = saved_errno;
+    return error;
+}
+#endif
+
+#if defined(__RIN_MMAN_LINUX_VISIBLE)
+static inline int madvise(void* addr, size_t length, int advice) {
+    return __rin_mman_madvise(addr, length, advice);
+}
+#endif
+
+#if defined(__RIN_MMAN_GNU_VISIBLE)
 static inline ssize_t process_madvise(int pidfd, const struct iovec* iovec,
                                       size_t vlen, int advice,
                                       unsigned int flags) {
@@ -541,30 +633,19 @@ static inline ssize_t process_madvise(int pidfd, const struct iovec* iovec,
     }
     return (ssize_t)result;
 }
+#endif /* __RIN_MMAN_GNU_VISIBLE */
 
-#if (defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)) || \
-    defined(RIN_MMAN_POSIX_ADVISE_RUNTIME_IMPLEMENTATION)
+#if defined(__RIN_MMAN_POSIX_VISIBLE) && \
+    ((defined(RIN_USERSPACE) && !defined(_MSVCRT_COMPAT)) || \
+     defined(RIN_MMAN_POSIX_ADVISE_RUNTIME_IMPLEMENTATION))
 int posix_madvise(void* addr, size_t length, int advice);
-#else
+#elif defined(__RIN_MMAN_POSIX_VISIBLE)
 static inline int posix_madvise(void* addr, size_t length, int advice) {
-    int saved_errno = errno;
-    int error;
-    /* POSIX advice may influence performance but must not change memory
-     * contents. Linux MADV_DONTNEED is destructive, so treat the POSIX
-     * DONTNEED hint as NORMAL while retaining kernel range validation. */
-    if (!__rin_posix_madvise_advice_valid(advice)) return EINVAL;
-    if (advice == POSIX_MADV_DONTNEED)
-        advice = MADV_NORMAL;
-    if (madvise(addr, length, advice) == 0) {
-        errno = saved_errno;
-        return 0;
-    }
-    error = errno;
-    errno = saved_errno;
-    return error;
+    return __rin_mman_posix_madvise(addr, length, advice);
 }
 #endif
 
+#if defined(__RIN_MMAN_POSIX_VISIBLE)
 static inline int mlock(const void* addr, size_t length) {
     intptr_t ret = _RIN_MMAN_SYSCALL2(
         SYS_MLOCK, (uintptr_t)addr, (uintptr_t)length);
@@ -587,13 +668,17 @@ static inline int munlockall(void) {
     intptr_t ret = _RIN_MMAN_SYSCALL0(SYS_MUNLOCKALL);
     return __rin_mman_zero_result(ret);
 }
+#endif /* __RIN_MMAN_POSIX_VISIBLE */
 
+#if defined(__RIN_MMAN_LINUX_VISIBLE)
 static inline int mincore(void* addr, size_t length, unsigned char* vec) {
     intptr_t ret = _RIN_MMAN_SYSCALL3(
         SYS_MINCORE, (uintptr_t)addr, (uintptr_t)length, (uintptr_t)vec);
     return __rin_mman_zero_result(ret);
 }
+#endif /* __RIN_MMAN_LINUX_VISIBLE */
 
+#if defined(__RIN_MMAN_GNU_VISIBLE)
 static inline void* mremap(void* old_addr, size_t old_size, size_t new_size,
                            int flags, ...) {
     uintptr_t new_addr = 0u;
@@ -609,10 +694,14 @@ static inline void* mremap(void* old_addr, size_t old_size, size_t new_size,
         (uintptr_t)new_size, (uintptr_t)(intptr_t)flags, new_addr);
     return __rin_mman_pointer_result(ret);
 }
+#endif /* __RIN_MMAN_GNU_VISIBLE */
 
+#if defined(__RIN_MMAN_POSIX_VISIBLE)
 int shm_open(const char* name, int oflag, mode_t mode);
 int shm_unlink(const char* name);
+#endif
 
+#if defined(__RIN_MMAN_GNU_VISIBLE)
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 0x0001U
 #endif
@@ -623,14 +712,16 @@ int shm_unlink(const char* name);
 #endif
 int memfd_create(const char* name, unsigned int flags);
 int memfd_secret(unsigned int flags);
+#endif /* __RIN_MMAN_GNU_VISIBLE */
 
 #ifdef __cplusplus
 }
 #endif
 
-#if defined(__RIN_FILE_OFFSET_BITS64) && \
+#if defined(__RIN_MMAN_POSIX_VISIBLE) && \
+    defined(__RIN_FILE_OFFSET_BITS64) && \
     !defined(__RIN_SYS_TYPES_HOST_OWNER)
-#define mmap mmap64
+#define mmap __rin_mmap64
 #endif
 
 #endif /* _SYS_MMAN_H */

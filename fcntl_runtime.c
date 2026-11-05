@@ -22,25 +22,7 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
 }
 
 int posix_madvise(void* addr, size_t length, int advice) {
-    int saved_errno = errno;
-    int error;
-    /* POSIX advice may influence performance but must not change memory
-     * contents. Linux MADV_DONTNEED is destructive, so treat the POSIX
-     * DONTNEED hint as NORMAL while retaining kernel range validation. */
-    if (advice != POSIX_MADV_NORMAL && advice != POSIX_MADV_RANDOM &&
-        advice != POSIX_MADV_SEQUENTIAL &&
-        advice != POSIX_MADV_WILLNEED &&
-        advice != POSIX_MADV_DONTNEED)
-        return EINVAL;
-    if (advice == POSIX_MADV_DONTNEED)
-        advice = MADV_NORMAL;
-    if (madvise(addr, length, advice) == 0) {
-        errno = saved_errno;
-        return 0;
-    }
-    error = errno;
-    errno = saved_errno;
-    return error;
+    return __rin_mman_posix_madvise(addr, length, advice);
 }
 
 static int rin_shm_name_snapshot(const char* name, char* destination,
