@@ -34,6 +34,9 @@ static inline int pidfd_getfd(int pidfd, int target_fd, unsigned int flags)
 #ifndef PIDFD_NONBLOCK
 #define PIDFD_NONBLOCK 0x800
 #endif
+#ifndef PIDFD_THREAD
+#define PIDFD_THREAD 0x80
+#endif
 
 static inline int pidfd_open(pid_t pid, unsigned int flags)
 {
