@@ -269,6 +269,8 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 #define RIN_MADV_HWPOISON_SUPPORTED_IA32 1
 #define RIN_MADV_HWPOISON_SUPPORTED_X86_64 1
 #define MADV_SOFT_OFFLINE 101 /* migrate contents and retire the old PFN */
+#define MADV_GUARD_INSTALL 102 /* access raises SIGSEGV until removed */
+#define MADV_GUARD_REMOVE 103 /* remove lightweight guard pages */
 #define RIN_MADV_SOFT_OFFLINE_SUPPORTED_IA32 1
 #define RIN_MADV_SOFT_OFFLINE_SUPPORTED_X86_64 1
 
