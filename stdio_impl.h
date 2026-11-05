@@ -2522,6 +2522,10 @@ _RIN_STDIO_API int putc_unlocked(int c, FILE* stream) {
     return _rin_fputc_unlocked(c, stream);
 }
 
+_RIN_STDIO_API int fputc_unlocked(int c, FILE* stream) {
+    return _rin_fputc_unlocked(c, stream);
+}
+
 _RIN_STDIO_API int fputs(const char* s, FILE* stream) {
     size_t length = 0;
     /* GCC knows fputs as a builtin with nonnull args; the checks
@@ -2540,6 +2544,20 @@ _RIN_STDIO_API int fputs(const char* s, FILE* stream) {
 #endif
     while (s[length]) ++length;
     return _rin_stdio_write_all(stream, s, length) == 0 ? 0 : EOF;
+}
+
+_RIN_STDIO_API int fputs_unlocked(const char* s, FILE* stream) {
+    size_t length = 0u;
+    if (!s || !stream) {
+        errno = EINVAL;
+        if (stream) stream->error = 1;
+        return EOF;
+    }
+    while (s[length] != '\0') ++length;
+    if (!_rin_stdio_claim_byte_orientation(stream) ||
+        _rin_stdio_write_all_buffered(stream, s, length) != 0)
+        return EOF;
+    return 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2662,6 +2680,10 @@ _RIN_STDIO_API int fgetc(FILE* stream) {
     return result;
 }
 
+_RIN_STDIO_API int fgetc_unlocked(FILE* stream) {
+    return _rin_fgetc_unlocked(stream);
+}
+
 _RIN_STDIO_API int getc_unlocked(FILE* stream) {
     return _rin_fgetc_unlocked(stream);
 }
@@ -2714,6 +2736,10 @@ _RIN_STDIO_API char* fgets(char* s, int size, FILE* stream) {
     result = _rin_fgets_unlocked(s, size, stream);
     funlockfile(stream);
     return result;
+}
+
+_RIN_STDIO_API char* fgets_unlocked(char* s, int size, FILE* stream) {
+    return _rin_fgets_unlocked(s, size, stream);
 }
 
 static inline void _rin_stdio_mark_stream_error(FILE* stream) {
@@ -3367,6 +3393,11 @@ _RIN_STDIO_API size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream) 
     return result;
 }
 
+_RIN_STDIO_API size_t fread_unlocked(void* ptr, size_t size, size_t nmemb,
+                                     FILE* stream) {
+    return _rin_fread_unlocked(ptr, size, nmemb, stream);
+}
+
 static inline size_t _rin_fwrite_unlocked(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
     size_t total;
     size_t copied;
@@ -3423,6 +3454,11 @@ _RIN_STDIO_API size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* s
     result = _rin_fwrite_unlocked(ptr, size, nmemb, stream);
     funlockfile(stream);
     return result;
+}
+
+_RIN_STDIO_API size_t fwrite_unlocked(const void* ptr, size_t size,
+                                      size_t nmemb, FILE* stream) {
+    return _rin_fwrite_unlocked(ptr, size, nmemb, stream);
 }
 
 static inline int _rin_fseek_unlocked(FILE* stream, long offset, int whence) {
@@ -3999,6 +4035,14 @@ _RIN_STDIO_API int feof(FILE* stream) {
     return result;
 }
 
+_RIN_STDIO_API int feof_unlocked(FILE* stream) {
+    if (!stream) {
+        errno = EINVAL;
+        return 0;
+    }
+    return stream->eof;
+}
+
 _RIN_STDIO_API int ferror(FILE* stream) {
     int result;
     if (!stream) {
@@ -4009,6 +4053,14 @@ _RIN_STDIO_API int ferror(FILE* stream) {
     result = stream->error;
     funlockfile(stream);
     return result;
+}
+
+_RIN_STDIO_API int ferror_unlocked(FILE* stream) {
+    if (!stream) {
+        errno = EINVAL;
+        return 0;
+    }
+    return stream->error;
 }
 
 _RIN_STDIO_API void clearerr(FILE* stream) {
@@ -4023,6 +4075,15 @@ _RIN_STDIO_API void clearerr(FILE* stream) {
     stream->eof = 0;
     stream->error = 0;
     funlockfile(stream);
+}
+
+_RIN_STDIO_API void clearerr_unlocked(FILE* stream) {
+    if (!stream) return;
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_cookie_active(stream)) return;
+#endif
+    stream->eof = 0;
+    stream->error = 0;
 }
 
 static inline int _rin_stdio_flush_output_only_unlocked(FILE* stream) {
@@ -4126,6 +4187,20 @@ _RIN_STDIO_API int fileno(FILE* stream) {
     result = stream->fd;
     funlockfile(stream);
     return result;
+}
+
+_RIN_STDIO_API int fileno_unlocked(FILE* stream) {
+    if (!stream) {
+        errno = EINVAL;
+        return -1;
+    }
+#if defined(RIN_USERSPACE)
+    if (rin_stdio_memstream_kind(stream) != RIN_STDIO_MEMSTREAM_NONE) {
+        errno = EBADF;
+        return -1;
+    }
+#endif
+    return stream->fd;
 }
 
 /* ═══════════════════════════════════════════════════════════════

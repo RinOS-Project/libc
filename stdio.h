@@ -103,6 +103,19 @@ int getchar_unlocked(void);
 int getc(FILE* stream);
 int putc(int c, FILE* stream);
 char* fgets(char* s, int size, FILE* stream);
+#if defined(__RIN_FEATURES_GNU)
+int fgetc_unlocked(FILE* stream);
+int fputc_unlocked(int c, FILE* stream);
+char* fgets_unlocked(char* s, int size, FILE* stream);
+int fputs_unlocked(const char* s, FILE* stream);
+size_t fread_unlocked(void* ptr, size_t size, size_t nmemb, FILE* stream);
+size_t fwrite_unlocked(const void* ptr, size_t size, size_t nmemb,
+                       FILE* stream);
+int feof_unlocked(FILE* stream);
+int ferror_unlocked(FILE* stream);
+void clearerr_unlocked(FILE* stream);
+int fileno_unlocked(FILE* stream);
+#endif
 ssize_t getline(char** lineptr, size_t* n, FILE* stream);
 ssize_t getdelim(char** lineptr, size_t* n, int delimiter, FILE* stream);
 int ungetc(int c, FILE* stream);

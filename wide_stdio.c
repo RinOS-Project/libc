@@ -1825,6 +1825,10 @@ wint_t fgetwc(FILE* stream) {
     return result;
 }
 
+wint_t fgetwc_unlocked(FILE* stream) {
+    return _rin_fgetwc_unlocked(stream);
+}
+
 static wchar_t* _rin_fgetws_unlocked(wchar_t* s, int n, FILE* stream) {
     int index = 0;
     if (!s || !stream || n <= 0) {
@@ -1854,6 +1858,10 @@ wchar_t* fgetws(wchar_t* s, int n, FILE* stream) {
     result = _rin_fgetws_unlocked(s, n, stream);
     funlockfile(stream);
     return result;
+}
+
+wchar_t* fgetws_unlocked(wchar_t* s, int n, FILE* stream) {
+    return _rin_fgetws_unlocked(s, n, stream);
 }
 
 static wint_t _rin_fputwc_unlocked(wchar_t c, FILE* stream) {
@@ -1908,6 +1916,10 @@ wint_t fputwc(wchar_t c, FILE* stream) {
     return result;
 }
 
+wint_t fputwc_unlocked(wchar_t c, FILE* stream) {
+    return _rin_fputwc_unlocked(c, stream);
+}
+
 static int _rin_fputws_unlocked(const wchar_t* s, FILE* stream) {
     const wchar_t* cursor;
     if (!s || !stream) {
@@ -1941,10 +1953,20 @@ int fputws(const wchar_t* s, FILE* stream) {
     return result;
 }
 
+int fputws_unlocked(const wchar_t* s, FILE* stream) {
+    return _rin_fputws_unlocked(s, stream);
+}
+
 wint_t getwc(FILE* stream) { return fgetwc(stream); }
 wint_t getwchar(void) { return fgetwc(stdin); }
 wint_t putwc(wchar_t c, FILE* stream) { return fputwc(c, stream); }
 wint_t putwchar(wchar_t c) { return fputwc(c, stdout); }
+wint_t getwc_unlocked(FILE* stream) { return fgetwc_unlocked(stream); }
+wint_t getwchar_unlocked(void) { return fgetwc_unlocked(stdin); }
+wint_t putwc_unlocked(wchar_t c, FILE* stream) {
+    return fputwc_unlocked(c, stream);
+}
+wint_t putwchar_unlocked(wchar_t c) { return fputwc_unlocked(c, stdout); }
 
 static wint_t _rin_ungetwc_unlocked(wint_t c, FILE* stream) {
     uint32_t value = (uint32_t)c;
