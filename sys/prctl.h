@@ -106,6 +106,10 @@ extern "C" {
 #define PR_GET_THP_DISABLE  42  /* Get THP disable status */
 #define PR_THP_DISABLE      1
 #define PR_THP_DISABLE_EXCEPT_ADVISED (1 << 1)
+#define PR_SET_MDWE         65  /* Set memory-deny-write-execute policy */
+#define PR_GET_MDWE         66  /* Get memory-deny-write-execute policy */
+#define PR_MDWE_REFUSE_EXEC_GAIN (1UL << 0)
+#define PR_MDWE_NO_INHERIT       (1UL << 1)
 #define PR_MPX_ENABLE_MANAGEMENT    43
 #define PR_MPX_DISABLE_MANAGEMENT   44
 #define PR_SET_FP_MODE      45  /* Set FP mode */
@@ -160,6 +164,12 @@ extern "C" {
 #define RIN_PRCTL_THP_DISABLE_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_THP_ENFORCEMENT_SUPPORTED_X86_64 1
 #define RIN_PRCTL_THP_ENFORCEMENT_SUPPORTED_IA32   1
+/* MDWE policy is enforced for both native ABIs and x86_64 compat32. */
+#define RIN_PRCTL_MDWE_CONTROL_SUPPORTED 1
+#define RIN_PRCTL_MDWE_SUPPORTED_IA32 1
+#define RIN_PRCTL_MDWE_SUPPORTED_X86_64_NATIVE 1
+#define RIN_PRCTL_MDWE_SUPPORTED_X86_64_COMPAT32 1
+#define RIN_PRCTL_MDWE_EXEC_GAIN_ENFORCEMENT_SUPPORTED 1
 #define RIN_PRCTL_TIMING_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_SET_MM_SCALAR_CONTROL_SUPPORTED 1
 #define RIN_PRCTL_SET_MM_MAP_CONTROL_SUPPORTED 1
@@ -414,6 +424,7 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_IO_FLUSHER || option == PR_GET_IO_FLUSHER ||
         option == PR_GET_TID_ADDRESS ||
         option == PR_SET_SYSCALL_USER_DISPATCH ||
+        option == PR_SET_MDWE || option == PR_GET_MDWE ||
         option == PR_SET_THP_DISABLE ||
         option == PR_GET_THP_DISABLE ||
         option == PR_SET_MM ||
@@ -462,6 +473,7 @@ static inline int prctl(int option, ...) {
         option == PR_MCE_KILL || option == PR_SET_IO_FLUSHER ||
         option == PR_SET_DUMPABLE || option == PR_SET_NO_NEW_PRIVS ||
         option == PR_SET_SYSCALL_USER_DISPATCH ||
+        option == PR_SET_MDWE ||
         option == PR_SET_THP_DISABLE ||
         option == PR_SET_MM ||
         option == PR_SET_ENDIAN || option == PR_SET_CHILD_SUBREAPER ||
@@ -504,6 +516,8 @@ static inline int prctl(int option, ...) {
             if ((uint32_t)arg2 == PR_SET_MM_AUXV ||
                 (uint32_t)arg2 == PR_SET_MM_MAP)
                 arg4 = (uintptr_t)__builtin_va_arg(args, uintptr_t);
+        } else if (option == PR_SET_MDWE) {
+            arg2 = (uintptr_t)__builtin_va_arg(args, unsigned long);
         } else if (option == PR_SET_THP_DISABLE) {
             arg2 = (uintptr_t)__builtin_va_arg(args, long);
             arg3 = (uintptr_t)__builtin_va_arg(args, unsigned long);
