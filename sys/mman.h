@@ -213,9 +213,14 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 #define MADV_NOHUGEPAGE  15  /* disable transparent huge pages for range */
 #define MADV_DONTDUMP    16  /* exclude this mapping from core dumps */
 #define MADV_DODUMP      17  /* include this mapping in core dumps */
+#define MADV_WIPEONFORK  18  /* zero private anonymous pages in fork children */
+#define MADV_KEEPONFORK  19  /* retain private anonymous contents on fork */
 #define MADV_HWPOISON   100  /* isolate an owned anonymous page as poisoned */
 #define RIN_MADV_HWPOISON_SUPPORTED_IA32 1
 #define RIN_MADV_HWPOISON_SUPPORTED_X86_64 1
+#define MADV_SOFT_OFFLINE 101 /* migrate contents and retire the old PFN */
+#define RIN_MADV_SOFT_OFFLINE_SUPPORTED_IA32 1
+#define RIN_MADV_SOFT_OFFLINE_SUPPORTED_X86_64 1
 
 /* First-touch anonymous THP policy is implemented by the x86_64 kernel. */
 #define RIN_MMAN_THP_ADVICE_SUPPORTED_X86_64 1
@@ -596,13 +601,13 @@ int shm_unlink(const char* name);
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 0x0001U
 #endif
-int memfd_create(const char* name, unsigned int flags);
-
 #if defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
 #ifndef MFD_CLOFORK
 #define MFD_CLOFORK 0x00020000U
 #endif
 #endif
+int memfd_create(const char* name, unsigned int flags);
+
 #ifdef __cplusplus
 }
 #endif
