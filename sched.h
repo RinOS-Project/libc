@@ -436,6 +436,23 @@ static inline int _policy_to_rinos_priority(int policy) {
     }
 }
 
+static inline int _rin_sched_policy_supported(int policy) {
+    switch (policy) {
+        case SCHED_OTHER:
+        case SCHED_FIFO:
+        case SCHED_RR:
+        case SCHED_BATCH:
+        case SCHED_IDLE:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static inline int _rin_sched_policy_error(int policy) {
+    return policy == SCHED_DEADLINE ? ENOTSUP : EINVAL;
+}
+
 static inline int _rin_sched_policy_priority_valid(int policy,
                                                     int priority) {
     switch (policy) {
@@ -538,11 +555,19 @@ static inline int sched_getscheduler(pid_t pid) {
 
 /* スケジューリングポリシーを設定 */
 static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_param* param) {
+    if (!param) { errno = EINVAL; return -1; }
+    if (!_rin_sched_policy_supported(policy)) {
+        errno = _rin_sched_policy_error(policy);
+        return -1;
+    }
+    if (!_rin_sched_policy_priority_valid(policy, param->sched_priority)) {
+        errno = EINVAL;
+        return -1;
+    }
 #if defined(RIN_FREESTANDING) && defined(RIN_USERSPACE)
     RinThreadSchedParametersV2 parameters;
     intptr_t result;
     uint32_t thread_id;
-    if (!param) { errno = EINVAL; return -1; }
     if (pid < 0) { errno = EINVAL; return -1; }
     if ((uint64_t)pid > UINT32_MAX) { errno = EOVERFLOW; return -1; }
     thread_id = pid == 0 ? 0u : (uint32_t)pid;
@@ -566,12 +591,7 @@ static inline int sched_setscheduler(pid_t pid, int policy, const struct sched_p
     if (result != 0) { errno = EIO; return -1; }
     return 0;
 #elif defined(RIN_FREESTANDING) && !defined(RIN_USERSPACE)
-    if (!param) { errno = EINVAL; return -1; }
     if (pid < 0) { errno = EINVAL; return -1; }
-    if (!_rin_sched_policy_priority_valid(policy, param->sched_priority)) {
-        errno = EINVAL;
-        return -1;
-    }
     void* task = rin_sched_task_get((int)pid);
     if (!task && pid == 0) {
         task = rin_sched_task_current();
@@ -694,16 +714,14 @@ static inline int sched_get_priority_max(int policy) {
     switch (policy) {
         case SCHED_FIFO:
         case SCHED_RR:
-        /* B55: DEADLINE joins the RT range (both contract tests pin
-         * 1/99 with errno preserved; Linux answers 0/0 here, kept as
-         * a deliberate delta so RT-aware code treats all RT policies
-         * uniformly). */
-        case SCHED_DEADLINE:
             return 99;
         case SCHED_OTHER:
         case SCHED_BATCH:
         case SCHED_IDLE:
             return 0;
+        case SCHED_DEADLINE:
+            errno = ENOTSUP;
+            return -1;
         default:
             errno = EINVAL;
             return -1;
@@ -715,13 +733,14 @@ static inline int sched_get_priority_min(int policy) {
     switch (policy) {
         case SCHED_FIFO:
         case SCHED_RR:
-        /* B55: see sched_get_priority_max (DEADLINE in RT range). */
-        case SCHED_DEADLINE:
             return 1;
         case SCHED_OTHER:
         case SCHED_BATCH:
         case SCHED_IDLE:
             return 0;
+        case SCHED_DEADLINE:
+            errno = ENOTSUP;
+            return -1;
         default:
             errno = EINVAL;
             return -1;
