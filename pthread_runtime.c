@@ -4,6 +4,8 @@
  * libcがpthread ABIの所有者となる実装。
  */
 
+#define _RIN_USE_GNU_CPU_SET 1
+#define _RIN_USE_GNU_PTHREAD 1
 #define RIN_PTHREAD_RUNTIME_IMPLEMENTATION 1
 #include "pthread.h"
 #include "internal/pthread_cond_interrupt.h"
@@ -14,6 +16,8 @@
 #include "string.h"
 #include "unistd.h"
 #include "linux/rseq.h"
+#include <rin/syscall_abi.h>
+#include <rin/thread/control_abi.h>
 
 #define CLONE_THREAD    0x00010000UL
 #define CLONE_VM        0x00000100UL
@@ -1029,6 +1033,16 @@ static int rin_pthread_create_impl(pthread_t* thread,
                                                   schedule_policy,
                                                   &schedule_param);
         }
+        if (create_error == 0 && attr && attr->affinity_set != 0u) {
+            if (attr->affinity_set != 1u || attr->affinity_size == 0u ||
+                attr->affinity_size > sizeof(attr->affinity_mask)) {
+                create_error = EINVAL;
+            } else {
+                create_error = pthread_setaffinity_np(
+                    created_thread, attr->affinity_size,
+                    (const cpu_set_t*)attr->affinity_mask);
+            }
+        }
         if (create_error == 0 && attr &&
             attr->detachstate == PTHREAD_CREATE_DETACHED) {
             create_error = rin_pthread_detach_created(created_thread);
@@ -1064,6 +1078,106 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
     int result = rin_pthread_create_impl(thread, attr, start_routine, arg);
     errno = saved_errno;
     return result;
+}
+
+static int rin_pthread_resolve_control_thread(
+    pthread_t thread, RinThreadControlV1* request) {
+    intptr_t raw_result;
+    if (thread == 0u || (uint64_t)thread > UINT32_MAX || !request)
+        return ESRCH;
+    memset(request, 0, sizeof(*request));
+    request->struct_size = (uint32_t)sizeof(*request);
+    request->version = RIN_THREAD_CONTROL_V1_VERSION;
+    request->operation = RIN_THREAD_CONTROL_RESOLVE_GENERATION;
+    request->thread_id = (uint32_t)thread;
+    raw_result = _RIN_PTHREAD_NAME_SYSCALL1(
+        RIN_SYS_THREAD_CONTROL_V1, request);
+    if (raw_result < 0) return rin_pthread_syscall_error(raw_result);
+    if (raw_result != 0 ||
+        request->struct_size != sizeof(*request) ||
+        request->version != RIN_THREAD_CONTROL_V1_VERSION ||
+        request->operation != RIN_THREAD_CONTROL_RESOLVE_GENERATION ||
+        request->thread_id != (uint32_t)thread ||
+        request->process_generation == 0u ||
+        request->thread_generation == 0u ||
+        request->reserved_header != 0u || request->reserved0 != 0u ||
+        request->reserved1 != 0u || request->reserved[0] != 0u ||
+        request->reserved[1] != 0u)
+        return EIO;
+    return 0;
+}
+
+static int rin_pthread_thread_affinity_np(pthread_t thread,
+                                          size_t cpusetsize,
+                                          cpu_set_t* cpuset,
+                                          uint32_t operation) {
+    RinThreadControlV1 request;
+    intptr_t raw_result;
+    int result;
+    if (!cpuset || cpusetsize == 0u || cpusetsize > 128u ||
+        (operation != RIN_THREAD_CONTROL_GET_AFFINITY &&
+         operation != RIN_THREAD_CONTROL_SET_AFFINITY))
+        return EINVAL;
+    result = rin_pthread_resolve_control_thread(thread, &request);
+    if (result != 0) return result;
+    request.operation = operation;
+    request.reserved[0] = (uint64_t)(uintptr_t)cpuset;
+    request.reserved[1] = (uint64_t)cpusetsize;
+    raw_result = _RIN_PTHREAD_NAME_SYSCALL1(
+        RIN_SYS_THREAD_CONTROL_V1, &request);
+    if (raw_result < 0) return rin_pthread_syscall_error(raw_result);
+    return raw_result == 0 ? 0 : EIO;
+}
+
+int pthread_getaffinity_np(pthread_t thread, size_t cpusetsize,
+                           cpu_set_t* cpuset) {
+    int saved_errno = errno;
+    int result = rin_pthread_thread_affinity_np(
+        thread, cpusetsize, cpuset, RIN_THREAD_CONTROL_GET_AFFINITY);
+    errno = saved_errno;
+    return result;
+}
+
+int pthread_setaffinity_np(pthread_t thread, size_t cpusetsize,
+                           const cpu_set_t* cpuset) {
+    int saved_errno = errno;
+    int result = rin_pthread_thread_affinity_np(
+        thread, cpusetsize, (cpu_set_t*)cpuset,
+        RIN_THREAD_CONTROL_SET_AFFINITY);
+    errno = saved_errno;
+    return result;
+}
+
+int pthread_attr_setaffinity_np(pthread_attr_t* attr, size_t cpusetsize,
+                                const cpu_set_t* cpuset) {
+    const unsigned char* bytes = (const unsigned char*)cpuset;
+    unsigned char any_cpu = 0u;
+    if (!attr || !cpuset || cpusetsize == 0u || cpusetsize > 128u)
+        return EINVAL;
+    for (size_t index = 0u; index < cpusetsize; ++index)
+        any_cpu |= bytes[index];
+    if (any_cpu == 0u) return EINVAL;
+    memset(attr->affinity_mask, 0, sizeof(attr->affinity_mask));
+    memcpy(attr->affinity_mask, cpuset, cpusetsize);
+    attr->affinity_size = cpusetsize;
+    attr->affinity_set = 1u;
+    return 0;
+}
+
+int pthread_attr_getaffinity_np(const pthread_attr_t* attr,
+                                size_t cpusetsize, cpu_set_t* cpuset) {
+    if (!attr || !cpuset || cpusetsize == 0u || cpusetsize > 128u)
+        return EINVAL;
+    if (attr->affinity_set == 0u)
+        return pthread_getaffinity_np(_RIN_PTHREAD_RUNTIME_SELF(),
+                                      cpusetsize, cpuset);
+    if (attr->affinity_set != 1u || attr->affinity_size == 0u ||
+        attr->affinity_size > sizeof(attr->affinity_mask) ||
+        cpusetsize < attr->affinity_size)
+        return EINVAL;
+    memset(cpuset, 0, cpusetsize);
+    memcpy(cpuset, attr->affinity_mask, attr->affinity_size);
+    return 0;
 }
 
 static int rin_pthread_join_impl(pthread_t thread, void** retval) {

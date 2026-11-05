@@ -214,6 +214,12 @@ typedef struct {
     int schedpolicy;
     int sched_priority;
     size_t guardsize;
+    /* Zero affinity_size means that a new thread inherits its creator's
+     * effective affinity. An explicit mask is applied before its start gate
+     * opens. Keep this storage present in every feature namespace. */
+    size_t affinity_size;
+    unsigned int affinity_set;
+    unsigned char affinity_mask[128];
 } pthread_attr_t;
 
 typedef struct {
@@ -538,6 +544,10 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_init(pthread_attr_t* attr) {
     attr->schedpolicy = SCHED_OTHER;
     attr->sched_priority = 0;
     attr->guardsize = _RIN_PTHREAD_DEFAULT_GUARDSIZE;
+    attr->affinity_size = 0u;
+    attr->affinity_set = 0u;
+    for (size_t index = 0u; index < sizeof(attr->affinity_mask); ++index)
+        attr->affinity_mask[index] = 0u;
     return 0;
 }
 #endif
@@ -555,6 +565,10 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_destroy(pthread_attr_t* attr) {
     attr->schedpolicy = SCHED_OTHER;
     attr->sched_priority = 0;
     attr->guardsize = 0;
+    attr->affinity_size = 0u;
+    attr->affinity_set = 0u;
+    for (size_t index = 0u; index < sizeof(attr->affinity_mask); ++index)
+        attr->affinity_mask[index] = 0u;
     return 0;
 }
 #endif
@@ -819,6 +833,21 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_attr_getschedparam(const pthread_attr
 }
 #endif
 
+/* GNU CPU-affinity extensions. The cpuset size is explicit so dynamically
+ * allocated sets and future product CPU counts remain supported. */
+#if defined(_RIN_USE_GNU_PTHREAD) && defined(_RIN_USE_GNU_CPU_SET)
+extern int pthread_getaffinity_np(pthread_t thread, size_t cpusetsize,
+                                  cpu_set_t* cpuset);
+extern int pthread_setaffinity_np(pthread_t thread, size_t cpusetsize,
+                                  const cpu_set_t* cpuset);
+extern int pthread_attr_getaffinity_np(const pthread_attr_t* attr,
+                                       size_t cpusetsize,
+                                       cpu_set_t* cpuset);
+extern int pthread_attr_setaffinity_np(pthread_attr_t* attr,
+                                       size_t cpusetsize,
+                                       const cpu_set_t* cpuset);
+#endif
+
 /* GNU extension: get attributes of running thread */
 #if defined(_RIN_USE_GNU_PTHREAD) || \
     defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION)
@@ -873,6 +902,19 @@ _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_getattr_np(pthread_t thread, pthread_
     attr->schedpolicy = policy;
     attr->sched_priority = schedparam.sched_priority;
     attr->guardsize = (size_t)info.guard_size;
+    attr->affinity_size = 0u;
+    attr->affinity_set = 0u;
+    for (size_t index = 0u; index < sizeof(attr->affinity_mask); ++index)
+        attr->affinity_mask[index] = 0u;
+#if defined(_RIN_USE_GNU_CPU_SET)
+    {
+        int affinity_result = pthread_getaffinity_np(
+            thread, sizeof(cpu_set_t), (cpu_set_t*)attr->affinity_mask);
+        if (affinity_result != 0) return affinity_result;
+        attr->affinity_size = sizeof(cpu_set_t);
+        attr->affinity_set = 1u;
+    }
+#endif
     return 0;
 }
 #endif
