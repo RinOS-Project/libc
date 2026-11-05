@@ -58,6 +58,7 @@ extern int* __errno_location(void);
 #undef EDEADLK
 #undef EDESTADDRREQ
 #undef EHOSTUNREACH
+#undef EHWPOISON
 #undef EIDRM
 #undef EILSEQ
 #undef EINPROGRESS
@@ -234,6 +235,7 @@ extern int* __errno_location(void);
 #define EKEYREJECTED    RIN_EKEYREJECTED /* Key was rejected by service */
 #define EOWNERDEAD      RIN_EOWNERDEAD /* Owner died */
 #define ENOTRECOVERABLE RIN_ENOTRECOVERABLE /* State not recoverable */
+#define EHWPOISON       RIN_EHWPOISON /* Linux hardware memory error */
 
 /* POSIX.1-2001互換。Hosted C runtime が既に独自の値を所有する場合は
  * それを再定義せず、RinOS native build だけで POSIX alias を公開する。 */
