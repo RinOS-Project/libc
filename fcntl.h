@@ -41,6 +41,15 @@
 #ifndef AT_EMPTY_PATH
 #define AT_EMPTY_PATH       0x1000 /* 空パスを許可 */
 #endif
+#ifndef AT_STATX_SYNC_TYPE
+#define AT_STATX_SYNC_TYPE  0x6000
+#endif
+#ifndef AT_STATX_FORCE_SYNC
+#define AT_STATX_FORCE_SYNC 0x2000
+#endif
+#ifndef AT_STATX_DONT_SYNC
+#define AT_STATX_DONT_SYNC  0x4000
+#endif
 #ifndef AT_EACCESS
 #define AT_EACCESS          0x200  /* 実効IDでアクセスチェック */
 #endif

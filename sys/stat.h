@@ -222,6 +222,135 @@ static_assert(sizeof(struct stat64) == 88u, "RinOS stat64 ABI size");
 _Static_assert(sizeof(struct stat64) == 88u, "RinOS stat64 ABI size");
 #endif
 
+#ifndef STATX_TYPE
+#define STATX_TYPE RIN_STATX_TYPE
+#endif
+#ifndef STATX_MODE
+#define STATX_MODE RIN_STATX_MODE
+#endif
+#ifndef STATX_NLINK
+#define STATX_NLINK RIN_STATX_NLINK
+#endif
+#ifndef STATX_UID
+#define STATX_UID RIN_STATX_UID
+#endif
+#ifndef STATX_GID
+#define STATX_GID RIN_STATX_GID
+#endif
+#ifndef STATX_ATIME
+#define STATX_ATIME RIN_STATX_ATIME
+#endif
+#ifndef STATX_MTIME
+#define STATX_MTIME RIN_STATX_MTIME
+#endif
+#ifndef STATX_CTIME
+#define STATX_CTIME RIN_STATX_CTIME
+#endif
+#ifndef STATX_INO
+#define STATX_INO RIN_STATX_INO
+#endif
+#ifndef STATX_SIZE
+#define STATX_SIZE RIN_STATX_SIZE
+#endif
+#ifndef STATX_BLOCKS
+#define STATX_BLOCKS RIN_STATX_BLOCKS
+#endif
+#ifndef STATX_BASIC_STATS
+#define STATX_BASIC_STATS RIN_STATX_BASIC_STATS
+#endif
+#ifndef STATX_BTIME
+#define STATX_BTIME RIN_STATX_BTIME
+#endif
+#ifndef STATX_MNT_ID
+#define STATX_MNT_ID RIN_STATX_MNT_ID
+#endif
+#ifndef STATX_DIOALIGN
+#define STATX_DIOALIGN RIN_STATX_DIOALIGN
+#endif
+#ifndef STATX_MNT_ID_UNIQUE
+#define STATX_MNT_ID_UNIQUE RIN_STATX_MNT_ID_UNIQUE
+#endif
+#ifndef STATX_SUBVOL
+#define STATX_SUBVOL RIN_STATX_SUBVOL
+#endif
+#ifndef STATX_WRITE_ATOMIC
+#define STATX_WRITE_ATOMIC RIN_STATX_WRITE_ATOMIC
+#endif
+#ifndef STATX_DIO_READ_ALIGN
+#define STATX_DIO_READ_ALIGN RIN_STATX_DIO_READ_ALIGN
+#endif
+#ifndef STATX__RESERVED
+#define STATX__RESERVED RIN_STATX_RESERVED
+#endif
+#ifndef STATX_ALL
+#define STATX_ALL RIN_STATX_ALL
+#endif
+
+struct statx_timestamp {
+    int64_t tv_sec;
+    uint32_t tv_nsec;
+    int32_t __reserved;
+};
+
+/* Version 1 is a fixed-width 256-byte Linux statx-compatible record. The
+ * kernel leaves unsupported optional fields zero and clears their mask bits. */
+struct statx {
+    uint32_t stx_mask;
+    uint32_t stx_blksize;
+    uint64_t stx_attributes;
+    uint32_t stx_nlink;
+    uint32_t stx_uid;
+    uint32_t stx_gid;
+    uint16_t stx_mode;
+    uint16_t __spare0;
+    uint64_t stx_ino;
+    uint64_t stx_size;
+    uint64_t stx_blocks;
+    uint64_t stx_attributes_mask;
+    struct statx_timestamp stx_atime;
+    struct statx_timestamp stx_btime;
+    struct statx_timestamp stx_ctime;
+    struct statx_timestamp stx_mtime;
+    uint32_t stx_rdev_major;
+    uint32_t stx_rdev_minor;
+    uint32_t stx_dev_major;
+    uint32_t stx_dev_minor;
+    uint64_t stx_mnt_id;
+    uint32_t stx_dio_mem_align;
+    uint32_t stx_dio_offset_align;
+    uint64_t stx_subvol;
+    uint32_t stx_atomic_write_unit_min;
+    uint32_t stx_atomic_write_unit_max;
+    uint32_t stx_atomic_write_segments_max;
+    uint32_t stx_dio_read_offset_align;
+    uint32_t stx_atomic_write_unit_max_opt;
+    uint32_t __spare1;
+    uint64_t __spare3[8];
+};
+#if !defined(MIDL_PASS) && defined(__cplusplus)
+static_assert(sizeof(struct statx_timestamp) == 16u,
+              "RinOS statx timestamp ABI size");
+static_assert(sizeof(struct statx) == RIN_STATX_V1_SIZE,
+              "RinOS statx v1 ABI size");
+static_assert(offsetof(struct statx, stx_ino) == 32u,
+              "RinOS statx inode offset");
+static_assert(offsetof(struct statx, stx_atime) == 64u,
+              "RinOS statx timestamps offset");
+static_assert(offsetof(struct statx, stx_mnt_id) == 144u,
+              "RinOS statx mount offset");
+#elif !defined(MIDL_PASS)
+_Static_assert(sizeof(struct statx_timestamp) == 16u,
+               "RinOS statx timestamp ABI size");
+_Static_assert(sizeof(struct statx) == RIN_STATX_V1_SIZE,
+               "RinOS statx v1 ABI size");
+_Static_assert(offsetof(struct statx, stx_ino) == 32u,
+               "RinOS statx inode offset");
+_Static_assert(offsetof(struct statx, stx_atime) == 64u,
+               "RinOS statx timestamps offset");
+_Static_assert(offsetof(struct statx, stx_mnt_id) == 144u,
+               "RinOS statx mount offset");
+#endif
+
 #if defined(__RIN_STAT_TIME64_ABI)
 static inline int __rin_stat64_to_time64(const struct stat64* source,
                                          struct stat* output) {
@@ -457,6 +586,44 @@ static inline int fstatat(int dirfd, const char* pathname, struct stat* statbuf,
     return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
 #endif
 }
+
+#if !defined(__RIN_SYS_TYPES_HOST_OWNER)
+/* Query fixed-width metadata without changing either legacy stat layout.
+ * statx also covers an open descriptor through AT_EMPTY_PATH. */
+static inline int statx(int dirfd, const char* pathname, int flags,
+                        unsigned int mask, struct statx* statbuf) {
+    RinPathAtCallV1 call;
+    if (!statbuf) {
+        errno = EFAULT;
+        return -1;
+    }
+    if ((flags & ~(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW |
+                   AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE)) != 0 ||
+        (flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!pathname) {
+        if ((flags & AT_EMPTY_PATH) == 0) {
+            errno = EFAULT;
+            return -1;
+        }
+        pathname = "";
+    }
+    __rin_stat_path_at_init(&call, RIN_PATH_AT_STATX);
+    call.flags = (uint32_t)flags;
+    call.dirfd = dirfd;
+    call.mode = (uint32_t)mask;
+    call.path1 = (uint64_t)(uintptr_t)pathname;
+    call.buffer = (uint64_t)(uintptr_t)statbuf;
+    call.buffer_size = RIN_STATX_V1_SIZE;
+    return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
+}
+
+static inline int fstatx(int fd, unsigned int mask, struct statx* statbuf) {
+    return statx(fd, "", AT_EMPTY_PATH, mask, statbuf);
+}
+#endif /* !__RIN_SYS_TYPES_HOST_OWNER */
 
 #if !defined(__RIN_SYS_TYPES_HOST_OWNER)
 /* Explicit 64-bit metadata calls share the versioned path-at buffer contract.
