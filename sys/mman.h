@@ -24,6 +24,8 @@
 #include "../limits.h"
 #include "../internal/pthread_cancel_point.h"
 #include <rin/mman_abi.h>
+#include <rin/linux_cachestat_abi.h>
+#include <rin/linux_syscall_abi.h>
 #include <rin/process/madvise_abi.h>
 #include <stdarg.h>
 
@@ -486,6 +488,12 @@ static inline int msync(void* addr, size_t length, int flags) {
     int result = __rin_mman_zero_result(ret);
     __rin_pthread_cancel_point_if_linked();
     return result;
+}
+
+static inline int cachestat(int fd, const struct cachestat_range* range,
+                            struct cachestat* stats, unsigned int flags) {
+    return __rin_mman_zero_result(_RIN_MMAN_SYSCALL4(
+        RIN_LINUX_NR_CACHESTAT, fd, range, stats, flags));
 }
 
 static inline int madvise(void* addr, size_t length, int advice) {
