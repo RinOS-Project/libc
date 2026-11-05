@@ -359,6 +359,7 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define SO_REUSEADDR    2   /* アドレス再利用 */
 #define SO_TYPE         3   /* ソケットタイプ取得 */
 #define SO_ERROR        4   /* エラー取得 */
+#define SO_MARK        36   /* Socket firewall mark; requires NETWORK_ADMIN. */
 #ifndef SO_BINDTODEVICE
 #define SO_BINDTODEVICE 25  /* interface nameをsocketに固定 */
 #endif
@@ -430,6 +431,9 @@ static inline uint32_t ntohl(uint32_t netlong) {
  * - SO_BINDTODEVICEはTCP、UDP、raw IPv4/IPv6でinterface名を固定する。
  *   NETWORK_ADMIN capabilityを要求し、空文字またはoptlen=0で解除する。
  *   getsockopt()は現在のinterface名を返し、短いbufferでは安全に切り詰める。
+ * - SO_MARK sets and gets a uint32_t mark for TCP, UDP, and raw IPv4/IPv6.
+ *   NETWORK_ADMIN is required. The mark is passed to namespace route
+ *   selection and firewall packet matching on egress.
  * - SO_TXTIMEはIPv4/IPv6 UDPのみ。sock_txtimeはCLOCK_MONOTONICを使い、
  *   SCM_TXTIMEのuint64_t nanosecond値をbounded egress queueで処理する。
  *   REPORT_ERRORS時のmissed/invalid通知はMSG_ERRQUEUEのIP_RECVERR/
