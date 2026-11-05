@@ -2,6 +2,7 @@
 
 #include "sys/msg.h"
 #include "sys/sem.h"
+#include "sys/shm.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -63,6 +64,14 @@ static int sysv_semaphore_call(uint32_t command, uintptr_t arg1,
         arg1, arg2, arg3, arg4, arg5);
 }
 
+static int64_t sysv_shared_memory_call(uint32_t command, uintptr_t arg1,
+                                      uintptr_t arg2, uintptr_t arg3)
+{
+    return syscall(SYS_SYSV_IPC,
+        sysv_ipc_operation(RIN_SYSV_IPC_COMMAND_SHARED_MEMORY, command),
+        arg1, arg2, arg3, 0u, 0u);
+}
+
 int msgget(key_t key, int msgflg)
 {
     return sysv_message_call(RIN_SYSV_MSGGET, (uintptr_t)(intptr_t)key,
@@ -100,7 +109,8 @@ int msgctl(int msqid, int cmd, struct msqid_ds* buffer)
     }
     result = sysv_message_call(RIN_SYSV_MSGCTL,
         (uintptr_t)(unsigned int)msqid, (uintptr_t)(unsigned int)cmd,
-        (uintptr_t)(cmd == IPC_SET || cmd == IPC_STAT ? &wire : buffer),
+        (uintptr_t)(cmd == IPC_SET || cmd == IPC_STAT
+            ? (void*)&wire : (void*)buffer),
         0u, 0u);
     if (result == 0 && cmd == IPC_STAT) {
         buffer->msg_perm = (struct ipc_perm){0};
@@ -204,5 +214,59 @@ int semctl(int semid, int semnum, int command, ...)
     result = sysv_semaphore_call(RIN_SYSV_SEMCTL,
         (uintptr_t)(unsigned int)semid, (uintptr_t)(unsigned int)semnum,
         (uintptr_t)(unsigned int)command, argument, 0u);
+    return result;
+}
+
+int shmget(key_t key, size_t size, int shmflg)
+{
+    return (int)sysv_shared_memory_call(RIN_SYSV_SHMGET,
+        (uintptr_t)(intptr_t)key, (uintptr_t)size,
+        (uintptr_t)(unsigned int)shmflg);
+}
+
+void* shmat(int shmid, const void* shmaddr, int shmflg)
+{
+    int64_t result = sysv_shared_memory_call(RIN_SYSV_SHMAT,
+        (uintptr_t)(unsigned int)shmid, (uintptr_t)shmaddr,
+        (uintptr_t)(unsigned int)shmflg);
+    return result < 0 ? (void*)(intptr_t)-1 : (void*)(uintptr_t)result;
+}
+
+int shmdt(const void* shmaddr)
+{
+    return (int)sysv_shared_memory_call(RIN_SYSV_SHMDT,
+        (uintptr_t)shmaddr, 0u, 0u);
+}
+
+int shmctl(int shmid, int command, struct shmid_ds* buffer)
+{
+    RinSysvShmidDs wire;
+    int result;
+    command &= ~IPC_64;
+    if ((command == IPC_SET || command == IPC_STAT) && buffer == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (command == IPC_SET) {
+        memset(&wire, 0, sizeof(wire));
+        sysv_perm_to_wire(&buffer->shm_perm, &wire.perm);
+    }
+    result = (int)sysv_shared_memory_call(RIN_SYSV_SHMCTL,
+        (uintptr_t)(unsigned int)shmid, (uintptr_t)(unsigned int)command,
+        (uintptr_t)(command == IPC_SET || command == IPC_STAT
+            ? (void*)&wire : (void*)buffer));
+    if (result == 0 && command == IPC_STAT) {
+        memset(buffer, 0, sizeof(*buffer));
+        sysv_perm_from_wire(&wire.perm, &buffer->shm_perm);
+        buffer->shm_segsz = (size_t)wire.size;
+        buffer->shm_atime = (time_t)wire.attach_time;
+        buffer->shm_dtime = (time_t)wire.detach_time;
+        buffer->shm_ctime = (time_t)wire.change_time;
+        buffer->shm_nattch = (unsigned long)wire.attach_count;
+        buffer->shm_cpid = wire.creator_pid;
+        buffer->shm_lpid = wire.last_pid;
+        buffer->__reserved[0] = wire.reserved[0];
+        buffer->__reserved[1] = wire.reserved[1];
+    }
     return result;
 }
