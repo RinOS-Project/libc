@@ -465,6 +465,7 @@ static inline uint32_t ntohl(uint32_t netlong) {
 #define MSG_DONTWAIT    0x40    /* ノンブロッキング操作 */
 #define MSG_WAITALL     0x100   /* 全データを待つ */
 #define MSG_NOSIGNAL    0x4000  /* SIGPIPEを送らない */
+#define MSG_MORE        0x8000  /* TCP送信を保留、UDP datagramを集焚 */
 #define MSG_ERRQUEUE    0x2000  /* socket error queueから補助情報を読む */
 #define MSG_ZEROCOPY    0x04000000 /* user bufferの解放完了を通知する */
 #define MSG_CTRUNC      0x08    /* 補助データが制御バッファで切り詰められた */
