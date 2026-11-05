@@ -105,6 +105,10 @@ typedef struct __rin_account_info_v1 {
     uint64_t reserved[4];
 } __rin_account_info_v1;
 
+typedef RinGroupQueryV1 __rin_group_query_v1;
+typedef RinGroupInfoV1 __rin_group_info_v1;
+typedef RinGroupManageV1 __rin_group_manage_v1;
+
 #ifndef MIDL_PASS
 #include "internal/user_snapshot.h"
 
@@ -327,6 +331,128 @@ static inline int __rin_account_query(uint16_t kind, uint32_t uid,
     error = __rin_account_errno(result);
     if (error != 0) return error;
     return __rin_account_validate_info(info);
+}
+
+static inline int __rin_group_validate_info(
+    const __rin_group_info_v1* info)
+{
+    uint32_t index;
+    if (!info || info->struct_size != sizeof(*info) ||
+        info->version != RIN_GROUP_INFO_VERSION ||
+        (info->flags & (uint16_t)~(RIN_GROUP_INFO_FLAG_MEMBERSHIP |
+                                   RIN_GROUP_INFO_FLAG_SNAPSHOT)) != 0u ||
+        ((info->flags & RIN_GROUP_INFO_FLAG_SNAPSHOT) != 0u &&
+         ((info->flags & RIN_GROUP_INFO_FLAG_MEMBERSHIP) == 0u ||
+          info->reserved[0] == 0u)) ||
+        info->member_count > RIN_GROUP_MAX_MEMBERS ||
+        !__rin_account_string_terminated(info->name, sizeof(info->name)))
+        return EIO;
+    for (index = 1u;
+         index < sizeof(info->reserved) / sizeof(info->reserved[0]);
+         ++index) {
+        if (info->reserved[index] != 0u) return EIO;
+    }
+    if ((info->flags & RIN_GROUP_INFO_FLAG_SNAPSHOT) == 0u &&
+        info->reserved[0] != 0u)
+        return EIO;
+    for (index = 0u; index < info->member_count; ++index) {
+        uint32_t other;
+        for (other = index + 1u; other < info->member_count; ++other) {
+            if (info->member_ids[index] == info->member_ids[other])
+                return EIO;
+        }
+    }
+    for (index = info->member_count; index < RIN_GROUP_MAX_MEMBERS; ++index) {
+        if (info->member_ids[index] != 0u) return EIO;
+    }
+    return 0;
+}
+
+static inline int __rin_group_query(uint16_t kind, uint32_t gid,
+                                    uint32_t member_uid, const char* name,
+                                    uint64_t snapshot,
+                                    __rin_group_info_v1* info)
+{
+    __rin_group_query_v1 query;
+    char name_snapshot[sizeof(query.name)];
+    size_t index = 0u;
+    intptr_t result;
+    int error;
+    if (!info) return EFAULT;
+    __rin_account_zero(&query, sizeof(query));
+    query.struct_size = sizeof(query);
+    query.version = RIN_GROUP_QUERY_VERSION;
+    query.kind = kind;
+    query.gid = gid;
+    query.member_uid = member_uid;
+    query.reserved = snapshot;
+    if (kind == RIN_GROUP_QUERY_BY_NAME) {
+        if (!name) return EINVAL;
+        if (__rin_user_snapshot_string(name, name_snapshot,
+                                       sizeof(name_snapshot)) != 0) {
+            error = errno;
+            return error == ENAMETOOLONG ? EINVAL : error;
+        }
+        if (name_snapshot[0] == '\0') return EINVAL;
+        while (index < sizeof(query.name) && name_snapshot[index] != '\0') {
+            query.name[index] = (uint8_t)name_snapshot[index];
+            ++index;
+        }
+        if (index == sizeof(query.name)) return EINVAL;
+    } else if (name != NULL) {
+        return EINVAL;
+    }
+    __rin_account_zero(info, sizeof(*info));
+    info->struct_size = sizeof(*info);
+    info->version = RIN_GROUP_INFO_VERSION;
+    result = _RIN_ACCOUNT_SYSCALL2(RIN_SYS_GROUP_QUERY, &query, info);
+    error = __rin_account_errno(result);
+    if (error != 0) return error;
+    return __rin_group_validate_info(info);
+}
+
+static inline int __rin_group_manage(uint16_t operation, uint32_t gid,
+                                     uint32_t member_uid, const char* name,
+                                     uint32_t* created_gid)
+{
+    __rin_group_manage_v1 request;
+    char name_snapshot[sizeof(request.name)];
+    uint32_t index = 0u;
+    intptr_t result;
+    int error;
+    __rin_account_zero(&request, sizeof(request));
+    request.struct_size = sizeof(request);
+    request.version = RIN_GROUP_MANAGE_VERSION;
+    request.operation = operation;
+    request.gid = gid;
+    request.member_uid = member_uid;
+    if (operation == RIN_GROUP_MANAGE_CREATE) {
+        if (!name) return EINVAL;
+        if (__rin_user_snapshot_string(name, name_snapshot,
+                                       sizeof(name_snapshot)) != 0) {
+            error = errno;
+            return error == ENAMETOOLONG ? EINVAL : error;
+        }
+        if (name_snapshot[0] == '\0') return EINVAL;
+        while (index < sizeof(request.name) && name_snapshot[index] != '\0') {
+            request.name[index] = (uint8_t)name_snapshot[index];
+            ++index;
+        }
+        if (index == sizeof(request.name)) return EINVAL;
+    } else if (name != NULL) {
+        return EINVAL;
+    }
+    result = _RIN_CREDENTIAL_SYSCALL1(RIN_SYS_GROUP_MANAGE, &request);
+    error = __rin_account_errno(result);
+    if (error != 0) return error;
+    if (operation == RIN_GROUP_MANAGE_CREATE) {
+        if (request.gid == 0u ||
+            __rin_account_string_terminated(request.name,
+                                            sizeof(request.name)) == 0)
+            return EIO;
+        if (created_gid) *created_gid = request.gid;
+    }
+    return 0;
 }
 
 static inline size_t __rin_account_string_size(const uint8_t* value,

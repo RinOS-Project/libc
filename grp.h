@@ -1,8 +1,8 @@
 /*
  * RinOS libc - grp.h
  * グループデータベース
- * Backed by the versioned Rin account-query ABI. RinOS currently exposes one
- * primary private group per account.
+ * Backed by the versioned Rin group-query ABI. Primary private groups remain
+ * available alongside persisted shared groups with bounded member lists.
  */
 
 #if !defined(RIN_ACCOUNT_CUSTOM_SYSCALL_HOOK) && \
@@ -61,7 +61,7 @@ struct group {
 typedef struct __rin_group_runtime_state_v1 {
     struct group entry;
     union {
-        char bytes[128];
+        char bytes[512];
         void* align;
     } storage;
     uint32_t cursor;
@@ -75,7 +75,7 @@ extern RIN_GROUP_THREAD_LOCAL __rin_group_runtime_state_v1
  * グループデータベース関数
  * ═══════════════════════════════════════════════════════════════*/
 
-static inline int __rin_group_pack(const __rin_account_info_v1* info,
+static inline int __rin_group_pack(const __rin_group_info_v1* info,
                                    struct group* grp,
                                    char* buf, size_t buflen,
                                    struct group** result) {
@@ -85,6 +85,7 @@ static inline int __rin_group_pack(const __rin_account_info_v1* info,
     size_t aligned;
     uintptr_t aligned_address;
     char** members;
+    size_t member_count = 0u;
     if (result) *result = NULL;
     if (!info || !grp || !buf || !result) return EINVAL;
     name_size = __rin_account_string_size(info->name, sizeof(info->name));
@@ -101,10 +102,27 @@ static inline int __rin_group_pack(const __rin_account_info_v1* info,
     if (aligned_address < (uintptr_t)(void*)buf) return ERANGE;
     aligned = (size_t)(aligned_address - (uintptr_t)(void*)buf);
     if (aligned < offset || aligned > buflen ||
-        sizeof(char*) * 2u > buflen - aligned) return ERANGE;
+        sizeof(char*) * (info->member_count + 1u) > buflen - aligned)
+        return ERANGE;
     members = (char**)(void*)(buf + aligned);
-    members[0] = grp->gr_name;
-    members[1] = NULL;
+    offset = aligned + sizeof(char*) * (info->member_count + 1u);
+    for (size_t index = 0u; index < info->member_count; ++index) {
+        __rin_account_info_v1 account;
+        size_t account_name_size;
+        int error = __rin_account_query(__RIN_ACCOUNT_QUERY_BY_UID,
+                                        info->member_ids[index], NULL,
+                                        &account);
+        if (error == ENOENT) continue;
+        if (error != 0) return error;
+        account_name_size = __rin_account_string_size(
+            account.name, sizeof(account.name));
+        if (account_name_size == 0u || account_name_size > buflen - offset)
+            return ERANGE;
+        members[member_count++] = buf + offset;
+        __rin_account_copy(buf + offset, account.name, account_name_size);
+        offset += account_name_size;
+    }
+    members[member_count] = NULL;
     grp->gr_gid = (gid_t)info->gid;
     grp->gr_mem = members;
     *result = grp;
@@ -119,7 +137,8 @@ static inline int getgrnam_r(const char* name, struct group* grp,
     int error;
     if (result) *result = NULL;
     if (!name || !grp || !buf || !result) return EINVAL;
-    error = __rin_account_query(__RIN_ACCOUNT_QUERY_BY_NAME, 0u, name, &info);
+    error = __rin_group_query(RIN_GROUP_QUERY_BY_NAME, 0u, 0u, name, 0u,
+                              &info);
     if (error == ENOENT) return 0;
     if (error != 0) return error;
     return __rin_group_pack(&info, grp, buf, buflen, result);
@@ -136,8 +155,8 @@ static inline int getgrgid_r(gid_t gid, struct group* grp,
 #if !defined(RIN_SYS_TYPES_UNSIGNED_ID)
     if (gid < 0) return EINVAL;
 #endif
-    error = __rin_account_query(__RIN_ACCOUNT_QUERY_BY_UID, (uint32_t)gid,
-                                NULL, &info);
+    error = __rin_group_query(RIN_GROUP_QUERY_BY_GID, (uint32_t)gid, 0u,
+                              NULL, 0u, &info);
     if (error == ENOENT) return 0;
     if (error != 0) return error;
     return __rin_group_pack(&info, grp, buf, buflen, result);
@@ -189,12 +208,14 @@ static inline void endgrent(void) {
 
 /* getgrent - 次のエントリを取得 */
 static inline struct group* getgrent(void) {
-    __rin_account_info_v1 info;
+    __rin_group_info_v1 info;
     struct group* result = NULL;
     int error = __rin_group_runtime_state.cursor_started
-        ? __rin_account_query_uid_after(__rin_group_runtime_state.cursor,
-                                        &info)
-        : __rin_account_query(__RIN_ACCOUNT_QUERY_BY_UID, 0u, NULL, &info);
+        ? __rin_group_query(RIN_GROUP_QUERY_BY_GID_AFTER,
+                            __rin_group_runtime_state.cursor, 0u, NULL, 0u,
+                            &info)
+        : __rin_group_query(RIN_GROUP_QUERY_BY_INDEX, 0u, 0u, NULL, 0u,
+                            &info);
     if (error == ENOENT) {
         return NULL;
     }
@@ -208,7 +229,7 @@ static inline struct group* getgrent(void) {
         errno = error;
         return NULL;
     }
-    __rin_group_runtime_state.cursor = info.uid;
+    __rin_group_runtime_state.cursor = info.gid;
     __rin_group_runtime_state.cursor_started = 1u;
     return result;
 }
@@ -310,6 +331,61 @@ static inline int setgroups(size_t size, const gid_t* list) {
 #endif
 }
 
+static inline int __rin_group_append_id(uint32_t* ids, uint32_t* count,
+                                       uint32_t capacity, uint32_t gid) {
+    uint32_t index;
+    for (index = 0u; index < *count; ++index) {
+        if (ids[index] == gid) return 0;
+    }
+    if (*count >= capacity) return E2BIG;
+    ids[(*count)++] = gid;
+    return 0;
+}
+
+static inline int __rin_group_collect_user(const char* user, uint32_t base_gid,
+                                           uint32_t* group_ids,
+                                           uint32_t* group_count) {
+    __rin_account_info_v1 account;
+    __rin_account_info_v1 account_check;
+    __rin_group_info_v1 group_info;
+    uint32_t cursor = 0u;
+    uint64_t snapshot = 0u;
+    int error;
+    if (!user || !group_ids || !group_count) return EINVAL;
+    *group_count = 0u;
+    error = __rin_account_query(__RIN_ACCOUNT_QUERY_BY_NAME, 0u, user,
+                                &account);
+    if (error != 0) return error;
+    error = __rin_group_append_id(group_ids, group_count,
+                                  RIN_GROUP_MAX_MEMBERS + 2u, account.gid);
+    if (error != 0) return error;
+    error = __rin_group_append_id(group_ids, group_count,
+                                  RIN_GROUP_MAX_MEMBERS + 2u, base_gid);
+    if (error != 0) return error;
+    for (;;) {
+        error = __rin_group_query(RIN_GROUP_QUERY_BY_MEMBER_UID, cursor,
+                                  account.uid, NULL, snapshot, &group_info);
+        if (error == ENOENT) break;
+        if (error != 0) return error;
+        if (group_info.gid <= cursor ||
+            (group_info.flags & RIN_GROUP_INFO_FLAG_SNAPSHOT) == 0u ||
+            group_info.reserved[0] == 0u)
+            return EIO;
+        error = __rin_group_append_id(group_ids, group_count,
+                                      RIN_GROUP_MAX_MEMBERS + 2u,
+                                      group_info.gid);
+        if (error != 0) return error;
+        cursor = group_info.gid;
+        snapshot = group_info.reserved[0];
+    }
+    error = __rin_account_query(__RIN_ACCOUNT_QUERY_BY_UID, account.uid,
+                                NULL, &account_check);
+    if (error != 0) return error;
+    if (account_check.uid != account.uid || account_check.gid != account.gid)
+        return EAGAIN;
+    return 0;
+}
+
 /* initgroups - グループアクセスリストを初期化 */
 static inline int initgroups(const char* user, gid_t group) {
     __rin_account_info_v1 info;
@@ -318,7 +394,7 @@ static inline int initgroups(const char* user, gid_t group) {
 #else
     RinSupplementaryGroupsUserV2 request;
 #endif
-    uint32_t group_ids[2];
+    uint32_t group_ids[RIN_GROUP_MAX_MEMBERS + 2u];
     uint32_t group_count;
     int error;
     if (!user || user[0] == '\0') {
@@ -331,17 +407,19 @@ static inline int initgroups(const char* user, gid_t group) {
         return -1;
     }
 #endif
+    error = __rin_group_collect_user(user, (uint32_t)group, group_ids,
+                                     &group_count);
+    if (error == 0 && group_count > __RIN_CREDENTIALS_MAX_GROUPS)
+        error = E2BIG;
+    if (error != 0) {
+        errno = error;
+        return -1;
+    }
     error = __rin_account_query(__RIN_ACCOUNT_QUERY_BY_NAME, 0u, user,
                                 &info);
     if (error != 0) {
         errno = error;
         return -1;
-    }
-    group_ids[0] = info.gid;
-    group_count = 1u;
-    if (info.gid != (uint32_t)group) {
-        group_ids[1] = (uint32_t)group;
-        group_count = 2u;
     }
 #if defined(__RIN_SYS_TYPES_HOST_OWNER)
     __rin_account_zero(&request, sizeof(request));
@@ -350,8 +428,8 @@ static inline int initgroups(const char* user, gid_t group) {
     request.operation = __RIN_SUPPLEMENTARY_GROUPS_OPERATION_SET;
     request.target_uid = info.uid;
     request.group_count = group_count;
-    request.groups[0] = group_ids[0];
-    if (group_count > 1u) request.groups[1] = group_ids[1];
+    for (uint32_t index = 0u; index < group_count; ++index)
+        request.groups[index] = group_ids[index];
 #else
     __rin_account_zero(&request, sizeof(request));
     request.struct_size = sizeof(request);
@@ -369,6 +447,51 @@ static inline int initgroups(const char* user, gid_t group) {
     }
     return 0;
 }
+
+#if defined(_RIN_USE_GNU_GETGROUPLIST) || defined(__RIN_FEATURES_GNU)
+/* GNU getgrouplist: on insufficient capacity, report the required count. */
+static inline int getgrouplist(const char* user, gid_t group, gid_t* groups,
+                               int* group_count) {
+    uint32_t group_ids[RIN_GROUP_MAX_MEMBERS + 2u];
+    uint32_t required = 0u;
+    int capacity;
+    int error;
+    int index;
+    if (!group_count) {
+        errno = EFAULT;
+        return -1;
+    }
+    capacity = *group_count;
+    if (capacity < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (capacity > 0 && !groups) {
+        errno = EFAULT;
+        return -1;
+    }
+#if !defined(RIN_SYS_TYPES_UNSIGNED_ID)
+    if (group < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+#endif
+    error = __rin_group_collect_user(user, (uint32_t)group, group_ids,
+                                     &required);
+    if (error != 0) {
+        errno = error;
+        return -1;
+    }
+    *group_count = (int)required;
+    for (index = 0; index < capacity && (uint32_t)index < required; ++index)
+        groups[index] = (gid_t)group_ids[index];
+    if ((uint32_t)capacity < required) {
+        errno = ERANGE;
+        return -1;
+    }
+    return (int)required;
+}
+#endif
 
 #ifdef __cplusplus
 }
