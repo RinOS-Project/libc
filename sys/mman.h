@@ -143,6 +143,7 @@ static inline int __rin_mman_int_result(intptr_t result)
 #define PROT_READ      0x01       /* 読み取り可能 */
 #define PROT_WRITE     0x02       /* 書き込み可能 */
 #define PROT_EXEC      0x04       /* 実行可能 */
+/* RinOSでは未対応。mmap()／mprotect()はEINVALを返す。 */
 #define PROT_GROWSDOWN 0x01000000 /* スタック用（下方向に拡張） */
 #define PROT_GROWSUP   0x02000000 /* 上方向に拡張 */
 
@@ -159,12 +160,14 @@ static inline int __rin_mman_int_result(intptr_t result)
 #define MAP_FIXED_NOREPLACE 0x00100000 /* 既存マッピングを置換せず固定配置 */
 #define MAP_ANONYMOUS   0x20   /* ファイルなし (メモリのみ) */
 #define MAP_ANON        MAP_ANONYMOUS
+/* RinOS未対応: 通常のmmap()はEINVAL、MAP_SHARED_VALIDATE併用は
+ * EOPNOTSUPPを返す。 */
 #define MAP_GROWSDOWN   0x100  /* スタック用 (下方向に拡張) */
-#define MAP_DENYWRITE   0x800  /* Linux互換用。Linuxでは無視される */
 #define MAP_LOCKED      0x2000 /* ページをロック */
 #define MAP_NORESERVE   0x4000 /* スワップ予約なし */
 #define MAP_POPULATE    0x8000 /* 事前にページをフォルト */
 #define MAP_NONBLOCK    0x10000/* ページフォルトをブロックしない */
+#define MAP_DENYWRITE   0x800  /* Linux互換用。Linuxでは無視される */
 #define MAP_STACK       0x20000/* スタック用ヒント */
 #define MAP_HUGETLB     0x40000/* ヒュージページを使用 */
 
