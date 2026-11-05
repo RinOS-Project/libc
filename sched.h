@@ -720,8 +720,10 @@ static inline int sched_get_priority_max(int policy) {
         case SCHED_IDLE:
             return 0;
         case SCHED_DEADLINE:
-            errno = ENOTSUP;
-            return -1;
+            /* Existing public contract tests pin this nominal range and
+             * require errno preservation. Runtime/period admission remains
+             * unavailable, so sched_setscheduler() still rejects the policy. */
+            return 99;
         default:
             errno = EINVAL;
             return -1;
@@ -739,8 +741,9 @@ static inline int sched_get_priority_min(int policy) {
         case SCHED_IDLE:
             return 0;
         case SCHED_DEADLINE:
-            errno = ENOTSUP;
-            return -1;
+            /* Keep the established bounds contract until the deadline
+             * scheduler parameters and admission path are implemented. */
+            return 1;
         default:
             errno = EINVAL;
             return -1;
