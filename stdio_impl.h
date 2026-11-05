@@ -4110,7 +4110,8 @@ static inline int _rin_fflush_unlocked(FILE* stream) {
             if (unread != 0u ||
                 (stream_index >= 0 &&
                  _rin_stdio_ungetc_count(stream) != 0u))
-                return fseek(stream, 0L, SEEK_CUR) == 0 ? 0 : EOF;
+                return _rin_fseek_unlocked(stream, 0L, SEEK_CUR) == 0
+                    ? 0 : EOF;
         }
         return 0;
     }
@@ -4168,6 +4169,10 @@ _RIN_STDIO_API int fflush(FILE* stream) {
         return result;
     }
     return _rin_fflush_all();
+}
+
+_RIN_STDIO_API int fflush_unlocked(FILE* stream) {
+    return _rin_fflush_unlocked(stream);
 }
 
 _RIN_STDIO_API int fileno(FILE* stream) {

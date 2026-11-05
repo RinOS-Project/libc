@@ -104,6 +104,7 @@ int getc(FILE* stream);
 int putc(int c, FILE* stream);
 char* fgets(char* s, int size, FILE* stream);
 #if defined(__RIN_FEATURES_GNU)
+int fflush_unlocked(FILE* stream);
 int fgetc_unlocked(FILE* stream);
 int fputc_unlocked(int c, FILE* stream);
 char* fgets_unlocked(char* s, int size, FILE* stream);
