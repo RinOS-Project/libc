@@ -205,6 +205,7 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 #define MADV_SEQUENTIAL  2   /* シーケンシャルアクセス */
 #define MADV_WILLNEED    3   /* すぐに必要 */
 #define MADV_DONTNEED    4   /* しばらく不要 */
+#define MADV_DONTNEED_LOCKED 24 /* locked VMAの常駐ページを破棄 */
 #define MADV_FREE        8   /* ページ解放可能 */
 #define MADV_REMOVE      9   /* 削除 */
 #define MADV_DONTFORK    10  /* fork時にコピーしない */
