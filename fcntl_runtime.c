@@ -9,6 +9,12 @@
 #include "unistd.h"
 #include <rin/ipc.h>
 
+/* memfd_create is implemented here even when the runtime is compiled with
+ * the POSIX feature set, where sys/mman.h intentionally hides GNU names. */
+#ifndef MFD_CLOEXEC
+#define MFD_CLOEXEC 0x0001U
+#endif
+
 int _fcntl_fd_flags[_FCNTL_MAX_FDS];
 int _fcntl_fl_flags[_FCNTL_MAX_FDS];
 int _fcntl_initialized = 0;
