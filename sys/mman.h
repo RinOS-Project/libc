@@ -152,6 +152,9 @@ static inline int __rin_mman_int_result(intptr_t result)
 
 #define MAP_SHARED      0x01   /* 他プロセスと共有 */
 #define MAP_PRIVATE     0x02   /* プライベートコピーオンライト */
+#define MAP_SHARED_VALIDATE \
+    (MAP_SHARED | MAP_PRIVATE) /* 未知flagを厳密に検証する共有mapping */
+#define MAP_SYNC        0x80000 /* 永続同期mappingを要求 */
 #define MAP_FIXED       0x10   /* 指定アドレスに配置 */
 #define MAP_FIXED_NOREPLACE 0x00100000 /* 既存マッピングを置換せず固定配置 */
 #define MAP_ANONYMOUS   0x20   /* ファイルなし (メモリのみ) */
