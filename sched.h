@@ -913,6 +913,17 @@ static inline int rin_sched_move_numa_pages(RinNumaMovePagesV1* request)
         (uintptr_t)request));
 }
 
+static inline long rin_sched_migrate_numa_pages(
+    RinNumaMigratePagesV1* request)
+{
+    if (!request) {
+        errno = EINVAL;
+        return -1;
+    }
+    return _rin_sched_result(_RIN_SCHED_SYSCALL2(
+        SYS_PROCESS_NUMA_POLICY, RIN_NUMA_POLICY_OPERATION_MIGRATE_PAGES,
+        (uintptr_t)request));
+}
 static inline int rin_sched_get_numa_allowed_nodes(RinNumaNodeMaskV1* mask)
 {
     if (!mask) {

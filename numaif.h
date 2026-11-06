@@ -127,6 +127,24 @@ static inline long move_pages(int process_id, unsigned long count,
     return (long)failed;
 }
 
+static inline int migrate_pages(int process_id, unsigned long maxnode,
+                                const unsigned long* old_nodes,
+                                const unsigned long* new_nodes) {
+    RinNumaMigratePagesV1 request = {0};
+    const unsigned long word_bits = sizeof(unsigned long) * CHAR_BIT;
+    if (process_id < 0 || maxnode == 0ul || maxnode > 64ul) {
+        errno = EINVAL;
+        return -1;
+    }
+    request.struct_size = sizeof(request);
+    request.version = RIN_NUMA_POLICY_ABI_VERSION;
+    request.process_id = process_id;
+    request.maxnode = (uint32_t)maxnode;
+    request.node_word_bits = (uint32_t)word_bits;
+    request.old_nodes = (uint64_t)(uintptr_t)old_nodes;
+    request.new_nodes = (uint64_t)(uintptr_t)new_nodes;
+    return (int)rin_sched_migrate_numa_pages(&request);
+}
 static inline int get_mempolicy(int* mode, unsigned long* nodemask,
                                 unsigned long maxnode, void* address,
                                 unsigned long flags) {
