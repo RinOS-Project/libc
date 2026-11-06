@@ -133,7 +133,7 @@ static inline int __rin_group_pack(const __rin_group_info_v1* info,
 static inline int getgrnam_r(const char* name, struct group* grp,
                              char* buf, size_t buflen,
                              struct group** result) {
-    __rin_account_info_v1 info;
+    __rin_group_info_v1 info;
     int error;
     if (result) *result = NULL;
     if (!name || !grp || !buf || !result) return EINVAL;
@@ -148,7 +148,7 @@ static inline int getgrnam_r(const char* name, struct group* grp,
 static inline int getgrgid_r(gid_t gid, struct group* grp,
                              char* buf, size_t buflen,
                              struct group** result) {
-    __rin_account_info_v1 info;
+    __rin_group_info_v1 info;
     int error;
     if (result) *result = NULL;
     if (!grp || !buf || !result) return EINVAL;
