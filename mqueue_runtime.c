@@ -12,7 +12,7 @@
 #include <rin/ipc.h>
 
 #define RIN_LIBC_MQ_NOTIFY_SLOTS 64u
-#define RIN_LIBC_MQ_NOTIFY_JOBS 64u
+#define RIN_LIBC_MQ_NOTIFY_JOBS 16u
 #define RIN_LIBC_MQ_WAIT_RECHECK_NS UINT64_C(50000000)
 
 enum {
