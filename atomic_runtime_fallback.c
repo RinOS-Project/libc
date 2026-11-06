@@ -3,9 +3,11 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include "rin_atomic_wait.h"
 
 #define RIN_ATOMIC_WAIT_BUCKET_COUNT 64u
+#define RIN_ATOMIC_FALLBACK_STACK_SCRATCH_BYTES 256u
 
 typedef struct rin_atomic_waiter_v1 {
     const volatile void *object;
@@ -216,18 +218,24 @@ void __rin_atomic_store_v1(volatile void *object, const void *value,
 void __rin_atomic_exchange_v1(volatile void *object, const void *desired,
                               void *result, size_t size, int memory_order)
 {
-    unsigned char snapshot[size ? size : 1u];
+    unsigned char stack_snapshot[RIN_ATOMIC_FALLBACK_STACK_SCRATCH_BYTES];
+    unsigned char *snapshot = stack_snapshot;
     size_t index;
     const unsigned char *source = (const unsigned char *)desired;
     volatile unsigned char *target = (volatile unsigned char *)object;
     volatile unsigned char *output = (volatile unsigned char *)result;
     (void)memory_order;
+    if (size > sizeof(stack_snapshot)) {
+        snapshot = (unsigned char *)malloc(size);
+        if (!snapshot) __builtin_trap();
+    }
     rin_atomic_fallback_lock_acquire();
     for (index = 0; index < size; ++index) snapshot[index] = source[index];
     rin_atomic_fallback_copy_from_volatile(
         (unsigned char *)output, (const volatile unsigned char *)target, size);
     rin_atomic_fallback_copy_to_volatile(target, snapshot, size);
     rin_atomic_fallback_lock_release();
+    if (snapshot != stack_snapshot) free(snapshot);
 }
 
 int __rin_atomic_compare_exchange_v1(
