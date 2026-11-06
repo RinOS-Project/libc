@@ -307,6 +307,7 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 #endif
 #if defined(__RIN_MMAN_LINUX_VISIBLE)
 #define MCL_ONFAULT 4   /* フォルト時にロック */
+#define MLOCK_ONFAULT 1 /* フォルト時にロック */
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -677,6 +678,16 @@ static inline int munlockall(void) {
     return __rin_mman_zero_result(ret);
 }
 #endif /* __RIN_MMAN_POSIX_VISIBLE */
+
+#if defined(__RIN_MMAN_GNU_VISIBLE)
+static inline int mlock2(const void* addr, size_t length,
+                         unsigned int flags) {
+    intptr_t ret = _RIN_MMAN_SYSCALL3(
+        SYS_MLOCK2, (uintptr_t)addr, (uintptr_t)length,
+        (uintptr_t)flags);
+    return __rin_mman_zero_result(ret);
+}
+#endif /* __RIN_MMAN_GNU_VISIBLE */
 
 #if defined(__RIN_MMAN_LINUX_VISIBLE)
 static inline int mincore(void* addr, size_t length, unsigned char* vec) {
