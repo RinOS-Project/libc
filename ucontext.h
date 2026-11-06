@@ -458,7 +458,8 @@ static inline int rin_ucontext_amd64_ready(const ucontext_t* context) {
 
 /* The wrapper around this naked function validates the pointer first.  On a
  * later setcontext(), returning here runs the wrapper epilogue exactly as a
- * normal getcontext() call would. */
+ * normal getcontext() call would.  The XSAVE header is cleared first because
+ * the caller-owned context storage may not have been initialized. */
 static __attribute__((naked, noinline)) int
 rin_ucontext_amd64_capture(ucontext_t* context __attribute__((unused))) {
 #if defined(_WIN64)
@@ -479,6 +480,14 @@ rin_ucontext_amd64_capture(ucontext_t* context __attribute__((unused))) {
         "movl 788(%rdi), %edx\n\t"
         "leaq 855(%rdi), %r11\n\t"
         "andq $-64, %r11\n\t"
+        "movq $0, 512(%r11)\n\t"
+        "movq $0, 520(%r11)\n\t"
+        "movq $0, 528(%r11)\n\t"
+        "movq $0, 536(%r11)\n\t"
+        "movq $0, 544(%r11)\n\t"
+        "movq $0, 552(%r11)\n\t"
+        "movq $0, 560(%r11)\n\t"
+        "movq $0, 568(%r11)\n\t"
         "xsave64 (%r11)\n\t"
         "1:\n\t"
         "movq %r8, 40(%rdi)\n\t"
@@ -513,6 +522,14 @@ rin_ucontext_amd64_capture(ucontext_t* context __attribute__((unused))) {
         "movl 788(%rdi), %edx\n\t"
         "leaq 855(%rdi), %r11\n\t"
         "andq $-64, %r11\n\t"
+        "movq $0, 512(%r11)\n\t"
+        "movq $0, 520(%r11)\n\t"
+        "movq $0, 528(%r11)\n\t"
+        "movq $0, 536(%r11)\n\t"
+        "movq $0, 544(%r11)\n\t"
+        "movq $0, 552(%r11)\n\t"
+        "movq $0, 560(%r11)\n\t"
+        "movq $0, 568(%r11)\n\t"
         "xsave64 (%r11)\n\t"
         "1:\n\t"
         "movq %r8, 40(%rdi)\n\t"
@@ -1016,7 +1033,8 @@ static inline int rin_ucontext_i386_ready(const ucontext_t* context) {
 
 /* Capture the normal continuation after this helper returns.  EAX/EDX are
  * preserved on the helper stack long enough to record them; restore always
- * returns zero as required by getcontext(). */
+ * returns zero as required by getcontext().  The XSAVE header is cleared
+ * first because the caller-owned context storage may be uninitialized. */
 static __attribute__((naked, noinline)) int
 rin_ucontext_i386_capture(ucontext_t* context __attribute__((unused))) {
     __asm__(
@@ -1057,6 +1075,22 @@ rin_ucontext_i386_capture(ucontext_t* context __attribute__((unused))) {
         "andl $-64, %ecx\n\t"
         "movl 660(%eax), %edx\n\t"
         "movl 656(%eax), %eax\n\t"
+        "movl $0, 512(%ecx)\n\t"
+        "movl $0, 516(%ecx)\n\t"
+        "movl $0, 520(%ecx)\n\t"
+        "movl $0, 524(%ecx)\n\t"
+        "movl $0, 528(%ecx)\n\t"
+        "movl $0, 532(%ecx)\n\t"
+        "movl $0, 536(%ecx)\n\t"
+        "movl $0, 540(%ecx)\n\t"
+        "movl $0, 544(%ecx)\n\t"
+        "movl $0, 548(%ecx)\n\t"
+        "movl $0, 552(%ecx)\n\t"
+        "movl $0, 556(%ecx)\n\t"
+        "movl $0, 560(%ecx)\n\t"
+        "movl $0, 564(%ecx)\n\t"
+        "movl $0, 568(%ecx)\n\t"
+        "movl $0, 572(%ecx)\n\t"
         "xsave (%ecx)\n\t"
         "1:\n\t"
         "addl $8, %esp\n\t"
