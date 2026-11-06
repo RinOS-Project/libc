@@ -261,7 +261,7 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 #define MADV_DOFORK      11  /* fork時にコピーする */
 #define MADV_MERGEABLE   12  /* private anonymous pages may be deduplicated */
 #define MADV_UNMERGEABLE 13  /* stop future page deduplication */
-#define RIN_MADV_KSM_SUPPORTED_IA32 0
+#define RIN_MADV_KSM_SUPPORTED_IA32 1
 #define RIN_MADV_KSM_SUPPORTED_X86_64 1
 #define MADV_HUGEPAGE    14  /* transparent huge-page preference */
 #define MADV_NOHUGEPAGE  15  /* disable transparent huge pages for range */
