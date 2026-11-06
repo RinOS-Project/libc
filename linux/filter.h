@@ -8,6 +8,7 @@
 #define BPF_CLASS(code) ((code) & 0x07)
 #define BPF_SIZE(code)  ((code) & 0x18)
 #define BPF_MODE(code)  ((code) & 0xe0)
+#define BPF_RVAL(code)  ((code) & 0x18)
 #define BPF_SRC(code)   ((code) & 0x08)
 #define BPF_OP(code)    ((code) & 0xf0)
 
@@ -31,6 +32,7 @@
 #define BPF_MSH  0xa0
 #define BPF_K    0x00
 #define BPF_X    0x08
+#define BPF_A    0x10
 
 #define BPF_ADD  0x00
 #define BPF_SUB  0x10
@@ -72,6 +74,8 @@
 #define SKF_AD_MAX             64
 #define SKF_NET_OFF            (-0x100000)
 #define SKF_LL_OFF             (-0x200000)
+#define BPF_NET_OFF             SKF_NET_OFF
+#define BPF_LL_OFF              SKF_LL_OFF
 
 #define SKF_AD_PROTOCOL_LOAD \
     ((uint32_t)(SKF_AD_OFF + SKF_AD_PROTOCOL))
