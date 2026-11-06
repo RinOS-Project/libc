@@ -594,6 +594,7 @@ RIN_STRING_INLINE const char* strerror(int errnum) {
 }
 
 /* POSIX/XSI strerror_r: caller-owned output and an explicit ERANGE result. */
+#if !defined(__RIN_FEATURES_GNU) && !defined(_GNU_SOURCE)
 RIN_STRING_INLINE int strerror_r(int errnum, char* buf, size_t buflen) {
     const char* message = _rin_strerror_known_message(errnum);
     char unknown[_RIN_STRERROR_UNKNOWN_MESSAGE_CAPACITY];
@@ -615,6 +616,24 @@ RIN_STRING_INLINE int strerror_r(int errnum, char* buf, size_t buflen) {
     buf[copied] = '\0';
     return copied == length ? 0 : ERANGE;
 }
+
+#endif
+
+/* GNU strerror_r returns a message pointer when the caller buffer is too
+ * small. Keep the single out-of-line runtime symbol in the XSI form, and
+ * provide GNU's distinct return type through this feature-gated inline. */
+#if (defined(__RIN_FEATURES_GNU) || defined(_GNU_SOURCE)) && \
+    !defined(RIN_STRING_IMPLEMENTATION)
+RIN_STRING_INLINE char* strerror_r(int errnum, char* buf, size_t buflen) {
+    const char* message = strerror(errnum);
+    size_t length = 0u;
+
+    while (message[length] != '\0') ++length;
+    if (!buf || buflen <= length) return (char*)message;
+    if (buf != message) memmove(buf, message, length + 1u);
+    return buf;
+}
+#endif
 
 #if defined(_GNU_SOURCE) || defined(_RIN_USE_GNU_STRVERSCMP)
 int strverscmp(const char* left, const char* right);
