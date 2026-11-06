@@ -140,7 +140,8 @@ typedef int key_t;
 #ifndef RIN_FD_SET_DEFINED
 #define RIN_FD_SET_DEFINED 1
 typedef struct {
-    unsigned long fds_bits[FD_SETSIZE / (8 * sizeof(unsigned long))];
+    unsigned long fds_bits[(FD_SETSIZE + (8 * sizeof(unsigned long)) - 1) /
+                           (8 * sizeof(unsigned long))];
 } fd_set;
 
 #define FD_ZERO(set)     do { \

@@ -105,128 +105,6 @@ static inline intptr_t __rin_poll_result(intptr_t result) {
     return result;
 }
 
-static inline void __rin_select_clear_sets(fd_set* readfds,
-                                            fd_set* writefds,
-                                            fd_set* exceptfds) {
-    if (readfds) FD_ZERO(readfds);
-    if (writefds) FD_ZERO(writefds);
-    if (exceptfds) FD_ZERO(exceptfds);
-}
-
-#define RIN_SELECT_LOCAL_POLLFD_COUNT 8u
-
-static inline int __rin_select_build_pollfds(
-    int nfds, const fd_set* readfds, const fd_set* writefds,
-    const fd_set* exceptfds, struct pollfd* local_pollfds,
-    nfds_t local_capacity, struct pollfd** pollfds_out,
-    nfds_t* poll_count_out)
-{
-    struct pollfd* pollfds;
-    nfds_t count = 0u;
-    nfds_t capacity = local_capacity;
-
-    if (!pollfds_out || !poll_count_out) {
-        errno = EINVAL;
-        return -1;
-    }
-    *pollfds_out = local_pollfds;
-    *poll_count_out = 0u;
-    pollfds = local_pollfds;
-    for (int fd = 0; fd < nfds; ++fd) {
-        short events = 0;
-        if (readfds && FD_ISSET(fd, readfds)) events |= POLLIN;
-        if (writefds && FD_ISSET(fd, writefds)) events |= POLLOUT;
-        if (exceptfds && FD_ISSET(fd, exceptfds)) events |= POLLPRI;
-        if (!events) continue;
-
-        if (count == capacity) {
-            nfds_t next_capacity;
-            struct pollfd* grown;
-            if (capacity == 0u) {
-                next_capacity = 1u;
-            } else if (capacity > UINT_MAX / 2u) {
-                next_capacity = (nfds_t)nfds;
-            } else {
-                next_capacity = capacity * 2u;
-                if (next_capacity > (nfds_t)nfds)
-                    next_capacity = (nfds_t)nfds;
-            }
-            if (next_capacity <= capacity
-#if SIZE_MAX <= UINT32_MAX
-                || (uint64_t)next_capacity *
-                       (uint64_t)sizeof(*pollfds) > (uint64_t)SIZE_MAX
-#endif
-                ) {
-                if (pollfds != local_pollfds) free(pollfds);
-                errno = EOVERFLOW;
-                return -1;
-            }
-            if (pollfds == local_pollfds) {
-                grown = (struct pollfd*)malloc(
-                    (size_t)next_capacity * sizeof(*pollfds));
-                if (grown)
-                    for (nfds_t i = 0u; i < count; ++i)
-                        grown[i] = local_pollfds[i];
-            } else {
-                grown = (struct pollfd*)realloc(
-                    pollfds, (size_t)next_capacity * sizeof(*pollfds));
-            }
-            if (!grown) {
-                if (pollfds != local_pollfds) free(pollfds);
-                errno = ENOMEM;
-                return -1;
-            }
-            pollfds = grown;
-            capacity = next_capacity;
-        }
-        pollfds[count].fd = fd;
-        pollfds[count].events = events;
-        pollfds[count].revents = 0;
-        ++count;
-    }
-    *pollfds_out = pollfds;
-    *poll_count_out = count;
-    return 0;
-}
-
-static inline void __rin_select_release_pollfds(
-    struct pollfd* pollfds, const struct pollfd* local_pollfds) {
-    if (pollfds && pollfds != local_pollfds) free(pollfds);
-}
-
-static inline int __rin_select_unpack_pollfds(
-    const struct pollfd* pollfds, nfds_t poll_count,
-    fd_set* readfds, fd_set* writefds, fd_set* exceptfds) {
-    int ready_count = 0;
-
-    for (nfds_t i = 0u; i < poll_count; ++i) {
-        if ((pollfds[i].revents & POLLNVAL) != 0) {
-            errno = EBADF;
-            return -1;
-        }
-    }
-
-    __rin_select_clear_sets(readfds, writefds, exceptfds);
-    for (nfds_t i = 0u; i < poll_count; ++i) {
-        if (readfds && (pollfds[i].events & POLLIN) != 0 &&
-            (pollfds[i].revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
-            FD_SET(pollfds[i].fd, readfds);
-            ++ready_count;
-        }
-        if (writefds && (pollfds[i].events & POLLOUT) != 0 &&
-            (pollfds[i].revents & (POLLOUT | POLLERR)) != 0) {
-            FD_SET(pollfds[i].fd, writefds);
-            ++ready_count;
-        }
-        if (exceptfds && (pollfds[i].events & POLLPRI) != 0 &&
-            (pollfds[i].revents & POLLPRI) != 0) {
-            FD_SET(pollfds[i].fd, exceptfds);
-            ++ready_count;
-        }
-    }
-    return ready_count;
-}
-
 static inline int __rin_ppoll_syscall_once(
     struct pollfd* fds, nfds_t nfds, int64_t timeout_ns,
     const sigset_t* sigmask) {
@@ -252,6 +130,39 @@ static inline int __rin_ppoll_syscall_once(
 static inline int __rin_poll_syscall_without_mask_change(
     struct pollfd* fds, nfds_t nfds, int64_t timeout_ns) {
     return __rin_ppoll_syscall_once(fds, nfds, timeout_ns, NULL);
+}
+
+static inline int __rin_select_syscall_once(
+    int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds,
+    int64_t timeout_ns, const sigset_t* sigmask) {
+    RinPpollTimeout64UserV1 request = {0};
+    intptr_t result;
+    const size_t fdset_size = sizeof(fd_set);
+    if (nfds < 0 || nfds > (int)RIN_POLL_MAX_FDS ||
+        fdset_size == 0u ||
+        fdset_size > RIN_PPOLL_TIMEOUT64_USER_FDSET_MAX_BYTES ||
+        (size_t)nfds > fdset_size * 8u) {
+        errno = EINVAL;
+        return -1;
+    }
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = RIN_PPOLL_TIMEOUT64_USER_ABI_VERSION;
+    request.flags = RIN_PPOLL_TIMEOUT64_USER_SELECT_FLAGS(fdset_size);
+    request.nfds = (uint32_t)nfds;
+    request.sigset_size = RIN_PPOLL_TIMEOUT64_USER_SIGSET_SIZE;
+    request.timeout_ns = timeout_ns;
+    request.fds_address = (uint64_t)(uintptr_t)readfds;
+    request.sigmask_address = (uint64_t)(uintptr_t)sigmask;
+    request.reserved[0] = (uint64_t)(uintptr_t)writefds;
+    request.reserved[1] = (uint64_t)(uintptr_t)exceptfds;
+    result = __rin_poll_result(_RIN_POLL_SYSCALL1(
+        SYS_PPOLL_TIMEOUT64_V1, &request));
+    if (result < 0) return -1;
+    if (result > (intptr_t)INT_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return (int)result;
 }
 
 static inline int __rin_poll_timespec_to_ns(
@@ -495,9 +406,6 @@ static inline int ppoll(struct pollfd* fds, nfds_t nfds,
 static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
                          fd_set* exceptfds, struct timeval* timeout) {
     int64_t timeout_ns;
-    struct pollfd local_pollfds[RIN_SELECT_LOCAL_POLLFD_COUNT];
-    struct pollfd* pfds = NULL;
-    nfds_t npfds = 0u;
     struct timespec timeout_start;
     struct timeval timeout_snapshot;
     const struct timeval* original_timeout = NULL;
@@ -519,67 +427,20 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
         __rin_poll_timeval_to_ns(original_timeout, &timeout_ns) != 0)
         return -1;
 
-    if (__rin_select_build_pollfds(nfds, readfds, writefds, exceptfds,
-                                   local_pollfds,
-                                   RIN_SELECT_LOCAL_POLLFD_COUNT,
-                                   &pfds, &npfds) != 0)
-        return -1;
-
-    if (npfds == 0) {
-        int ret;
-        int poll_errno;
-        if (timeout && clock_gettime(CLOCK_MONOTONIC, &timeout_start) != 0) {
-            __rin_select_release_pollfds(pfds, local_pollfds);
-            return -1;
-        }
-        __rin_pthread_cancel_point_if_linked();
-        ret = __rin_poll_syscall_without_mask_change(NULL, 0u, timeout_ns);
-        poll_errno = errno;
-        __rin_pthread_cancel_point_if_linked();
-        if (timeout && __rin_select_update_timeval(
-                timeout, original_timeout, &timeout_start) != 0) {
-            __rin_select_release_pollfds(pfds, local_pollfds);
-            return -1;
-        }
-        errno = poll_errno;
-        /* No descriptor below nfds was requested, so a successful select
-         * must clear bits that were set only at or above nfds as well. */
-        if (ret >= 0) {
-            (void)__rin_select_unpack_pollfds(
-                pfds, npfds, readfds, writefds, exceptfds);
-        }
-        __rin_select_release_pollfds(pfds, local_pollfds);
-        return ret;
-    }
-
     if (timeout && clock_gettime(CLOCK_MONOTONIC, &timeout_start) != 0) {
-        __rin_select_release_pollfds(pfds, local_pollfds);
         return -1;
     }
     __rin_pthread_cancel_point_if_linked();
-    int ret = __rin_poll_syscall_without_mask_change(
-        pfds, npfds, timeout_ns);
+    int ret = __rin_select_syscall_once(
+        nfds, readfds, writefds, exceptfds, timeout_ns, NULL);
     int poll_errno = errno;
     __rin_pthread_cancel_point_if_linked();
     if (timeout && __rin_select_update_timeval(
             timeout, original_timeout, &timeout_start) != 0) {
-        __rin_select_release_pollfds(pfds, local_pollfds);
         return -1;
     }
     errno = poll_errno;
-    if (ret < 0) {
-        __rin_select_release_pollfds(pfds, local_pollfds);
-        return ret;
-    }
-    int ready_count = __rin_select_unpack_pollfds(
-        pfds, npfds, readfds, writefds, exceptfds);
-    if (ready_count < 0) {
-        __rin_select_release_pollfds(pfds, local_pollfds);
-        return -1;
-    }
-
-    __rin_select_release_pollfds(pfds, local_pollfds);
-    return ready_count;
+    return ret;
 }
 
 /* pselect - シグナルマスク付きselect */
@@ -591,28 +452,17 @@ static inline int pselect(int nfds, fd_set* readfds, fd_set* writefds,
         return -1;
     }
     {
-        struct pollfd local_pollfds[RIN_SELECT_LOCAL_POLLFD_COUNT];
-        struct pollfd* pfds = NULL;
-        nfds_t npfds = 0u;
-        int ret;
-        if (__rin_select_build_pollfds(nfds, readfds, writefds, exceptfds,
-                                       local_pollfds,
-                                       RIN_SELECT_LOCAL_POLLFD_COUNT,
-                                       &pfds, &npfds) != 0)
+        struct timespec timeout_snapshot;
+        int64_t timeout_ns;
+        int result;
+        if (__rin_poll_snapshot_timespec(
+                timeout, &timeout_snapshot, &timeout_ns) != 0)
             return -1;
-        ret = __rin_ppoll_impl(pfds, npfds, timeout, sigmask);
-        if (ret < 0) {
-            __rin_select_release_pollfds(pfds, local_pollfds);
-            return ret;
-        }
-        int ready_count = __rin_select_unpack_pollfds(
-            pfds, npfds, readfds, writefds, exceptfds);
-        if (ready_count < 0) {
-            __rin_select_release_pollfds(pfds, local_pollfds);
-            return -1;
-        }
-        __rin_select_release_pollfds(pfds, local_pollfds);
-        return ready_count;
+        __rin_pthread_cancel_point_if_linked();
+        result = __rin_select_syscall_once(
+            nfds, readfds, writefds, exceptfds, timeout_ns, sigmask);
+        __rin_pthread_cancel_point_if_linked();
+        return result;
     }
 }
 
