@@ -62,6 +62,9 @@
 #ifndef RENAME_WHITEOUT
 #define RENAME_WHITEOUT   (1u << 2)
 #endif
+#ifndef RIN_PATH_AT_RENAME_IF_NEWER
+#define RIN_PATH_AT_RENAME_IF_NEWER 0x0010u
+#endif
 
 #include "stddef.h"
 #include "stdarg.h"
@@ -1030,6 +1033,26 @@ static inline int rin_renameat_noreplace(int olddirfd, const char* oldpath,
     call.secondary_dirfd = newdirfd;
     call.path1 = (uint64_t)(uintptr_t)oldpath;
     call.path2 = (uint64_t)(uintptr_t)newpath;
+    return _fcntl_path_at_zero(&call);
+}
+
+/* Replace a destination only when its timestamp is older than source_mtime.
+ * buffer_size carries the signed seconds value as an ABI-stable bit pattern. */
+static inline int rin_renameat_if_newer(int olddirfd, const char* oldpath,
+                                        int newdirfd, const char* newpath,
+                                        int64_t source_mtime) {
+    RinPathAtCallV1 call;
+    if (!oldpath || !newpath) {
+        errno = EFAULT;
+        return -1;
+    }
+    _fcntl_path_at_init(&call, RIN_PATH_AT_RENAME);
+    call.flags = RIN_PATH_AT_RENAME_IF_NEWER;
+    call.dirfd = olddirfd;
+    call.secondary_dirfd = newdirfd;
+    call.path1 = (uint64_t)(uintptr_t)oldpath;
+    call.path2 = (uint64_t)(uintptr_t)newpath;
+    call.buffer_size = (uint64_t)source_mtime;
     return _fcntl_path_at_zero(&call);
 }
 
