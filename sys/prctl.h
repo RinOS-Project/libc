@@ -97,6 +97,11 @@ extern "C" {
 #define PR_SET_MM_EXE_FILE 13
 #define PR_SET_MM_MAP 14
 #define PR_SET_MM_MAP_SIZE 15
+#define PR_GET_AUXV 0x41555856
+#define RIN_PRCTL_GET_AUXV_CONTROL_SUPPORTED 1
+#define RIN_PRCTL_GET_AUXV_SUPPORTED_IA32 1
+#define RIN_PRCTL_GET_AUXV_SUPPORTED_X86_64_NATIVE 1
+#define RIN_PRCTL_GET_AUXV_SUPPORTED_X86_64_COMPAT32 1
 #define PR_SET_CHILD_SUBREAPER 36
 #define PR_GET_CHILD_SUBREAPER 37
 #define PR_SET_NO_NEW_PRIVS 38  /* Set no_new_privs flag */
@@ -427,6 +432,7 @@ static inline int _prctl_impl(int option, uintptr_t arg2, uintptr_t arg3,
         option == PR_SET_MDWE || option == PR_GET_MDWE ||
         option == PR_SET_THP_DISABLE ||
         option == PR_GET_THP_DISABLE ||
+        option == PR_GET_AUXV ||
         option == PR_SET_MM ||
         option == PR_SET_CHILD_SUBREAPER ||
         option == PR_GET_CHILD_SUBREAPER ||
@@ -466,6 +472,7 @@ static inline int prctl(int option, ...) {
         option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE ||
         option == PR_GET_TID_ADDRESS ||
         option == PR_SET_NAME || option == PR_GET_NAME ||
+        option == PR_GET_AUXV ||
         option == PR_SET_VMA ||
         option == PR_SET_PTRACER ||
         option == PR_SET_TIMERSLACK || option == PR_SET_TIMING ||
@@ -486,7 +493,10 @@ static inline int prctl(int option, ...) {
         option == PR_SCHED_CORE) {
         __builtin_va_list args;
         __builtin_va_start(args, option);
-        if (option == PR_GET_TID_ADDRESS) {
+        if (option == PR_GET_AUXV) {
+            arg2 = (uintptr_t)__builtin_va_arg(args, void*);
+            arg3 = (uintptr_t)__builtin_va_arg(args, size_t);
+        } else if (option == PR_GET_TID_ADDRESS) {
             arg2 = (uintptr_t)__builtin_va_arg(args, uint32_t **);
         } else if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
             option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE) {
