@@ -5,10 +5,18 @@
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
-    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    (defined(__linux__) || defined(__MINGW32__) || \
+     defined(__MINGW64__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
     !defined(_RIN_STAT_SYSCALL1) && !defined(_RIN_STAT_SYSCALL2) && \
     !defined(_RIN_STAT_SYSCALL4) && !defined(_RIN_STAT_PATH_AT_CALL)
 #include_next <sys/stat.h>
+#elif defined(_WIN32) && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    !defined(RIN_HOSTED_WINDOWS_ENABLE_RIN_SYSCALL) && \
+    !defined(_RIN_STAT_SYSCALL1) && !defined(_RIN_STAT_SYSCALL2) && \
+    !defined(_RIN_STAT_SYSCALL4) && !defined(_RIN_STAT_PATH_AT_CALL)
+#error "RinOS sys/stat.h is target-only on hosted Windows; use the host CRT or provide a stat syscall adapter"
 #else
 
 #ifndef _SYS_STAT_H
@@ -853,4 +861,4 @@ static inline mode_t umask(mode_t mask) {
 #endif
 
 #endif /* _SYS_STAT_H */
-#endif /* hosted Linux native filesystem CRT */
+#endif /* hosted native filesystem CRT */

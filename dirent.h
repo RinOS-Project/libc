@@ -5,10 +5,18 @@
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
     (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
-    defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && \
+    (defined(__linux__) || defined(__MINGW32__) || \
+     defined(__MINGW64__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
     !defined(_RIN_DIRENT_SYSCALL1) && \
     !defined(_RIN_DIRENT_SYSCALL3) && !defined(_RIN_DIRENT_SYSCALL5)
 #include_next <dirent.h>
+#elif defined(_WIN32) && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    !defined(RIN_HOSTED_WINDOWS_ENABLE_RIN_SYSCALL) && \
+    !defined(_RIN_DIRENT_SYSCALL1) && \
+    !defined(_RIN_DIRENT_SYSCALL3) && !defined(_RIN_DIRENT_SYSCALL5)
+#error "RinOS dirent.h is target-only on hosted Windows; use a host dirent provider or supply syscall adapters"
 #else
 
 #include "features.h"
@@ -843,4 +851,4 @@ extern int versionsort(const struct dirent** left,
 #endif
 #endif
 #endif
-#endif /* hosted Linux native filesystem CRT */
+#endif /* hosted native filesystem CRT */
