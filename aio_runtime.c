@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 
+#define _RIN_SIGNAL_RUNTIME_IMPLEMENTATION 1
 #include "aio.h"
 
 #include "errno.h"
@@ -131,6 +132,7 @@ static uint32_t g_rin_aio_callback_dispatcher_started;
 static void* rin_aio_worker(void* unused);
 static void* rin_aio_callback_dispatcher(void* unused);
 static void rin_aio_suspend_notify_locked(RinAioRequest* request);
+static void rin_aio_signal_available_workers_locked(void);
 static int rin_aio_callback_start_dispatcher_locked(void);
 static int rin_aio_callback_reserve(void);
 static void rin_aio_callback_release_reservation(void);
@@ -583,7 +585,7 @@ static int rin_aio_submit_prepared(struct aiocb* control, int operation,
         if (g_rin_aio_next_sequence == 0u) g_rin_aio_next_sequence = 1u;
         if (notification) request->notification = *notification;
         request->group = group;
-        (void)pthread_cond_broadcast(&g_rin_aio_changed);
+        rin_aio_signal_available_workers_locked();
     }
     (void)pthread_mutex_unlock(&g_rin_aio_mutex);
     (void)pthread_mutex_unlock(&g_rin_aio_worker_start_mutex);
@@ -652,6 +654,42 @@ static int rin_aio_find_queued_locked(void)
     return selected;
 }
 
+/* The global condition variable is only for workers waiting for runnable
+ * requests.  Wake no more idle workers than there are eligible queued jobs;
+ * running jobs cannot take a queued request until they finish.  In particular,
+ * a queued fsync barrier is not runnable until earlier requests for its file
+ * finish. */
+static void rin_aio_signal_available_workers_locked(void)
+{
+    uint32_t runnable = 0u;
+    uint32_t wake_count;
+    uint32_t index;
+
+    if (g_rin_aio_idle_worker_count == 0u ||
+        g_rin_aio_worker_count == 0u)
+        return;
+
+    for (index = 0u; index < RIN_AIO_CAPACITY; ++index) {
+        const RinAioRequest* request = &g_rin_aio_requests[index];
+        if (request->state == RIN_AIO_QUEUED &&
+            rin_aio_fsync_barrier_ready_locked(request))
+            ++runnable;
+    }
+    wake_count = runnable;
+    if (wake_count > g_rin_aio_idle_worker_count)
+        wake_count = g_rin_aio_idle_worker_count;
+
+    while (wake_count != 0u) {
+        if (pthread_cond_signal(&g_rin_aio_changed) != 0) {
+            /* Preserve progress if the condition implementation reports an
+             * unexpected error after some waiters have already been signaled. */
+            (void)pthread_cond_broadcast(&g_rin_aio_changed);
+            return;
+        }
+        --wake_count;
+    }
+}
+
 static void* rin_aio_worker(void* unused)
 {
     (void)unused;
@@ -710,7 +748,7 @@ static void* rin_aio_worker(void* unused)
                     group, &completed_notifications[notification_count]);
             }
             if (completed_group) ++notification_count;
-            (void)pthread_cond_broadcast(&g_rin_aio_changed);
+            rin_aio_signal_available_workers_locked();
         }
         (void)pthread_mutex_unlock(&g_rin_aio_mutex);
         if (completed_group) free(completed_group);
@@ -851,7 +889,7 @@ int aio_cancel(int fd, struct aiocb* request)
             saw_running = 1;
         }
     }
-    (void)pthread_cond_broadcast(&g_rin_aio_changed);
+    if (saw_canceled) rin_aio_signal_available_workers_locked();
     (void)pthread_mutex_unlock(&g_rin_aio_mutex);
 
     for (index = 0u; index < held_count; ++index)
@@ -1222,7 +1260,7 @@ int lio_listio(int mode, struct aiocb* const requests[], int count,
                         g_rin_aio_next_sequence = 1u;
                     request->group = group;
                 }
-                (void)pthread_cond_broadcast(&g_rin_aio_changed);
+                rin_aio_signal_available_workers_locked();
             }
             (void)pthread_mutex_unlock(&g_rin_aio_mutex);
             (void)pthread_mutex_unlock(&g_rin_aio_worker_start_mutex);
