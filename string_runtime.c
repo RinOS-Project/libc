@@ -24,6 +24,24 @@ void* memccpy(void* destination, const void* source, int stop_byte,
     return NULL;
 }
 
+void* memmem(const void* haystack, size_t haystack_length,
+             const void* needle, size_t needle_length) {
+    const unsigned char* bytes = (const unsigned char*)haystack;
+    const unsigned char* pattern = (const unsigned char*)needle;
+    size_t offset;
+    if (needle_length == 0u) return (void*)(__UINTPTR_TYPE__)haystack;
+    if (haystack_length < needle_length) return NULL;
+    for (offset = 0u; offset <= haystack_length - needle_length; ++offset) {
+        size_t index = 0u;
+        while (index < needle_length &&
+               bytes[offset + index] == pattern[index])
+            ++index;
+        if (index == needle_length)
+            return (void*)(__UINTPTR_TYPE__)(bytes + offset);
+    }
+    return NULL;
+}
+
 void* memset_explicit(void* memory, int value, size_t size) {
     volatile unsigned char* output = (volatile unsigned char*)memory;
     const unsigned char byte = (unsigned char)value;

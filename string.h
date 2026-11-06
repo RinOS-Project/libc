@@ -204,6 +204,33 @@ RIN_STRING_INLINE char* strstr(const char* haystack, const char* needle) {
 }
 #endif
 
+/* POSIX.1-2024 bounded byte-subsequence search. */
+#if defined(__RIN_FEATURES_POSIX_2024) || defined(__RIN_FEATURES_GNU) || \
+    defined(RIN_STRING_IMPLEMENTATION)
+#ifdef RIN_STRING_IMPLEMENTATION
+void* memmem(const void* haystack, size_t haystack_length,
+             const void* needle, size_t needle_length);
+#else
+RIN_STRING_INLINE void* memmem(const void* haystack, size_t haystack_length,
+                               const void* needle, size_t needle_length) {
+    const unsigned char* bytes = (const unsigned char*)haystack;
+    const unsigned char* pattern = (const unsigned char*)needle;
+    size_t offset;
+    if (needle_length == 0u) return (void*)(__UINTPTR_TYPE__)haystack;
+    if (haystack_length < needle_length) return NULL;
+    for (offset = 0u; offset <= haystack_length - needle_length; ++offset) {
+        size_t index = 0u;
+        while (index < needle_length &&
+               bytes[offset + index] == pattern[index])
+            ++index;
+        if (index == needle_length)
+            return (void*)(__UINTPTR_TYPE__)(bytes + offset);
+    }
+    return NULL;
+}
+#endif
+#endif
+
 RIN_STRING_INLINE size_t strnlen(const char* s, size_t maxlen) {
     size_t len = 0;
     while (len < maxlen && s[len] != '\0') len++;
