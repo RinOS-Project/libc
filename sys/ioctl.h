@@ -256,17 +256,20 @@ static inline int _rin_ioctl_result_status_zero(intptr_t raw_result) {
     return 0;
 }
 
-/* FIOGETOWN and SIOCGPGRP return a process or process-group identifier as
- * their ioctl result. Query F_GETOWN_EX so negative process-group IDs never
- * collide with the syscall ABI's negative errno values. */
-static inline int _rin_ioctl_get_owner_result(int fd) {
+/* The kernel's SYS_IOCTL wire contract copies a fixed f_owner_ex record and
+ * returns status separately, so negative process-group IDs cannot collide
+ * with negative errno values. */
+static inline int _rin_ioctl_get_owner_result(int fd, unsigned long request) {
     struct f_owner_ex owner = {0};
     intptr_t raw_result = _RIN_IOCTL_SYSCALL3(
-        SYS_FCNTL, (uintptr_t)fd, (uintptr_t)F_GETOWN_EX,
-        (uintptr_t)&owner);
+        SYS_IOCTL, (uintptr_t)fd, (uintptr_t)request, (uintptr_t)&owner);
     if (_rin_ioctl_result_status_zero(raw_result) != 0) return -1;
-    if (owner.type == F_OWNER_PGRP && owner.pid > 0)
+    if (owner.type == F_OWNER_PGRP && owner.pid > 0) {
+        /* A process group of 1 has the valid POSIX result -1. Clear stale
+         * errno so callers can distinguish it from a failed ioctl. */
+        if (owner.pid == 1) errno = 0;
         return -owner.pid;
+    }
     if ((owner.type == F_OWNER_TID || owner.type == F_OWNER_PID) &&
         owner.pid >= 0)
         return owner.pid;
@@ -378,7 +381,7 @@ static inline int ioctl(int fd, unsigned long request, ...) {
         _rin_ioctl_get_argument_kind(request);
 
     if (request == FIOGETOWN || request == SIOCGPGRP)
-        return _rin_ioctl_get_owner_result(fd);
+        return _rin_ioctl_get_owner_result(fd, request);
 
     if (argument_kind != _RIN_IOCTL_ARGUMENT_NONE) {
         va_start(ap, request);
