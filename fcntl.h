@@ -162,6 +162,9 @@ struct flock {
  * ═══════════════════════════════════════════════════════════════*/
 
 #define F_DUPFD_CLOEXEC 1030 /* F_DUPFDと同様だがCLOEXECを設定 */
+#if defined(__USE_GNU)
+#define F_DUPFD_QUERY 1027 /* Return whether two descriptors share an open description. */
+#endif
 #define __RIN_F_DUPFD_CLOFORK 0x52494E01
 #if defined(__RIN_FEATURES_POSIX_2024) || \
     defined(__RIN_FEATURES_GNU) || defined(__RIN_FEATURES_DEFAULT)
@@ -523,6 +526,15 @@ static inline int fcntl(int fd, int cmd, ...) {
             int minfd = va_arg(ap, int);
             result = _fcntl_dupfd_at_least(fd, minfd,
                                            __RIN_F_DUPFD_CLOFORK);
+#if defined(__USE_GNU)
+        case F_DUPFD_QUERY: {
+            int query_fd = va_arg(ap, int);
+            result = _fcntl_result_to_int(_RIN_FCNTL_SYSCALL3(
+                (uintptr_t)SYS_FCNTL, (uintptr_t)fd,
+                (uintptr_t)F_DUPFD_QUERY, (uintptr_t)query_fd));
+            break;
+        }
+#endif
             break;
         }
 
