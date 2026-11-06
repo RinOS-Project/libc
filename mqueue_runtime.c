@@ -7,10 +7,12 @@
 #include "stdarg.h"
 #include "string.h"
 #include "sys/syscall.h"
+#include "time.h"
 #include "unistd.h"
 #include <rin/ipc.h>
 
 #define RIN_LIBC_MQ_NOTIFY_SLOTS 64u
+#define RIN_LIBC_MQ_NOTIFY_JOBS 64u
 #define RIN_LIBC_MQ_WAIT_RECHECK_NS UINT64_C(50000000)
 
 enum {
@@ -35,13 +37,32 @@ enum {
 
 typedef struct RinLibcMqNotifySlot {
     volatile uint32_t state;
-    uint32_t notification;
     RinEvent event;
     void (*function)(union sigval);
     union sigval value;
+    uint32_t has_thread_attributes;
+    pthread_attr_t thread_attributes;
 } RinLibcMqNotifySlot;
 
+typedef struct RinLibcMqNotifyJob {
+    volatile uint32_t state;
+    uint32_t generation;
+    void (*function)(union sigval);
+    union sigval value;
+} RinLibcMqNotifyJob;
+
+enum {
+    RIN_LIBC_MQ_NOTIFY_SLOT_FREE = 0u,
+    RIN_LIBC_MQ_NOTIFY_SLOT_RESERVING = 1u,
+    RIN_LIBC_MQ_NOTIFY_SLOT_REGISTERED = 2u,
+    RIN_LIBC_MQ_NOTIFY_SLOT_FIRED = 3u
+};
+
 static RinLibcMqNotifySlot g_mq_notify_slots[RIN_LIBC_MQ_NOTIFY_SLOTS];
+static RinLibcMqNotifyJob g_mq_notify_jobs[RIN_LIBC_MQ_NOTIFY_JOBS];
+static volatile uint32_t g_mq_notify_dispatcher_state;
+static volatile uint32_t g_mq_notify_process_id;
+static volatile uint32_t g_mq_notify_process_sync_lock;
 
 static int32_t mq_raw_sdk_call(uint32_t library_id, uint32_t operation,
                               const RinSdkArgsV1* request, void* response,
@@ -521,9 +542,10 @@ static RinLibcMqNotifySlot* mq_notify_reserve(void)
 {
     uint32_t index;
     for (index = 0u; index < RIN_LIBC_MQ_NOTIFY_SLOTS; ++index) {
-        uint32_t expected = 0u;
+        uint32_t expected = RIN_LIBC_MQ_NOTIFY_SLOT_FREE;
         if (__atomic_compare_exchange_n(&g_mq_notify_slots[index].state,
-                                        &expected, 1u, 0,
+                                        &expected,
+                                        RIN_LIBC_MQ_NOTIFY_SLOT_RESERVING, 0,
                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
             return &g_mq_notify_slots[index];
     }
@@ -556,77 +578,360 @@ static int32_t mq_event_create(RinEvent* event_out)
                            &request, event_out, sizeof(*event_out));
 }
 
-static int32_t mq_event_signal(RinEvent event, uint64_t value)
+static int32_t mq_event_query(RinEvent event, uint64_t* value_out)
 {
     RinSdkArgsV1 request;
-    mq_sdk_request_init(&request);
-    request.value[0] = event;
-    request.value[1] = value;
-    return mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
-                           RIN_LIBC_SDK_IPC_EVENT_SIGNAL,
-                           &request, NULL, 0u);
-}
-
-static int32_t mq_event_wait(RinEvent event, uint64_t* value_out)
-{
-    RinSdkArgsV1 request;
-    RinWaitItemV1 item;
-    uint32_t index = UINT32_MAX;
-    int32_t result;
     if (!value_out) return RIN_ERROR_INVALID_ARGUMENT;
     *value_out = 0u;
-    item.handle = event;
-    item.events = RIN_WAIT_EVENT_READABLE;
-    item.observed = 0u;
-    item.user_tag = 0u;
-    mq_sdk_request_init(&request);
-    request.value[0] = (uint64_t)(uintptr_t)&item;
-    request.value[1] = sizeof(item);
-    request.value[2] = RIN_SDK_INFINITE;
-    result = mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
-                             RIN_LIBC_SDK_IPC_WAIT_MANY, &request,
-                             &index, sizeof(index));
-    if (result != RIN_SUCCESS || index != 0u) return -1;
     mq_sdk_request_init(&request);
     request.value[0] = event;
-    result = mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
-                             RIN_LIBC_SDK_IPC_EVENT_QUERY, &request,
-                             value_out, sizeof(*value_out));
-    return result == RIN_SUCCESS ? 0 : -1;
+    return mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
+                           RIN_LIBC_SDK_IPC_EVENT_QUERY, &request,
+                           value_out, sizeof(*value_out));
 }
 
-static void mq_notify_slot_cleanup(void* argument)
+static void mq_notify_slot_release(RinLibcMqNotifySlot* slot)
 {
-    RinLibcMqNotifySlot* slot = (RinLibcMqNotifySlot*)argument;
+    RinEvent event;
     if (!slot) return;
-    if (slot->event != RIN_OBJECT_HANDLE_INVALID)
-        (void)mq_close_handle(slot->event);
+    event = slot->event;
     slot->event = RIN_OBJECT_HANDLE_INVALID;
     slot->function = NULL;
     slot->value.sival_ptr = NULL;
-    __atomic_store_n(&slot->state, 0u, __ATOMIC_RELEASE);
+    slot->has_thread_attributes = 0u;
+    memset(&slot->thread_attributes, 0, sizeof(slot->thread_attributes));
+    if (event != RIN_OBJECT_HANDLE_INVALID) (void)mq_close_handle(event);
+    __atomic_store_n(&slot->state, RIN_LIBC_MQ_NOTIFY_SLOT_FREE,
+                     __ATOMIC_RELEASE);
 }
 
-static void* mq_notify_worker(void* argument)
+typedef struct RinLibcMqNotifyJobCleanup {
+    RinLibcMqNotifyJob* job;
+    uint32_t generation;
+} RinLibcMqNotifyJobCleanup;
+
+static void mq_notify_job_release(RinLibcMqNotifyJob* job,
+                                  uint32_t generation)
 {
-    RinLibcMqNotifySlot* slot = (RinLibcMqNotifySlot*)argument;
-    void (*callback)(union sigval) = NULL;
-    union sigval callback_value = {0};
-    int wait_result;
-    uint64_t event_value = 0u;
-    if (!slot) return NULL;
-    pthread_cleanup_push(mq_notify_slot_cleanup, slot);
-    wait_result = mq_event_wait(slot->event, &event_value);
-    if (wait_result == 0 && event_value != 0u &&
-        __atomic_load_n(&slot->state, __ATOMIC_ACQUIRE) == 2u) {
-        if (slot->notification == SIGEV_THREAD && slot->function) {
-            callback = slot->function;
-            callback_value = slot->value;
+    if (!job || __atomic_load_n(&job->generation, __ATOMIC_ACQUIRE) !=
+                    generation)
+        return;
+    job->function = NULL;
+    job->value.sival_ptr = NULL;
+    __atomic_store_n(&job->state, 0u, __ATOMIC_RELEASE);
+}
+
+static void mq_notify_job_cleanup(void* argument)
+{
+    RinLibcMqNotifyJobCleanup* cleanup =
+        (RinLibcMqNotifyJobCleanup*)argument;
+    if (cleanup)
+        mq_notify_job_release(cleanup->job, cleanup->generation);
+}
+
+static void* mq_notify_callback_worker(void* argument)
+{
+    RinLibcMqNotifyJob* job = (RinLibcMqNotifyJob*)argument;
+    RinLibcMqNotifyJobCleanup cleanup;
+    void (*callback)(union sigval);
+    union sigval callback_value;
+    if (!job) return NULL;
+    cleanup.job = job;
+    cleanup.generation = __atomic_load_n(&job->generation, __ATOMIC_ACQUIRE);
+    callback = job->function;
+    callback_value = job->value;
+    pthread_cleanup_push(mq_notify_job_cleanup, &cleanup);
+    if (callback) callback(callback_value);
+    pthread_cleanup_pop(1);
+    return NULL;
+}
+
+static RinLibcMqNotifyJob* mq_notify_job_reserve(void)
+{
+    uint32_t index;
+    for (index = 0u; index < RIN_LIBC_MQ_NOTIFY_JOBS; ++index) {
+        uint32_t expected = 0u;
+        RinLibcMqNotifyJob* job = &g_mq_notify_jobs[index];
+        if (__atomic_compare_exchange_n(&job->state, &expected, 1u, 0,
+                                        __ATOMIC_ACQ_REL,
+                                        __ATOMIC_ACQUIRE)) {
+            uint32_t generation =
+                __atomic_load_n(&job->generation, __ATOMIC_RELAXED) + 1u;
+            if (generation == 0u) generation = 1u;
+            __atomic_store_n(&job->generation, generation, __ATOMIC_RELEASE);
+            return job;
         }
     }
-    pthread_cleanup_pop(1);
-    if (callback) callback(callback_value);
     return NULL;
+}
+
+static int mq_notify_launch_callback(RinLibcMqNotifySlot* slot)
+{
+    RinLibcMqNotifyJob* job;
+    pthread_attr_t attributes;
+    pthread_t thread;
+    uint64_t event_value = 0u;
+    uint32_t generation;
+    int attributes_initialized = 0;
+    int thread_result;
+    int32_t result;
+    if (!slot) return -1;
+    result = mq_event_query(slot->event, &event_value);
+    if (result != RIN_SUCCESS) return -1;
+    if (event_value == 0u) {
+        mq_notify_slot_release(slot);
+        return 0;
+    }
+    job = mq_notify_job_reserve();
+    if (!job) return 1;
+    generation = __atomic_load_n(&job->generation, __ATOMIC_ACQUIRE);
+    job->function = slot->function;
+    job->value = slot->value;
+
+    if (slot->has_thread_attributes != 0u) {
+        attributes = slot->thread_attributes;
+        thread_result = 0;
+    } else {
+        thread_result = pthread_attr_init(&attributes);
+        attributes_initialized = thread_result == 0;
+    }
+    if (thread_result == 0)
+        thread_result = pthread_attr_setdetachstate(
+            &attributes, PTHREAD_CREATE_DETACHED);
+    if (thread_result != 0) {
+        if (attributes_initialized)
+            (void)pthread_attr_destroy(&attributes);
+        mq_notify_job_release(job, generation);
+        return 1;
+    }
+    thread_result = pthread_create(&thread, &attributes,
+                                   mq_notify_callback_worker, job);
+    if (attributes_initialized)
+        (void)pthread_attr_destroy(&attributes);
+    if (thread_result != 0) {
+        mq_notify_job_release(job, generation);
+        return 1;
+    }
+    mq_notify_slot_release(slot);
+    return 0;
+}
+
+static int mq_notify_wait_many(RinWaitItemV1* items, uint32_t count,
+                               uint32_t* index_out)
+{
+    RinSdkArgsV1 request;
+    int32_t result;
+    if (!items || count == 0u || count > RIN_LIBC_MQ_NOTIFY_SLOTS ||
+        !index_out)
+        return RIN_ERROR_INVALID_ARGUMENT;
+    *index_out = UINT32_MAX;
+    mq_sdk_request_init(&request);
+    request.value[0] = (uint64_t)(uintptr_t)items;
+    request.value[1] = (uint64_t)count * sizeof(*items);
+    request.value[2] = RIN_LIBC_MQ_WAIT_RECHECK_NS;
+    result = mq_raw_sdk_call(RIN_LIBC_SDK_LIBRARY_IPC,
+                             RIN_LIBC_SDK_IPC_WAIT_MANY, &request,
+                             index_out, sizeof(*index_out));
+    if (result == RIN_SUCCESS)
+        return *index_out < count ? 0 : RIN_ERROR_IO;
+    if (result == RIN_ERROR_TIMEOUT || result == RIN_ERROR_CANCELLED)
+        return 1;
+    return result;
+}
+
+static void mq_notify_pause(void)
+{
+    struct timespec delay;
+    delay.tv_sec = 0;
+    delay.tv_nsec = (long)RIN_LIBC_MQ_WAIT_RECHECK_NS;
+    while (nanosleep(&delay, &delay) != 0 && errno == EINTR) { }
+}
+
+static void* mq_notify_dispatcher(void* argument)
+{
+    (void)argument;
+    for (;;) {
+        RinWaitItemV1 items[RIN_LIBC_MQ_NOTIFY_SLOTS];
+        uint32_t count = 0u;
+        uint32_t index;
+        int wait_result;
+        for (index = 0u; index < RIN_LIBC_MQ_NOTIFY_SLOTS; ++index) {
+            RinLibcMqNotifySlot* slot = &g_mq_notify_slots[index];
+            if (__atomic_load_n(&slot->state, __ATOMIC_ACQUIRE) ==
+                RIN_LIBC_MQ_NOTIFY_SLOT_FIRED)
+                (void)mq_notify_launch_callback(slot);
+        }
+        for (index = 0u; index < RIN_LIBC_MQ_NOTIFY_SLOTS; ++index) {
+            RinLibcMqNotifySlot* slot = &g_mq_notify_slots[index];
+            if (__atomic_load_n(&slot->state, __ATOMIC_ACQUIRE) !=
+                RIN_LIBC_MQ_NOTIFY_SLOT_REGISTERED)
+                continue;
+            items[count].handle = slot->event;
+            items[count].events = RIN_WAIT_EVENT_READABLE;
+            items[count].observed = 0u;
+            items[count].user_tag = index;
+            ++count;
+        }
+        if (count == 0u) {
+            mq_notify_pause();
+            continue;
+        }
+        wait_result = mq_notify_wait_many(items, count, &index);
+        if (wait_result == 1) continue;
+        if (wait_result != 0) {
+            mq_notify_pause();
+            continue;
+        }
+        if (items[index].user_tag >= RIN_LIBC_MQ_NOTIFY_SLOTS) {
+            mq_notify_pause();
+            continue;
+        }
+        {
+            RinLibcMqNotifySlot* slot =
+                &g_mq_notify_slots[(uint32_t)items[index].user_tag];
+            uint64_t event_value = 0u;
+            if (__atomic_load_n(&slot->state, __ATOMIC_ACQUIRE) !=
+                RIN_LIBC_MQ_NOTIFY_SLOT_REGISTERED)
+                continue;
+            if (mq_event_query(slot->event, &event_value) != RIN_SUCCESS) {
+                mq_notify_pause();
+                continue;
+            }
+            if (event_value == 0u) {
+                mq_notify_slot_release(slot);
+            } else {
+                uint32_t expected = RIN_LIBC_MQ_NOTIFY_SLOT_REGISTERED;
+                (void)__atomic_compare_exchange_n(
+                    &slot->state, &expected, RIN_LIBC_MQ_NOTIFY_SLOT_FIRED,
+                    0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+            }
+        }
+    }
+}
+
+static int mq_notify_ensure_dispatcher(void)
+{
+    for (;;) {
+        uint32_t state =
+            __atomic_load_n(&g_mq_notify_dispatcher_state, __ATOMIC_ACQUIRE);
+        uint32_t expected = 0u;
+        if (state == 2u) return 0;
+        if (state == 1u) {
+            struct timespec delay = {0, 1000000L};
+            (void)nanosleep(&delay, NULL);
+            continue;
+        }
+        if (!__atomic_compare_exchange_n(&g_mq_notify_dispatcher_state,
+                                         &expected, 1u, 0,
+                                         __ATOMIC_ACQ_REL,
+                                         __ATOMIC_ACQUIRE))
+            continue;
+        {
+            pthread_attr_t attributes;
+            pthread_t thread;
+            int result = pthread_attr_init(&attributes);
+            int attributes_initialized = result == 0;
+            if (result == 0)
+                result = pthread_attr_setdetachstate(
+                    &attributes, PTHREAD_CREATE_DETACHED);
+            if (result == 0)
+                result = pthread_create(&thread, &attributes,
+                                        mq_notify_dispatcher, NULL);
+            if (attributes_initialized)
+                (void)pthread_attr_destroy(&attributes);
+            if (result != 0) {
+                __atomic_store_n(&g_mq_notify_dispatcher_state, 0u,
+                                 __ATOMIC_RELEASE);
+                errno = result;
+                return -1;
+            }
+            __atomic_store_n(&g_mq_notify_dispatcher_state, 2u,
+                             __ATOMIC_RELEASE);
+            return 0;
+        }
+    }
+}
+
+static void* mq_notify_attribute_probe(void* argument)
+{
+    (void)argument;
+    return NULL;
+}
+
+static int mq_notify_validate_attributes(const pthread_attr_t* attributes)
+{
+    pthread_attr_t probe_attributes;
+    pthread_t probe_thread;
+    int result;
+    if (!attributes) return 0;
+    if (attributes->detachstate != PTHREAD_CREATE_JOINABLE &&
+        attributes->detachstate != PTHREAD_CREATE_DETACHED)
+        return EINVAL;
+    probe_attributes = *attributes;
+    result = pthread_attr_setdetachstate(&probe_attributes,
+                                        PTHREAD_CREATE_JOINABLE);
+    if (result != 0) return result;
+    result = pthread_create(&probe_thread, &probe_attributes,
+                            mq_notify_attribute_probe, NULL);
+    if (result != 0) return result;
+    return pthread_join(probe_thread, NULL);
+}
+
+static void mq_notify_process_reset(void)
+{
+    uint32_t index;
+    for (index = 0u; index < RIN_LIBC_MQ_NOTIFY_SLOTS; ++index)
+        mq_notify_slot_release(&g_mq_notify_slots[index]);
+    for (index = 0u; index < RIN_LIBC_MQ_NOTIFY_JOBS; ++index) {
+        RinLibcMqNotifyJob* job = &g_mq_notify_jobs[index];
+        uint32_t generation =
+            __atomic_load_n(&job->generation, __ATOMIC_RELAXED) + 1u;
+        if (generation == 0u) generation = 1u;
+        job->function = NULL;
+        job->value.sival_ptr = NULL;
+        __atomic_store_n(&job->generation, generation, __ATOMIC_RELEASE);
+        __atomic_store_n(&job->state, 0u, __ATOMIC_RELEASE);
+    }
+    __atomic_store_n(&g_mq_notify_dispatcher_state, 0u, __ATOMIC_RELEASE);
+}
+
+static int mq_notify_process_sync(void)
+{
+    pid_t process_id = getpid();
+    uint32_t process_id_word;
+    if (process_id <= 0) return -1;
+    process_id_word = (uint32_t)process_id;
+    if (__atomic_load_n(&g_mq_notify_process_id, __ATOMIC_ACQUIRE) ==
+        process_id_word)
+        return 0;
+    for (;;) {
+        uint32_t lock =
+            __atomic_load_n(&g_mq_notify_process_sync_lock, __ATOMIC_ACQUIRE);
+        uint32_t expected;
+        if (lock != 0u && lock != process_id_word) {
+            expected = lock;
+            (void)__atomic_compare_exchange_n(
+                &g_mq_notify_process_sync_lock, &expected, 0u, 0,
+                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+            continue;
+        }
+        if (lock == process_id_word) continue;
+        expected = 0u;
+        if (!__atomic_compare_exchange_n(&g_mq_notify_process_sync_lock,
+                                         &expected, process_id_word, 0,
+                                         __ATOMIC_ACQ_REL,
+                                         __ATOMIC_ACQUIRE))
+            continue;
+        if (__atomic_load_n(&g_mq_notify_process_id, __ATOMIC_ACQUIRE) !=
+            process_id_word) {
+            mq_notify_process_reset();
+            __atomic_store_n(&g_mq_notify_process_id, process_id_word,
+                             __ATOMIC_RELEASE);
+        }
+        __atomic_store_n(&g_mq_notify_process_sync_lock, 0u,
+                         __ATOMIC_RELEASE);
+        return 0;
+    }
 }
 
 mqd_t mq_open(const char* name, int oflag, ...)
@@ -830,6 +1135,7 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
     int has_thread_attributes = 0;
     uint32_t action;
     int32_t result;
+    if (mq_notify_process_sync() != 0) return -1;
     if (!notification) {
         result = mq_notify_call(
             mqdes, RIN_OBJECT_HANDLE_INVALID,
@@ -882,6 +1188,19 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
             errno = EINVAL;
             return -1;
         }
+        if (has_thread_attributes) {
+            int attribute_result =
+                mq_notify_validate_attributes(&attr_copy);
+            if (attribute_result != 0) {
+                errno = attribute_result;
+                return -1;
+            }
+            if (pthread_attr_setdetachstate(
+                    &attr_copy, PTHREAD_CREATE_DETACHED) != 0) {
+                errno = EINVAL;
+                return -1;
+            }
+        }
         action = RIN_POSIX_MQ_NOTIFY_EVENT;
     } else {
         errno = EINVAL;
@@ -892,55 +1211,33 @@ int mq_notify(mqd_t mqdes, const struct sigevent* notification)
             mq_notify_call(mqdes, RIN_OBJECT_HANDLE_INVALID, action, 0u),
             RIN_LIBC_SDK_IPC_POSIX_MQ_NOTIFY, 0);
 
+    if (mq_notify_ensure_dispatcher() != 0) return -1;
     slot = mq_notify_reserve();
     if (!slot) {
         errno = EAGAIN;
         return -1;
     }
+    slot->event = RIN_OBJECT_HANDLE_INVALID;
     result = mq_event_create(&event);
     if (result != RIN_SUCCESS) {
-        __atomic_store_n(&slot->state, 0u, __ATOMIC_RELEASE);
+        mq_notify_slot_release(slot);
         return mq_error_from_result(result,
                                     RIN_LIBC_SDK_IPC_EVENT_CREATE, 0);
     }
-    slot->notification = (uint32_t)event_copy.sigev_notify;
     slot->event = event;
     slot->function = event_copy.sigev_notify_function;
     slot->value = event_copy.sigev_value;
-    {
-        pthread_t thread;
-        const pthread_attr_t* thread_attributes = NULL;
-        int thread_result;
-        if (has_thread_attributes) thread_attributes = &attr_copy;
-        thread_result = pthread_create(&thread, thread_attributes,
-                                       mq_notify_worker, slot);
-        if (thread_result != 0) {
-            (void)mq_close_handle(event);
-            slot->event = RIN_OBJECT_HANDLE_INVALID;
-            __atomic_store_n(&slot->state, 0u, __ATOMIC_RELEASE);
-            errno = thread_result;
-            return -1;
-        }
-        thread_result = pthread_detach(thread);
-        if (thread_result != 0) {
-            __atomic_store_n(&slot->state, 3u, __ATOMIC_RELEASE);
-            if (mq_event_signal(event, 1u) != RIN_SUCCESS)
-                (void)mq_close_handle(event);
-            (void)pthread_join(thread, NULL);
-            errno = thread_result;
-            return -1;
-        }
-    }
-    /* Start the worker before publishing the kernel registration.  The
-     * kernel may signal the event before mq_notify returns, so a worker must
-     * already be waiting when registration succeeds. */
-    __atomic_store_n(&slot->state, 2u, __ATOMIC_RELEASE);
+    slot->has_thread_attributes = has_thread_attributes ? 1u : 0u;
+    if (has_thread_attributes) slot->thread_attributes = attr_copy;
     result = mq_notify_call(mqdes, event, RIN_POSIX_MQ_NOTIFY_EVENT, 0u);
     if (result != RIN_SUCCESS) {
-        __atomic_store_n(&slot->state, 3u, __ATOMIC_RELEASE);
-        (void)mq_event_signal(event, 1u);
+        mq_notify_slot_release(slot);
         return mq_error_from_result(result,
                                     RIN_LIBC_SDK_IPC_POSIX_MQ_NOTIFY, 0);
     }
+    /* Event signals are persistent, so publishing the slot after the kernel
+     * call cannot lose a notification that arrives before this return. */
+    __atomic_store_n(&slot->state, RIN_LIBC_MQ_NOTIFY_SLOT_REGISTERED,
+                     __ATOMIC_RELEASE);
     return 0;
 }
