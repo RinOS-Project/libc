@@ -96,8 +96,9 @@ static unsigned int rin_ifaddrs_interface_flags(
         (capabilities_known &&
          (interface->capabilities &
           RIN_NET_IFADDRS_V2_CAP_POINT_TO_POINT) != 0u) ||
-        (interface->ipv4_peer[0] | interface->ipv4_peer[1] |
-         interface->ipv4_peer[2] | interface->ipv4_peer[3]) != 0u)
+        (!type_known && !capabilities_known &&
+         (interface->ipv4_peer[0] | interface->ipv4_peer[1] |
+          interface->ipv4_peer[2] | interface->ipv4_peer[3]) != 0u))
         flags |= IFF_POINTOPOINT;
     return flags;
 }
