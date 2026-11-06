@@ -24,6 +24,8 @@
 #include "sys/syscall.h"
 #include "signal.h"
 #include "stdlib.h"
+#include "unistd.h"
+#include "sys/uio.h"
 #include "internal/pthread_cancel_point.h"
 #include <rin/poll/ppoll_timeout_abi.h>
 
@@ -370,11 +372,15 @@ static inline int __rin_select_update_timeval(
         const struct timespec* start) {
     const uint64_t nanoseconds_per_second = UINT64_C(1000000000);
     struct timespec now;
+    struct timeval remaining;
+    struct iovec local_iov;
+    struct iovec remote_iov;
     uint64_t requested_ns;
     uint64_t elapsed_seconds;
     uint64_t elapsed_ns;
     uint64_t remaining_ns;
     int saved_errno;
+    ssize_t copied;
 
     if (!timeout || !original_timeout || !start) return 0;
     saved_errno = errno;
@@ -413,9 +419,19 @@ static inline int __rin_select_update_timeval(
 
     remaining_ns = elapsed_ns >= requested_ns
         ? 0u : requested_ns - elapsed_ns;
-    timeout->tv_sec = (time_t)(remaining_ns / nanoseconds_per_second);
-    timeout->tv_usec = (long)((remaining_ns % nanoseconds_per_second) /
-                              UINT64_C(1000));
+    remaining.tv_sec = (time_t)(remaining_ns / nanoseconds_per_second);
+    remaining.tv_usec = (long)((remaining_ns % nanoseconds_per_second) /
+                               UINT64_C(1000));
+    local_iov.iov_base = &remaining;
+    local_iov.iov_len = sizeof(remaining);
+    remote_iov.iov_base = timeout;
+    remote_iov.iov_len = sizeof(remaining);
+    copied = process_vm_writev(getpid(), &local_iov, 1u, &remote_iov, 1u, 0u);
+    if (copied < 0) return -1;
+    if ((size_t)copied != sizeof(remaining)) {
+        errno = EFAULT;
+        return -1;
+    }
     errno = saved_errno;
     return 0;
 }
