@@ -9,6 +9,24 @@
 
 #include "features.h"
 
+/* Hosted Windows toolchains can use a later sched.h (for example
+ * winpthreads) when one is installed. An explicit RinOS syscall hook keeps
+ * the RinOS ABI selected; without a host provider, the local hosted-Windows
+ * path continues to return ENOSYS instead of issuing RinOS selectors. */
+#if defined(_WIN32) && defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
+    (!defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)) && \
+    (defined(__GNUC__) || defined(__clang__)) && \
+    !defined(_RIN_SCHED_SYSCALL0) && \
+    !defined(_RIN_SCHED_SYSCALL1) && \
+    !defined(_RIN_SCHED_SYSCALL2) && \
+    !defined(_RIN_SCHED_SYSCALL3)
+#if defined(__has_include_next)
+#if __has_include_next(<sched.h>)
+#define RIN_SCHED_HOSTED_WINDOWS_PROVIDER 1
+#endif
+#endif
+#endif
+
 /* hosted POSIX環境では、型と宣言をhost CRTのscheduler実装に揃える。
  * RinOS syscall APIはfreestandingまたは明示的なhook指定時に使う。 */
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ && \
@@ -20,6 +38,9 @@
     !defined(_RIN_SCHED_SYSCALL2) && \
     !defined(_RIN_SCHED_SYSCALL3)
 #include_next <sched.h>
+#elif defined(RIN_SCHED_HOSTED_WINDOWS_PROVIDER)
+#include_next <sched.h>
+#undef RIN_SCHED_HOSTED_WINDOWS_PROVIDER
 #else
 
 #ifndef _SCHED_H
