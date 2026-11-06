@@ -24,6 +24,7 @@ extern unsigned int __rin_env_generation(void) __attribute__((weak));
 
 #define RIN_TZ_TEXT_MAX RIN_TIME_ZONE_PROVIDER_TEXT_MAX
 #define RIN_TZ_NAME_MAX 31u
+#define RIN_TZ_NAME_SNAPSHOT_CAPACITY 4096u
 
 typedef enum {
     RIN_TIME_ZONE_RULE_MONTH_WEEKDAY,
@@ -63,7 +64,6 @@ typedef struct {
 } RinTimeZone;
 
 typedef struct RinTimeZoneNameSnapshot {
-    struct RinTimeZoneNameSnapshot* next;
     char value[RIN_TZ_NAME_MAX + 1u];
 } RinTimeZoneNameSnapshot;
 
@@ -76,10 +76,14 @@ static RinTimeZone rin_time_zone = {
     "UTC", "UTC", 0, 0, 0, {0}, {0}, 0, "", "UTC", "UTC"
 };
 static volatile unsigned char rin_time_zone_lock;
-/* tm_zone has no release hook. Keep each distinct abbreviation immutable
- * for the process lifetime so previously returned struct tm values remain
- * safe after a later tzset() or timezone preference change. */
-static RinTimeZoneNameSnapshot* rin_time_zone_name_snapshots;
+/* tm_zone has no release hook. Keep each abbreviation immutable so previously
+ * returned struct tm values remain valid after tzset(). The fixed table makes
+ * both memory use and lookup work bounded; a new name is rejected when full. */
+static RinTimeZoneNameSnapshot
+    rin_time_zone_name_snapshots[RIN_TZ_NAME_SNAPSHOT_CAPACITY];
+static uint16_t rin_time_zone_name_snapshot_order[
+    RIN_TZ_NAME_SNAPSHOT_CAPACITY];
+static uint32_t rin_time_zone_name_snapshot_count;
 static RinTimeZoneSystemProvider rin_time_zone_system_provider;
 static void* rin_time_zone_system_provider_context;
 static unsigned char rin_time_zone_system_provider_bound;
@@ -400,82 +404,104 @@ static void rin_time_zone_copy(char* output, const char* input,
     output[index] = '\0';
 }
 
+static int rin_time_zone_name_valid(const char* name) {
+    size_t length = 0u;
+    if (!name) return 0;
+    while (length <= RIN_TZ_NAME_MAX && name[length] != '\0') ++length;
+    return length <= RIN_TZ_NAME_MAX;
+}
+
 static RinTimeZoneNameSnapshot* rin_time_zone_find_name_locked(
-    const char* name) {
-    RinTimeZoneNameSnapshot* current = rin_time_zone_name_snapshots;
-    while (current) {
-        size_t index = 0u;
-        while (current->value[index] == name[index] && name[index] != '\0')
-            ++index;
-        if (current->value[index] == name[index]) return current;
-        current = current->next;
+    const char* name, uint32_t* insertion_index_out) {
+    uint32_t low = 0u;
+    uint32_t high = rin_time_zone_name_snapshot_count;
+    if (insertion_index_out) *insertion_index_out = 0u;
+    while (low < high) {
+        const uint32_t middle = low + (high - low) / 2u;
+        const uint16_t slot = rin_time_zone_name_snapshot_order[middle];
+        const int comparison = strcmp(
+            rin_time_zone_name_snapshots[slot].value, name);
+        if (comparison == 0) return &rin_time_zone_name_snapshots[slot];
+        if (comparison < 0) low = middle + 1u;
+        else high = middle;
     }
+    if (insertion_index_out) *insertion_index_out = low;
     return NULL;
 }
 
+static RinTimeZoneNameSnapshot* rin_time_zone_insert_name_locked(
+    const char* name, uint32_t insertion_index) {
+    uint32_t index;
+    RinTimeZoneNameSnapshot* entry = rin_time_zone_find_name_locked(
+        name, NULL);
+    if (entry) return entry;
+    if (insertion_index > rin_time_zone_name_snapshot_count ||
+        rin_time_zone_name_snapshot_count >= RIN_TZ_NAME_SNAPSHOT_CAPACITY)
+        return NULL;
+    entry = &rin_time_zone_name_snapshots[
+        rin_time_zone_name_snapshot_count];
+    rin_time_zone_copy(entry->value, name, sizeof(entry->value));
+    for (index = rin_time_zone_name_snapshot_count;
+         index > insertion_index; --index) {
+        rin_time_zone_name_snapshot_order[index] =
+            rin_time_zone_name_snapshot_order[index - 1u];
+    }
+    rin_time_zone_name_snapshot_order[insertion_index] =
+        (uint16_t)rin_time_zone_name_snapshot_count;
+    ++rin_time_zone_name_snapshot_count;
+    return entry;
+}
+
 static int rin_time_zone_snapshot_names(RinTimeZone* zone) {
-    RinTimeZoneNameSnapshot* standard_candidate;
-    RinTimeZoneNameSnapshot* daylight_candidate = NULL;
     RinTimeZoneNameSnapshot* standard_snapshot;
     RinTimeZoneNameSnapshot* daylight_snapshot;
+    uint32_t standard_insertion_index = 0u;
+    uint32_t daylight_insertion_index = 0u;
+    uint32_t missing_names;
     int names_match = 1;
     size_t index = 0u;
 
-    if (!zone) {
+    if (!zone ||
+        !rin_time_zone_name_valid(zone->standard_name) ||
+        !rin_time_zone_name_valid(zone->daylight_name)) {
         errno = EINVAL;
         return 0;
     }
-    standard_candidate = (RinTimeZoneNameSnapshot*)malloc(
-        sizeof(*standard_candidate));
-    if (!standard_candidate) {
-        errno = ENOMEM;
-        return 0;
-    }
-    standard_candidate->next = NULL;
-    rin_time_zone_copy(standard_candidate->value, zone->standard_name,
-                       sizeof(standard_candidate->value));
     while (zone->standard_name[index] != '\0' &&
            zone->daylight_name[index] != '\0' &&
            zone->standard_name[index] == zone->daylight_name[index])
         ++index;
     names_match = zone->standard_name[index] == zone->daylight_name[index];
-    if (!names_match) {
-        daylight_candidate = (RinTimeZoneNameSnapshot*)malloc(
-            sizeof(*daylight_candidate));
-        if (!daylight_candidate) {
-            free(standard_candidate);
-            errno = ENOMEM;
-            return 0;
-        }
-        daylight_candidate->next = NULL;
-        rin_time_zone_copy(daylight_candidate->value, zone->daylight_name,
-                           sizeof(daylight_candidate->value));
-    }
 
     rin_time_zone_acquire();
-    standard_snapshot = rin_time_zone_find_name_locked(zone->standard_name);
-    if (!standard_snapshot) {
-        standard_snapshot = standard_candidate;
-        standard_candidate = NULL;
-        standard_snapshot->next = rin_time_zone_name_snapshots;
-        rin_time_zone_name_snapshots = standard_snapshot;
+    standard_snapshot = rin_time_zone_find_name_locked(
+        zone->standard_name, &standard_insertion_index);
+    daylight_snapshot = names_match ? standard_snapshot
+        : rin_time_zone_find_name_locked(zone->daylight_name,
+                                         &daylight_insertion_index);
+    missing_names = (standard_snapshot == NULL ? 1u : 0u) +
+        (!names_match && daylight_snapshot == NULL ? 1u : 0u);
+    if (missing_names > RIN_TZ_NAME_SNAPSHOT_CAPACITY -
+                            rin_time_zone_name_snapshot_count) {
+        rin_time_zone_release();
+        errno = ENOSPC;
+        return 0;
     }
-    if (names_match) {
-        daylight_snapshot = standard_snapshot;
-    } else {
-        daylight_snapshot =
-            rin_time_zone_find_name_locked(zone->daylight_name);
-        if (!daylight_snapshot) {
-            daylight_snapshot = daylight_candidate;
-            daylight_candidate = NULL;
-            daylight_snapshot->next = rin_time_zone_name_snapshots;
-            rin_time_zone_name_snapshots = daylight_snapshot;
-        }
+    if (!standard_snapshot)
+        standard_snapshot = rin_time_zone_insert_name_locked(
+            zone->standard_name, standard_insertion_index);
+    if (names_match) daylight_snapshot = standard_snapshot;
+    else if (!daylight_snapshot) {
+        (void)rin_time_zone_find_name_locked(
+            zone->daylight_name, &daylight_insertion_index);
+        daylight_snapshot = rin_time_zone_insert_name_locked(
+            zone->daylight_name, daylight_insertion_index);
     }
     rin_time_zone_release();
-
-    free(standard_candidate);
-    free(daylight_candidate);
+    if (!standard_snapshot || !daylight_snapshot) {
+        errno = ENOSPC;
+        return 0;
+    }
     zone->standard_name_snapshot = standard_snapshot->value;
     zone->daylight_name_snapshot = daylight_snapshot->value;
     return 1;
