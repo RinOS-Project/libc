@@ -541,7 +541,8 @@ static inline void* dlopen(const char* filename, int flags) {
         return NULL;
     }
 
-#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && defined(__x86_64__)
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    (defined(__x86_64__) || defined(__i386__))
     if (_rin_dl_lifecycle_run((uint64_t)(uintptr_t)handle,
                               RIN_DL_LIFECYCLE_INIT_NEXT) != 0) {
         (void)dynlink_unload(handle);
@@ -591,7 +592,8 @@ static inline int dlclose(void* handle) {
         return -1;
     }
 
-#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && defined(__x86_64__)
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    (defined(__x86_64__) || defined(__i386__))
     if (_rin_dl_lifecycle_run((uint64_t)(uintptr_t)handle,
                               RIN_DL_LIFECYCLE_FINI_NEXT) != 0) {
         _dl_set_error("dlclose: library finalization failed");
