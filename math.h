@@ -4283,6 +4283,173 @@ static inline long double compoundnl(long double x, long long int n) {
     return (long double)compoundn((double)x, n);
 }
 
+static inline double exp10(double x) {
+    double result;
+    if (__builtin_isnan(x)) {
+        if (issignaling(x)) (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (x == 0.0) return 1.0;
+    if (__builtin_isinf(x)) return x < 0.0 ? 0.0 : HUGE_VAL;
+    result = exp(x * 2.30258509299404568402);
+    if (__builtin_isinf(result)) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+    } else if (result == 0.0 || result < __DBL_MIN__) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+    }
+    return result;
+}
+
+static inline float exp10f(float x) {
+    return __rin_math_narrow_errno(exp10((double)x));
+}
+
+static inline long double exp10l(long double x) {
+    return (long double)exp10((double)x);
+}
+
+static inline double exp10m1(double x) {
+    double result;
+    if (__builtin_isnan(x)) {
+        if (issignaling(x)) (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (x == 0.0) return x;
+    if (__builtin_isinf(x)) return x < 0.0 ? -1.0 : HUGE_VAL;
+    result = expm1(x * 2.30258509299404568402);
+    if (__builtin_isinf(result)) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+    } else if (result == 0.0 || fabs(result) < __DBL_MIN__) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+    }
+    return result;
+}
+
+static inline float exp10m1f(float x) {
+    return __rin_math_narrow_errno(exp10m1((double)x));
+}
+
+static inline long double exp10m1l(long double x) {
+    return (long double)exp10m1((double)x);
+}
+
+static inline double pown(double x, long long int n) {
+    int negative_result;
+    double magnitude;
+    if (n == 0) {
+        if (issignaling(x)) (void)feraiseexcept(FE_INVALID);
+        return 1.0;
+    }
+    if (__builtin_isnan(x)) {
+        if (issignaling(x)) (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    negative_result = __builtin_signbit(x) && (n % 2 != 0);
+    if (x == 0.0) {
+        if (n < 0) {
+            errno = ERANGE;
+            (void)feraiseexcept(FE_DIVBYZERO);
+            return __builtin_copysign(HUGE_VAL,
+                                      negative_result ? -1.0 : 1.0);
+        }
+        return __builtin_copysign(0.0, negative_result ? -1.0 : 1.0);
+    }
+    if (__builtin_isinf(x)) {
+        double value = n < 0 ? 0.0 : HUGE_VAL;
+        return __builtin_copysign(value, negative_result ? -1.0 : 1.0);
+    }
+    if (x == 1.0) return 1.0;
+    if (x == -1.0) return negative_result ? -1.0 : 1.0;
+    magnitude = pow(fabs(x), (double)n);
+    return negative_result ? -magnitude : magnitude;
+}
+
+static inline float pownf(float x, long long int n) {
+    return __rin_math_narrow_errno(pown((double)x, n));
+}
+
+static inline long double pownl(long double x, long long int n) {
+    return (long double)pown((double)x, n);
+}
+
+static inline double rootn(double x, long long int n) {
+    int odd;
+    double magnitude;
+    if (n == 0) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (__builtin_isnan(x)) {
+        if (issignaling(x)) (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    odd = n % 2 != 0;
+    if (x < 0.0 && !odd) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (x == 0.0) {
+        int negative_result = __builtin_signbit(x) && odd;
+        if (n < 0) {
+            errno = ERANGE;
+            (void)feraiseexcept(FE_DIVBYZERO);
+            return __builtin_copysign(HUGE_VAL,
+                                      negative_result ? -1.0 : 1.0);
+        }
+        return __builtin_copysign(0.0, negative_result ? -1.0 : 1.0);
+    }
+    if (__builtin_isinf(x)) {
+        int negative_result = __builtin_signbit(x) && odd;
+        double value = n < 0 ? 0.0 : HUGE_VAL;
+        return __builtin_copysign(value, negative_result ? -1.0 : 1.0);
+    }
+    if (x == 1.0) return 1.0;
+    if (x == -1.0) return -1.0;
+    magnitude = pow(fabs(x), 1.0 / (double)n);
+    return __builtin_signbit(x) ? -magnitude : magnitude;
+}
+
+static inline float rootnf(float x, long long int n) {
+    return __rin_math_narrow_errno(rootn((double)x, n));
+}
+
+static inline long double rootnl(long double x, long long int n) {
+    return (long double)rootn((double)x, n);
+}
+
+static inline double rsqrt(double x) {
+    if (__builtin_isnan(x)) {
+        if (issignaling(x)) (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (x < 0.0) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (x == 0.0) {
+        errno = ERANGE;
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return __builtin_copysign(HUGE_VAL, x);
+    }
+    if (__builtin_isinf(x)) return 0.0;
+    return 1.0 / sqrt(x);
+}
+
+static inline float rsqrtf(float x) {
+    return __rin_math_narrow_errno(rsqrt((double)x));
+}
+
+static inline long double rsqrtl(long double x) {
+    return (long double)rsqrt((double)x);
+}
+
 static inline long double sqrtl(long double x) {
     return (long double)sqrt((double)x);
 }
