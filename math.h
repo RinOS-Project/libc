@@ -4251,6 +4251,38 @@ static inline long double atan2pil(long double y, long double x) {
     return (long double)atan2pi((double)y, (double)x);
 }
 
+/* C23 compoundn computes (1 + x)^n.  log1p keeps the small-x contribution
+ * when 1 + x would round to 1 before exponentiation. */
+static inline double compoundn(double x, long long int n) {
+    if (x < -1.0) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (n == 0) return 1.0;
+    if (x == -1.0) {
+        if (n < 0) {
+            errno = ERANGE;
+            (void)feraiseexcept(FE_DIVBYZERO);
+            return HUGE_VAL;
+        }
+        return 0.0;
+    }
+    if (__builtin_isnan(x)) return x;
+    if (__builtin_isinf(x)) return n < 0 ? 0.0 : HUGE_VAL;
+    if (x == 0.0) return 1.0;
+    if (n == 1) return 1.0 + x;
+    return exp((double)n * log1p(x));
+}
+
+static inline float compoundnf(float x, long long int n) {
+    return __rin_math_narrow_errno(compoundn((double)x, n));
+}
+
+static inline long double compoundnl(long double x, long long int n) {
+    return (long double)compoundn((double)x, n);
+}
+
 static inline long double sqrtl(long double x) {
     return (long double)sqrt((double)x);
 }
