@@ -499,7 +499,8 @@ static inline int prctl(int option, ...) {
         } else if (option == PR_GET_TID_ADDRESS) {
             arg2 = (uintptr_t)__builtin_va_arg(args, uint32_t **);
         } else if (option == PR_GET_ENDIAN || option == PR_GET_TSC ||
-            option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE) {
+            option == PR_GET_PDEATHSIG || option == PR_GET_DUMPABLE ||
+            option == PR_GET_CHILD_SUBREAPER) {
             arg2 = (uintptr_t)__builtin_va_arg(args, int*);
         } else if (option == PR_SET_PTRACER) {
             arg2 = (uintptr_t)__builtin_va_arg(args, unsigned long);
