@@ -245,7 +245,7 @@ static inline int __rin_poll_snapshot_timespec(
     int result;
     if (!timeout) return __rin_poll_timespec_to_ns(NULL, timeout_ns);
     result = _rin_time_snapshot_user_timespec(
-        CLOCK_MONOTONIC, timeout, snapshot);
+        RIN_CLOCK_ID_MONOTONIC, timeout, snapshot);
     if (result != 0) {
         errno = result;
         return -1;
@@ -260,7 +260,8 @@ static inline int __rin_poll_snapshot_timeval(
     int result;
     if (!timeout) return __rin_poll_timeval_to_ns(NULL, timeout_ns);
     result = _rin_time_snapshot_user_timespec(
-        CLOCK_MONOTONIC, (const struct timespec*)(const void*)timeout,
+        RIN_CLOCK_ID_MONOTONIC,
+        (const struct timespec*)(const void*)timeout,
         &wire_snapshot);
     if (result != 0) {
         errno = result;
@@ -295,7 +296,8 @@ static inline int __rin_select_update_timeval(
 
     if (!timeout || !original_timeout || !start) return 0;
     saved_errno = errno;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    if (__rin_time_clock_gettime(RIN_CLOCK_ID_MONOTONIC, &now) != 0)
+        return -1;
     if (start->tv_sec < 0 || start->tv_nsec < 0 ||
         start->tv_nsec >= 1000000000L || now.tv_sec < 0 ||
         now.tv_nsec < 0 || now.tv_nsec >= 1000000000L) {
@@ -427,7 +429,8 @@ static inline int select(int nfds, fd_set* readfds, fd_set* writefds,
         __rin_poll_timeval_to_ns(original_timeout, &timeout_ns) != 0)
         return -1;
 
-    if (timeout && clock_gettime(CLOCK_MONOTONIC, &timeout_start) != 0) {
+    if (timeout && __rin_time_clock_gettime(
+                       RIN_CLOCK_ID_MONOTONIC, &timeout_start) != 0) {
         return -1;
     }
     __rin_pthread_cancel_point_if_linked();

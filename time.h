@@ -49,12 +49,24 @@
 #ifndef _TIME_H
 #define _TIME_H
 
+#include "features.h"
+
+#if defined(RIN_TIME_INTERNAL) || defined(__RIN_FEATURES_DEFAULT) || \
+    defined(__RIN_FEATURES_GNU) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199309L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 500)
+#define __RIN_TIME_POSIX_VISIBLE 1
+#endif
+
 #define __STDC_VERSION_TIME_H__ 202311L
 
 #include "stddef.h"
 #include "stdint.h"
 #include "errno.h"
+#if defined(__RIN_TIME_POSIX_VISIBLE)
 #include "signal.h"
+#include "sys/types.h"
+#endif
 #include "limits.h"
 #include "internal/time_type.h"
 #include "internal/user_snapshot.h"
@@ -272,13 +284,17 @@ typedef rin_time_t time_t;
 typedef long clock_t;
 #define _CLOCK_T_DEFINED
 #endif
+#if defined(__RIN_TIME_POSIX_VISIBLE)
 #ifndef _CLOCKID_T_DEFINED
 typedef int clockid_t;
 #define _CLOCKID_T_DEFINED
 #endif
+#endif
+#if defined(__RIN_TIME_POSIX_VISIBLE)
 #ifndef _TIMER_T_DEFINED
 typedef int timer_t;
 #define _TIMER_T_DEFINED
+#endif
 #endif
 
 #ifndef _TM_DEFINED
@@ -315,14 +331,22 @@ struct timespec {
 };
 #endif
 
+typedef struct RinTimeval {
+    time_t tv_sec;   /* 秒 */
+    long   tv_usec;  /* マイクロ秒 */
+} RinTimeval;
+
+#if defined(__RIN_TIME_POSIX_VISIBLE)
 #ifndef _TIMEVAL_DEFINED
 #define _TIMEVAL_DEFINED
 struct timeval {
-    time_t tv_sec;   /* 秒 */
-    long   tv_usec;  /* マイクロ秒 */
+    time_t tv_sec;
+    long   tv_usec;
 };
 #endif
+#endif /* __RIN_TIME_POSIX_VISIBLE */
 
+#if defined(__RIN_TIME_POSIX_VISIBLE)
 #ifndef _ITIMERSPEC_DEFINED
 #if !defined(RIN_LIBC_TIME_EXTERNAL_TIMESPEC)
 #define _ITIMERSPEC_DEFINED
@@ -336,6 +360,7 @@ struct itimerspec {
 #ifndef TIMER_ABSTIME
 #define TIMER_ABSTIME ((int)RIN_TIMER_ABSTIME)
 #endif
+#if defined(__RIN_TIME_POSIX_VISIBLE)
 #ifndef SIGEV_SIGNAL
 #define SIGEV_SIGNAL ((int)RIN_TIMER_NOTIFY_SIGNAL)
 #endif
@@ -346,9 +371,11 @@ struct itimerspec {
 #ifndef SIGEV_THREAD
 #define SIGEV_THREAD 2
 #endif
+#endif /* __RIN_TIME_POSIX_VISIBLE */
 #ifndef RIN_TIMER_THREAD_SIGNAL
 #define RIN_TIMER_THREAD_SIGNAL 62
 #endif
+#if defined(__RIN_TIME_POSIX_VISIBLE)
 #ifndef _SIGVAL_DEFINED
 #define _SIGVAL_DEFINED
 union sigval {
@@ -356,6 +383,7 @@ union sigval {
     void* sival_ptr;
 };
 #endif
+#endif /* __RIN_TIME_POSIX_VISIBLE */
 #ifndef _SIGEVENT_DEFINED
 #define _SIGEVENT_DEFINED
 struct sigevent {
@@ -367,11 +395,14 @@ struct sigevent {
 };
 
 #endif
+#endif /* __RIN_TIME_POSIX_VISIBLE */
 
 /* Keep the runtime hooks independent from _SIGEVENT_DEFINED.  signal.h may
  * provide the sigevent record before this header is reached; the timer
  * implementation still needs these declarations for SIGEV_THREAD. */
-#if defined(RIN_USERSPACE) && !defined(RIN_TIMER_THREAD_RUNTIME_DECLS) && \
+#if defined(RIN_USERSPACE) && defined(__RIN_TIME_POSIX_VISIBLE) && \
+    !defined(RIN_TIMER_THREAD_RUNTIME) && \
+    !defined(RIN_TIMER_THREAD_RUNTIME_DECLS) && \
     !defined(MIDL_PASS)
 #define RIN_TIMER_THREAD_RUNTIME_DECLS 1
 extern int rin_timer_thread_register(timer_t timer_id,
@@ -421,7 +452,7 @@ static inline int _rin_time_status(intptr_t result) {
 }
 
 static inline int _rin_time_clock_timespec_user(
-    uint16_t operation, clockid_t clock_id, const struct timespec* value)
+    uint16_t operation, int32_t clock_id, const struct timespec* value)
 {
     RinClockTimespecUserV1 request = {0};
     request.struct_size = (uint32_t)sizeof(request);
@@ -438,7 +469,7 @@ static inline int _rin_time_clock_timespec_user(
  * This avoids dereferencing an untrusted pointer in libc and gives repeated
  * waits one stable deadline even if the caller later changes its memory. */
 static inline int _rin_time_snapshot_user_timespec(
-    clockid_t clock_id, const struct timespec* value,
+    int32_t clock_id, const struct timespec* value,
     struct timespec* snapshot)
 {
     RinClockTimespecUserV1 request = {0};
@@ -460,7 +491,7 @@ static inline int _rin_time_snapshot_user_timespec(
     return 0;
 }
 
-static inline int _rin_time_gettimeofday(struct timeval* output) {
+static inline int _rin_time_gettimeofday(RinTimeval* output) {
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING && !defined(RIN_KERNEL)
     RinClockTimespecUserV1 request = {0};
     request.struct_size = (uint32_t)sizeof(request);
@@ -515,10 +546,11 @@ static inline int _rin_time_ns_to_timespec(uint64_t nanoseconds,
 }
 
 /* クロックID */
-#define CLOCK_REALTIME           RIN_CLOCK_ID_REALTIME
 #ifndef TIME_UTC
 #define TIME_UTC                  1
 #endif
+#if defined(__RIN_TIME_POSIX_VISIBLE)
+#define CLOCK_REALTIME           RIN_CLOCK_ID_REALTIME
 #ifndef TIME_MONOTONIC
 #define TIME_MONOTONIC           2
 #endif
@@ -527,6 +559,7 @@ static inline int _rin_time_ns_to_timespec(uint64_t nanoseconds,
 #define CLOCK_THREAD_CPUTIME_ID  RIN_CLOCK_ID_THREAD_CPUTIME
 #define CLOCK_REALTIME_COARSE    CLOCK_REALTIME
 #define CLOCK_MONOTONIC_COARSE   CLOCK_MONOTONIC
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * 定数
@@ -676,7 +709,7 @@ static inline time_t time(time_t* tloc) {
     if (tloc) *tloc = t;
     return t;
 #else
-    struct timeval tv = {0, 0};
+    RinTimeval tv = {0, 0};
     if (_rin_time_gettimeofday(&tv) != 0) {
         if (tloc) *tloc = (time_t)-1;
         return (time_t)-1;
@@ -702,6 +735,7 @@ static inline clock_t clock(void) {
     return (clock_t)ticks;
 }
 
+#if defined(__RIN_TIME_POSIX_VISIBLE)
 static inline int gettimeofday(struct timeval* tv, void* tz) {
     (void)tz;
     if (!tv) {
@@ -714,9 +748,14 @@ static inline int gettimeofday(struct timeval* tv, void* tz) {
     tv->tv_usec = 0;
     return 0;
 #else
-    return _rin_time_gettimeofday(tv);
+    RinTimeval snapshot;
+    if (_rin_time_gettimeofday(&snapshot) != 0) return -1;
+    tv->tv_sec = snapshot.tv_sec;
+    tv->tv_usec = snapshot.tv_usec;
+    return 0;
 #endif
 }
+#endif /* __RIN_TIME_POSIX_VISIBLE */
 
 /* ═══════════════════════════════════════════════════════════════
  * tm構造体操作
@@ -1064,7 +1103,8 @@ size_t strftime_l(char* s, size_t maxsize, const char* format,
  * POSIX時刻関数
  * ═══════════════════════════════════════════════════════════════*/
 
-static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
+static inline int __rin_time_clock_gettime(int32_t clk_id,
+                                           struct timespec* tp) {
     if (!tp) {
         errno = EFAULT;
         return -1;
@@ -1076,10 +1116,10 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
 #else
 #if defined(RIN_TIME_HOSTED_WINDOWS_NO_PROVIDER)
     switch (clk_id) {
-        case CLOCK_REALTIME:
-        case CLOCK_MONOTONIC:
-        case CLOCK_PROCESS_CPUTIME_ID:
-        case CLOCK_THREAD_CPUTIME_ID:
+        case RIN_CLOCK_ID_REALTIME:
+        case RIN_CLOCK_ID_MONOTONIC:
+        case RIN_CLOCK_ID_PROCESS_CPUTIME:
+        case RIN_CLOCK_ID_THREAD_CPUTIME:
             errno = ENOSYS;
             return -1;
         default:
@@ -1088,7 +1128,7 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
     }
 #else
     switch (clk_id) {
-        case CLOCK_MONOTONIC:
+        case RIN_CLOCK_ID_MONOTONIC:
         {
             /* SYS_TIME_NS (260): TSC-based monotonic nanoseconds */
 #if defined(__x86_64__)
@@ -1104,16 +1144,16 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
 #endif
             return _rin_time_ns_to_timespec(ns, tp);
         }
-        case CLOCK_PROCESS_CPUTIME_ID:
-        case CLOCK_THREAD_CPUTIME_ID:
+        case RIN_CLOCK_ID_PROCESS_CPUTIME:
+        case RIN_CLOCK_ID_THREAD_CPUTIME:
         {
             uint64_t ns;
-            uint16_t scope = clk_id == CLOCK_PROCESS_CPUTIME_ID
+            uint16_t scope = clk_id == RIN_CLOCK_ID_PROCESS_CPUTIME
                 ? RIN_CPU_TIME_SCOPE_PROCESS : RIN_CPU_TIME_SCOPE_THREAD;
             if (_rin_cpu_time_ns(scope, &ns) != 0) return -1;
             return _rin_time_ns_to_timespec(ns, tp);
         }
-        case CLOCK_REALTIME:
+        case RIN_CLOCK_ID_REALTIME:
         {
 #if defined(RIN_FREESTANDING)
 #if defined(RIN_TIME_ABI64)
@@ -1154,8 +1194,8 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
             return _rin_time_ns_to_timespec(ns, tp);
 #endif
 #else
-            struct timeval tv;
-            int ret = gettimeofday(&tv, NULL);
+            RinTimeval tv;
+            int ret = _rin_time_gettimeofday(&tv);
             if (ret < 0) return -1;
             tp->tv_sec = tv.tv_sec;
             tp->tv_nsec = tv.tv_usec * 1000;
@@ -1169,6 +1209,12 @@ static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
 #endif
 #endif
 }
+
+#if defined(__RIN_TIME_POSIX_VISIBLE)
+static inline int clock_gettime(clockid_t clk_id, struct timespec* tp) {
+    return __rin_time_clock_gettime((int32_t)clk_id, tp);
+}
+#endif /* __RIN_TIME_POSIX_VISIBLE */
 
 /* The current futex ABI represents absolute deadlines as unsigned
  * nanoseconds. For an epoch-relative absolute wait while CLOCK_REALTIME is
@@ -1185,7 +1231,7 @@ static inline int _rin_time_realtime_deadline_relative(
     *use_relative = 0;
     if (deadline->tv_nsec < 0 || deadline->tv_nsec >= 1000000000L)
         return EINVAL;
-    if (clock_gettime(CLOCK_REALTIME, &now) != 0)
+    if (__rin_time_clock_gettime(RIN_CLOCK_ID_REALTIME, &now) != 0)
         return errno != 0 ? errno : EIO;
     if (now.tv_sec > deadline->tv_sec ||
         (now.tv_sec == deadline->tv_sec &&
@@ -1216,38 +1262,42 @@ static inline int _rin_time_realtime_deadline_relative(
 }
 
 static inline int timespec_get(struct timespec* ts, int base) {
-    clockid_t clock_id;
+    int32_t clock_id;
     switch (base) {
         case TIME_UTC:
-            clock_id = CLOCK_REALTIME;
+            clock_id = RIN_CLOCK_ID_REALTIME;
             break;
+#if defined(__RIN_TIME_POSIX_VISIBLE)
         case TIME_MONOTONIC:
-            clock_id = CLOCK_MONOTONIC;
+            clock_id = RIN_CLOCK_ID_MONOTONIC;
             break;
+#endif
         default:
             return 0;
     }
-    if (clock_gettime(clock_id, ts) != 0) return 0;
+    if (__rin_time_clock_gettime(clock_id, ts) != 0) return 0;
     return base;
 }
 
-static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
+static inline int __rin_time_clock_getres(int32_t clk_id,
+                                          struct timespec* res) {
 #if defined(RIN_FREESTANDING) && RIN_FREESTANDING
     return _rin_time_clock_timespec_user(
         RIN_CLOCK_TIMESPEC_USER_GETRES, clk_id, res);
 #else
 #if defined(RIN_TIME_HOSTED_WINDOWS_NO_PROVIDER)
-    if (clk_id != CLOCK_REALTIME && clk_id != CLOCK_MONOTONIC &&
-        clk_id != CLOCK_PROCESS_CPUTIME_ID &&
-        clk_id != CLOCK_THREAD_CPUTIME_ID) {
+    if (clk_id != RIN_CLOCK_ID_REALTIME &&
+        clk_id != RIN_CLOCK_ID_MONOTONIC &&
+        clk_id != RIN_CLOCK_ID_PROCESS_CPUTIME &&
+        clk_id != RIN_CLOCK_ID_THREAD_CPUTIME) {
         errno = EINVAL;
         return -1;
     }
     errno = ENOSYS;
     return -1;
 #else
-    if (clk_id == CLOCK_PROCESS_CPUTIME_ID ||
-        clk_id == CLOCK_THREAD_CPUTIME_ID) {
+    if (clk_id == RIN_CLOCK_ID_PROCESS_CPUTIME ||
+        clk_id == RIN_CLOCK_ID_THREAD_CPUTIME) {
 #if (defined(RIN_FREESTANDING) && defined(RIN_KERNEL)) || \
     (defined(RIN_FREESTANDING) && defined(RIN_USERSPACE))
         intptr_t result = _rin_time_result(
@@ -1268,7 +1318,8 @@ static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
         return -1;
 #endif
     }
-    if (clk_id != CLOCK_REALTIME && clk_id != CLOCK_MONOTONIC) {
+    if (clk_id != RIN_CLOCK_ID_REALTIME &&
+        clk_id != RIN_CLOCK_ID_MONOTONIC) {
         errno = EINVAL;
         return -1;
     }
@@ -1299,19 +1350,27 @@ static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
 #endif
 }
 
+#if defined(__RIN_TIME_POSIX_VISIBLE)
+static inline int clock_getres(clockid_t clk_id, struct timespec* res) {
+    return __rin_time_clock_getres((int32_t)clk_id, res);
+}
+#endif /* __RIN_TIME_POSIX_VISIBLE */
+
 static inline int timespec_getres(struct timespec* ts, int base) {
-    clockid_t clock_id;
+    int32_t clock_id;
     switch (base) {
         case TIME_UTC:
-            clock_id = CLOCK_REALTIME;
+            clock_id = RIN_CLOCK_ID_REALTIME;
             break;
+#if defined(__RIN_TIME_POSIX_VISIBLE)
         case TIME_MONOTONIC:
-            clock_id = CLOCK_MONOTONIC;
+            clock_id = RIN_CLOCK_ID_MONOTONIC;
             break;
+#endif
         default:
             return 0;
     }
-    if (clock_getres(clock_id, ts) != 0) return 0;
+    if (__rin_time_clock_getres(clock_id, ts) != 0) return 0;
     return base;
 }
 
@@ -1336,7 +1395,7 @@ static inline int _rin_time_timer_value_to_ns(
     if (input->tv_nsec < 0 || input->tv_nsec >= 1000000000L)
         return EINVAL;
     if (input->tv_sec < 0) {
-        if ((flags & TIMER_ABSTIME) == 0) return EINVAL;
+        if ((flags & (int)RIN_TIMER_ABSTIME) == 0) return EINVAL;
         /* Preserve nonzero so the kernel distinguishes a negative past
          * deadline from the zero it_value that disarms an absolute timer. */
         *output = 1u;
@@ -1385,7 +1444,9 @@ static inline int clock_settime(clockid_t clk_id,
     return 0;
 #endif
 }
+#endif /* __RIN_TIME_POSIX_VISIBLE */
 
+#if defined(__RIN_TIME_POSIX_VISIBLE)
 static inline int timer_create(clockid_t clock_id,
                                const struct sigevent* event,
                                timer_t* timer_id) {
@@ -1408,7 +1469,8 @@ static inline int timer_create(clockid_t clock_id,
         errno = EFAULT;
         return -1;
     }
-    if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC) {
+    if (clock_id != RIN_CLOCK_ID_REALTIME &&
+        clock_id != RIN_CLOCK_ID_MONOTONIC) {
         errno = EINVAL;
         return -1;
     }
@@ -1722,9 +1784,11 @@ static inline int timer_getoverrun(timer_t timer_id) {
     return -1;
 #endif
 }
+#endif /* __RIN_TIME_POSIX_VISIBLE */
 
 #if defined(RIN_TIME_HOST_HOOK_COMPAT)
-static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
+static inline int __rin_time_nanosleep(const struct timespec* req,
+                                      struct timespec* rem) {
     struct timespec deadline;
     struct timespec now;
     int entry_errno;
@@ -1749,7 +1813,8 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
     }
 
     entry_errno = errno;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    if (__rin_time_clock_gettime(RIN_CLOCK_ID_MONOTONIC, &now) != 0)
+        return -1;
     if (now.tv_sec < 0 || now.tv_nsec < 0 ||
         now.tv_nsec >= 1000000000L) {
         errno = EIO;
@@ -1790,7 +1855,9 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
                 return 0;
             }
             if (wait_errno == EINTR) {
-                if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+                if (__rin_time_clock_gettime(
+                        RIN_CLOCK_ID_MONOTONIC, &now) != 0)
+                    return -1;
                 if (now.tv_sec < 0 || now.tv_nsec < 0 ||
                     now.tv_nsec >= 1000000000L) {
                     errno = EIO;
@@ -1824,7 +1891,8 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
             errno = EIO;
             return -1;
         }
-        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+        if (__rin_time_clock_gettime(RIN_CLOCK_ID_MONOTONIC, &now) != 0)
+            return -1;
         if (now.tv_sec < 0 || now.tv_nsec < 0 ||
             now.tv_nsec >= 1000000000L) {
             errno = EIO;
@@ -1849,25 +1917,26 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
  * absolute waits pass their original deadline to FUTEX_WAIT_BITSET so the
  * kernel can re-evaluate realtime clock changes while the thread is blocked. */
 #if defined(RIN_TIME_HOST_HOOK_COMPAT)
-static inline int clock_nanosleep(clockid_t clock_id, int flags,
-                                  const struct timespec* request,
-                                  struct timespec* remain) {
+static inline int __rin_time_clock_nanosleep(
+    int32_t clock_id, int flags, const struct timespec* request,
+    struct timespec* remain) {
     struct timespec now;
     int saved_errno;
     int result;
 
     __rin_pthread_cancel_point_if_linked();
     if (!request) return EFAULT;
-    if ((flags & ~TIMER_ABSTIME) != 0) return EINVAL;
-    if (((flags & TIMER_ABSTIME) == 0 && request->tv_sec < 0) ||
+    if ((flags & ~(int)RIN_TIMER_ABSTIME) != 0) return EINVAL;
+    if (((flags & (int)RIN_TIMER_ABSTIME) == 0 && request->tv_sec < 0) ||
         request->tv_nsec < 0 || request->tv_nsec >= 1000000000L)
         return EINVAL;
-    if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
+    if (clock_id != RIN_CLOCK_ID_REALTIME &&
+        clock_id != RIN_CLOCK_ID_MONOTONIC)
         return EINVAL;
 
-    if ((flags & TIMER_ABSTIME) == 0) {
+    if ((flags & (int)RIN_TIMER_ABSTIME) == 0) {
         int entry_errno = errno;
-        result = nanosleep(request, remain);
+        result = __rin_time_nanosleep(request, remain);
         if (result == 0) {
             errno = entry_errno;
             return 0;
@@ -1883,15 +1952,15 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
                         FUTEX_RIN_SLEEP_NORESTART;
         int32_t futex_word = 0;
 
-        if (clock_id == CLOCK_REALTIME)
+        if (clock_id == RIN_CLOCK_ID_REALTIME)
             operation |= FUTEX_CLOCK_REALTIME;
-        if (clock_gettime(clock_id, &now) != 0) {
+        if (__rin_time_clock_gettime(clock_id, &now) != 0) {
             saved_errno = errno;
             errno = entry_errno;
             return saved_errno != 0 ? saved_errno : EIO;
         }
         if (now.tv_nsec < 0 || now.tv_nsec >= 1000000000L ||
-            (clock_id == CLOCK_MONOTONIC && now.tv_sec < 0)) {
+            (clock_id == RIN_CLOCK_ID_MONOTONIC && now.tv_sec < 0)) {
             errno = entry_errno;
             return EIO;
         }
@@ -1923,12 +1992,12 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
                 errno = entry_errno;
                 return EIO;
             }
-            if (clock_gettime(clock_id, &now) != 0) {
+            if (__rin_time_clock_gettime(clock_id, &now) != 0) {
                 saved_errno = errno;
                 errno = entry_errno;
                 return saved_errno != 0 ? saved_errno : EIO;
             }
-            if (((clock_id == CLOCK_MONOTONIC) && now.tv_sec < 0) ||
+            if (((clock_id == RIN_CLOCK_ID_MONOTONIC) && now.tv_sec < 0) ||
                 now.tv_nsec < 0 || now.tv_nsec >= 1000000000L) {
                 errno = entry_errno;
                 return EIO;
@@ -1945,30 +2014,32 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
 
 #else
 static inline intptr_t __rin_time_sleep_userptr_call(
-    clockid_t clock_id, int flags, const struct timespec* request,
+    int32_t clock_id, int flags, const struct timespec* request,
     struct timespec* remaining) {
     RinNanosleepUserRequestV2 user_request = {0};
     user_request.struct_size = sizeof(user_request);
     user_request.version = RIN_NANOSLEEP_ABI_VERSION_USERPTR_V2;
-    user_request.flags = (flags & TIMER_ABSTIME) != 0
+    user_request.flags = (flags & (int)RIN_TIMER_ABSTIME) != 0
         ? RIN_NANOSLEEP_USERPTR_FLAG_ABSOLUTE : 0u;
     user_request.clock_id = (uint32_t)clock_id;
     user_request.time_width = (uint32_t)sizeof(request->tv_sec);
     user_request.long_width = (uint32_t)sizeof(request->tv_nsec);
     user_request.request_address = (uint64_t)(uintptr_t)request;
     user_request.remaining_address =
-        (flags & TIMER_ABSTIME) == 0
+        (flags & (int)RIN_TIMER_ABSTIME) == 0
             ? (uint64_t)(uintptr_t)remaining : 0u;
     return __rin_syscall_posixize(_RIN_TIME_SYSCALL2(
         SYS_NANOSLEEP, &user_request,
         RIN_NANOSLEEP_ABI_SELECTOR_USERPTR_V2));
 }
 
-static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
+static inline int __rin_time_nanosleep(const struct timespec* req,
+                                      struct timespec* rem) {
     const int entry_errno = errno;
     intptr_t result;
     __rin_pthread_cancel_point_if_linked();
-    result = __rin_time_sleep_userptr_call(CLOCK_MONOTONIC, 0, req, rem);
+    result = __rin_time_sleep_userptr_call(
+        RIN_CLOCK_ID_MONOTONIC, 0, req, rem);
     __rin_pthread_cancel_point_if_linked();
     if (result == 0) {
         errno = entry_errno;
@@ -1981,13 +2052,14 @@ static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
  * errno as its result channel.  Relative waits keep the nanosleep owner;
  * absolute waits pass their original deadline to FUTEX_WAIT_BITSET so the
  * kernel can re-evaluate realtime clock changes while the thread is blocked. */
-static inline int clock_nanosleep(clockid_t clock_id, int flags,
-                                  const struct timespec* request,
-                                  struct timespec* remain) {
+static inline int __rin_time_clock_nanosleep(
+    int32_t clock_id, int flags, const struct timespec* request,
+    struct timespec* remain) {
     const int entry_errno = errno;
     intptr_t result;
-    if ((flags & ~TIMER_ABSTIME) != 0 ||
-        (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC))
+    if ((flags & ~(int)RIN_TIMER_ABSTIME) != 0 ||
+        (clock_id != RIN_CLOCK_ID_REALTIME &&
+         clock_id != RIN_CLOCK_ID_MONOTONIC))
         return EINVAL;
     __rin_pthread_cancel_point_if_linked();
     result = __rin_time_sleep_userptr_call(clock_id, flags, request, remain);
@@ -2004,6 +2076,19 @@ static inline int clock_nanosleep(clockid_t clock_id, int flags,
 }
 
 #endif
+
+#if defined(__RIN_TIME_POSIX_VISIBLE)
+static inline int nanosleep(const struct timespec* req, struct timespec* rem) {
+    return __rin_time_nanosleep(req, rem);
+}
+
+static inline int clock_nanosleep(clockid_t clock_id, int flags,
+                                  const struct timespec* request,
+                                  struct timespec* remain) {
+    return __rin_time_clock_nanosleep(
+        (int32_t)clock_id, flags, request, remain);
+}
+#endif /* __RIN_TIME_POSIX_VISIBLE */
 
 /* ═══════════════════════════════════════════════════════════════
  * strptime - 文字列から時刻への変換 (POSIX)

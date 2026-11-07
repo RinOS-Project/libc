@@ -451,7 +451,7 @@ typedef struct {
 #define PTHREAD_CANCELED             ((void*)(intptr_t)-1)
 
 #define PTHREAD_MUTEX_INITIALIZER { 0, 0, 0, 0 }
-#define PTHREAD_COND_INITIALIZER  { 0, 0, CLOCK_REALTIME, PTHREAD_PROCESS_PRIVATE }
+#define PTHREAD_COND_INITIALIZER  { 0, 0, RIN_CLOCK_ID_REALTIME, PTHREAD_PROCESS_PRIVATE }
 #define PTHREAD_RWLOCK_INITIALIZER { 0, 0, 0, 0, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1422,7 +1422,7 @@ static inline int pthread_mutex_timedlock(
     if (result == 0 || result == EOWNERDEAD) return result;
     if (result != EBUSY) return result;
     result = _rin_time_snapshot_user_timespec(
-        CLOCK_REALTIME, abstime, &checked_abstime);
+        RIN_CLOCK_ID_REALTIME, abstime, &checked_abstime);
     if (result != 0) return result;
     result = platform_mutex_timedlock(
         mutex->kernel_mutex, (int64_t)checked_abstime.tv_sec,
@@ -1523,7 +1523,7 @@ extern int pthread_condattr_init(pthread_condattr_t* attr);
 #else
 _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_condattr_init(pthread_condattr_t* attr) {
     if (!attr) return EINVAL;
-    attr->clock_id = CLOCK_REALTIME;
+    attr->clock_id = RIN_CLOCK_ID_REALTIME;
     attr->pshared = PTHREAD_PROCESS_PRIVATE;
     return 0;
 }
@@ -1543,7 +1543,8 @@ extern int pthread_condattr_setclock(pthread_condattr_t* attr, int clock_id);
 #else
 _RIN_PTHREAD_ATTR_SCHED_INLINE int pthread_condattr_setclock(pthread_condattr_t* attr, int clock_id) {
     if (!attr) return EINVAL;
-    if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC) {
+    if (clock_id != RIN_CLOCK_ID_REALTIME &&
+        clock_id != RIN_CLOCK_ID_MONOTONIC) {
         return EINVAL;
     }
     attr->clock_id = clock_id;
@@ -1599,7 +1600,7 @@ static inline int pthread_cond_init(pthread_cond_t* cond, const pthread_condattr
     if (attr && attr->pshared == PTHREAD_PROCESS_SHARED) return ENOTSUP;
     cond->generation = 0;
     cond->waiting = 0;
-    cond->clock_id = (attr ? attr->clock_id : CLOCK_REALTIME);
+    cond->clock_id = (attr ? attr->clock_id : RIN_CLOCK_ID_REALTIME);
     cond->pshared = (attr ? attr->pshared : PTHREAD_PROCESS_PRIVATE);
     return 0;
 }
@@ -1651,7 +1652,8 @@ static inline int __rin_pthread_cond_timedwait_clock(
     const struct timespec* abstime, clockid_t clock_id) {
     struct timespec checked_abstime;
     if (!cond || !mutex || !abstime) return EINVAL;
-    if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
+    if (clock_id != RIN_CLOCK_ID_REALTIME &&
+        clock_id != RIN_CLOCK_ID_MONOTONIC)
         return EINVAL;
     {
         int snapshot_result = _rin_time_snapshot_user_timespec(
@@ -1672,14 +1674,14 @@ static inline int __rin_pthread_cond_timedwait_clock(
         /* CLOCK_MONOTONIC values cannot be negative.  A normalized negative
          * absolute deadline is already expired; do not pass it to futex,
          * whose non-realtime timeout ABI reports EINVAL for this value. */
-        if (clock_id == CLOCK_MONOTONIC && abstime->tv_sec < 0) {
+        if (clock_id == RIN_CLOCK_ID_MONOTONIC && abstime->tv_sec < 0) {
             result = ETIMEDOUT;
             break;
         }
         int operation = FUTEX_WAIT_BITSET |
             (cond->pshared == PTHREAD_PROCESS_SHARED ? 0 :
              FUTEX_PRIVATE_FLAG) |
-            (clock_id == CLOCK_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
+            (clock_id == RIN_CLOCK_ID_REALTIME ? FUTEX_CLOCK_REALTIME : 0);
         long ret = _RIN_PTHREAD_FUTEX_CALL(
             &cond->generation, operation, (int)gen, abstime, NULL,
             FUTEX_BITSET_MATCH_ANY);
@@ -1707,7 +1709,8 @@ static inline int pthread_cond_timedwait(pthread_cond_t* cond,
                                           pthread_mutex_t* mutex,
                                           const struct timespec* abstime) {
     return __rin_pthread_cond_timedwait_clock(
-        cond, mutex, abstime, cond ? cond->clock_id : CLOCK_REALTIME);
+        cond, mutex, abstime,
+        cond ? cond->clock_id : RIN_CLOCK_ID_REALTIME);
 }
 
 #if defined(_RIN_PTHREAD_CLOCK_WAIT_VISIBLE)

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
 #define _RIN_SIGNAL_RUNTIME_IMPLEMENTATION 1
+#define RIN_TIME_INTERNAL 1
 #include "aio.h"
 
 #include "errno.h"

@@ -1927,7 +1927,7 @@ static inline int usleep(useconds_t usec) {
     struct timespec request;
     request.tv_sec = 0;
     request.tv_nsec = (long)usec * 1000L;
-    return nanosleep(&request, 0);
+    return __rin_time_nanosleep(&request, 0);
 }
 
 /* ═══════════════════════════════════════════════════════════════

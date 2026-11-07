@@ -30,7 +30,8 @@
 /* Keep the ISO C signal surface available in strict modes while gating the
  * POSIX signal namespace.  Runtime owners may opt in privately because their
  * implementation is not a public header consumer. */
-#if defined(_RIN_SIGNAL_RUNTIME_IMPLEMENTATION) || \
+#if defined(RIN_TIME_INTERNAL) || \
+    defined(_RIN_SIGNAL_RUNTIME_IMPLEMENTATION) || \
     defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION) || \
     defined(RIN_TIMER_THREAD_RUNTIME) || \
     defined(__USE_POSIX) || defined(__USE_XOPEN) || \
@@ -42,7 +43,8 @@
 #define _RIN_SIGNAL_POSIX_VISIBLE 1
 #endif
 #if defined(_RIN_SIGNAL_POSIX_VISIBLE) && \
-    (defined(_RIN_SIGNAL_RUNTIME_IMPLEMENTATION) || \
+     (defined(RIN_TIME_INTERNAL) || \
+      defined(_RIN_SIGNAL_RUNTIME_IMPLEMENTATION) || \
      defined(RIN_PTHREAD_RUNTIME_IMPLEMENTATION) || \
      defined(RIN_TIMER_THREAD_RUNTIME) || \
      defined(_RIN_USE_GNU_PTHREAD_SIGQUEUE) || \
@@ -305,6 +307,7 @@ static inline int __rin_signal_mask_snapshot(const sigset_t* source,
 #define SYS_USER_DISPATCH 2
 #endif
 
+#if defined(_RIN_SIGNAL_REALTIME_VISIBLE)
 #ifndef _SIGVAL_DEFINED
 #define _SIGVAL_DEFINED
 union sigval {
@@ -312,7 +315,9 @@ union sigval {
     void* sival_ptr;
 };
 #endif
+#endif /* _RIN_SIGNAL_REALTIME_VISIBLE */
 
+#if defined(_RIN_SIGNAL_REALTIME_VISIBLE)
 #ifndef _SIGEVENT_DEFINED
 #define _SIGEVENT_DEFINED
 struct sigevent {
@@ -326,6 +331,7 @@ struct sigevent {
     void* sigev_notify_attributes;
 };
 #endif
+#endif /* _RIN_SIGNAL_REALTIME_VISIBLE */
 
 union __rin_siginfo_fields {
     int _pad[(SI_MAX_SIZE - 16) / (int)sizeof(int)];

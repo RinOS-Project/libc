@@ -6,6 +6,7 @@
 
 #define _RIN_USE_GNU_CPU_SET 1
 #define _RIN_USE_GNU_PTHREAD 1
+#define RIN_TIME_INTERNAL 1
 #define RIN_PTHREAD_RUNTIME_IMPLEMENTATION 1
 #include "pthread.h"
 #include "internal/pthread_cond_interrupt.h"

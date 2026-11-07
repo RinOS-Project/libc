@@ -6,6 +6,7 @@
 #ifndef _NETDB_H
 #define _NETDB_H
 
+#include "features.h"
 #include "stddef.h"
 #include "stdint.h"
 #include "errno.h"
@@ -292,7 +293,13 @@ static inline int _netdb_is_localhost(const char* name) {
 static inline int _netdb_resolved_now_ns(uint64_t* now_ns_out) {
     struct timespec now;
     uint64_t seconds;
+#if defined(__RINOS__)
+    if (!now_ns_out ||
+        __rin_time_clock_gettime(RIN_CLOCK_ID_MONOTONIC, &now) != 0)
+        return -1;
+#else
     if (!now_ns_out || clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+#endif
     if (now.tv_sec < 0 || now.tv_nsec < 0 || now.tv_nsec >= 1000000000L) {
         errno = EIO;
         return -1;

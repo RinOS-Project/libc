@@ -18,6 +18,7 @@
 #include "sys/syscall.h"
 #include "linux/futex.h"
 #include <rin/ipc/posix_semaphore_abi.h>
+#include <rin/time/cpu_time_abi.h>
 
 #ifndef _RIN_SEMAPHORE_FUTEX
 #define _RIN_SEMAPHORE_FUTEX(address, operation, value, timeout) \
@@ -240,8 +241,8 @@ static inline int __rin_sem_clockwait_impl(
     const struct timespec* wait_deadline = abstime;
     int deadline_checked = 0;
     __rin_pthread_cancel_point_if_linked();
-    if (!sem || (clock_id != CLOCK_REALTIME &&
-                 clock_id != CLOCK_MONOTONIC)) {
+    if (!sem || (clock_id != RIN_CLOCK_ID_REALTIME &&
+                 clock_id != RIN_CLOCK_ID_MONOTONIC)) {
         errno = EINVAL;
         return -1;
     }
@@ -294,7 +295,7 @@ static inline int __rin_sem_clockwait_impl(
         }
 
         int operation = rin_sem_futex_operation(sem, FUTEX_WAIT_BITSET);
-        if (clock_id == CLOCK_REALTIME)
+        if (clock_id == RIN_CLOCK_ID_REALTIME)
             operation |= FUTEX_CLOCK_REALTIME;
         long ret = _RIN_SEMAPHORE_FUTEX_BITSET(
             &sem->value, operation, 0, wait_deadline,

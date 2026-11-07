@@ -1,5 +1,6 @@
 /* RinOS libc syslog process-owned configuration. */
 
+#define RIN_TIME_INTERNAL 1
 #include "syslog.h"
 #include "pthread.h"
 #include <rin/syslog_transport_v1.h>

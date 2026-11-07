@@ -3,6 +3,7 @@
 #ifndef RIN_LIBC_THREADS_H
 #define RIN_LIBC_THREADS_H
 
+#include "features.h"
 #include "errno.h"
 #include "pthread.h"
 #include "stdint.h"
@@ -101,7 +102,11 @@ static inline int thrd_equal(thrd_t left, thrd_t right)
 static inline int thrd_sleep(const struct timespec* duration,
                              struct timespec* remaining)
 {
+#if defined(__RINOS__)
+    if (__rin_time_nanosleep(duration, remaining) == 0) return 0;
+#else
     if (nanosleep(duration, remaining) == 0) return 0;
+#endif
     return errno == EINTR ? -1 : -2;
 }
 

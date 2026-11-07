@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 
+#define RIN_TIME_INTERNAL 1
 #include "mqueue.h"
 
 #include "pthread.h"

@@ -715,7 +715,8 @@ static inline int __rin_socket_accept_wait_init(
     wait->timed = timeout.tv_sec != 0 || timeout.tv_usec != 0;
     wait->deadline_ms = 0u;
     if (wait->timed) {
-        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+        if (__rin_time_clock_gettime(RIN_CLOCK_ID_MONOTONIC, &now) != 0)
+            return 0;
         if (now.tv_sec < 0 || now.tv_nsec < 0 ||
             now.tv_nsec >= 1000000000L ||
             (uint64_t)now.tv_sec >
@@ -757,7 +758,8 @@ static inline int __rin_socket_accept_backoff(
         uint64_t now_ms;
         uint64_t fractional_ms;
         uint64_t remaining_ms;
-        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+        if (__rin_time_clock_gettime(RIN_CLOCK_ID_MONOTONIC, &now) != 0)
+            return 0;
         if (now.tv_sec < 0 || now.tv_nsec < 0 ||
             now.tv_nsec >= 1000000000L) {
             errno = EOVERFLOW;
@@ -782,7 +784,7 @@ static inline int __rin_socket_accept_backoff(
     }
 
     struct timespec delay = {0, (long)delay_ms * 1000000L};
-    if (nanosleep(&delay, 0) != 0) return 0;
+    if (__rin_time_nanosleep(&delay, 0) != 0) return 0;
     if (wait->delay_ms < 256u) {
         wait->delay_ms = wait->delay_ms > 128u
             ? 256u : wait->delay_ms * 2u;
@@ -796,7 +798,8 @@ static inline int __rin_socket_accept_wait_expired(
     uint64_t now_ms;
     uint64_t fractional_ms;
     if (!wait || !wait->initialized || !wait->timed) return 0;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    if (__rin_time_clock_gettime(RIN_CLOCK_ID_MONOTONIC, &now) != 0)
+        return -1;
     if (now.tv_sec < 0 || now.tv_nsec < 0 ||
         now.tv_nsec >= 1000000000L) {
         errno = EOVERFLOW;
@@ -880,7 +883,7 @@ static inline int connect(int sockfd, const struct sockaddr* addr, socklen_t add
          * spins or parks a worker while waiting for capacity. Nonblocking
          * sockets and other errors return immediately. */
         struct timespec delay = {0, (long)delay_ms * 1000000L};
-        if (nanosleep(&delay, 0) != 0) return -1;
+        if (__rin_time_nanosleep(&delay, 0) != 0) return -1;
         ++retry_count;
         delay_ms <<= 1;
     }

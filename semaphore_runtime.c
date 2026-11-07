@@ -2,6 +2,7 @@
 /* POSIX named semaphore syscall bridge. */
 
 #define RIN_SEMAPHORE_IMPLEMENTATION 1
+#define RIN_TIME_INTERNAL 1
 #include "semaphore.h"
 #include "fcntl_flags.h"
 #include "stdarg.h"

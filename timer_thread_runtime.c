@@ -2,6 +2,7 @@
 /* Bounded SIGEV_THREAD bridge: kernel timer events are consumed by a private
  * signal and each callback runs on a detached libc thread. */
 #define RIN_TIMER_THREAD_RUNTIME 1
+#define RIN_TIME_INTERNAL 1
 #include "time.h"
 #include "signal.h"
 #include "pthread.h"
