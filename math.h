@@ -3502,6 +3502,53 @@ static inline long double fminimum_magl(long double x, long double y) {
     return (long double)fminimum_mag((double)x, (double)y);
 }
 
+/* C23 magnitude _num variants select a numeric operand when only one
+ * argument is NaN; equal magnitudes use the corresponding numeric extremum
+ * so signed-zero ties keep the same rule as fmaximum_num/fminimum_num. */
+static inline double fmaximum_mag_num(double x, double y) {
+    if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y))
+        return fmaximum_num(x, y);
+    double ax = fabs(x), ay = fabs(y);
+    if (ax > ay) return x;
+    if (ay > ax) return y;
+    return fmaximum_num(x, y);
+}
+
+static inline float fmaximum_mag_numf(float x, float y) {
+    if (__rin_math_isnan_f(x) || __rin_math_isnan_f(y))
+        return fmaximum_numf(x, y);
+    float ax = fabsf(x), ay = fabsf(y);
+    if (ax > ay) return x;
+    if (ay > ax) return y;
+    return fmaximum_numf(x, y);
+}
+
+static inline long double fmaximum_mag_numl(long double x, long double y) {
+    return (long double)fmaximum_mag_num((double)x, (double)y);
+}
+
+static inline double fminimum_mag_num(double x, double y) {
+    if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y))
+        return fminimum_num(x, y);
+    double ax = fabs(x), ay = fabs(y);
+    if (ax < ay) return x;
+    if (ay < ax) return y;
+    return fminimum_num(x, y);
+}
+
+static inline float fminimum_mag_numf(float x, float y) {
+    if (__rin_math_isnan_f(x) || __rin_math_isnan_f(y))
+        return fminimum_numf(x, y);
+    float ax = fabsf(x), ay = fabsf(y);
+    if (ax < ay) return x;
+    if (ay < ax) return y;
+    return fminimum_numf(x, y);
+}
+
+static inline long double fminimum_mag_numl(long double x, long double y) {
+    return (long double)fminimum_mag_num((double)x, (double)y);
+}
+
 /* C23 canonicalize - store the canonical encoding of *x in *cx.
  * x86: every encoding is canonical (return 0 always); sNaN input
  * is quieted (payload kept) and raises INVALID (M64 parity; the

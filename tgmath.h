@@ -210,6 +210,10 @@
 #define fminimum_num(x, y) __RIN_TGMATH_BINARY_REAL(fminimum_num, (x), (y))
 #define fmaximum_mag(x, y) __RIN_TGMATH_BINARY_REAL(fmaximum_mag, (x), (y))
 #define fminimum_mag(x, y) __RIN_TGMATH_BINARY_REAL(fminimum_mag, (x), (y))
+#define fmaximum_mag_num(x, y) \
+    __RIN_TGMATH_BINARY_REAL(fmaximum_mag_num, (x), (y))
+#define fminimum_mag_num(x, y) \
+    __RIN_TGMATH_BINARY_REAL(fminimum_mag_num, (x), (y))
 #define compoundn(x, n) \
     __RIN_TGMATH_UNARY_REAL_WITH_ARG(compoundn, (x), (n))
 /* C23 canonicalize: dispatch on the source pointer's pointee. */
