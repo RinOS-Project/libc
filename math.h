@@ -4464,6 +4464,81 @@ static inline long double pownl(long double x, long long int n) {
     return (long double)pown((double)x, n);
 }
 
+/* C23 powr computes the continuous real power exp(y * log(x)) for x >= 0.
+ * Its deliberately narrower special-case rules distinguish it from pow. */
+static inline double powr(double x, double y) {
+    if (__builtin_isnan(x)) {
+        if (issignaling(x)) (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (x < 0.0) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    if (__builtin_isnan(y)) {
+        if (issignaling(y)) (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+
+    if (y == 0.0) {
+        if (x == 0.0 || __builtin_isinf(x)) {
+            errno = EDOM;
+            (void)feraiseexcept(FE_INVALID);
+            return NAN;
+        }
+        return 1.0;
+    }
+    if (x == 1.0 && __builtin_isinf(y)) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+
+    if (x == 0.0) {
+        if (y < 0.0) {
+            if (!__builtin_isinf(y)) {
+                errno = ERANGE;
+                (void)feraiseexcept(FE_DIVBYZERO);
+            }
+            return HUGE_VAL;
+        }
+        return 0.0;
+    }
+    if (__builtin_isinf(x))
+        return y < 0.0 ? 0.0 : HUGE_VAL;
+    if (x == 1.0) return 1.0;
+
+    if (__builtin_isinf(y)) {
+        int grows = x > 1.0;
+        if (y < 0.0) grows = !grows;
+        return grows ? HUGE_VAL : 0.0;
+    }
+    double log_x = log(x);
+    /* Avoid overflowing the intermediate product for extreme finite y.
+     * The sign of that product determines whether exp is out of range high
+     * or low, even though exp itself would only see an infinity. */
+    if (fabs(log_x) > 1.0 &&
+        fabs(y) > __DBL_MAX__ / fabs(log_x)) {
+        errno = ERANGE;
+        if ((log_x < 0.0) != (y < 0.0)) {
+            (void)feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+            return 0.0;
+        }
+        (void)feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+        return HUGE_VAL;
+    }
+    return exp(y * log_x);
+}
+
+static inline float powrf(float x, float y) {
+    return __rin_math_narrow_errno(powr((double)x, (double)y));
+}
+
+static inline long double powrl(long double x, long double y) {
+    return (long double)powr((double)x, (double)y);
+}
+
 static inline double rootn(double x, long long int n) {
     int odd;
     double magnitude;

@@ -189,6 +189,7 @@
 #define fmod(x, y)       __RIN_TGMATH_BINARY_REAL(fmod, (x), (y))
 #define hypot(x, y)      __RIN_TGMATH_BINARY_REAL(hypot, (x), (y))
 #define pown(x, n)       __RIN_TGMATH_UNARY_REAL_WITH_ARG(pown, (x), (n))
+#define powr(x, y)       __RIN_TGMATH_BINARY_REAL(powr, (x), (y))
 #define nextafter(x, y)  __RIN_TGMATH_BINARY_REAL(nextafter, (x), (y))
 #define rootn(x, n)      __RIN_TGMATH_UNARY_REAL_WITH_ARG(rootn, (x), (n))
 #define remainder(x, y)  __RIN_TGMATH_BINARY_REAL(remainder, (x), (y))
