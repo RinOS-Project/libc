@@ -4464,7 +4464,8 @@ static inline long double pownl(long double x, long long int n) {
     return (long double)pown((double)x, n);
 }
 
-/* C23 powr computes the continuous real power exp(y * log(x)) for x >= 0.
+/* WG14 Issue 1046 proposes correcting the C23 synopsis to x-first:
+ * powr(x, y) computes x raised to y. Keep x as the base and y as the exponent.
  * Its deliberately narrower special-case rules distinguish it from pow. */
 static inline double powr(double x, double y) {
     if (__builtin_isnan(x)) {
