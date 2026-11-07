@@ -254,6 +254,12 @@ static inline void* __rin_mman_pointer_result(intptr_t result)
 #define MADV_SEQUENTIAL  2   /* シーケンシャルアクセス */
 #define MADV_WILLNEED    3   /* すぐに必要 */
 #define MADV_DONTNEED    4   /* しばらく不要 */
+#define MADV_COLD       20   /* reclaim ageを下げる */
+#define MADV_PAGEOUT    21   /* 内容を保ったまま退避を試みる */
+#define RIN_MADV_COLD_SUPPORTED_IA32 1
+#define RIN_MADV_COLD_SUPPORTED_X86_64 1
+#define RIN_MADV_PAGEOUT_SUPPORTED_IA32 1
+#define RIN_MADV_PAGEOUT_SUPPORTED_X86_64 1
 #define MADV_DONTNEED_LOCKED 24 /* locked VMAの常駐ページを破棄 */
 #define MADV_FREE        8   /* ページ解放可能 */
 #define MADV_REMOVE      9   /* 削除 */
