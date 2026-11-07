@@ -1403,6 +1403,9 @@ char* setstate(char* state);
 int initstate_r(unsigned int seed, char* state, size_t state_size,
                 struct random_data* buffer);
 int setstate_r(char* state, struct random_data* buffer);
+uint32_t arc4random(void);
+void arc4random_buf(void* buffer, size_t length);
+uint32_t arc4random_uniform(uint32_t upper_bound);
 #ifdef __cplusplus
 }
 #endif

@@ -5,6 +5,7 @@
 
 #define _RIN_STDLIB_RANDOM_STATE_OWNER 1
 #include "stdlib.h"
+#include "sys/random.h"
 
 #define RIN_LIBC_RAND_MAX 0x7fffffffU
 
@@ -395,6 +396,62 @@ long random(void)
     (void)rin_libc_random_step(&rin_libc_random_data, &result);
     rin_libc_random_lock_release();
     return (long)result;
+}
+
+static int rin_libc_arc4random_fill(void* buffer, size_t length)
+{
+#if defined(RIN_SYS_RANDOM_HOSTED_UNAVAILABLE)
+    (void)buffer;
+    (void)length;
+    errno = ENOSYS;
+    return -1;
+#else
+    unsigned char* bytes = (unsigned char*)buffer;
+    size_t offset = 0u;
+    while (offset < length) {
+        size_t request = length - offset;
+        ssize_t received;
+        /* Keep each request bounded for providers with narrower syscall
+         * length types; getrandom may still complete it in short reads. */
+        if (request > 1048576u) request = 1048576u;
+        received = getrandom(bytes + offset, request, 0u);
+        if (received > 0) {
+            offset += (size_t)received;
+            continue;
+        }
+        if (received < 0 && errno == EINTR) continue;
+        if (received == 0) errno = EIO;
+        return -1;
+    }
+    return 0;
+#endif
+}
+
+void arc4random_buf(void* buffer, size_t length)
+{
+    /* The API has no error return: treat an unavailable or failed secure
+     * provider as fatal rather than exposing deterministic fallback bytes. */
+    if (length != 0u && rin_libc_arc4random_fill(buffer, length) != 0)
+        abort();
+}
+
+uint32_t arc4random(void)
+{
+    uint32_t value;
+    arc4random_buf(&value, sizeof(value));
+    return value;
+}
+
+uint32_t arc4random_uniform(uint32_t upper_bound)
+{
+    uint32_t threshold;
+    uint32_t value;
+    if (upper_bound < 2u) return 0u;
+    threshold = (uint32_t)(0u - upper_bound) % upper_bound;
+    do {
+        value = arc4random();
+    } while (value < threshold);
+    return value % upper_bound;
 }
 
 #ifdef __cplusplus
