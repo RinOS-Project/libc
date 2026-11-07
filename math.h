@@ -3367,11 +3367,21 @@ static inline long double roundevenl(long double x) {
     return (long double)__rin_math_round_even((double)x);
 }
 
-/* C23 fmaximum/fminimum - NaN-propagating extrema (glibc-2.39
- * parity; C23-final prefers numbers, tracked as follow-up).
- * Signed zeros: maximum prefers +0, minimum prefers -0.
- * Quiet: no errno, no exceptions. */
+/* C23 extrema raise INVALID for signaling NaNs, preserve NaN propagation for
+ * fmaximum/fminimum, and prefer numeric operands in the _num variants.
+ * Signed zeros: maximum prefers +0, minimum prefers -0. */
+static inline void __rin_math_extrema_signal_invalid_d(double x, double y) {
+    if (issignaling(x) || issignaling(y))
+        (void)feraiseexcept(FE_INVALID);
+}
+
+static inline void __rin_math_extrema_signal_invalid_f(float x, float y) {
+    if (issignaling(x) || issignaling(y))
+        (void)feraiseexcept(FE_INVALID);
+}
+
 static inline double fmaximum(double x, double y) {
+    __rin_math_extrema_signal_invalid_d(x, y);
     if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) return NAN;
     if (x == y) {
         if (x == 0.0)
@@ -3383,6 +3393,7 @@ static inline double fmaximum(double x, double y) {
 }
 
 static inline float fmaximumf(float x, float y) {
+    __rin_math_extrema_signal_invalid_f(x, y);
     if (__rin_math_isnan_f(x) || __rin_math_isnan_f(y))
         return __builtin_nanf("");
     if (x == y) {
@@ -3399,6 +3410,7 @@ static inline long double fmaximuml(long double x, long double y) {
 }
 
 static inline double fminimum(double x, double y) {
+    __rin_math_extrema_signal_invalid_d(x, y);
     if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) return NAN;
     if (x == y) {
         if (x == 0.0)
@@ -3410,6 +3422,7 @@ static inline double fminimum(double x, double y) {
 }
 
 static inline float fminimumf(float x, float y) {
+    __rin_math_extrema_signal_invalid_f(x, y);
     if (__rin_math_isnan_f(x) || __rin_math_isnan_f(y))
         return __builtin_nanf("");
     if (x == y) {
@@ -3427,14 +3440,26 @@ static inline long double fminimuml(long double x, long double y) {
 
 /* C23 _num variants - numbers win over NaN (NaN only if both are). */
 static inline double fmaximum_num(double x, double y) {
-    if (__rin_math_isnan_d(x)) return y;
-    if (__rin_math_isnan_d(y)) return x;
+    int x_nan;
+    int y_nan;
+    __rin_math_extrema_signal_invalid_d(x, y);
+    x_nan = __rin_math_isnan_d(x);
+    y_nan = __rin_math_isnan_d(y);
+    if (x_nan && y_nan) return NAN;
+    if (x_nan) return y;
+    if (y_nan) return x;
     return fmaximum(x, y);
 }
 
 static inline float fmaximum_numf(float x, float y) {
-    if (__rin_math_isnan_f(x)) return y;
-    if (__rin_math_isnan_f(y)) return x;
+    int x_nan;
+    int y_nan;
+    __rin_math_extrema_signal_invalid_f(x, y);
+    x_nan = __rin_math_isnan_f(x);
+    y_nan = __rin_math_isnan_f(y);
+    if (x_nan && y_nan) return __builtin_nanf("");
+    if (x_nan) return y;
+    if (y_nan) return x;
     return fmaximumf(x, y);
 }
 
@@ -3443,14 +3468,26 @@ static inline long double fmaximum_numl(long double x, long double y) {
 }
 
 static inline double fminimum_num(double x, double y) {
-    if (__rin_math_isnan_d(x)) return y;
-    if (__rin_math_isnan_d(y)) return x;
+    int x_nan;
+    int y_nan;
+    __rin_math_extrema_signal_invalid_d(x, y);
+    x_nan = __rin_math_isnan_d(x);
+    y_nan = __rin_math_isnan_d(y);
+    if (x_nan && y_nan) return NAN;
+    if (x_nan) return y;
+    if (y_nan) return x;
     return fminimum(x, y);
 }
 
 static inline float fminimum_numf(float x, float y) {
-    if (__rin_math_isnan_f(x)) return y;
-    if (__rin_math_isnan_f(y)) return x;
+    int x_nan;
+    int y_nan;
+    __rin_math_extrema_signal_invalid_f(x, y);
+    x_nan = __rin_math_isnan_f(x);
+    y_nan = __rin_math_isnan_f(y);
+    if (x_nan && y_nan) return __builtin_nanf("");
+    if (x_nan) return y;
+    if (y_nan) return x;
     return fminimumf(x, y);
 }
 
@@ -3461,6 +3498,7 @@ static inline long double fminimum_numl(long double x, long double y) {
 /* C23 _mag variants - larger magnitude wins (sign kept); ties
  * delegate to the base function; NaN propagates. */
 static inline double fmaximum_mag(double x, double y) {
+    __rin_math_extrema_signal_invalid_d(x, y);
     if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) return NAN;
     double ax = fabs(x), ay = fabs(y);
     if (ax > ay) return x;
@@ -3469,6 +3507,7 @@ static inline double fmaximum_mag(double x, double y) {
 }
 
 static inline float fmaximum_magf(float x, float y) {
+    __rin_math_extrema_signal_invalid_f(x, y);
     if (__rin_math_isnan_f(x) || __rin_math_isnan_f(y))
         return __builtin_nanf("");
     float ax = fabsf(x), ay = fabsf(y);
@@ -3482,6 +3521,7 @@ static inline long double fmaximum_magl(long double x, long double y) {
 }
 
 static inline double fminimum_mag(double x, double y) {
+    __rin_math_extrema_signal_invalid_d(x, y);
     if (__rin_math_isnan_d(x) || __rin_math_isnan_d(y)) return NAN;
     double ax = fabs(x), ay = fabs(y);
     if (ax < ay) return x;
@@ -3490,6 +3530,7 @@ static inline double fminimum_mag(double x, double y) {
 }
 
 static inline float fminimum_magf(float x, float y) {
+    __rin_math_extrema_signal_invalid_f(x, y);
     if (__rin_math_isnan_f(x) || __rin_math_isnan_f(y))
         return __builtin_nanf("");
     float ax = fabsf(x), ay = fabsf(y);
