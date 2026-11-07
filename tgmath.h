@@ -113,10 +113,13 @@
 
 /* Real/complex function pairs. */
 #define acos(x)  __RIN_TGMATH_UNARY_COMPLEX(acos, (x))
+#define acospi(x) __RIN_TGMATH_UNARY_REAL(acospi, (x))
 #define acosh(x) __RIN_TGMATH_UNARY_COMPLEX(acosh, (x))
 #define asin(x)  __RIN_TGMATH_UNARY_COMPLEX(asin, (x))
+#define asinpi(x) __RIN_TGMATH_UNARY_REAL(asinpi, (x))
 #define asinh(x) __RIN_TGMATH_UNARY_COMPLEX(asinh, (x))
 #define atan(x)  __RIN_TGMATH_UNARY_COMPLEX(atan, (x))
+#define atanpi(x) __RIN_TGMATH_UNARY_REAL(atanpi, (x))
 #define atanh(x) __RIN_TGMATH_UNARY_COMPLEX(atanh, (x))
 #define cos(x)   __RIN_TGMATH_UNARY_COMPLEX(cos, (x))
 #define cosh(x)  __RIN_TGMATH_UNARY_COMPLEX(cosh, (x))
@@ -166,11 +169,15 @@
 #define lround(x)     __RIN_TGMATH_UNARY_REAL(lround, (x))
 #define llround(x)    __RIN_TGMATH_UNARY_REAL(llround, (x))
 #define roundeven(x)  __RIN_TGMATH_UNARY_REAL(roundeven, (x))
+#define sinpi(x)      __RIN_TGMATH_UNARY_REAL(sinpi, (x))
+#define cospi(x)      __RIN_TGMATH_UNARY_REAL(cospi, (x))
+#define tanpi(x)      __RIN_TGMATH_UNARY_REAL(tanpi, (x))
 #define tgamma(x)     __RIN_TGMATH_UNARY_REAL(tgamma, (x))
 #define trunc(x)      __RIN_TGMATH_UNARY_REAL(trunc, (x))
 
 /* Multi-parameter functions with a common real precision. */
 #define atan2(x, y)      __RIN_TGMATH_BINARY_REAL(atan2, (x), (y))
+#define atan2pi(x, y)    __RIN_TGMATH_BINARY_REAL(atan2pi, (x), (y))
 #define copysign(x, y)   __RIN_TGMATH_BINARY_REAL(copysign, (x), (y))
 #define fdim(x, y)       __RIN_TGMATH_BINARY_REAL(fdim, (x), (y))
 #define fma(x, y, z)     __RIN_TGMATH_TERNARY_REAL(fma, (x), (y), (z))

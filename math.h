@@ -5,10 +5,9 @@
 
 #ifndef _MATH_H
 #define _MATH_H
-/* C23 header-version macro withheld: the extended binary math surface
- * is owned by LIBC-C23-MATH-API-COVERAGE-01 (sinpi/fmaximum/powr/
- * compoundn, roundeven, fadd-family, ...).  Only nextup/nextdown plus
- * the C99/C11 subset exist today, so no version claim is published. */
+/* The C23 header-version macro stays withheld until the complete C23
+ * math surface is available. Individual C23 functions may be exposed
+ * before that conformance claim is made. */
 
 
 #include "stddef.h"
@@ -1068,6 +1067,123 @@ static inline double tan(double x) {
 
 static inline float tanf(float x) {
     return (float)tan((double)x);
+}
+
+/* C23 pi-scaled trigonometric functions.  Reduce the input into
+ * [-1/2, 1/2] before multiplying by pi so large integral parts never
+ * contaminate the fractional phase. */
+static inline void __rin_math_pi_reduce(double x, double *fraction,
+                                        int *integer_odd) {
+    double integral = trunc(x);
+    *fraction = x - integral;
+    if (*fraction > 0.5) {
+        *fraction -= 1.0;
+        integral += 1.0;
+    } else if (*fraction < -0.5) {
+        *fraction += 1.0;
+        integral -= 1.0;
+    }
+    *integer_odd = fmod(integral, 2.0) != 0.0;
+}
+
+static inline double sinpi(double x) {
+    double fraction;
+    int integer_odd;
+    if (__builtin_isnan(x)) return NAN;
+    if (__builtin_isinf(x)) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    __rin_math_pi_reduce(x, &fraction, &integer_odd);
+    if (fraction == 0.0) return __builtin_copysign(0.0, x);
+    if (fraction == 0.5 || fraction == -0.5) {
+        int lower_integer_odd = integer_odd ^ (fraction < 0.0);
+        return lower_integer_odd ? -1.0 : 1.0;
+    }
+    {
+        double magnitude = fabs(fraction);
+        double result;
+        if (magnitude > 0.25) {
+            double delta = 0.5 - magnitude;
+            result = cos(delta * M_PI);
+            result = __builtin_copysign(result, fraction);
+        } else {
+            result = sin(fraction * M_PI);
+        }
+        return integer_odd ? -result : result;
+    }
+}
+
+static inline float sinpif(float x) {
+    return (float)sinpi((double)x);
+}
+
+static inline double cospi(double x) {
+    double fraction;
+    int integer_odd;
+    if (__builtin_isnan(x)) return NAN;
+    if (__builtin_isinf(x)) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    __rin_math_pi_reduce(x, &fraction, &integer_odd);
+    if (fraction == 0.0) return integer_odd ? -1.0 : 1.0;
+    if (fraction == 0.5 || fraction == -0.5) return 0.0;
+    {
+        double magnitude = fabs(fraction);
+        double result;
+        if (magnitude > 0.25) {
+            double delta = 0.5 - magnitude;
+            result = sin(delta * M_PI);
+        } else {
+            result = cos(fraction * M_PI);
+        }
+        return integer_odd ? -result : result;
+    }
+}
+
+static inline float cospif(float x) {
+    return (float)cospi((double)x);
+}
+
+static inline double tanpi(double x) {
+    double fraction;
+    int integer_odd;
+    if (__builtin_isnan(x)) return NAN;
+    if (__builtin_isinf(x)) {
+        errno = EDOM;
+        (void)feraiseexcept(FE_INVALID);
+        return NAN;
+    }
+    __rin_math_pi_reduce(x, &fraction, &integer_odd);
+    if (fraction == 0.0) {
+        int negative;
+        if (x == 0.0) return x;
+        negative = integer_odd ^ (x < 0.0);
+        return __builtin_copysign(0.0, negative ? -1.0 : 1.0);
+    }
+    if (fraction == 0.5 || fraction == -0.5) {
+        int lower_integer_odd = integer_odd ^ (fraction < 0.0);
+        errno = ERANGE;
+        (void)feraiseexcept(FE_DIVBYZERO);
+        return lower_integer_odd ? -HUGE_VAL : HUGE_VAL;
+    }
+    {
+        double magnitude = fabs(fraction);
+        if (magnitude > 0.25) {
+            double delta = 0.5 - magnitude;
+            double s, c;
+            sincos(delta * M_PI, &s, &c);
+            return __builtin_copysign(c / s, fraction);
+        }
+        return tan(fraction * M_PI);
+    }
+}
+
+static inline float tanpif(float x) {
+    return (float)tanpi((double)x);
 }
 
 /* sqrt - 平方根 (Newton法) */
@@ -4044,6 +4160,95 @@ static inline long double cosl(long double x) {
 
 static inline long double tanl(long double x) {
     return (long double)tan((double)x);
+}
+
+static inline long double sinpil(long double x) {
+    return (long double)sinpi((double)x);
+}
+
+static inline long double cospil(long double x) {
+    return (long double)cospi((double)x);
+}
+
+static inline long double tanpil(long double x) {
+    return (long double)tanpi((double)x);
+}
+
+static inline double asinpi(double x) {
+    if (x == 0.0) return x;
+    if (x == 1.0) return 0.5;
+    if (x == -1.0) return -0.5;
+    return asin(x) / M_PI;
+}
+
+static inline float asinpif(float x) {
+    return (float)asinpi((double)x);
+}
+
+static inline double acospi(double x) {
+    if (x == 1.0) return 0.0;
+    if (x == -1.0) return 1.0;
+    if (x == 0.0) return 0.5;
+    return acos(x) / M_PI;
+}
+
+static inline float acospif(float x) {
+    return (float)acospi((double)x);
+}
+
+static inline double atanpi(double x) {
+    if (x == 0.0) return x;
+    if (__builtin_isinf(x))
+        return __builtin_copysign(0.5, x);
+    return atan(x) / M_PI;
+}
+
+static inline float atanpif(float x) {
+    return (float)atanpi((double)x);
+}
+
+static inline double atan2pi(double y, double x) {
+    if (__builtin_isnan(y) || __builtin_isnan(x))
+        return atan2(y, x) / M_PI;
+    if (y == 0.0) {
+        if (x < 0.0 || (x == 0.0 && __builtin_signbit(x)))
+            return __builtin_copysign(1.0, y);
+        return __builtin_copysign(0.0, y);
+    }
+    if (x == 0.0)
+        return __builtin_copysign(0.5, y);
+    if (__builtin_isinf(y)) {
+        if (__builtin_isinf(x))
+            return __builtin_copysign(
+                __builtin_signbit(x) ? 0.75 : 0.25, y);
+        return __builtin_copysign(0.5, y);
+    }
+    if (__builtin_isinf(x)) {
+        if (__builtin_signbit(x))
+            return __builtin_copysign(1.0, y);
+        return __builtin_copysign(0.0, y);
+    }
+    return atan2(y, x) / M_PI;
+}
+
+static inline float atan2pif(float y, float x) {
+    return (float)atan2pi((double)y, (double)x);
+}
+
+static inline long double asinpil(long double x) {
+    return (long double)asinpi((double)x);
+}
+
+static inline long double acospil(long double x) {
+    return (long double)acospi((double)x);
+}
+
+static inline long double atanpil(long double x) {
+    return (long double)atanpi((double)x);
+}
+
+static inline long double atan2pil(long double y, long double x) {
+    return (long double)atan2pi((double)y, (double)x);
 }
 
 static inline long double sqrtl(long double x) {
