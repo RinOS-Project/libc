@@ -632,15 +632,6 @@ static inline int close(int fd) {
     return rc;
 }
 
-#if defined(_RIN_USE_GNU_CLOSE_RANGE)
-#ifndef CLOSE_RANGE_CLOEXEC
-#define CLOSE_RANGE_CLOEXEC RIN_CLOSE_RANGE_FLAG_CLOEXEC
-#endif
-#ifndef CLOSE_RANGE_UNSHARE
-#define CLOSE_RANGE_UNSHARE RIN_CLOSE_RANGE_FLAG_UNSHARE
-#endif
-#endif /* _RIN_USE_GNU_CLOSE_RANGE */
-
 /* POSIX.1-2024 posix_close(). POSIX_CLOSE_RESTART is zero on RinOS, so
  * the syscall completes atomically with respect to signal delivery. Invalid
  * flags are reported only after close has succeeded; EBADF and other close
@@ -668,6 +659,15 @@ static inline int posix_close(int fd, int flags) {
 }
 #endif
 #endif /* _RIN_UNISTD_POSIX_CLOSE_VISIBLE */
+
+#if defined(_RIN_USE_GNU_CLOSE_RANGE)
+#ifndef CLOSE_RANGE_CLOEXEC
+#define CLOSE_RANGE_CLOEXEC RIN_CLOSE_RANGE_FLAG_CLOEXEC
+#endif
+#ifndef CLOSE_RANGE_UNSHARE
+#define CLOSE_RANGE_UNSHARE RIN_CLOSE_RANGE_FLAG_UNSHARE
+#endif
+#endif /* _RIN_USE_GNU_CLOSE_RANGE */
 
 #if defined(_RIN_USE_GNU_CLOSE_RANGE)
 static inline int close_range(unsigned int first, unsigned int last,
