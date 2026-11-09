@@ -148,6 +148,12 @@ static inline wchar_t* wcschr(const wchar_t* s, wchar_t c) {
     return (c == L'\0') ? (wchar_t*)s : NULL;
 }
 
+/* GNU end-pointer APIs are exported by string_runtime.c. */
+#if defined(__RIN_FEATURES_GNU) || defined(RIN_WCHAR_IMPLEMENTATION)
+wchar_t* wcschrnul(const wchar_t* string, wchar_t character);
+wchar_t* wmempcpy(wchar_t* destination, const wchar_t* source, size_t count);
+#endif
+
 static inline wchar_t* wcsrchr(const wchar_t* s, wchar_t c) {
     const wchar_t* last = NULL;
     while (*s) {

@@ -102,6 +102,35 @@ char* strchrnul(const char* string, int character) {
     return (char*)(__UINTPTR_TYPE__)string;
 }
 
+void* mempcpy(void* destination, const void* source, size_t size) {
+    unsigned char* output = (unsigned char*)destination;
+    const unsigned char* input = (const unsigned char*)source;
+    void* end = destination;
+    while (size != 0u) {
+        *output++ = *input++;
+        --size;
+        end = output;
+    }
+    return end;
+}
+
+wchar_t* wcschrnul(const wchar_t* string, wchar_t character) {
+    while (*string != L'\0' && *string != character) ++string;
+    return (wchar_t*)(__UINTPTR_TYPE__)string;
+}
+
+wchar_t* wmempcpy(wchar_t* destination, const wchar_t* source,
+                  size_t count) {
+    wchar_t* output = destination;
+    wchar_t* end = destination;
+    while (count != 0u) {
+        *output++ = *source++;
+        --count;
+        end = output;
+    }
+    return end;
+}
+
 static _Thread_local char* g_rin_strtok_last;
 
 char* strtok(char* input, const char* delimiters) {
