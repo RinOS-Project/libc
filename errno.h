@@ -36,9 +36,10 @@ extern "C" {
 
 /* __errno_location関数でスレッドローカルなerrnoへのポインタを返す */
 extern int* __errno_location(void);
-#ifndef errno
-#define errno (*__errno_location())
+#ifdef errno
+#undef errno
 #endif
+#define errno (*__errno_location())
 
 /* ═══════════════════════════════════════════════════════════════
  * エラーコード定義 (POSIX準拠)
