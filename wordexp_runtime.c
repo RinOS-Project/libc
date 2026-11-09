@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* This implementation uses the GNU pipe2 extension internally. */
 #define RIN_UNISTD_PIPE2_IMPLEMENTATION 1
+#define RIN_POSIX_CLOSE_RUNTIME_IMPLEMENTATION 1
 #include "wordexp.h"
 
 #include "errno.h"

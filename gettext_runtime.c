@@ -2,6 +2,7 @@
 /* Bounded GNU MO catalog reader and gettext runtime. */
 
 #define RIN_GETTEXT_RUNTIME_IMPLEMENTATION 1
+#define RIN_POSIX_CLOSE_RUNTIME_IMPLEMENTATION 1
 #include "libintl.h"
 
 #include "errno.h"

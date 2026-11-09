@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#define RIN_POSIX_CLOSE_RUNTIME_IMPLEMENTATION 1
 
 #ifdef RIN_FTW_HOST_TEST
 #include <ftw.h>

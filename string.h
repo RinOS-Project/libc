@@ -204,6 +204,19 @@ RIN_STRING_INLINE char* strstr(const char* haystack, const char* needle) {
 }
 #endif
 
+/* GNU string extension used by imported POSIX tools such as dash. */
+#if defined(__RIN_FEATURES_GNU) || defined(RIN_STRING_IMPLEMENTATION)
+#ifdef RIN_STRING_IMPLEMENTATION
+char* strchrnul(const char* string, int character);
+#else
+RIN_STRING_INLINE char* strchrnul(const char* string, int character) {
+    while (*string && (unsigned char)*string != (unsigned char)character)
+        ++string;
+    return (char*)(__UINTPTR_TYPE__)string;
+}
+#endif
+#endif
+
 /* POSIX.1-2024 bounded byte-subsequence search. */
 #if defined(__RIN_FEATURES_POSIX_2024) || defined(__RIN_FEATURES_GNU) || \
     defined(RIN_STRING_IMPLEMENTATION)

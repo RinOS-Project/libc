@@ -6,6 +6,8 @@
 #ifndef _NETDB_H
 #define _NETDB_H
 
+#define RIN_POSIX_CLOSE_RUNTIME_IMPLEMENTATION 1
+
 #include "features.h"
 #include "stddef.h"
 #include "stdint.h"

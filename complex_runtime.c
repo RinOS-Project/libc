@@ -4,6 +4,9 @@
                    * host builds where the system math.h hides M_*). */
 #include "fenv.h"
 
+/* math.h's inline lgamma implementation publishes the sign here. */
+int signgam = 0;
+
 static double complex cx_make(double real, double imaginary) {
     return CMPLX(real, imaginary);
 }

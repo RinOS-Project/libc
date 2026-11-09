@@ -36,10 +36,13 @@
 #endif
 #include "fcntl_flags.h"
 #if !defined(MIDL_PASS) && !defined(_MSVCRT_COMPAT) && \
+    !defined(RIN_KERNEL) && \
     (defined(__RINOS__) || defined(RIN_USERSPACE) || \
      defined(RIN_FREESTANDING))
 #include "signal.h"
+#if defined(_RIN_SIGNAL_POSIX_VISIBLE)
 #define _RIN_STDLIB_HAS_SIGNAL_API 1
+#endif
 #endif
 #if !defined(__cplusplus) && !defined(RIN_FREESTANDING) && \
     defined(__STDC_HOSTED__) && __STDC_HOSTED__

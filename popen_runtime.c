@@ -4,6 +4,9 @@
 #ifndef RINSDK_SPLIT_BUILD
 #define RINSDK_SPLIT_BUILD 1
 #endif
+/* The implementation uses POSIX descriptor helpers regardless of feature mode. */
+#define RIN_UNISTD_PIPE2_IMPLEMENTATION 1
+#define RIN_POSIX_CLOSE_RUNTIME_IMPLEMENTATION 1
 #include "stdio.h"
 
 #if defined(RIN_USERSPACE)

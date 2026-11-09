@@ -96,6 +96,12 @@ char* strndup(const char* string, size_t size) {
     return copy;
 }
 
+char* strchrnul(const char* string, int character) {
+    while (*string && (unsigned char)*string != (unsigned char)character)
+        ++string;
+    return (char*)(__UINTPTR_TYPE__)string;
+}
+
 static _Thread_local char* g_rin_strtok_last;
 
 char* strtok(char* input, const char* delimiters) {

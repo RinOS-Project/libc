@@ -6,6 +6,7 @@
 #include "errno.h"
 #include "stdint.h"
 #include "stdlib.h"
+#include "string.h"
 #include "../libunicode/rin_unicode.h"
 #if defined(RIN_ICONV_RUNTIME_TESTING)
 extern int rin_iconv_runtime_test_wait(volatile uint32_t* address,
@@ -300,8 +301,8 @@ iconv_t iconv_open(const char* tocode, const char* fromcode) {
             errno = ENOMEM;
             return (iconv_t)(uintptr_t)-1;
         }
-        __builtin_memset(candidate_chunk, 0,
-                         (size_t)available * sizeof(*candidate_chunk));
+        memset(candidate_chunk, 0,
+               (size_t)available * sizeof(*candidate_chunk));
 
         rin_iconv_table_lock();
         if (g_iconv_free_list ||

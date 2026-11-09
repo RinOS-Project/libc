@@ -1,4 +1,8 @@
 /* SPDX-License-Identifier: MIT */
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
+#define RIN_POSIX_CLOSE_RUNTIME_IMPLEMENTATION 1
 #include "nl_types.h"
 
 #include "errno.h"
