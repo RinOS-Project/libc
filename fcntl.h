@@ -219,6 +219,18 @@ struct f_owner_ex {
 #define POSIX_FADV_DONTNEED   4
 #define POSIX_FADV_NOREUSE    5
 
+/* Linux sync_file_range(2) flags.  The operation writes data pages only and
+ * does not replace fsync/fdatasync as a durability barrier. */
+#ifndef SYNC_FILE_RANGE_WAIT_BEFORE
+#define SYNC_FILE_RANGE_WAIT_BEFORE (1u << 0)
+#endif
+#ifndef SYNC_FILE_RANGE_WRITE
+#define SYNC_FILE_RANGE_WRITE       (1u << 1)
+#endif
+#ifndef SYNC_FILE_RANGE_WAIT_AFTER
+#define SYNC_FILE_RANGE_WAIT_AFTER  (1u << 2)
+#endif
+
 /* Linux fallocate(2) mode flags. Modes that the selected filesystem cannot
  * perform are reported by the kernel as EOPNOTSUPP. */
 #ifndef FALLOC_FL_KEEP_SIZE
@@ -812,6 +824,32 @@ static inline int _rin_fallocate_result(
     return EIO;
 }
 
+static inline int _rin_sync_file_range_result(
+    int fd, off64_t offset, off64_t nbytes, unsigned int flags) {
+    const unsigned int allowed_flags =
+        SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE |
+        SYNC_FILE_RANGE_WAIT_AFTER;
+    uint64_t unsigned_offset;
+    uint64_t unsigned_length;
+    intptr_t result;
+
+    if (offset < 0 || nbytes < 0 || (flags & ~allowed_flags) != 0u)
+        return EINVAL;
+    unsigned_offset = (uint64_t)offset;
+    unsigned_length = (uint64_t)nbytes;
+    if (unsigned_offset > (uint64_t)INT64_MAX - unsigned_length)
+        return EOVERFLOW;
+    result = _RIN_FCNTL_SYSCALL6(
+        SYS_SYNC_FILE_RANGE, (uintptr_t)(intptr_t)fd,
+        (uintptr_t)(uint32_t)unsigned_offset,
+        (uintptr_t)(uint32_t)(unsigned_offset >> 32),
+        (uintptr_t)(uint32_t)unsigned_length,
+        (uintptr_t)(uint32_t)(unsigned_length >> 32), (uintptr_t)flags);
+    if (result == 0) return 0;
+    if (result < 0 && result >= (intptr_t)-4095) return (int)-result;
+    return EIO;
+}
+
 static inline int fallocate(int fd, int mode, off_t offset, off_t len) {
     int error = _rin_fallocate_result(fd, mode, offset, len);
     if (error == 0) return 0;
@@ -836,6 +874,14 @@ static inline int posix_fallocate(int fd, off_t offset, off_t len) {
 #if defined(__USE_GNU)
 static inline ssize_t readahead(int fd, off64_t offset, size_t count) {
     int error = _rin_readahead_result(fd, offset, count);
+    if (error == 0) return 0;
+    errno = error;
+    return -1;
+}
+
+static inline int sync_file_range(int fd, off64_t offset, off64_t nbytes,
+                                  unsigned int flags) {
+    int error = _rin_sync_file_range_result(fd, offset, nbytes, flags);
     if (error == 0) return 0;
     errno = error;
     return -1;
