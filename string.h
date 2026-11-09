@@ -260,8 +260,8 @@ RIN_STRING_INLINE size_t strnlen(const char* s, size_t maxlen) {
 #ifdef RIN_STRING_IMPLEMENTATION
 size_t strlcpy(char* destination, const char* source, size_t size);
 #else
-RIN_STRING_INLINE size_t strlcpy(char* destination, const char* source,
-                                 size_t size) {
+static inline size_t strlcpy(char* destination, const char* source,
+                             size_t size) {
     size_t source_length = 0u;
     size_t copied = 0u;
     while (source[source_length] != '\0') ++source_length;
@@ -281,8 +281,8 @@ RIN_STRING_INLINE size_t strlcpy(char* destination, const char* source,
 #ifdef RIN_STRING_IMPLEMENTATION
 size_t strlcat(char* destination, const char* source, size_t size);
 #else
-RIN_STRING_INLINE size_t strlcat(char* destination, const char* source,
-                                 size_t size) {
+static inline size_t strlcat(char* destination, const char* source,
+                             size_t size) {
     size_t destination_length = 0u;
     size_t source_length = 0u;
     size_t copied = 0u;

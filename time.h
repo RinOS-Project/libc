@@ -1408,8 +1408,10 @@ static inline int _rin_time_timer_value_to_ns(
  * kernel owner.  CLOCK_MONOTONIC and CPU clocks are immutable. */
 static inline int clock_settime(clockid_t clk_id,
                                 const struct timespec* tp) {
+#if !defined(RIN_FREESTANDING) || !(RIN_FREESTANDING)
     RinClockSettimeV1 request = { 0u, 0u, 0u, 0, 0, 0, 0 };
     intptr_t result;
+#endif
     if (!tp) {
         errno = EFAULT;
         return -1;
