@@ -47,6 +47,12 @@ typedef struct RinAioFileIdentity {
     uint32_t file_type;
 } RinAioFileIdentity;
 
+typedef struct RinAioBackendLease {
+    uint32_t request_slot;
+    uint32_t valid;
+    RinAioFileIdentity identity;
+} RinAioBackendLease;
+
 typedef struct RinAioSubscription {
     RinAioSuspendWaiter* waiter;
     RinAioRequest* request;
@@ -114,6 +120,10 @@ static pthread_cond_t g_rin_aio_changed = {
  * to be dropped around pthread_create().  Workers never acquire this mutex. */
 static pthread_mutex_t g_rin_aio_worker_start_mutex = PTHREAD_MUTEX_INITIALIZER;
 static RinAioRequest g_rin_aio_requests[RIN_AIO_CAPACITY];
+/* Synchronous pread/pwrite/fsync can block a worker inside one backend.  Keep
+ * at most one request active per backend so one slow backend cannot occupy
+ * the entire worker pool. */
+static RinAioBackendLease g_rin_aio_backend_leases[RIN_AIO_WORKERS];
 static uint32_t g_rin_aio_worker_count;
 static uint32_t g_rin_aio_idle_worker_count;
 static uint64_t g_rin_aio_next_sequence = 1u;
@@ -484,6 +494,24 @@ static int rin_aio_file_identity_equal(const RinAioFileIdentity* left,
            left->file_type == right->file_type;
 }
 
+static int rin_aio_same_backend(const RinAioFileIdentity* left,
+                               const RinAioFileIdentity* right)
+{
+    if (!left || !right || left->device != right->device) return 0;
+    if (left->file_type == S_IFCHR || left->file_type == S_IFBLK ||
+        right->file_type == S_IFCHR || right->file_type == S_IFBLK)
+        return left->file_type == right->file_type &&
+               left->special_device == right->special_device;
+    /* FIFO and socket operations are endpoint-specific even when their
+     * synthetic filesystem shares st_dev with unrelated endpoints. */
+    if (left->file_type == S_IFIFO || left->file_type == S_IFSOCK ||
+        right->file_type == S_IFIFO || right->file_type == S_IFSOCK)
+        return rin_aio_file_identity_equal(left, right);
+    /* st_dev identifies ordinary filesystem-backed I/O, allowing distinct
+     * files on one slow mount to share a single blocking worker slot. */
+    return 1;
+}
+
 static int rin_aio_prepare(struct aiocb* control, int operation,
                            int* held_fd_out,
                            RinAioFileIdentity* file_identity_out,
@@ -639,6 +667,47 @@ static int rin_aio_fsync_barrier_ready_locked(
     return 1;
 }
 
+static int rin_aio_backend_busy_locked(
+    const RinAioFileIdentity* identity)
+{
+    uint32_t index;
+    for (index = 0u; index < RIN_AIO_WORKERS; ++index) {
+        const RinAioBackendLease* lease = &g_rin_aio_backend_leases[index];
+        if (lease->valid == 1u &&
+            rin_aio_same_backend(&lease->identity, identity))
+            return 1;
+    }
+    return 0;
+}
+
+static int rin_aio_backend_lease_locked(uint32_t request_slot,
+                                        const RinAioFileIdentity* identity)
+{
+    uint32_t index;
+    if (!identity || rin_aio_backend_busy_locked(identity)) return 0;
+    for (index = 0u; index < RIN_AIO_WORKERS; ++index) {
+        RinAioBackendLease* lease = &g_rin_aio_backend_leases[index];
+        if (lease->valid != 0u) continue;
+        lease->request_slot = request_slot;
+        lease->identity = *identity;
+        lease->valid = 1u;
+        return 1;
+    }
+    return 0;
+}
+
+static void rin_aio_backend_release_locked(uint32_t request_slot)
+{
+    uint32_t index;
+    for (index = 0u; index < RIN_AIO_WORKERS; ++index) {
+        RinAioBackendLease* lease = &g_rin_aio_backend_leases[index];
+        if (lease->valid == 1u && lease->request_slot == request_slot) {
+            memset(lease, 0, sizeof(*lease));
+            return;
+        }
+    }
+}
+
 static int rin_aio_find_queued_locked(void)
 {
     uint32_t index;
@@ -648,6 +717,7 @@ static int rin_aio_find_queued_locked(void)
         RinAioRequest* request = &g_rin_aio_requests[index];
         if (request->state == RIN_AIO_QUEUED &&
             rin_aio_fsync_barrier_ready_locked(request) &&
+            !rin_aio_backend_busy_locked(&request->file_identity) &&
             (selected < 0 || request->sequence < sequence)) {
             selected = (int)index;
             sequence = request->sequence;
@@ -656,30 +726,43 @@ static int rin_aio_find_queued_locked(void)
     return selected;
 }
 
+static uint32_t rin_aio_runnable_backend_count_locked(uint32_t limit)
+{
+    RinAioFileIdentity runnable_backends[RIN_AIO_WORKERS];
+    uint32_t count = 0u;
+    uint32_t index;
+
+    if (limit > RIN_AIO_WORKERS) limit = RIN_AIO_WORKERS;
+    for (index = 0u; index < RIN_AIO_CAPACITY && count < limit; ++index) {
+        const RinAioRequest* request = &g_rin_aio_requests[index];
+        uint32_t seen;
+        if (request->state != RIN_AIO_QUEUED ||
+            !rin_aio_fsync_barrier_ready_locked(request) ||
+            rin_aio_backend_busy_locked(&request->file_identity))
+            continue;
+        for (seen = 0u; seen < count; ++seen)
+            if (rin_aio_same_backend(&runnable_backends[seen],
+                                     &request->file_identity))
+                break;
+        if (seen == count) runnable_backends[count++] = request->file_identity;
+    }
+    return count;
+}
+
 /* The global condition variable is only for workers waiting for runnable
- * requests.  Wake no more idle workers than there are eligible queued jobs;
- * running jobs cannot take a queued request until they finish.  In particular,
- * a queued fsync barrier is not runnable until earlier requests for its file
+ * requests. Wake no more workers than there are eligible backend queues;
+ * each blocking backend owns at most one worker lease. In particular, a
+ * queued fsync barrier is not runnable until earlier requests for its file
  * finish. */
 static void rin_aio_signal_available_workers_locked(void)
 {
-    uint32_t runnable = 0u;
     uint32_t wake_count;
-    uint32_t index;
 
     if (g_rin_aio_idle_worker_count == 0u ||
         g_rin_aio_worker_count == 0u)
         return;
-
-    for (index = 0u; index < RIN_AIO_CAPACITY; ++index) {
-        const RinAioRequest* request = &g_rin_aio_requests[index];
-        if (request->state == RIN_AIO_QUEUED &&
-            rin_aio_fsync_barrier_ready_locked(request))
-            ++runnable;
-    }
-    wake_count = runnable;
-    if (wake_count > g_rin_aio_idle_worker_count)
-        wake_count = g_rin_aio_idle_worker_count;
+    wake_count = rin_aio_runnable_backend_count_locked(
+        g_rin_aio_idle_worker_count);
 
     while (wake_count != 0u) {
         if (pthread_cond_signal(&g_rin_aio_changed) != 0) {
@@ -705,7 +788,13 @@ static void* rin_aio_worker(void* unused)
         ssize_t operation_result = -1;
 
         (void)pthread_mutex_lock(&g_rin_aio_mutex);
-        while ((slot = rin_aio_find_queued_locked()) < 0) {
+        for (;;) {
+            slot = rin_aio_find_queued_locked();
+            if (slot >= 0 && rin_aio_backend_lease_locked(
+                                 (uint32_t)slot,
+                                 &g_rin_aio_requests[slot].file_identity))
+                break;
+            slot = -1;
             ++g_rin_aio_idle_worker_count;
             (void)pthread_cond_wait(&g_rin_aio_changed, &g_rin_aio_mutex);
             if (g_rin_aio_idle_worker_count != 0u)
@@ -737,6 +826,7 @@ static void* rin_aio_worker(void* unused)
         if (g_rin_aio_requests[slot].state == RIN_AIO_RUNNING) {
             RinAioRequest* request = &g_rin_aio_requests[slot];
             request->state = RIN_AIO_DONE;
+            rin_aio_backend_release_locked((uint32_t)slot);
             request->completion_error = saved_errno;
             request->result = operation_result;
             rin_aio_suspend_notify_locked(request);
