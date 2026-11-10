@@ -3082,7 +3082,11 @@ static inline int syncfs(int fd) {
 #endif /* _RIN_USE_GNU_SYNCFS */
 
 static inline int fdatasync(int fd) {
-    return fsync(fd);
+    __rin_pthread_cancel_point_if_linked();
+    int result = _rin_unistd_status(_RIN_UNISTD_SYSCALL1(
+        SYS_FDATASYNC, (uintptr_t)(intptr_t)fd));
+    __rin_pthread_cancel_point_if_linked();
+    return result;
 }
 
 /* dup3 - フラグ付きdup2 */

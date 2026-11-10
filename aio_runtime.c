@@ -31,7 +31,8 @@ enum RinAioState {
 enum RinAioOperation {
     RIN_AIO_OP_READ = 1,
     RIN_AIO_OP_WRITE,
-    RIN_AIO_OP_FSYNC
+    RIN_AIO_OP_FSYNC,
+    RIN_AIO_OP_FDATASYNC
 };
 
 typedef struct RinAioRequest RinAioRequest;
@@ -551,7 +552,8 @@ static int rin_aio_prepare(struct aiocb* control, int operation,
         rin_aio_notification_release(notification_out);
         return error;
     }
-    if ((operation == RIN_AIO_OP_FSYNC &&
+    if (((operation == RIN_AIO_OP_FSYNC ||
+          operation == RIN_AIO_OP_FDATASYNC) &&
          (flags & O_ACCMODE) == O_RDONLY) ||
         (operation == RIN_AIO_OP_READ && (flags & O_ACCMODE) == O_WRONLY) ||
         (operation == RIN_AIO_OP_WRITE &&
@@ -609,7 +611,8 @@ static int rin_aio_submit_prepared(struct aiocb* control, int operation,
         request->held_fd = held_fd;
         request->file_identity = *file_identity;
         request->file_identity_valid = 1u;
-        if (operation == RIN_AIO_OP_FSYNC)
+        if (operation == RIN_AIO_OP_FSYNC ||
+            operation == RIN_AIO_OP_FDATASYNC)
             request->barrier_sequence = g_rin_aio_next_sequence - 1u;
         request->sequence = g_rin_aio_next_sequence++;
         if (g_rin_aio_next_sequence == 0u) g_rin_aio_next_sequence = 1u;
@@ -647,7 +650,9 @@ static int rin_aio_fsync_barrier_ready_locked(
     const RinAioRequest* barrier)
 {
     uint32_t index;
-    if (!barrier || barrier->operation != RIN_AIO_OP_FSYNC) return 1;
+    if (!barrier || (barrier->operation != RIN_AIO_OP_FSYNC &&
+                     barrier->operation != RIN_AIO_OP_FDATASYNC))
+        return 1;
     for (index = 0u; index < RIN_AIO_CAPACITY; ++index) {
         const RinAioRequest* candidate = &g_rin_aio_requests[index];
         if (candidate == barrier || candidate->state == RIN_AIO_FREE ||
@@ -815,6 +820,8 @@ static void* rin_aio_worker(void* unused)
                                       (const void*)snapshot.control->aio_buf,
                                       snapshot.control->aio_nbytes,
                                       snapshot.control->aio_offset);
+        } else if (snapshot.operation == RIN_AIO_OP_FDATASYNC) {
+            operation_result = fdatasync(snapshot.held_fd);
         } else {
             operation_result = fsync(snapshot.held_fd);
         }
@@ -869,7 +876,8 @@ int aio_fsync(int operation, struct aiocb* request)
         errno = EINVAL;
         return -1;
     }
-    return rin_aio_submit(request, RIN_AIO_OP_FSYNC);
+    return rin_aio_submit(request, operation == O_DSYNC
+        ? RIN_AIO_OP_FDATASYNC : RIN_AIO_OP_FSYNC);
 }
 
 int aio_error(const struct aiocb* request)
