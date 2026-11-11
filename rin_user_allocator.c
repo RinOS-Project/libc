@@ -53,6 +53,13 @@ extern int pthread_key_create(RinUserAllocatorPthreadKey* key,
     __attribute__((weak));
 extern int pthread_setspecific(RinUserAllocatorPthreadKey key,
                                const void* value) __attribute__((weak));
+extern void rin_runtime_allocator_map_insert_failure(
+    uint32_t reason, uintptr_t map, uintptr_t root, uintptr_t map_size,
+    uintptr_t data_offset, uintptr_t data_end) __attribute__((weak));
+extern void rin_runtime_allocator_failure_context(
+    uint32_t reason, uintptr_t map, uintptr_t size,
+    uintptr_t class_index, uintptr_t cache_enabled,
+    uintptr_t attempt) __attribute__((weak));
 
 /* Cache arena selection and a bounded set of same-thread blocks. Cross-thread
  * frees still return directly to the owning arena under its lock. */
@@ -1898,7 +1905,8 @@ static int rin_user_map_tree_rebalance(RinUserAllocatorMap* node)
     return 1;
 }
 
-static int rin_user_map_tree_insert(RinUserAllocatorMap* map)
+static int rin_user_map_tree_insert(RinUserAllocatorMap* map,
+                                    uint32_t* failure_reason)
 {
     RinUserAllocatorMap* parent = NULL;
     RinUserAllocatorMap* node = rin_user_allocator_map_tree_root;
@@ -1909,9 +1917,12 @@ static int rin_user_map_tree_insert(RinUserAllocatorMap* map)
     int has_lower = 0;
     int has_upper = 0;
     unsigned steps = 0u;
+    if (failure_reason) *failure_reason = 0u;
     if (!map || !rin_user_map_shape_valid(map) || map->tree_left ||
-        map->tree_right || map->tree_parent || map->tree_height != 0u)
+        map->tree_right || map->tree_parent || map->tree_height != 0u) {
+        if (failure_reason) *failure_reason = 1u;
         return 0;
+    }
     base = (uintptr_t)map;
     end = base + map->map_size;
     if (!node) {
@@ -1922,14 +1933,21 @@ static int rin_user_map_tree_insert(RinUserAllocatorMap* map)
     while (node) {
         uintptr_t node_base;
         uintptr_t node_end;
-        if (++steps > RIN_USER_MAP_TREE_MAX_HEIGHT ||
-            !rin_user_map_tree_node_valid(node, parent, 1))
+        if (++steps > RIN_USER_MAP_TREE_MAX_HEIGHT) {
+            if (failure_reason) *failure_reason = 2u;
             return 0;
+        }
+        if (!rin_user_map_tree_node_valid(node, parent, 1)) {
+            if (failure_reason) *failure_reason = 3u;
+            return 0;
+        }
         node_base = (uintptr_t)node;
         node_end = node_base + node->map_size;
         if ((has_lower && node_base < lower_end) ||
-            (has_upper && node_end > upper_base))
+            (has_upper && node_end > upper_base)) {
+            if (failure_reason) *failure_reason = 4u;
             return 0;
+        }
         parent = node;
         if (end <= node_base) {
             upper_base = node_base;
@@ -1940,6 +1958,7 @@ static int rin_user_map_tree_insert(RinUserAllocatorMap* map)
             has_lower = 1;
             node = node->tree_right;
         } else {
+            if (failure_reason) *failure_reason = 5u;
             return 0;
         }
     }
@@ -1947,7 +1966,11 @@ static int rin_user_map_tree_insert(RinUserAllocatorMap* map)
     map->tree_height = 1u;
     if (base < (uintptr_t)parent) parent->tree_left = map;
     else parent->tree_right = map;
-    return rin_user_map_tree_rebalance(parent);
+    if (!rin_user_map_tree_rebalance(parent)) {
+        if (failure_reason) *failure_reason = 6u;
+        return 0;
+    }
+    return 1;
 }
 
 static int rin_user_map_tree_remove(RinUserAllocatorMap* target)
@@ -2131,38 +2154,49 @@ static int rin_user_allocator_candidate_refresh_locked(
 static int rin_user_map_insert(RinUserAllocatorMap* map)
 {
     RinUserAllocatorMap* previous = NULL;
+    uint32_t failure_reason = 0u;
+    uint32_t tree_failure_reason = 0u;
     if (__atomic_load_n(&rin_user_allocator_directory_corrupt,
                         __ATOMIC_ACQUIRE) != 0u ||
         !map || map->next || map->list_previous) {
-        __atomic_store_n(&rin_user_allocator_directory_corrupt, 1u,
-                         __ATOMIC_RELEASE);
-        return 0;
+        failure_reason = 1u;
+        goto failed;
     }
     if (rin_user_allocator_maps) {
         if (rin_user_allocator_maps->list_previous != NULL) {
-            __atomic_store_n(&rin_user_allocator_directory_corrupt, 1u,
-                             __ATOMIC_RELEASE);
-            return 0;
+            failure_reason = 2u;
+            goto failed;
         }
         previous = rin_user_allocator_maps;
     }
-    if (!rin_user_map_tree_insert(map)) {
-        __atomic_store_n(&rin_user_allocator_directory_corrupt, 1u,
-                         __ATOMIC_RELEASE);
-        return 0;
+    if (!rin_user_map_tree_insert(map, &tree_failure_reason)) {
+        failure_reason = 0x100u + tree_failure_reason;
+        goto failed;
     }
     map->next = previous;
     map->list_previous = NULL;
     if (previous) previous->list_previous = map;
     rin_user_allocator_maps = map;
     if (!rin_user_allocator_candidate_refresh_locked(map)) {
-        __atomic_store_n(&rin_user_allocator_directory_corrupt, 1u,
-                         __ATOMIC_RELEASE);
-        return 0;
+        failure_reason = 3u;
+        goto failed;
     }
     if (!rin_user_allocator_reap_map_cursor)
         rin_user_allocator_reap_map_cursor = map;
     return 1;
+
+failed:
+    __atomic_store_n(&rin_user_allocator_directory_corrupt, 1u,
+                     __ATOMIC_RELEASE);
+    if (rin_runtime_allocator_map_insert_failure) {
+        rin_runtime_allocator_map_insert_failure(
+            failure_reason, (uintptr_t)map,
+            (uintptr_t)rin_user_allocator_map_tree_root,
+            map ? (uintptr_t)map->map_size : 0u,
+            map ? (uintptr_t)map->data_offset : 0u,
+            map ? (uintptr_t)map->data_end : 0u);
+    }
+    return 0;
 }
 
 static RinUserAllocatorMap* rin_user_find_map(const void* pointer)
@@ -3242,6 +3276,9 @@ void* rin_user_allocator_malloc(size_t size)
         return NULL;
     if (__atomic_load_n(&rin_user_allocator_directory_corrupt,
                         __ATOMIC_ACQUIRE) != 0u) {
+        if (rin_runtime_allocator_failure_context)
+            rin_runtime_allocator_failure_context(
+                0x100u, 0u, size, 0u, 0u, 0u);
         rin_user_allocator_corruption();
         return NULL;
     }
@@ -3267,6 +3304,7 @@ void* rin_user_allocator_malloc(size_t size)
         RinUserAllocationHeader* block;
         void* result = NULL;
         int corrupt = 0;
+        uint32_t corruption_reason = 0u;
         int arena_request = size <= RIN_USER_ARENA_MAX_ALLOCATION;
         unsigned class_index = arena_request
             ? rin_user_bin_for_size(size) : 0u;
@@ -3277,7 +3315,13 @@ void* rin_user_allocator_malloc(size_t size)
                 cache, class_index, size, allocation_backtrace, &corrupt);
             if (result || corrupt) {
                 rin_user_cache_unlock(cache);
-                if (corrupt) rin_user_allocator_corruption();
+                if (corrupt) {
+                    if (rin_runtime_allocator_failure_context)
+                        rin_runtime_allocator_failure_context(
+                            0x101u, 0u, size, class_index, cache_enabled,
+                            attempt);
+                    rin_user_allocator_corruption();
+                }
                 return corrupt ? NULL : result;
             }
 
@@ -3288,17 +3332,20 @@ void* rin_user_allocator_malloc(size_t size)
                 result = rin_user_allocator_allocate_from_arena_locked(
                     map, cache, class_index, size, requested_total,
                     allocation_backtrace, &corrupt);
+                if (corrupt) corruption_reason = 0x201u;
                 rin_user_allocator_unlock(&map->lock);
             }
             if (!result && !corrupt) {
                 map = rin_user_allocator_class_candidates[class_index];
-                if (map == cache->arena_by_class[class_index]) {
+                if (map && map == cache->arena_by_class[class_index]) {
                     corrupt = 1;
+                    corruption_reason = 0x202u;
                 } else if (map) {
                     rin_user_map_lock(map);
                     result = rin_user_allocator_allocate_from_arena_locked(
                         map, cache, class_index, size, requested_total,
                         allocation_backtrace, &corrupt);
+                    if (corrupt) corruption_reason = 0x203u;
                     rin_user_allocator_unlock(&map->lock);
                 }
             }
@@ -3310,12 +3357,16 @@ void* rin_user_allocator_malloc(size_t size)
                 map = rin_user_create_arena();
                 if (map) {
                     rin_user_allocator_lock(&rin_user_allocator_directory_lock);
-                    if (!rin_user_map_insert(map)) corrupt = 1;
+                    if (!rin_user_map_insert(map)) {
+                        corrupt = 1;
+                        corruption_reason = 0x204u;
+                    }
                     else {
                         rin_user_map_lock(map);
                         result = rin_user_allocator_allocate_from_arena_locked(
                             map, cache, class_index, size, requested_total,
                             allocation_backtrace, &corrupt);
+                        if (corrupt) corruption_reason = 0x205u;
                         rin_user_allocator_unlock(&map->lock);
                     }
                     rin_user_allocator_unlock(
@@ -3330,14 +3381,19 @@ void* rin_user_allocator_malloc(size_t size)
                 rin_user_map_lock(map);
                 if (!rin_user_map_free_lists_valid(map)) {
                     corrupt = 1;
+                    corruption_reason = 0x301u;
                 } else {
                     block = rin_user_find_free_block(map, size, &corrupt);
+                    if (corrupt) corruption_reason = 0x302u;
                     if (!corrupt && block) {
                         result = rin_user_take_free_block(
                             map, block, size, requested_total,
                             allocation_backtrace, owner_token,
                             owner_generation);
-                        if (!result) corrupt = 1;
+                        if (!result) {
+                            corrupt = 1;
+                            corruption_reason = 0x303u;
+                        }
                     } else if (!corrupt &&
                                (!rin_user_allocator_candidate_refresh_locked(
                                     map) ||
@@ -3345,6 +3401,7 @@ void* rin_user_allocator_malloc(size_t size)
                                  (uint16_t)(1u << class_index)))) {
                         rin_user_map_mark_corrupt(map);
                         corrupt = 1;
+                        corruption_reason = 0x304u;
                     }
                 }
                 rin_user_allocator_unlock(&map->lock);
@@ -3355,14 +3412,20 @@ void* rin_user_allocator_malloc(size_t size)
                 map = rin_user_create_arena();
                 if (map) {
                     rin_user_allocator_lock(&rin_user_allocator_directory_lock);
-                    if (!rin_user_map_insert(map)) corrupt = 1;
+                    if (!rin_user_map_insert(map)) {
+                        corrupt = 1;
+                        corruption_reason = 0x401u;
+                    }
                     else {
                         rin_user_map_lock(map);
                         result = rin_user_take_free_block(
                             map, map->first, size, requested_total,
                             allocation_backtrace, owner_token,
                             owner_generation);
-                        if (!result) corrupt = 1;
+                        if (!result) {
+                            corrupt = 1;
+                            corruption_reason = 0x402u;
+                        }
                         rin_user_allocator_unlock(&map->lock);
                         if (result && cache_enabled)
                             cache->arena_by_class[class_index] = map;
@@ -3379,12 +3442,20 @@ void* rin_user_allocator_malloc(size_t size)
                                         owner_generation);
             if (map) {
                 rin_user_allocator_lock(&rin_user_allocator_directory_lock);
-                if (!rin_user_map_insert(map)) corrupt = 1;
+                if (!rin_user_map_insert(map)) {
+                    corrupt = 1;
+                    corruption_reason = 0x501u;
+                }
                 else result = rin_user_block_payload(map->first);
                 rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
             }
         }
         if (corrupt) {
+            if (rin_runtime_allocator_failure_context)
+                rin_runtime_allocator_failure_context(
+                    corruption_reason ? corruption_reason : 0x1FFu,
+                    (uintptr_t)map, size, class_index, cache_enabled,
+                    attempt);
             rin_user_allocator_corruption();
             return NULL;
         }
