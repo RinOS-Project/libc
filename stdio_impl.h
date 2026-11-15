@@ -22,10 +22,6 @@
 #include "errno.h"
 #include "limits.h"
 #include "sys/syscall.h"
-#if defined(RIN_FREESTANDING) || defined(__RINOS__)
-#include "fcntl.h"
-#endif
-#include "fcntl.h"
 #include "fcntl_flags.h"
 #include "termios.h"
 #include "stdlib.h"
