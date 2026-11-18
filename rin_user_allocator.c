@@ -345,6 +345,24 @@ static size_t rin_user_min_block_size(void)
     return rin_user_align_up(size);
 }
 
+static size_t rin_user_min_allocated_block_size(void)
+{
+    size_t size = sizeof(RinUserAllocationHeader) +
+                  RIN_USER_ARENA_TAIL_GUARD_SIZE +
+                  RIN_USER_BLOCK_ALIGNMENT;
+    return rin_user_align_up(size);
+}
+
+static size_t rin_user_block_minimum_size(uint32_t magic)
+{
+    if (magic == RIN_USER_ARENA_MAGIC_FREE)
+        return rin_user_min_block_size();
+    if (magic == RIN_USER_ARENA_MAGIC_ALLOCATED ||
+        magic == RIN_USER_ARENA_MAGIC_CACHED)
+        return rin_user_min_allocated_block_size();
+    return 0u;
+}
+
 static size_t rin_user_block_total_for_request(size_t request)
 {
     size_t payload = rin_user_align_up(request);
@@ -355,7 +373,10 @@ static size_t rin_user_block_total_for_request(size_t request)
         return 0u;
     total = payload + sizeof(RinUserAllocationHeader) +
             RIN_USER_ARENA_TAIL_GUARD_SIZE;
-    return rin_user_align_up(total);
+    total = rin_user_align_up(total);
+    if (total != 0u && total < rin_user_min_block_size())
+        total = rin_user_min_block_size();
+    return total;
 }
 
 static unsigned rin_user_bin_for_size(size_t size)
@@ -582,7 +603,7 @@ static int rin_user_map_remote_queue_valid_locked(
     uint64_t depth;
     if (!map || map->kind != RIN_USER_ARENA_KIND) return 1;
     maximum_nodes = (map->data_end - map->data_offset) /
-                        rin_user_min_block_size() +
+                        rin_user_min_allocated_block_size() +
                     1u;
     depth = __atomic_load_n(&map->remote_free_depth, __ATOMIC_RELAXED);
     block = __atomic_load_n(&map->remote_free_head, __ATOMIC_RELAXED);
@@ -620,7 +641,7 @@ static int rin_user_map_block_graph_valid(
     end = (uintptr_t)map + map->data_end;
     cursor = begin;
     maximum_blocks = (map->data_end - map->data_offset) /
-                         rin_user_min_block_size() + 1u;
+                         rin_user_min_allocated_block_size() + 1u;
     while (cursor < end) {
         RinUserAllocationHeader* block =
             (RinUserAllocationHeader*)(uintptr_t)cursor;
@@ -632,12 +653,14 @@ static int rin_user_map_block_graph_valid(
             !rin_user_block_boundary_test(map, block) ||
             block->map != (uintptr_t)map ||
             block->previous_size != previous_size ||
-            block->total_size < rin_user_min_block_size() ||
+            block->total_size < rin_user_min_allocated_block_size() ||
             (block->total_size & (RIN_USER_BLOCK_ALIGNMENT - 1u)) != 0u ||
             block->total_size > (size_t)(end - cursor) ||
             (block->magic != RIN_USER_ARENA_MAGIC_ALLOCATED &&
              block->magic != RIN_USER_ARENA_MAGIC_FREE &&
              block->magic != RIN_USER_ARENA_MAGIC_CACHED))
+            return 0;
+        if (block->total_size < rin_user_block_minimum_size(block->magic))
             return 0;
         for (;;) {
             uint32_t state_after_fields;
@@ -744,6 +767,7 @@ static int rin_user_header_is_exact(const RinUserAllocatorMap* map,
     uintptr_t address;
     uintptr_t begin;
     uintptr_t end;
+    size_t minimum_size;
     if (!rin_user_map_shape_valid(map) ||
         !rin_user_map_range_valid(map, (uintptr_t)candidate,
                                   sizeof(*candidate)) ||
@@ -752,8 +776,9 @@ static int rin_user_header_is_exact(const RinUserAllocatorMap* map,
     address = (uintptr_t)candidate;
     begin = (uintptr_t)map + map->data_offset;
     end = (uintptr_t)map + map->data_end;
+    minimum_size = rin_user_block_minimum_size(candidate->magic);
     if (candidate->map != (uintptr_t)map ||
-        candidate->total_size < rin_user_min_block_size() ||
+        minimum_size == 0u || candidate->total_size < minimum_size ||
         (candidate->total_size & (RIN_USER_BLOCK_ALIGNMENT - 1u)) != 0u ||
         candidate->total_size > (size_t)(end - address))
         return 0;
@@ -761,7 +786,8 @@ static int rin_user_header_is_exact(const RinUserAllocatorMap* map,
         if (candidate != map->first || candidate->previous_size != 0u)
             return 0;
     } else {
-        if (candidate->previous_size < rin_user_min_block_size() ||
+        if (candidate->previous_size <
+                rin_user_min_allocated_block_size() ||
             (candidate->previous_size &
              (RIN_USER_BLOCK_ALIGNMENT - 1u)) != 0u ||
             candidate->previous_size > (size_t)(address - begin))
@@ -776,7 +802,9 @@ static int rin_user_header_is_exact(const RinUserAllocatorMap* map,
             previous->total_size > (size_t)(end - (uintptr_t)previous) ||
             (previous->magic != RIN_USER_ARENA_MAGIC_ALLOCATED &&
              previous->magic != RIN_USER_ARENA_MAGIC_FREE &&
-             previous->magic != RIN_USER_ARENA_MAGIC_CACHED))
+             previous->magic != RIN_USER_ARENA_MAGIC_CACHED) ||
+            previous->total_size <
+                rin_user_block_minimum_size(previous->magic))
             return 0;
     }
     address += candidate->total_size;
@@ -786,12 +814,13 @@ static int rin_user_header_is_exact(const RinUserAllocatorMap* map,
             !rin_user_block_boundary_test(map, next) ||
             next->map != (uintptr_t)map ||
             next->previous_size != candidate->total_size ||
-            next->total_size < rin_user_min_block_size() ||
+            next->total_size < rin_user_min_allocated_block_size() ||
             (next->total_size & (RIN_USER_BLOCK_ALIGNMENT - 1u)) != 0u ||
             next->total_size > (size_t)(end - address) ||
             (next->magic != RIN_USER_ARENA_MAGIC_ALLOCATED &&
              next->magic != RIN_USER_ARENA_MAGIC_FREE &&
-             next->magic != RIN_USER_ARENA_MAGIC_CACHED))
+             next->magic != RIN_USER_ARENA_MAGIC_CACHED) ||
+            next->total_size < rin_user_block_minimum_size(next->magic))
             return 0;
     }
     return 1;
@@ -1213,21 +1242,45 @@ static int rin_user_free_tree_validate_node(
 static int rin_user_map_free_lists_valid(RinUserAllocatorMap* map)
 {
     uint64_t pending_class_depth = 0u;
+    uint64_t depth;
+    size_t maximum_nodes;
+    RinUserAllocationHeader* head;
     unsigned pending_class;
+    int valid;
     if (!rin_user_map_shape_valid(map) ||
         __atomic_load_n(&map->allocator_corrupt, __ATOMIC_ACQUIRE) != 0u)
         return 0;
+    if (map->kind != RIN_USER_ARENA_KIND) {
+        rin_user_allocator_lock((volatile unsigned*)&map->remote_free_lock);
+        valid = __atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) == 0u;
+        rin_user_allocator_unlock((volatile unsigned*)&map->remote_free_lock);
+        if (!valid) rin_user_map_mark_corrupt(map);
+        return valid;
+    }
+
+    maximum_nodes = (map->data_end - map->data_offset) /
+                    rin_user_min_allocated_block_size() + 1u;
+    /* The remote-free counters are published together under this lock.  A
+     * map lock alone does not exclude a free from another thread, so reading
+     * the per-class counters before taking it could observe a half-published
+     * enqueue and falsely quarantine a healthy arena. */
+    rin_user_allocator_lock((volatile unsigned*)&map->remote_free_lock);
     for (pending_class = 0u;
          pending_class < RIN_USER_ARENA_CLASS_COUNT; ++pending_class) {
         uint32_t class_depth = map->remote_free_class_depth[pending_class];
         if (UINT64_MAX - pending_class_depth < class_depth) {
-            rin_user_map_mark_corrupt(map);
-            return 0;
+            pending_class_depth = UINT64_MAX;
+            break;
         }
         pending_class_depth += class_depth;
     }
-    if (pending_class_depth != __atomic_load_n(
-            &map->remote_free_depth, __ATOMIC_RELAXED)) {
+    depth = __atomic_load_n(&map->remote_free_depth, __ATOMIC_RELAXED);
+    head = __atomic_load_n(&map->remote_free_head, __ATOMIC_RELAXED);
+    valid = __atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) == 0u &&
+            pending_class_depth == depth && depth <= maximum_nodes &&
+            ((depth == 0u) == (head == NULL));
+    rin_user_allocator_unlock((volatile unsigned*)&map->remote_free_lock);
+    if (!valid) {
         rin_user_map_mark_corrupt(map);
         return 0;
     }
@@ -1259,25 +1312,7 @@ static int rin_user_map_free_lists_valid(RinUserAllocatorMap* map)
     }
     return 1;
 #else
-    size_t maximum_nodes;
-    uint64_t depth;
-    RinUserAllocationHeader* head;
-    int valid;
-    if (map->kind != RIN_USER_ARENA_KIND) {
-        valid = __atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) == 0u;
-        if (!valid) rin_user_map_mark_corrupt(map);
-        return valid;
-    }
-    maximum_nodes = (map->data_end - map->data_offset) /
-                    rin_user_min_block_size() + 1u;
-    rin_user_allocator_lock((volatile unsigned*)&map->remote_free_lock);
-    depth = __atomic_load_n(&map->remote_free_depth, __ATOMIC_RELAXED);
-    head = __atomic_load_n(&map->remote_free_head, __ATOMIC_RELAXED);
-    valid = __atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) == 0u &&
-            depth <= maximum_nodes && ((depth == 0u) == (head == NULL));
-    rin_user_allocator_unlock((volatile unsigned*)&map->remote_free_lock);
-    if (!valid) rin_user_map_mark_corrupt(map);
-    return valid;
+    return 1;
 #endif
 }
 
@@ -1533,8 +1568,16 @@ static void* rin_user_take_free_block(RinUserAllocatorMap* map,
                                       uint32_t owner_generation)
 {
     if (!rin_user_remove_free_block(map, block)) return NULL;
+    /* Split validation walks back through the preceding block.  Mark the
+     * selected block allocated before publishing a smaller remainder so the
+     * boundary checker applies the allocated minimum size. */
+    rin_user_mark_allocated(block, requested_size,
+                            RIN_USER_BLOCK_FLAG_ALLOCATED, backtrace,
+                            owner_token, owner_generation);
     if (rin_user_split_allocated_tail(map, block, requested_total) == 0)
         return NULL;
+    /* Splitting poisons the remainder after the selected block was marked;
+     * publish the final payload range after that transition. */
     rin_user_mark_allocated(block, requested_size,
                             RIN_USER_BLOCK_FLAG_ALLOCATED, backtrace,
                             owner_token, owner_generation);
@@ -2135,6 +2178,7 @@ static int rin_user_allocator_candidate_refresh_locked(
     uint16_t candidate_mask = 0u;
     unsigned request_class;
     if (map && map->kind == RIN_USER_ARENA_KIND) {
+        rin_user_allocator_lock(&map->remote_free_lock);
         for (request_class = 0u;
              request_class < RIN_USER_ARENA_CLASS_COUNT; ++request_class) {
             unsigned free_class;
@@ -2147,8 +2191,30 @@ static int rin_user_allocator_candidate_refresh_locked(
                 }
             }
         }
+        rin_user_allocator_unlock(&map->remote_free_lock);
     }
     return rin_user_allocator_candidate_set_locked(map, candidate_mask);
+}
+
+static int rin_user_allocator_map_has_candidate_above_class_locked(
+    RinUserAllocatorMap* map, unsigned request_class)
+{
+    unsigned free_class;
+    int found = 0;
+    if (!map || map->kind != RIN_USER_ARENA_KIND ||
+        request_class + 1u >= RIN_USER_ARENA_CLASS_COUNT)
+        return 0;
+    rin_user_allocator_lock(&map->remote_free_lock);
+    for (free_class = request_class + 1u;
+         free_class < RIN_USER_ARENA_CLASS_COUNT; ++free_class) {
+        if (map->free_tree_roots[free_class] ||
+            map->remote_free_class_depth[free_class] != 0u) {
+            found = 1;
+            break;
+        }
+    }
+    rin_user_allocator_unlock(&map->remote_free_lock);
+    return found;
 }
 
 static int rin_user_map_insert(RinUserAllocatorMap* map)
@@ -2405,10 +2471,15 @@ static int rin_user_allocator_remote_pending_consume_locked(
     capacity = block->total_size - sizeof(*block) -
                RIN_USER_ARENA_TAIL_GUARD_SIZE;
     free_class = rin_user_bin_for_size(capacity);
-    if (free_class >= RIN_USER_ARENA_CLASS_COUNT ||
-        map->remote_free_class_depth[free_class] == 0u)
+    if (free_class >= RIN_USER_ARENA_CLASS_COUNT)
         return 0;
+    rin_user_allocator_lock(&map->remote_free_lock);
+    if (map->remote_free_class_depth[free_class] == 0u) {
+        rin_user_allocator_unlock(&map->remote_free_lock);
+        return 0;
+    }
     --map->remote_free_class_depth[free_class];
+    rin_user_allocator_unlock(&map->remote_free_lock);
     return 1;
 }
 
@@ -2431,12 +2502,27 @@ static void rin_user_allocator_drain_remote_frees_locked(
                                          __ATOMIC_RELAXED);
     rin_user_allocator_unlock(&map->remote_free_lock);
     if (!block) {
+        uint64_t queued_class_depth = 0u;
+        uint64_t queued_depth;
+        size_t maximum_nodes = (map->data_end - map->data_offset) /
+                               rin_user_min_allocated_block_size() + 1u;
         unsigned class_index;
+        int queue_valid;
         if (detached_depth != 0u) corrupt = 1;
+        rin_user_allocator_lock(&map->remote_free_lock);
         for (class_index = 0u;
              class_index < RIN_USER_ARENA_CLASS_COUNT; ++class_index)
-            if (map->remote_free_class_depth[class_index] != 0u)
-                corrupt = 1;
+            queued_class_depth += map->remote_free_class_depth[class_index];
+        queued_depth = __atomic_load_n(&map->remote_free_depth,
+                                       __ATOMIC_RELAXED);
+        block = __atomic_load_n(&map->remote_free_head, __ATOMIC_RELAXED);
+        queue_valid =
+            __atomic_load_n(&map->remote_corrupt, __ATOMIC_RELAXED) == 0u &&
+            queued_class_depth == queued_depth &&
+            queued_depth <= maximum_nodes &&
+            ((queued_depth == 0u) == (block == NULL));
+        rin_user_allocator_unlock(&map->remote_free_lock);
+        if (!queue_valid) corrupt = 1;
         if (!rin_user_allocator_candidate_refresh_locked(map)) corrupt = 1;
         if (corrupt)
             __atomic_store_n(&map->remote_corrupt, 1u, __ATOMIC_RELEASE);
@@ -2444,7 +2530,7 @@ static void rin_user_allocator_drain_remote_frees_locked(
     }
 
     maximum_nodes = (map->data_end - map->data_offset) /
-                        rin_user_min_block_size() +
+                        rin_user_min_allocated_block_size() +
                     1u;
     while (block) {
         RinUserAllocationHeader* next;
@@ -2461,7 +2547,7 @@ static void rin_user_allocator_drain_remote_frees_locked(
         next = __atomic_load_n(&block->remote_next, __ATOMIC_RELAXED);
         __atomic_store_n(&block->remote_next, NULL, __ATOMIC_RELAXED);
         offset = (size_t)(address - ((uintptr_t)map + map->data_offset));
-        if (block->total_size < rin_user_min_block_size() ||
+        if (block->total_size < rin_user_min_allocated_block_size() ||
             (block->total_size & (RIN_USER_BLOCK_ALIGNMENT - 1u)) != 0u ||
             offset > map->data_end - map->data_offset ||
             block->total_size > map->data_end - map->data_offset - offset) {
@@ -2510,7 +2596,7 @@ static int rin_user_allocator_release_remote_block_locked(
         !rin_user_block_boundary_test(map, block))
         return 0;
     offset = (size_t)(address - ((uintptr_t)map + map->data_offset));
-    if (block->total_size < rin_user_min_block_size() ||
+    if (block->total_size < rin_user_min_allocated_block_size() ||
         (block->total_size & (RIN_USER_BLOCK_ALIGNMENT - 1u)) != 0u ||
         offset > map->data_end - map->data_offset ||
         block->total_size > map->data_end - map->data_offset - offset)
@@ -2820,7 +2906,8 @@ static int rin_user_allocator_cache_reap_map_locked(
                 continue;
             }
             block_size = block->total_size;
-            valid_size = block_size >= rin_user_min_block_size() &&
+            valid_size = block_size >=
+                rin_user_min_allocated_block_size() &&
                 (block_size & (RIN_USER_BLOCK_ALIGNMENT - 1u)) == 0u &&
                 block_size <= data_end - address;
             if (valid_size) {
@@ -3215,7 +3302,8 @@ static void* rin_user_allocator_allocate_from_arena_locked(
         if (!rin_user_allocator_candidate_refresh_locked(map)) {
             rin_user_map_mark_corrupt(map);
             *corrupt = 1;
-        } else if (map->candidate_mask & (uint16_t)(1u << class_index)) {
+        } else if (rin_user_allocator_map_has_candidate_above_class_locked(
+                       map, class_index)) {
             rin_user_map_mark_corrupt(map);
             *corrupt = 1;
         }
@@ -3336,17 +3424,22 @@ void* rin_user_allocator_malloc(size_t size)
                 rin_user_allocator_unlock(&map->lock);
             }
             if (!result && !corrupt) {
-                map = rin_user_allocator_class_candidates[class_index];
-                if (map && map == cache->arena_by_class[class_index]) {
-                    corrupt = 1;
-                    corruption_reason = 0x202u;
-                } else if (map) {
-                    rin_user_map_lock(map);
-                    result = rin_user_allocator_allocate_from_arena_locked(
-                        map, cache, class_index, size, requested_total,
-                        allocation_backtrace, &corrupt);
-                    if (corrupt) corruption_reason = 0x203u;
-                    rin_user_allocator_unlock(&map->lock);
+                RinUserAllocatorMap* candidate =
+                    rin_user_allocator_class_candidates[class_index];
+                while (candidate && !result && !corrupt) {
+                    RinUserAllocatorMap* next_candidate =
+                        candidate->class_next[class_index];
+                    if (candidate != cache->arena_by_class[class_index]) {
+                        map = candidate;
+                        rin_user_map_lock(map);
+                        result =
+                            rin_user_allocator_allocate_from_arena_locked(
+                                map, cache, class_index, size, requested_total,
+                                allocation_backtrace, &corrupt);
+                        if (corrupt) corruption_reason = 0x203u;
+                        rin_user_allocator_unlock(&map->lock);
+                    }
+                    candidate = next_candidate;
                 }
             }
             rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
@@ -3376,35 +3469,46 @@ void* rin_user_allocator_malloc(size_t size)
             rin_user_cache_unlock(cache);
         } else if (arena_request) {
             rin_user_allocator_lock(&rin_user_allocator_directory_lock);
-            map = rin_user_allocator_class_candidates[class_index];
-            if (map) {
-                rin_user_map_lock(map);
-                if (!rin_user_map_free_lists_valid(map)) {
-                    corrupt = 1;
-                    corruption_reason = 0x301u;
-                } else {
-                    block = rin_user_find_free_block(map, size, &corrupt);
-                    if (corrupt) corruption_reason = 0x302u;
-                    if (!corrupt && block) {
-                        result = rin_user_take_free_block(
-                            map, block, size, requested_total,
-                            allocation_backtrace, owner_token,
-                            owner_generation);
-                        if (!result) {
-                            corrupt = 1;
-                            corruption_reason = 0x303u;
-                        }
-                    } else if (!corrupt &&
-                               (!rin_user_allocator_candidate_refresh_locked(
-                                    map) ||
-                                (map->candidate_mask &
-                                 (uint16_t)(1u << class_index)))) {
-                        rin_user_map_mark_corrupt(map);
+            {
+                RinUserAllocatorMap* candidate =
+                    rin_user_allocator_class_candidates[class_index];
+                while (candidate && !result && !corrupt) {
+                    RinUserAllocatorMap* next_candidate =
+                        candidate->class_next[class_index];
+                    map = candidate;
+                    rin_user_map_lock(map);
+                    if (!rin_user_map_free_lists_valid(map)) {
                         corrupt = 1;
-                        corruption_reason = 0x304u;
+                        corruption_reason = 0x301u;
+                    } else {
+                        block = rin_user_find_free_block(map, size, &corrupt);
+                        if (corrupt) corruption_reason = 0x302u;
+                        if (!corrupt && block) {
+                            result = rin_user_take_free_block(
+                                map, block, size, requested_total,
+                                allocation_backtrace, owner_token,
+                                owner_generation);
+                            if (!result) {
+                                corrupt = 1;
+                                corruption_reason = 0x303u;
+                            }
+                        } else if (!corrupt &&
+                                   !rin_user_allocator_candidate_refresh_locked(
+                                       map)) {
+                            rin_user_map_mark_corrupt(map);
+                            corrupt = 1;
+                            corruption_reason = 0x304u;
+                        } else if (!corrupt &&
+                                   rin_user_allocator_map_has_candidate_above_class_locked(
+                                       map, class_index)) {
+                            rin_user_map_mark_corrupt(map);
+                            corrupt = 1;
+                            corruption_reason = 0x304u;
+                        }
                     }
+                    rin_user_allocator_unlock(&map->lock);
+                    candidate = next_candidate;
                 }
-                rin_user_allocator_unlock(&map->lock);
             }
             rin_user_allocator_unlock(&rin_user_allocator_directory_lock);
 
@@ -3728,7 +3832,8 @@ void rin_user_allocator_free(void* pointer)
             uint32_t expected_state = remote_state;
             size_t requested_size = __atomic_load_n(
                 &remote->requested_size, __ATOMIC_ACQUIRE);
-            int valid = remote->total_size >= rin_user_min_block_size() &&
+            int valid = remote->total_size >=
+                            rin_user_min_allocated_block_size() &&
                         (remote->total_size &
                          (RIN_USER_BLOCK_ALIGNMENT - 1u)) == 0u &&
                         offset <= map->data_end - map->data_offset &&
