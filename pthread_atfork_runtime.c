@@ -3,15 +3,13 @@
 
 #include "pthread.h"
 #include "internal/pthread_atfork.h"
+#include "stdlib.h"
 
-typedef struct RinPthreadAtforkEntry {
-    void (*prepare)(void);
-    void (*parent)(void);
-    void (*child)(void);
-} RinPthreadAtforkEntry;
-
-static RinPthreadAtforkEntry g_rin_pthread_atfork_entries[
-    RIN_PTHREAD_ATFORK_MAX];
+static RinPthreadAtforkChunk g_rin_pthread_atfork_initial_chunk;
+static RinPthreadAtforkChunk* g_rin_pthread_atfork_head =
+    &g_rin_pthread_atfork_initial_chunk;
+static RinPthreadAtforkChunk* g_rin_pthread_atfork_tail =
+    &g_rin_pthread_atfork_initial_chunk;
 static size_t g_rin_pthread_atfork_count;
 static volatile unsigned int g_rin_pthread_atfork_lock;
 
@@ -32,20 +30,61 @@ static void rin_pthread_atfork_unlock(void) {
 
 int pthread_atfork(void (*prepare)(void), void (*parent)(void),
                    void (*child)(void)) {
+    RinPthreadAtforkChunk* candidate = NULL;
     size_t index;
-    rin_pthread_atfork_lock();
-    index = g_rin_pthread_atfork_count;
-    if (index >= RIN_PTHREAD_ATFORK_MAX) {
+    int installed;
+
+    for (;;) {
+        rin_pthread_atfork_lock();
+        index = g_rin_pthread_atfork_count;
+        if (index < RIN_PTHREAD_ATFORK_CHUNK_ENTRIES ||
+            index % RIN_PTHREAD_ATFORK_CHUNK_ENTRIES != 0u) {
+            index %= RIN_PTHREAD_ATFORK_CHUNK_ENTRIES;
+            g_rin_pthread_atfork_tail->entries[index].prepare = prepare;
+            g_rin_pthread_atfork_tail->entries[index].parent = parent;
+            g_rin_pthread_atfork_tail->entries[index].child = child;
+            __atomic_store_n(&g_rin_pthread_atfork_count,
+                             g_rin_pthread_atfork_count + 1u,
+                             __ATOMIC_RELEASE);
+            rin_pthread_atfork_unlock();
+            if (candidate != NULL) free(candidate);
+            return 0;
+        }
         rin_pthread_atfork_unlock();
-        return ENOMEM;
+
+        if (candidate == NULL) {
+            candidate = (RinPthreadAtforkChunk*)malloc(sizeof(*candidate));
+            if (candidate == NULL) return ENOMEM;
+            candidate->next = NULL;
+            candidate->prev = NULL;
+        }
+
+        rin_pthread_atfork_lock();
+        installed = 0;
+        index = g_rin_pthread_atfork_count;
+        if (index >= RIN_PTHREAD_ATFORK_CHUNK_ENTRIES &&
+            index % RIN_PTHREAD_ATFORK_CHUNK_ENTRIES == 0u) {
+            candidate->prev = g_rin_pthread_atfork_tail;
+            g_rin_pthread_atfork_tail->next = candidate;
+            g_rin_pthread_atfork_tail = candidate;
+            candidate = NULL;
+            installed = 1;
+        }
+        if (index < RIN_PTHREAD_ATFORK_CHUNK_ENTRIES ||
+            index % RIN_PTHREAD_ATFORK_CHUNK_ENTRIES != 0u || installed) {
+            index %= RIN_PTHREAD_ATFORK_CHUNK_ENTRIES;
+            g_rin_pthread_atfork_tail->entries[index].prepare = prepare;
+            g_rin_pthread_atfork_tail->entries[index].parent = parent;
+            g_rin_pthread_atfork_tail->entries[index].child = child;
+            __atomic_store_n(&g_rin_pthread_atfork_count,
+                             g_rin_pthread_atfork_count + 1u,
+                             __ATOMIC_RELEASE);
+            rin_pthread_atfork_unlock();
+            if (candidate != NULL) free(candidate);
+            return 0;
+        }
+        rin_pthread_atfork_unlock();
     }
-    g_rin_pthread_atfork_entries[index].prepare = prepare;
-    g_rin_pthread_atfork_entries[index].parent = parent;
-    g_rin_pthread_atfork_entries[index].child = child;
-    __atomic_store_n(&g_rin_pthread_atfork_count, index + 1u,
-                     __ATOMIC_RELEASE);
-    rin_pthread_atfork_unlock();
-    return 0;
 }
 
 void __rin_pthread_atfork_child_reset(void) {
@@ -56,41 +95,66 @@ void __rin_pthread_atfork_child_reset(void) {
 
 void __rin_pthread_atfork_prepare(
     __rin_pthread_atfork_snapshot* snapshot) {
-    size_t count;
+    RinPthreadAtforkChunk* chunk;
+    size_t remaining;
     if (!snapshot) return;
     rin_pthread_atfork_lock();
-    count = __atomic_load_n(&g_rin_pthread_atfork_count, __ATOMIC_ACQUIRE);
+    snapshot->count = __atomic_load_n(&g_rin_pthread_atfork_count,
+                                      __ATOMIC_ACQUIRE);
+    snapshot->tail = g_rin_pthread_atfork_tail;
     rin_pthread_atfork_unlock();
-    if (count > RIN_PTHREAD_ATFORK_MAX) count = RIN_PTHREAD_ATFORK_MAX;
-    snapshot->count = count;
-    while (count != 0u) {
-        void (*handler)(void) = g_rin_pthread_atfork_entries[--count].prepare;
-        if (handler) handler();
+
+    remaining = snapshot->count;
+    chunk = snapshot->tail;
+    while (chunk != NULL && remaining != 0u) {
+        size_t count = remaining % RIN_PTHREAD_ATFORK_CHUNK_ENTRIES;
+        if (count == 0u) count = RIN_PTHREAD_ATFORK_CHUNK_ENTRIES;
+        while (count != 0u) {
+            void (*handler)(void) = chunk->entries[--count].prepare;
+            if (handler) handler();
+        }
+        remaining -= remaining < RIN_PTHREAD_ATFORK_CHUNK_ENTRIES
+            ? remaining : RIN_PTHREAD_ATFORK_CHUNK_ENTRIES;
+        chunk = chunk->prev;
     }
 }
 
 void __rin_pthread_atfork_parent(
     const __rin_pthread_atfork_snapshot* snapshot) {
-    size_t index;
-    size_t count;
+    RinPthreadAtforkChunk* chunk;
+    size_t remaining;
     if (!snapshot) return;
-    count = snapshot->count;
-    if (count > RIN_PTHREAD_ATFORK_MAX) count = RIN_PTHREAD_ATFORK_MAX;
-    for (index = 0u; index < count; ++index) {
-        void (*handler)(void) = g_rin_pthread_atfork_entries[index].parent;
-        if (handler) handler();
+    remaining = snapshot->count;
+    chunk = g_rin_pthread_atfork_head;
+    while (chunk != NULL && remaining != 0u) {
+        size_t count = remaining < RIN_PTHREAD_ATFORK_CHUNK_ENTRIES
+            ? remaining : RIN_PTHREAD_ATFORK_CHUNK_ENTRIES;
+        for (size_t index = 0u; index < count; ++index) {
+            void (*handler)(void) = chunk->entries[index].parent;
+            if (handler) handler();
+        }
+        remaining -= count;
+        if (chunk == snapshot->tail) break;
+        chunk = chunk->next;
     }
 }
 
 void __rin_pthread_atfork_child(
     const __rin_pthread_atfork_snapshot* snapshot) {
-    size_t index;
-    size_t count;
+    RinPthreadAtforkChunk* chunk;
+    size_t remaining;
     if (!snapshot) return;
-    count = snapshot->count;
-    if (count > RIN_PTHREAD_ATFORK_MAX) count = RIN_PTHREAD_ATFORK_MAX;
-    for (index = 0u; index < count; ++index) {
-        void (*handler)(void) = g_rin_pthread_atfork_entries[index].child;
-        if (handler) handler();
+    remaining = snapshot->count;
+    chunk = g_rin_pthread_atfork_head;
+    while (chunk != NULL && remaining != 0u) {
+        size_t count = remaining < RIN_PTHREAD_ATFORK_CHUNK_ENTRIES
+            ? remaining : RIN_PTHREAD_ATFORK_CHUNK_ENTRIES;
+        for (size_t index = 0u; index < count; ++index) {
+            void (*handler)(void) = chunk->entries[index].child;
+            if (handler) handler();
+        }
+        remaining -= count;
+        if (chunk == snapshot->tail) break;
+        chunk = chunk->next;
     }
 }

@@ -401,10 +401,15 @@ struct sigevent {
  * provide the sigevent record before this header is reached; the timer
  * implementation still needs these declarations for SIGEV_THREAD. */
 #if defined(RIN_USERSPACE) && defined(__RIN_TIME_POSIX_VISIBLE) && \
-    !defined(RIN_TIMER_THREAD_RUNTIME) && \
-    !defined(RIN_TIMER_THREAD_RUNTIME_DECLS) && \
-    !defined(MIDL_PASS)
+    !defined(RIN_TIMER_THREAD_RUNTIME_DECLS) && !defined(MIDL_PASS)
 #define RIN_TIMER_THREAD_RUNTIME_DECLS 1
+#if defined(RIN_TIMER_THREAD_RUNTIME)
+extern int rin_timer_thread_register(timer_t timer_id,
+                                     void (*function)(union sigval),
+                                     union sigval value,
+                                     const void* attributes);
+extern void rin_timer_thread_unregister(timer_t timer_id);
+#else
 extern int rin_timer_thread_register(timer_t timer_id,
                                      void (*function)(union sigval),
                                      union sigval value,
@@ -412,6 +417,7 @@ extern int rin_timer_thread_register(timer_t timer_id,
     __attribute__((weak));
 extern void rin_timer_thread_unregister(timer_t timer_id)
     __attribute__((weak));
+#endif
 #endif
 #ifndef SIGALRM
 #define SIGALRM 14
@@ -1404,6 +1410,7 @@ static inline int _rin_time_timer_value_to_ns(
     return _rin_time_timespec_to_ns(input, output);
 }
 
+#if defined(__RIN_TIME_POSIX_VISIBLE)
 /* Set the shared wall clock only through the authenticated, capability-gated
  * kernel owner.  CLOCK_MONOTONIC and CPU clocks are immutable. */
 static inline int clock_settime(clockid_t clk_id,

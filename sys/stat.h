@@ -30,6 +30,7 @@
 #include "types.h"
 #include "syscall.h"
 #include <rin/fs/path_at_abi.h>
+#include <rin/fs/statx_abi.h>
 
 #if defined(__i386__) && defined(RIN_TIME_ABI64) && \
     !defined(__RIN_FILE_OFFSET_BITS64) && \
@@ -407,6 +408,8 @@ static inline int __rin_fstat_time64(int fd, struct stat* statbuf) {
 static inline int __rin_stat_time64_pathat(int dirfd, const char* pathname,
                                            struct stat* statbuf, int flags) {
     RinPathAtCallV1 call;
+    struct stat64 wide;
+    int result;
     if (!statbuf) {
         errno = EFAULT;
         return -1;
@@ -438,9 +441,10 @@ static inline int __rin_stat_time64_pathat(int dirfd, const char* pathname,
     call.flags = (uint32_t)(flags & ~AT_EMPTY_PATH);
     call.dirfd = dirfd;
     call.path1 = (uint64_t)(uintptr_t)pathname;
-    call.buffer = (uint64_t)(uintptr_t)statbuf;
-    call.buffer_size = sizeof(*statbuf);
-    return __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
+    call.buffer = (uint64_t)(uintptr_t)&wide;
+    call.buffer_size = sizeof(wide);
+    result = __rin_stat_path_at_result(_RIN_STAT_PATH_AT_CALL(&call));
+    return result < 0 ? result : __rin_stat64_to_time64(&wide, statbuf);
 }
 #endif /* __RIN_STAT_TIME64_ABI */
 #endif

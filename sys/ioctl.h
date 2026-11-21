@@ -22,7 +22,6 @@
 #include "../stdarg.h"
 #include "../errno.h"
 #include "../fcntl.h"
-#include "socket.h"
 #include "syscall.h"
 #include <rin/tty/abi.h>
 

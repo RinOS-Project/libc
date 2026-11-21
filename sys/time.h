@@ -29,6 +29,16 @@
 /* time.hに定義を集約 */
 #include "../time.h"
 
+/* sys/time.h is the POSIX entry point that publishes timeval, even when
+ * the general time.h POSIX namespace is hidden for a freestanding build. */
+#ifndef _TIMEVAL_DEFINED
+#define _TIMEVAL_DEFINED
+struct timeval {
+    time_t tv_sec;
+    long tv_usec;
+};
+#endif
+
 #define ITIMER_REAL    0
 #define ITIMER_VIRTUAL 1
 #define ITIMER_PROF    2
