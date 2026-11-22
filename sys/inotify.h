@@ -53,6 +53,17 @@ extern "C" {
 #define IN_CLOFORK      0x00020000
 #endif
 
+/* Linux-compatible userspace record header followed by a NUL-terminated,
+ * padded name. `name` is a flexible array so sizeof(struct inotify_event)
+ * remains the fixed 16-byte wire header size. */
+struct inotify_event {
+    int32_t wd;
+    uint32_t mask;
+    uint32_t cookie;
+    uint32_t len;
+    char name[];
+};
+
 static inline int __rin_inotify_result(intptr_t result)
 {
     result = __rin_syscall_posixize(result);
