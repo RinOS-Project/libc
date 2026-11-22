@@ -21,6 +21,7 @@
 #include "../features.h"
 #include "types.h"
 #include "syscall.h"
+#include "time.h"
 #include "../time.h"
 #include "../errno.h"
 #include "../limits.h"

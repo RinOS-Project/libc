@@ -52,7 +52,7 @@ static inline int pidfd_open(pid_t pid, unsigned int flags)
 #endif
 
 static inline int __rin_pidfd_send_signal(int pidfd, int signal_number,
-                                          const siginfo_t* info,
+                                          const void* info,
                                           unsigned int flags)
 {
     return (int)__rin_syscall_posixize(_RIN_PIDFD_SEND_SIGNAL_SYSCALL4(

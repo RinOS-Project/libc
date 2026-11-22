@@ -18,11 +18,18 @@
 #include "../features.h"
 #include "types.h"
 #include "syscall.h"
+#include "time.h"
 #include "../time.h"
 #include "../errno.h"
 #include "../limits.h"
 #include "../signal.h"
 #include "../internal/pthread_cancel_point.h"
+
+#if defined(__RIN_FEATURES_DEFAULT) || defined(__RIN_FEATURES_GNU) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L) || \
+    (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE >= 600)
+#define __RIN_WAITID_VISIBLE 1
+#endif
 
 #ifndef _RIN_WAIT_SYSCALL3
 #define _RIN_WAIT_SYSCALL3(number, argument1, argument2, argument3) \
@@ -97,6 +104,11 @@ static inline int __rin_waitid_event_result(intptr_t result) {
     return 0;
 }
 
+/* This private selector stays available to libc internals regardless of the
+ * public waitid feature namespace. */
+#define __RIN_WAIT_IDTYPE_PIDFD 3
+
+#if defined(__RIN_WAITID_VISIBLE)
 /* waitid() child selectors. */
 #ifndef _IDTYPE_T_DEFINED
 #define _IDTYPE_T_DEFINED
@@ -105,9 +117,9 @@ typedef int idtype_t;
 #define P_ALL  0
 #define P_PID  1
 #define P_PGID 2
-#define __RIN_WAIT_IDTYPE_PIDFD 3
 #if defined(__RIN_FEATURES_GNU)
 #define P_PIDFD 3
+#endif
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -187,6 +199,7 @@ static inline pid_t waitpid(pid_t pid, int* wstatus, int options) {
     return result;
 }
 
+#if defined(__RIN_WAITID_VISIBLE)
 static inline int waitid(idtype_t idtype, id_t id, siginfo_t* infop,
                          int options) {
     const int known_options = WNOHANG | WSTOPPED | WEXITED | WCONTINUED |
@@ -250,6 +263,7 @@ static inline int waitid(idtype_t idtype, id_t id, siginfo_t* infop,
      * returns zero after the siginfo copy has committed. */
     return 0;
 }
+#endif
 
 /* ═══════════════════════════════════════════════════════════════
  * wait3/wait4 (BSD互換)
@@ -331,5 +345,7 @@ static inline pid_t wait4(pid_t pid, int* wstatus, int options, struct rusage* r
 #endif
 
 #endif /* _SYS_WAIT_H */
+
+#undef __RIN_WAITID_VISIBLE
 
 #endif /* hosted Linux delegates to its native wait provider */
