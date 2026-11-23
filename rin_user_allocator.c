@@ -258,27 +258,45 @@ extern void* rin_user_allocator_backend_allocate(size_t size)
 extern void rin_user_allocator_backend_release(void* pointer)
     __attribute__((weak));
 
-/* Keep sanitizer integration optional.  The allocator remains usable by
- * freestanding/product runtimes that do not link an ASan runtime, while a
- * hosted ASan build can observe user-after-free accesses through the normal
- * sanitizer annotations.  The free-list link prefix is intentionally kept
- * addressable because allocator metadata is stored there while a block is
- * free; only the remainder of the payload is poisoned. */
+/* Hosted allocator tests may provide sanitizer hooks.  A weak undefined
+ * function in a freestanding PIE is not a reliable optional hook: its PLT/GOT
+ * slot can be nonzero even though no resolver is present.  Product RIN images
+ * have no ASan runtime, so omit those references unless a hosted build is
+ * being used.  The free-list link prefix remains addressable because the
+ * allocator stores metadata there while a block is free. */
+#if defined(RIN_FREESTANDING) && RIN_FREESTANDING && \
+    defined(RIN_USERSPACE) && RIN_USERSPACE
+#define RIN_USER_ALLOCATOR_ASAN_HOOKS 0
+#else
+#define RIN_USER_ALLOCATOR_ASAN_HOOKS 1
+#endif
+#if RIN_USER_ALLOCATOR_ASAN_HOOKS
 extern void __asan_poison_memory_region(const void* address, size_t size)
     __attribute__((weak));
 extern void __asan_unpoison_memory_region(const void* address, size_t size)
     __attribute__((weak));
+#endif
 
 static void rin_user_asan_poison(const void* address, size_t size)
 {
+#if RIN_USER_ALLOCATOR_ASAN_HOOKS
     if (address && size != 0u && __asan_poison_memory_region)
         __asan_poison_memory_region(address, size);
+#else
+    (void)address;
+    (void)size;
+#endif
 }
 
 static void rin_user_asan_unpoison(const void* address, size_t size)
 {
+#if RIN_USER_ALLOCATOR_ASAN_HOOKS
     if (address && size != 0u && __asan_unpoison_memory_region)
         __asan_unpoison_memory_region(address, size);
+#else
+    (void)address;
+    (void)size;
+#endif
 }
 
 __attribute__((weak)) void* rin_user_allocator_backend_map(size_t size)
